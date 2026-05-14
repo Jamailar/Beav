@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
@@ -1236,6 +1237,7 @@ fn retry_policy_for_stage(stage: &str) -> Option<(&'static str, &'static str, us
         "image-submit" => Some(("queued", "retry_image_submit", 3, 1_500)),
         "video-submit" => Some(("queued", "retry_video_submit", 3, 1_500)),
         "audio-submit" => Some(("queued", "retry_audio_submit", 3, 1_500)),
+        "audio-sequence-submit" => Some(("queued", "retry_audio_sequence_submit", 3, 1_500)),
         "voice-clone-submit" => Some(("queued", "retry_voice_clone_submit", 3, 2_500)),
         "video-poll" => Some(("polling", "retry_video_poll", 20, 2_500)),
         "video-download" => Some(("downloading", "retry_video_download", 5, 2_000)),
@@ -1481,7 +1483,7 @@ fn resolve_provider_metadata(
         "image" => payload_string(payload, "provider")
             .or_else(|| payload_string(&settings, "image_provider"))
             .unwrap_or_else(|| "openai-compatible".to_string()),
-        "audio" | "voice_clone" => payload_string(payload, "provider")
+        "audio" | "audio_sequence" | "voice_clone" => payload_string(payload, "provider")
             .or_else(|| payload_string(&settings, "voice_provider"))
             .or_else(|| payload_string(&settings, "tts_provider"))
             .unwrap_or_else(|| "voice".to_string()),
@@ -1492,7 +1494,7 @@ fn resolve_provider_metadata(
             payload_string(&settings, "image_model"),
             payload_string(payload, "model"),
         )?,
-        "audio" => normalize_optional_string(payload_string(payload, "model"))
+        "audio" | "audio_sequence" => normalize_optional_string(payload_string(payload, "model"))
             .or_else(|| payload_string(&settings, "voice_tts_model"))
             .or_else(|| payload_string(&settings, "tts_model")),
         "voice_clone" => normalize_optional_string(payload_string(payload, "model"))
@@ -2006,7 +2008,7 @@ fn slot_has_capacity(slots: &RuntimeSlots, loaded: &LoadedJob, stage: &str) -> b
                 .unwrap_or(0)
                 < VIDEO_SUBMIT_LIMIT_PER_PROVIDER
         }
-        "audio-submit" => {
+        "audio-submit" | "audio-sequence-submit" => {
             slots
                 .audio_submit_by_provider
                 .get(&provider_key)
@@ -2057,7 +2059,7 @@ fn reserve_slot(slots: &Arc<Mutex<RuntimeSlots>>, loaded: &LoadedJob, stage: &st
                 .entry(provider_key)
                 .or_insert(0) += 1;
         }
-        "audio-submit" => {
+        "audio-submit" | "audio-sequence-submit" => {
             *guard
                 .audio_submit_by_provider
                 .entry(provider_key)
@@ -2097,7 +2099,9 @@ fn release_slot(slots: &Arc<Mutex<RuntimeSlots>>, loaded: &LoadedJob, stage: &st
     match stage {
         "image-submit" => decrement(&mut guard.image_submit_by_provider, provider_key),
         "video-submit" => decrement(&mut guard.video_submit_by_provider, provider_key),
-        "audio-submit" => decrement(&mut guard.audio_submit_by_provider, provider_key),
+        "audio-submit" | "audio-sequence-submit" => {
+            decrement(&mut guard.audio_submit_by_provider, provider_key)
+        }
         "voice-clone-submit" => decrement(&mut guard.voice_clone_submit_by_provider, provider_key),
         "video-download" => decrement(&mut guard.video_download_by_provider, provider_key),
         "video-poll" => {
@@ -2488,6 +2492,279 @@ fn complete_audio_job(app: &AppHandle, loaded: &LoadedJob, result: &Value) -> Re
         Some(&current.attempt.attempt_id),
         "completed",
         "Speech synthesis completed",
+        Some(result),
+    )?;
+    emit_job_updated(app, &state, &loaded.job.job_id);
+    Ok(())
+}
+
+fn audio_sequence_format(request: &Value) -> String {
+    let raw = payload_string(request, "responseFormat")
+        .or_else(|| payload_string(request, "response_format"))
+        .or_else(|| payload_string(request, "format"))
+        .or_else(|| {
+            request
+                .pointer("/audio_setting/format")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "mp3".to_string());
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.contains("wav") {
+        "wav".to_string()
+    } else if normalized.contains("m4a") || normalized.contains("aac") {
+        "m4a".to_string()
+    } else if normalized.contains("ogg") || normalized.contains("opus") {
+        "ogg".to_string()
+    } else if normalized.contains("flac") {
+        "flac".to_string()
+    } else {
+        "mp3".to_string()
+    }
+}
+
+fn audio_sequence_codec_args(extension: &str) -> Vec<String> {
+    match extension {
+        "wav" => vec!["-c:a".to_string(), "pcm_s16le".to_string()],
+        "m4a" => vec!["-c:a".to_string(), "aac".to_string()],
+        "ogg" => vec!["-c:a".to_string(), "libopus".to_string()],
+        "flac" => vec!["-c:a".to_string(), "flac".to_string()],
+        _ => vec![
+            "-c:a".to_string(),
+            "libmp3lame".to_string(),
+            "-b:a".to_string(),
+            "128k".to_string(),
+        ],
+    }
+}
+
+fn concat_list_line(path: &PathBuf) -> String {
+    let escaped = path
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'");
+    format!("file '{}'\n", escaped)
+}
+
+fn audio_sequence_prompt_text(segments: &[Value]) -> String {
+    segments
+        .iter()
+        .filter_map(|segment| {
+            payload_string(segment, "input")
+                .or_else(|| payload_string(segment, "text"))
+                .map(|value| value.trim().to_string())
+        })
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn audio_sequence_output_paths(
+    state: &State<'_, AppState>,
+    job_id: &str,
+    extension: &str,
+) -> Result<(String, PathBuf), String> {
+    let relative_path = format!("generated/tts/{job_id}-sequence.{extension}");
+    let absolute_path = media_root(state)?.join(&relative_path);
+    if let Some(parent) = absolute_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    Ok((relative_path, absolute_path))
+}
+
+fn remove_existing_audio_sequence_artifacts(
+    state: &State<'_, AppState>,
+    job_id: &str,
+) -> Result<(), String> {
+    let conn = open_media_runtime_connection(state)?;
+    let mut statement = conn
+        .prepare(
+            r#"
+            SELECT absolute_path
+            FROM media_job_artifacts
+            WHERE job_id = ?1 AND kind IN ('audio', 'audio_segment')
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let paths = statement
+        .query_map(params![job_id], |row| row.get::<_, Option<String>>(0))
+        .map_err(|error| error.to_string())?
+        .filter_map(|row| row.ok().flatten())
+        .collect::<Vec<_>>();
+    drop(statement);
+    for path in paths {
+        let _ = fs::remove_file(path);
+    }
+    conn.execute(
+        "DELETE FROM media_job_artifacts WHERE job_id = ?1 AND kind IN ('audio', 'audio_segment')",
+        params![job_id],
+    )
+    .map_err(|error| error.to_string())?;
+    let work_dir = media_runtime_root(state)?
+        .join("audio-sequences")
+        .join(job_id);
+    let _ = fs::remove_dir_all(work_dir);
+    Ok(())
+}
+
+fn merge_audio_sequence_with_ffmpeg(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    job_id: &str,
+    segment_paths: &[PathBuf],
+    extension: &str,
+) -> Result<(String, PathBuf), String> {
+    if segment_paths.is_empty() {
+        return Err("audio sequence has no generated segments to merge".to_string());
+    }
+    let work_dir = media_runtime_root(state)?
+        .join("audio-sequences")
+        .join(job_id);
+    fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
+    let concat_path = work_dir.join("concat.txt");
+    {
+        let mut file = File::create(&concat_path).map_err(|error| error.to_string())?;
+        use std::io::Write as _;
+        for path in segment_paths {
+            file.write_all(concat_list_line(path).as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
+        file.sync_all().map_err(|error| error.to_string())?;
+    }
+
+    let (relative_path, absolute_path) = audio_sequence_output_paths(state, job_id, extension)?;
+    let temp_path = absolute_path.with_file_name(format!("{job_id}-sequence.tmp.{extension}"));
+    let mut command = Command::new(ffmpeg_program(Some(app))?);
+    command
+        .arg("-y")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-f")
+        .arg("concat")
+        .arg("-safe")
+        .arg("0")
+        .arg("-i")
+        .arg(&concat_path)
+        .arg("-vn");
+    for arg in audio_sequence_codec_args(extension) {
+        command.arg(arg);
+    }
+    command.arg(&temp_path);
+    let output = command
+        .output()
+        .map_err(|error| format!("audio sequence merge could not start ffmpeg: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let _ = fs::remove_file(&temp_path);
+        return Err(if detail.is_empty() {
+            "audio sequence merge failed".to_string()
+        } else {
+            format!("audio sequence merge failed: {detail}")
+        });
+    }
+    fs::rename(&temp_path, &absolute_path).map_err(|error| error.to_string())?;
+    Ok((relative_path, absolute_path))
+}
+
+fn register_audio_sequence_asset(
+    state: &State<'_, AppState>,
+    loaded: &LoadedJob,
+    relative_path: String,
+    absolute_path: PathBuf,
+    prompt: String,
+) -> Result<MediaAssetRecord, String> {
+    let request = &loaded.job.request_json;
+    let (mime_type, _, _) = guess_mime_and_kind(&absolute_path);
+    let title = payload_string(request, "title").unwrap_or_else(|| "TTS sequence".to_string());
+    let voice_id = payload_string(request, "voiceId")
+        .or_else(|| payload_string(request, "voice_id"))
+        .or_else(|| payload_string(request, "voice"));
+    let now = now_rfc3339();
+    let asset = MediaAssetRecord {
+        id: make_id("media"),
+        source: "generated".to_string(),
+        source_domain: Some("voice".to_string()),
+        source_link: voice_id.as_ref().map(|value| format!("voice:{value}")),
+        project_id: loaded.job.project_id.clone(),
+        title: Some(title),
+        prompt: Some(prompt),
+        provider: Some("voice".to_string()),
+        provider_template: Some("tts.sequence".to_string()),
+        model: loaded.job.provider_model.clone(),
+        aspect_ratio: None,
+        size: None,
+        quality: None,
+        mime_type: Some(mime_type),
+        content_hash: file_content_hash(&absolute_path).ok(),
+        relative_path: Some(relative_path),
+        bound_manuscript_path: payload_string(request, "boundManuscriptPath")
+            .or_else(|| loaded.job.manuscript_path.clone()),
+        created_at: now.clone(),
+        updated_at: now,
+        absolute_path: Some(absolute_path.display().to_string()),
+        preview_url: Some(file_url_for_path(&absolute_path)),
+        thumbnail_url: None,
+        exists: absolute_path.is_file(),
+    };
+    with_store_mut(state, |store| {
+        store.media_assets.insert(0, asset.clone());
+        Ok(())
+    })?;
+    persist_media_workspace_catalog(state)?;
+    Ok(asset)
+}
+
+fn complete_audio_sequence_job(
+    app: &AppHandle,
+    loaded: &LoadedJob,
+    result: &Value,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let conn = open_media_runtime_connection(&state)?;
+    let Some(current) = load_job_with_current_attempt(&conn, &loaded.job.job_id)? else {
+        return Ok(());
+    };
+    let asset = result.get("asset").cloned().unwrap_or(Value::Null);
+    insert_artifact_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        "audio",
+        result
+            .get("relativePath")
+            .and_then(Value::as_str)
+            .or_else(|| asset.get("relativePath").and_then(Value::as_str)),
+        result
+            .get("path")
+            .and_then(Value::as_str)
+            .or_else(|| asset.get("absolutePath").and_then(Value::as_str)),
+        asset.get("mimeType").and_then(Value::as_str),
+        asset.get("previewUrl").and_then(Value::as_str),
+        Some(&json!({
+            "asset": asset,
+            "voiceId": result.get("voiceId").cloned().unwrap_or(Value::Null),
+            "segments": result.get("segments").cloned().unwrap_or(Value::Null),
+        })),
+    )?;
+    update_job_result_json(&conn, &loaded.job.job_id, result, true)?;
+    set_attempt_details(
+        &conn,
+        &current,
+        "completed",
+        current.attempt.provider_task_id.as_deref(),
+        current.attempt.provider_status_url.as_deref(),
+        None,
+        Some(result),
+        None,
+        true,
+    )?;
+    append_event_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        Some(&current.attempt.attempt_id),
+        "completed",
+        "Speech sequence synthesis completed",
         Some(result),
     )?;
     emit_job_updated(app, &state, &loaded.job.job_id);
@@ -3062,6 +3339,168 @@ fn run_audio_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<R
     release_slot(&slots, &loaded, "audio-submit");
 }
 
+fn run_audio_sequence_submit_worker(
+    app: AppHandle,
+    loaded: LoadedJob,
+    slots: Arc<Mutex<RuntimeSlots>>,
+) {
+    let result = (|| {
+        let state = app.state::<AppState>();
+        remove_existing_audio_sequence_artifacts(&state, &loaded.job.job_id)?;
+        let segments = crate::voice_service::speech_sequence_segments(&loaded.job.request_json)?;
+        let total = segments.len();
+        let extension = audio_sequence_format(&loaded.job.request_json);
+        let mut segment_results = Vec::<Value>::with_capacity(total);
+        let mut segment_paths = Vec::<PathBuf>::with_capacity(total);
+        let prompt = audio_sequence_prompt_text(&segments);
+
+        for (index, segment) in segments.iter().enumerate() {
+            if get_media_job_projection(&state, &loaded.job.job_id)?
+                .get("status")
+                .and_then(Value::as_str)
+                == Some("cancel_requested")
+            {
+                return complete_job_cancelled(
+                    &app,
+                    &loaded.job.job_id,
+                    "User requested cancellation",
+                );
+            }
+            let mut payload = crate::voice_service::speech_sequence_segment_payload(
+                &loaded.job.request_json,
+                segment,
+                index,
+            )?;
+            if let Some(object) = payload.as_object_mut() {
+                if let Some(model) = loaded.job.provider_model.clone() {
+                    object.entry("model".to_string()).or_insert(json!(model));
+                }
+                object.insert("source".to_string(), json!(loaded.job.source.clone()));
+                object.insert("jobId".to_string(), json!(loaded.job.job_id.clone()));
+            }
+            let segment_result =
+                crate::voice_service::synthesize_speech_artifact(&state, &payload)?;
+            let segment_path = segment_result
+                .get("path")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| "voice.speech segment did not return path".to_string())?;
+            let asset = segment_result.get("asset").cloned().unwrap_or(Value::Null);
+            let metadata = json!({
+                "segmentIndex": index,
+                "segmentNumber": index + 1,
+                "inputPreview": payload_string(&payload, "input")
+                    .unwrap_or_default()
+                    .chars()
+                    .take(120)
+                    .collect::<String>(),
+                "speed": payload_field(&payload, "speed").cloned().unwrap_or(Value::Null),
+                "pitch": payload_field(&payload, "pitch").cloned().unwrap_or(Value::Null),
+                "emotion": payload_field(&payload, "emotion").cloned().unwrap_or(Value::Null),
+                "asset": asset,
+            });
+            let conn = open_media_runtime_connection(&state)?;
+            insert_artifact_with_connection(
+                &conn,
+                &loaded.job.job_id,
+                "audio_segment",
+                segment_result
+                    .get("relativePath")
+                    .and_then(Value::as_str)
+                    .or_else(|| asset.get("relativePath").and_then(Value::as_str)),
+                segment_result
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .or_else(|| asset.get("absolutePath").and_then(Value::as_str)),
+                asset.get("mimeType").and_then(Value::as_str),
+                asset.get("previewUrl").and_then(Value::as_str),
+                Some(&metadata),
+            )?;
+            segment_paths.push(segment_path);
+            segment_results.push(json!({
+                "index": index,
+                "path": segment_result.get("path").cloned().unwrap_or(Value::Null),
+                "relativePath": segment_result.get("relativePath").cloned().unwrap_or(Value::Null),
+                "speed": payload_field(&payload, "speed").cloned().unwrap_or(Value::Null),
+                "pitch": payload_field(&payload, "pitch").cloned().unwrap_or(Value::Null),
+                "emotion": payload_field(&payload, "emotion").cloned().unwrap_or(Value::Null),
+            }));
+            let progress = json!({
+                "progress": {
+                    "completedSegments": index + 1,
+                    "expectedSegments": total,
+                },
+                "segments": segment_results.clone(),
+            });
+            update_job_result_json(&conn, &loaded.job.job_id, &progress, false)?;
+            append_event_with_connection(
+                &conn,
+                &loaded.job.job_id,
+                Some(&loaded.attempt.attempt_id),
+                "segment_completed",
+                &format!("Speech segment {}/{} completed", index + 1, total),
+                Some(&metadata),
+            )?;
+            drop(conn);
+            emit_job_updated(&app, &state, &loaded.job.job_id);
+        }
+
+        if get_media_job_projection(&state, &loaded.job.job_id)?
+            .get("status")
+            .and_then(Value::as_str)
+            == Some("cancel_requested")
+        {
+            return complete_job_cancelled(&app, &loaded.job.job_id, "User requested cancellation");
+        }
+
+        let (relative_path, absolute_path) = merge_audio_sequence_with_ffmpeg(
+            &app,
+            &state,
+            &loaded.job.job_id,
+            &segment_paths,
+            &extension,
+        )?;
+        let asset = register_audio_sequence_asset(
+            &state,
+            &loaded,
+            relative_path.clone(),
+            absolute_path.clone(),
+            prompt,
+        )?;
+        let result = json!({
+            "success": true,
+            "asset": asset,
+            "voiceId": payload_string(&loaded.job.request_json, "voiceId")
+                .or_else(|| payload_string(&loaded.job.request_json, "voice_id"))
+                .or_else(|| payload_string(&loaded.job.request_json, "voice")),
+            "path": absolute_path.display().to_string(),
+            "relativePath": relative_path,
+            "segments": segment_results,
+            "progress": {
+                "completedSegments": total,
+                "expectedSegments": total,
+            },
+        });
+        complete_audio_sequence_job(&app, &loaded, &result)
+    })();
+    if let Err(error) = result {
+        let _ = schedule_stage_retry_or_dead_letter(
+            &app,
+            &loaded.job.job_id,
+            "audio-sequence-submit",
+            &error,
+            None,
+        );
+        emit_job_log(
+            &app,
+            &loaded.job.job_id,
+            &format!("audio sequence submit failed: {error}"),
+            None,
+        );
+    }
+    release_slot(&slots, &loaded, "audio-sequence-submit");
+}
+
 fn run_voice_clone_submit_worker(
     app: AppHandle,
     loaded: LoadedJob,
@@ -3363,6 +3802,11 @@ fn spawn_worker(
                 run_audio_submit_worker(app_handle, loaded, slots)
             });
         }
+        "audio-sequence-submit" => {
+            tauri::async_runtime::spawn_blocking(move || {
+                run_audio_sequence_submit_worker(app_handle, loaded, slots)
+            });
+        }
         "voice-clone-submit" => {
             tauri::async_runtime::spawn_blocking(move || {
                 run_voice_clone_submit_worker(app_handle, loaded, slots)
@@ -3409,9 +3853,11 @@ fn dispatch_stage(
             &conn,
             &loaded,
             match stage {
-                "image-submit" | "video-submit" | "audio-submit" | "voice-clone-submit" => {
-                    "submitting"
-                }
+                "image-submit"
+                | "video-submit"
+                | "audio-submit"
+                | "audio-sequence-submit"
+                | "voice-clone-submit" => "submitting",
                 "video-poll" => "polling",
                 "video-download" => "downloading",
                 _ => loaded.job.status.as_str(),
@@ -3473,6 +3919,16 @@ fn run_media_generation_dispatcher(
                 "audio-submit",
                 false,
                 "media-runtime:audio-submit",
+            );
+            let _ = dispatch_stage(
+                &app,
+                &state,
+                &slots,
+                "audio_sequence",
+                &["queued"],
+                "audio-sequence-submit",
+                false,
+                "media-runtime:audio-sequence-submit",
             );
             let _ = dispatch_stage(
                 &app,

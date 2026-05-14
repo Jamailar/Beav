@@ -45,6 +45,8 @@ const elements = {
   taskCurrent: document.getElementById('task-current'),
   taskQueueMeta: document.getElementById('task-queue-meta'),
   taskQueueControls: document.getElementById('task-queue-controls'),
+  taskQueuePause: document.getElementById('task-queue-pause'),
+  taskQueueResume: document.getElementById('task-queue-resume'),
   taskQueueCancel: document.getElementById('task-queue-cancel'),
   taskLogBadge: document.getElementById('task-log-badge'),
   taskLogList: document.getElementById('task-log-list'),
@@ -99,10 +101,12 @@ function bindEvents() {
     renderBloggerNotesMode();
   });
   elements.bloggerNotesStart.addEventListener('click', () => void startBloggerNotesCollection());
-  elements.bloggerNotesPause.addEventListener('click', () => void controlBloggerNotesTask('pause'));
-  elements.bloggerNotesResume.addEventListener('click', () => void controlBloggerNotesTask('resume'));
-  elements.bloggerNotesCancel.addEventListener('click', () => void controlBloggerNotesTask('cancel'));
-  elements.taskQueueCancel.addEventListener('click', () => void controlBloggerNotesTask('cancel'));
+  elements.bloggerNotesPause.addEventListener('click', () => void controlActiveTask('pause'));
+  elements.bloggerNotesResume.addEventListener('click', () => void controlActiveTask('resume'));
+  elements.bloggerNotesCancel.addEventListener('click', () => void controlActiveTask('cancel'));
+  elements.taskQueuePause.addEventListener('click', () => void controlActiveTask('pause'));
+  elements.taskQueueResume.addEventListener('click', () => void controlActiveTask('resume'));
+  elements.taskQueueCancel.addEventListener('click', () => void controlActiveTask('cancel'));
   elements.accountBindingAction.addEventListener('click', () => void bindCurrentProfileAsAccount());
   elements.captureActions.addEventListener('click', (event) => {
     const button = event.target?.closest?.('button[data-action]');
@@ -718,7 +722,7 @@ async function startBloggerNotesCollection() {
   }
 }
 
-async function controlBloggerNotesTask(action) {
+async function controlActiveTask(action) {
   try {
     debugLog('blogger-notes-control', { action });
     const response = await sendMessage({ type: 'xhs:control-active-task', action });
@@ -999,7 +1003,12 @@ function renderTaskQueue(queue) {
     elements.taskQueueBadge.textContent = queued.length > 0 ? `执行中 · 排队 ${queued.length}` : '执行中';
     elements.taskQueueBadge.className = 'task-badge running';
     elements.taskCurrent.textContent = active.title || '小红书采集任务';
-    elements.taskQueueControls.classList.toggle('hidden', active.cancelRequested === true);
+    elements.taskQueueControls.classList.remove('hidden');
+    const canPause = active?.capabilities?.pause === true;
+    elements.taskQueuePause.classList.toggle('hidden', !canPause || active.paused === true || active.cancelRequested === true);
+    elements.taskQueueResume.classList.toggle('hidden', !canPause || active.paused !== true || active.cancelRequested === true);
+    elements.taskQueuePause.disabled = active.cancelRequested === true;
+    elements.taskQueueResume.disabled = active.cancelRequested === true;
     elements.taskQueueCancel.disabled = active.cancelRequested === true;
     elements.taskQueueCancel.textContent = active.cancelRequested === true ? '停止中' : '停止任务';
     const progressText = active?.progress?.total
@@ -1018,6 +1027,8 @@ function renderTaskQueue(queue) {
   elements.taskQueueBadge.textContent = queued.length > 0 ? `排队 ${queued.length}` : '空闲';
   elements.taskQueueBadge.className = 'task-badge';
   elements.taskQueueControls.classList.add('hidden');
+  elements.taskQueuePause.classList.add('hidden');
+  elements.taskQueueResume.classList.add('hidden');
   elements.taskQueueCancel.disabled = false;
   elements.taskQueueCancel.textContent = '停止任务';
   if (queued.length > 0) {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
-import { FileText, Link2, Loader2, MessageSquareWarning, ShieldCheck } from 'lucide-react';
+import { ChevronDown, FileText, Link2, Loader2, MessageSquareWarning, ShieldCheck } from 'lucide-react';
 import QRCode from 'qrcode';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
@@ -1459,30 +1459,6 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                 </div>
               ) : (
                 <div className="space-y-5">
-                  <div className="grid grid-cols-2 rounded-2xl bg-white/70 p-1 text-sm font-medium text-slate-500 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveSetupTab('official');
-                        setLoginNotice('idle', '');
-                      }}
-                      className={`h-10 rounded-xl transition ${activeSetupTab === 'official' ? 'bg-slate-950 text-white shadow-sm' : 'hover:text-slate-700'}`}
-                    >
-                      官方账号
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        stopWechatPolling();
-                        setActiveSetupTab('custom');
-                        setLoginNotice('idle', '');
-                      }}
-                      className={`h-10 rounded-xl transition ${activeSetupTab === 'custom' ? 'bg-slate-950 text-white shadow-sm' : 'hover:text-slate-700'}`}
-                    >
-                      自定义 API
-                    </button>
-                  </div>
-
                   {activeSetupTab === 'custom' ? (
                     <form
                       className="space-y-4"
@@ -1491,16 +1467,20 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         void handleCustomApiSetup();
                       }}
                     >
-                      <select
-                        value={customForm.presetId}
-                        onChange={(event) => handleCustomPresetChange(event.target.value)}
-                        disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition focus:border-emerald-300 focus:bg-white disabled:opacity-60"
-                      >
-                        {AI_SOURCE_PRESETS.filter((preset) => preset.id !== 'redbox-official').map((preset) => (
-                          <option key={preset.id} value={preset.id}>{preset.label}</option>
-                        ))}
-                      </select>
+                      <div className="text-sm font-medium text-slate-700">自定义 API</div>
+                      <div className="relative">
+                        <select
+                          value={customForm.presetId}
+                          onChange={(event) => handleCustomPresetChange(event.target.value)}
+                          disabled={authBusy}
+                          className="h-12 w-full appearance-none rounded-xl border border-slate-200/80 bg-white/80 px-4 pr-11 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
+                        >
+                          {AI_SOURCE_PRESETS.filter((preset) => preset.id !== 'redbox-official').map((preset) => (
+                            <option key={preset.id} value={preset.id}>{preset.label}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                      </div>
                       <input
                         type="url"
                         value={customForm.baseURL}
@@ -1508,7 +1488,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         placeholder="API Base URL"
                         autoComplete="url"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white disabled:opacity-60"
+                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
                       />
                       <input
                         type="password"
@@ -1517,14 +1497,25 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         placeholder="API Key"
                         autoComplete="off"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white disabled:opacity-60"
+                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
                       />
                       <button
                         type="submit"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgba(16,185,129,0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
+                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgb(var(--color-accent-primary)/0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
                       >
                         {customBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '继续'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveSetupTab('official');
+                          setLoginNotice('idle', '');
+                        }}
+                        disabled={authBusy}
+                        className="flex h-[56px] w-full items-center justify-center rounded-xl border border-slate-200/80 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                      >
+                        返回登陆
                       </button>
                     </form>
                   ) : showMainlandWechatQr ? (
@@ -1559,7 +1550,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         placeholder="手机号"
                         autoComplete="tel"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white disabled:opacity-60"
+                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
                       />
                       <div className="grid grid-cols-[1fr_auto] gap-3">
                         <input
@@ -1569,7 +1560,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           placeholder="短信验证码"
                           autoComplete="one-time-code"
                           disabled={authBusy}
-                          className="h-12 min-w-0 rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white disabled:opacity-60"
+                          className="h-12 min-w-0 rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
                         />
                         <button
                           type="button"
@@ -1583,14 +1574,14 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                       <button
                         type="submit"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgba(16,185,129,0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
+                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgb(var(--color-accent-primary)/0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
                       >
                         {smsBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录 / 注册'}
                       </button>
                     </form>
                   )}
 
-                  {!showMainlandWechatQr && (
+                  {activeSetupTab !== 'custom' && !showMainlandWechatQr && (
                     <div className="space-y-4">
                     {!isMainlandRealm && (
                       <button
@@ -1610,13 +1601,25 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                       disabled={authBusy}
                       className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200/80 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
                     >
-                      {wechatBusy ? <Loader2 className="h-5 w-5 animate-spin text-emerald-500" /> : <img src={wechatIcon} alt="" className="h-5 w-5" />}
+                      {wechatBusy ? <Loader2 className="h-5 w-5 animate-spin text-[rgb(var(--color-accent-primary))]" /> : <img src={wechatIcon} alt="" className="h-5 w-5" />}
                       Continue with WeChat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopWechatPolling();
+                        setActiveSetupTab((current) => current === 'custom' ? 'official' : 'custom');
+                        setLoginNotice('idle', '');
+                      }}
+                      disabled={authBusy}
+                      className="flex h-[56px] w-full items-center justify-center rounded-xl border border-slate-200/80 bg-white/70 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                    >
+                      自定义 API
                     </button>
                     </div>
                   )}
 
-                  {wechatQrUrl && !showMainlandWechatQr && (
+                  {activeSetupTab !== 'custom' && wechatQrUrl && !showMainlandWechatQr && (
                     <div className="flex items-center gap-4">
                       <img src={wechatQrUrl} alt="微信登录二维码" className="h-24 w-24 rounded-lg bg-white object-contain" />
                       <div className="min-w-0 text-sm text-slate-500">
@@ -1630,7 +1633,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                       noticeType === 'error'
                         ? 'text-red-500'
                         : noticeType === 'success'
-                          ? 'text-emerald-600'
+                          ? 'text-[rgb(var(--color-accent-primary))]'
                           : 'text-slate-500'
                     }`}>
                       {notice}

@@ -94,6 +94,20 @@ fn channel_needs_runtime_context(channel: &str) -> bool {
         || channel.starts_with("video-gen:")
 }
 
+fn generation_agent_auto_execution_metadata(metadata: &Value) -> bool {
+    payload_field(metadata, "contextType")
+        .and_then(Value::as_str)
+        .map(|value| value.trim() == "generation-agent")
+        .unwrap_or(false)
+        && payload_field(metadata, "executionMode")
+            .and_then(Value::as_str)
+            .map(|value| value.trim() == "auto")
+            .unwrap_or(false)
+        && !payload_field(metadata, "requiresHumanApproval")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
 fn video_analysis_agent_system_prompt() -> &'static str {
     r#"你是应用内部专用 Video Analysis Agent。
 你只负责根据提供的视频和用户指令输出结构化视频理解结果，不写最终发布文案，不冒充主聊天 agent。
@@ -508,6 +522,22 @@ impl<'a> AppCliExecutor<'a> {
         .flatten()
     }
 
+    fn session_generation_agent_auto_execution_enabled(&self) -> bool {
+        let Some(session_id) = self.session_id else {
+            return false;
+        };
+        with_store(self.state, |store| {
+            Ok(store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .and_then(|item| item.metadata.as_ref())
+                .map(generation_agent_auto_execution_metadata)
+                .unwrap_or(false))
+        })
+        .unwrap_or(false)
+    }
+
     fn ensure_action_allowed(&self, action: &str, arguments: &Value) -> Result<(), String> {
         if action == "web.fetch" {
             return Ok(());
@@ -817,6 +847,20 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["get".to_string()];
                 self.handle_subjects(&tokens, payload)
             }
+            "subjectscreate" | "assetscreate" => {
+                let resolved = self.asset_payload_with_resolved_category(payload)?;
+                let tokens = vec!["create".to_string()];
+                self.handle_subjects(&tokens, &resolved)
+            }
+            "subjectsupdate" | "assetsupdate" => {
+                let resolved = self.asset_payload_with_resolved_category(payload)?;
+                let tokens = vec!["update".to_string()];
+                self.handle_subjects(&tokens, &resolved)
+            }
+            "subjectsdelete" | "assetsdelete" => {
+                let tokens = vec!["delete".to_string()];
+                self.handle_subjects(&tokens, payload)
+            }
             "assetssearch" => {
                 let tokens = vec!["search".to_string()];
                 self.handle_subjects(&tokens, payload)
@@ -825,6 +869,19 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["get".to_string()];
                 self.handle_subjects(&tokens, payload)
             }
+            "assetscategorieslist" | "subjectscategorieslist" => {
+                self.call_channel("subjects:categories:list", json!({}))
+            }
+            "assetscategoriescreate" | "subjectscategoriescreate" => {
+                self.call_channel("subjects:categories:create", payload.clone())
+            }
+            "assetsgeneratecharactercard" | "subjectsgeneratecharactercard" => self.call_channel(
+                "subjects:generate-character-card",
+                json!({
+                    "id": payload_string_alias(payload, &["id", "assetId", "subjectId"])
+                        .ok_or_else(|| "assets.generateCharacterCard requires id".to_string())?
+                }),
+            ),
             "runtimequery" => {
                 let tokens = vec!["query".to_string()];
                 self.handle_runtime(&tokens, payload)
@@ -1322,6 +1379,64 @@ impl<'a> AppCliExecutor<'a> {
             ),
             _ => Err(format!("unsupported subjects action: {action}")),
         }
+    }
+
+    fn asset_payload_with_resolved_category(&self, payload: &Value) -> Result<Value, String> {
+        let mut map = payload.as_object().cloned().unwrap_or_default();
+        if map
+            .get("categoryId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(Value::Object(map));
+        }
+        let category_name = payload_string(payload, "categoryName")
+            .or_else(|| {
+                payload_string(payload, "kind")
+                    .filter(|kind| kind.trim().eq_ignore_ascii_case("character"))
+                    .map(|_| "角色".to_string())
+            })
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let Some(category_name) = category_name else {
+            return Ok(Value::Object(map));
+        };
+        let categories_result = self.call_channel("subjects:categories:list", json!({}))?;
+        let category_id = categories_result
+            .get("categories")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items.iter().find_map(|item| {
+                    let name = item.get("name").and_then(Value::as_str)?;
+                    if name.trim().eq_ignore_ascii_case(&category_name) {
+                        item.get("id")
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .map(Ok)
+            .unwrap_or_else(|| {
+                let created = self.call_channel(
+                    "subjects:categories:create",
+                    json!({ "name": category_name }),
+                )?;
+                created
+                    .pointer("/category/id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        created
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("资产分类创建失败")
+                            .to_string()
+                    })
+            })?;
+        map.insert("categoryId".to_string(), json!(category_id));
+        Ok(Value::Object(map))
     }
 
     fn handle_subject_categories(
@@ -3439,6 +3554,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         let requested_count = requested_image_generation_count(&merged, image_plan_items.len());
         let multi_image_agent_turn = requested_count > 1 && self.session_id.is_some();
         let plan_confirmed = payload_bool(&merged, &["planConfirmed"]).unwrap_or(false);
+        let auto_execution_agent = self.session_generation_agent_auto_execution_enabled();
         let shared_style_guide =
             payload_string(&merged, "sharedStyleGuide").filter(|item| !item.trim().is_empty());
         let base_prompt = payload_string(&merged, "prompt").unwrap_or_default();
@@ -3446,19 +3562,34 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         if multi_image_agent_turn {
             self.run_preflight_multi_image_skill_activation();
             if image_plan_items.is_empty() {
+                let required = if auto_execution_agent {
+                    vec!["sharedStyleGuide", "imagePlanItems"]
+                } else {
+                    vec!["planConfirmed", "sharedStyleGuide", "imagePlanItems"]
+                };
+                let hint = if auto_execution_agent {
+                    "Agent 模式可自动执行；请先补齐多图顺序表、统一风格锚点和 imagePlanItems，然后直接再次调用 image.generate。"
+                } else {
+                    "先输出多图顺序表、统一风格锚点，并等待用户确认；确认后再调用 image.generate。"
+                };
                 return Err(app_cli_error_json(
                     Some("image.generate"),
                     "IMAGE_PLAN_REQUIRED",
                     "multi-image generation requires an approved image plan before execution",
                     false,
                     Some(json!({
-                        "required": ["planConfirmed", "sharedStyleGuide", "imagePlanItems"],
+                        "required": required,
                         "count": requested_count,
-                        "hint": "先输出多图顺序表、统一风格锚点，并等待用户确认；确认后再调用 image.generate。"
+                        "hint": hint
                     })),
                 ));
             }
             if shared_style_guide.is_none() {
+                let hint = if auto_execution_agent {
+                    "Agent 模式可自动执行；为整组图片补一份统一风格锚点，再直接继续生成。"
+                } else {
+                    "为整组图片补一份统一风格锚点，再继续生成。"
+                };
                 return Err(app_cli_error_json(
                     Some("image.generate"),
                     "IMAGE_STYLE_GUIDE_REQUIRED",
@@ -3466,11 +3597,11 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     false,
                     Some(json!({
                         "count": image_plan_items.len(),
-                        "hint": "为整组图片补一份统一风格锚点，再继续生成。"
+                        "hint": hint
                     })),
                 ));
             }
-            if !plan_confirmed {
+            if !plan_confirmed && !auto_execution_agent {
                 return Err(app_cli_error_json(
                     Some("image.generate"),
                     "IMAGE_PLAN_CONFIRMATION_REQUIRED",
@@ -5889,6 +6020,25 @@ mod tests {
 
         assert!(error.contains("TEAM_PLAN_CONFIRMATION_REQUIRED"));
         assert!(error.contains("userConfirmedTeamPlan=true"));
+    }
+
+    #[test]
+    fn generation_agent_auto_execution_requires_explicit_metadata() {
+        assert!(generation_agent_auto_execution_metadata(&json!({
+            "contextType": "generation-agent",
+            "executionMode": "auto",
+            "requiresHumanApproval": false
+        })));
+        assert!(!generation_agent_auto_execution_metadata(&json!({
+            "contextType": "generation-agent",
+            "executionMode": "auto",
+            "requiresHumanApproval": true
+        })));
+        assert!(!generation_agent_auto_execution_metadata(&json!({
+            "contextType": "chat",
+            "executionMode": "auto",
+            "requiresHumanApproval": false
+        })));
     }
 
     #[test]

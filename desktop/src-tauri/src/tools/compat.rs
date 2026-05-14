@@ -688,6 +688,33 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             let payload = normalize_id_payload(payload, "id");
             app_cli_action_call("assets.get", payload, Some("Operate"), Some("assets.get"))
         }
+        ("asset" | "assets" | "subject" | "subjects", "create" | "add") => app_cli_action_call(
+            "assets.create",
+            payload,
+            Some("Operate"),
+            Some("assets.create"),
+        ),
+        ("asset" | "assets" | "subject" | "subjects", "update") => app_cli_action_call(
+            "assets.update",
+            payload,
+            Some("Operate"),
+            Some("assets.update"),
+        ),
+        ("asset" | "assets" | "subject" | "subjects", "delete") => {
+            let payload = normalize_id_payload(payload, "id");
+            app_cli_action_call(
+                "assets.delete",
+                payload,
+                Some("Operate"),
+                Some("assets.delete"),
+            )
+        }
+        ("asset" | "assets" | "subject" | "subjects", "generate" | "run") => app_cli_action_call(
+            "assets.generateCharacterCard",
+            normalize_id_payload(payload, "id"),
+            Some("Operate"),
+            Some("assets.generateCharacterCard"),
+        ),
         ("image", "generate" | "create" | "run") => app_cli_action_call(
             "image.generate",
             payload,
@@ -1899,6 +1926,54 @@ mod tests {
         assert_eq!(list.arguments.get("action"), Some(&json!("assets.get")));
         assert_eq!(
             list.arguments
+                .get("payload")
+                .and_then(|value| value.get("id")),
+            Some(&json!("subject_1774704234274_53536cc0"))
+        );
+    }
+
+    #[test]
+    fn normalizes_asset_mutation_actions_from_operate() {
+        let create = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "asset",
+                "operation": "create",
+                "input": {
+                    "name": "林夕",
+                    "kind": "character",
+                    "categoryName": "角色"
+                }
+            }),
+        );
+        assert_eq!(create.name, "workflow");
+        assert_eq!(
+            create.arguments.get("action"),
+            Some(&json!("assets.create"))
+        );
+        assert_eq!(
+            create
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("kind")),
+            Some(&json!("character"))
+        );
+
+        let generate = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "asset",
+                "operation": "generate",
+                "id": "subject_1774704234274_53536cc0"
+            }),
+        );
+        assert_eq!(
+            generate.arguments.get("action"),
+            Some(&json!("assets.generateCharacterCard"))
+        );
+        assert_eq!(
+            generate
+                .arguments
                 .get("payload")
                 .and_then(|value| value.get("id")),
             Some(&json!("subject_1774704234274_53536cc0"))

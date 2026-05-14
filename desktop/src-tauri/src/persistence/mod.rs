@@ -1638,6 +1638,24 @@ mod tests {
     }
 
     #[test]
+    fn ensure_builtin_skills_present_adds_tts_director_to_existing_stores() {
+        let mut store = default_store();
+        store.skills.retain(|item| item.name != "tts-director");
+
+        ensure_builtin_skills_present(&mut store);
+
+        let tts_director = store
+            .skills
+            .iter()
+            .find(|item| item.name == "tts-director")
+            .expect("tts-director builtin should be inserted");
+        assert_eq!(tts_director.disabled, Some(false));
+        assert_eq!(tts_director.source_scope.as_deref(), Some("builtin"));
+        assert_eq!(tts_director.is_builtin, Some(true));
+        assert!(tts_director.body.contains("name: tts-director"));
+    }
+
+    #[test]
     fn persist_store_moves_session_artifacts_out_of_main_snapshot() {
         let path = test_store_path("persist-split");
         let store = seeded_store();

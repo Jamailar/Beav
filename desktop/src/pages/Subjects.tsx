@@ -19,6 +19,7 @@ import {
     ImagePlus,
     List,
     Mic,
+    Music2,
     Package,
     Pencil,
     Plus,
@@ -124,6 +125,8 @@ interface MediaAsset {
     updatedAt?: string;
     absolutePath?: string;
     previewUrl?: string;
+    thumbnailUrl?: string;
+    thumbnail_url?: string;
     exists?: boolean;
 }
 
@@ -262,17 +265,70 @@ function normalizeMediaSource(source: unknown): MediaAssetSource {
 }
 
 function normalizeMediaAsset(asset: MediaAsset): MediaAsset {
+    const legacyAsset = asset as MediaAsset & {
+        mime_type?: string;
+        relative_path?: string;
+        absolute_path?: string;
+        preview_url?: string;
+    };
     return {
         ...asset,
         source: normalizeMediaSource(asset.source),
+        mimeType: asset.mimeType || legacyAsset.mime_type,
+        relativePath: asset.relativePath || legacyAsset.relative_path,
+        absolutePath: asset.absolutePath || legacyAsset.absolute_path,
+        previewUrl: asset.previewUrl || legacyAsset.preview_url,
+        thumbnailUrl: asset.thumbnailUrl || asset.thumbnail_url,
         exists: asset.exists !== false,
     };
 }
 
-function isVideoAsset(asset: Pick<MediaAsset, 'mimeType' | 'relativePath'>): boolean {
+function mediaAssetSourceUrl(asset: Pick<MediaAsset, 'previewUrl' | 'absolutePath' | 'relativePath'>): string {
+    return asset.previewUrl || asset.absolutePath || asset.relativePath || '';
+}
+
+function isVideoAsset(asset: Pick<MediaAsset, 'mimeType' | 'relativePath' | 'absolutePath' | 'previewUrl'>): boolean {
     const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return false;
     if (mimeType.startsWith('video/')) return true;
-    return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
+    return /\.(mp4|webm|mov)(?:[?#].*)?$/i.test(mediaAssetSourceUrl(asset).trim());
+}
+
+function isAudioAsset(asset: Pick<MediaAsset, 'mimeType' | 'relativePath' | 'absolutePath' | 'previewUrl'>): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return true;
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i.test(mediaAssetSourceUrl(asset).trim());
+}
+
+function mediaAssetKindLabel(asset: MediaAsset): string {
+    if (isAudioAsset(asset)) return '音频';
+    if (isVideoAsset(asset)) return '视频';
+    return asset.aspectRatio || asset.size || '图片';
+}
+
+function AudioMediaThumb({ src, compact = false }: { src: string; compact?: boolean }) {
+    return (
+        <div className={clsx(
+            'flex h-full w-full flex-col items-center justify-center bg-surface-secondary/60 text-accent-primary',
+            compact ? 'gap-1.5 p-1.5' : 'gap-3 p-4',
+        )}>
+            <div className={clsx(
+                'flex items-center justify-center rounded-xl border border-accent-primary/20 bg-accent-primary/10',
+                compact ? 'h-9 w-9' : 'h-14 w-14',
+            )}>
+                <Music2 className={compact ? 'h-5 w-5' : 'h-7 w-7'} />
+            </div>
+            {!compact && src ? (
+                <audio
+                    src={resolveAssetUrl(src)}
+                    className="w-full"
+                    controls
+                    preload="metadata"
+                    onClick={(event) => event.stopPropagation()}
+                />
+            ) : null}
+        </div>
+    );
 }
 
 function subjectVoiceString(subject: SubjectRecord, keys: string[]): string {
@@ -1442,18 +1498,27 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     ) : viewMode === 'grid' ? (
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                             {filteredMediaAssets.map((asset) => {
-                                const previewUrl = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+                                const sourceUrl = mediaAssetSourceUrl(asset);
+                                const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
                                 const source = normalizeMediaSource(asset.source);
                                 return (
-                                    <button
+                                    <div
                                         key={asset.id}
-                                        type="button"
+                                        role="button"
+                                        tabIndex={0}
                                         onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                        onKeyDown={(event) => {
+                                            if (event.key !== 'Enter' && event.key !== ' ') return;
+                                            event.preventDefault();
+                                            void window.ipcRenderer.invoke('media:open', { assetId: asset.id });
+                                        }}
                                         className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
                                     >
                                         <div className="aspect-video overflow-hidden bg-surface-secondary/50">
                                             {previewUrl && asset.exists ? (
-                                                isVideoAsset(asset) ? (
+                                                isAudioAsset(asset) ? (
+                                                    <AudioMediaThumb src={sourceUrl} />
+                                                ) : isVideoAsset(asset) ? (
                                                     <video src={previewUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />
                                                 ) : (
                                                     <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
@@ -1471,17 +1536,18 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             </div>
                                             <div className="flex items-center justify-between gap-2 text-[10px] text-text-tertiary">
                                                 <span>{MEDIA_SOURCE_LABEL[source]}</span>
-                                                <span>{asset.aspectRatio || asset.size || (isVideoAsset(asset) ? '视频' : '图片')}</span>
+                                                <span>{mediaAssetKindLabel(asset)}</span>
                                             </div>
                                         </div>
-                                    </button>
+                                    </div>
                                 );
                             })}
                         </div>
                     ) : (
                         <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
                             {filteredMediaAssets.map((asset) => {
-                                const previewUrl = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+                                const sourceUrl = mediaAssetSourceUrl(asset);
+                                const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
                                 const source = normalizeMediaSource(asset.source);
                                 return (
                                     <button
@@ -1492,7 +1558,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     >
                                         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
                                             {previewUrl && asset.exists ? (
-                                                isVideoAsset(asset) ? (
+                                                isAudioAsset(asset) ? (
+                                                    <AudioMediaThumb src={sourceUrl} compact />
+                                                ) : isVideoAsset(asset) ? (
                                                     <video src={previewUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />
                                                 ) : (
                                                     <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />

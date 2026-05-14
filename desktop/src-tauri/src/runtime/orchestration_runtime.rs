@@ -64,6 +64,15 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
                 "你是视频导演，负责把脚本与素材组织成可执行的视频剪辑结构，并优先保证宿主可落地。"
                     .to_string(),
         },
+        "audio-director" => RuntimeSubagentRoleSpec {
+            role_id: "audio-director".to_string(),
+            purpose: "负责声音合成、口播文本整理、音色选择、语速/情绪/停顿控制和 TTS 执行指令。".to_string(),
+            handoff_contract: "必须把用户目标整理成可直接合成的 spoken text 与 voice.speech 参数；长文本、诗词、广告、角色口播或需要表现力时，先通过 Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"tts-director\" }) 激活 tts-director，再做表演分段，并使用 speed、pitch、emotion、<#0.6#> 停顿和轻量语气标签。多段语气长语音用一次 segments 请求，不要多次调用后手动合并。".to_string(),
+            output_schema: "TTS 文本或 segments、voiceId、speed、pitch、emotion、停顿/语气标记、语言、格式、生成结果".to_string(),
+            system_prompt:
+                "你是音频导演，负责把用户意图转成可直接执行的声音合成任务，并优先调用 voice.speech 生成音频。生成 TTS 时要根据内容语义设计表演层次；长文本、诗词、广告、角色口播或多情绪任务，先调用 skills.invoke 激活 tts-director，再把文本拆成有情绪、速度、音高和停顿意图的 segments。"
+                    .to_string(),
+        },
         "reviewer" => RuntimeSubagentRoleSpec {
             role_id: "reviewer".to_string(),
             purpose: "负责校验结果是否符合需求、是否保存、是否存在幻觉或遗漏。".to_string(),

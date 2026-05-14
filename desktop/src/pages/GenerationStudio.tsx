@@ -38,7 +38,7 @@ import { appAlert } from '../utils/appDialogs';
 type StudioMode = 'image' | 'video' | 'audio';
 type ImageGenerationMode = 'text-to-image' | 'reference-guided' | 'image-to-image';
 type VideoGenerationMode = 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation';
-type ImageCreationSurface = 'manual' | 'agent';
+type GenerationSurface = 'manual' | 'agent';
 type GenerationFeedSource = GenerationIntent['source'] | string;
 
 type SettingsShape = {
@@ -72,22 +72,14 @@ type ReferenceItem = {
 type GenerationAgentSessionMetadata = {
     contextType: typeof GENERATION_AGENT_CONTEXT_TYPE;
     intent: 'image_creation';
-    preferredRole: 'image-director';
-    generationTarget: 'image-suite';
-    suiteMode: true;
-    requiresHumanApproval: true;
+    preferredRole: 'image-director' | 'video-director' | 'audio-director';
+    generationTarget: StudioMode;
+    executionMode: 'auto';
+    requiresHumanApproval: false;
     projectId?: string;
     source: 'generation-studio';
     sourceTitle?: string;
-    suiteState: {
-        status: 'draft';
-        approvedPlanVersion: number;
-        sharedStyleGuide: string;
-        cards: Array<{
-            id: string;
-            status: 'draft';
-        }>;
-    };
+    recentAssetPolicy: 'current-project-feed';
 };
 
 type GeneratedAsset = {
@@ -179,6 +171,18 @@ type AgentSessionFeedEntry = {
 };
 
 type FeedEntry = GenerationFeedEntry | AgentSessionFeedEntry;
+
+type GenerationAgentAssetSummary = {
+    kind: StudioMode;
+    title?: string;
+    id: string;
+    relativePath?: string;
+    previewUrl?: string;
+    prompt?: string;
+    model?: string;
+    projectId?: string;
+    createdAt: number | string;
+};
 
 interface GenerationStudioProps {
     isActive?: boolean;
@@ -503,38 +507,41 @@ function normalizeGenerationAgentScope(value: string): string {
 
 function buildGenerationAgentContextId(projectId: string, source?: GenerationIntent['source'], sourceTitle?: string): string {
     const scope = normalizeGenerationAgentScope(projectId || sourceTitle || source || 'default');
-    return `generation-studio:image-agent:${scope}`;
+    return `generation-studio:agent:${scope}`;
 }
 
 function buildGenerationAgentInitialContext(projectId: string, sourceTitle?: string): string {
     return [
-        `你当前位于 ${APP_BRAND.displayName} 创作页的「套图制作」模式。`,
-        '这里是图片创作专用会话。用户只负责给目标、反馈和约束；具体图片生成相关工具调用由你负责。',
+        `你当前位于 ${APP_BRAND.displayName} 创作页的「Agent 模式」。`,
+        '这是图片、视频、音频生成共用的创作上下文。用户只负责给目标、反馈和约束；你负责整理意图、补全提示词、引用上下文并直接调用生成工具。',
+        '不要要求用户二次确认；只有缺少不可推断的硬性必填项时才停止并说明缺口。',
         sourceTitle ? `当前来源: ${sourceTitle}` : '',
         projectId ? `当前项目ID: ${projectId}` : '',
     ].filter(Boolean).join('\n');
 }
 
+function generationAgentRoleForMode(mode: StudioMode): GenerationAgentSessionMetadata['preferredRole'] {
+    if (mode === 'video') return 'video-director';
+    if (mode === 'audio') return 'audio-director';
+    return 'image-director';
+}
+
 function buildGenerationAgentSessionMetadata(
+    mode: StudioMode,
     projectId: string,
     sourceTitle?: string,
 ): GenerationAgentSessionMetadata {
     return {
         contextType: GENERATION_AGENT_CONTEXT_TYPE,
         intent: 'image_creation',
-        preferredRole: 'image-director',
-        generationTarget: 'image-suite',
-        suiteMode: true,
-        requiresHumanApproval: true,
+        preferredRole: generationAgentRoleForMode(mode),
+        generationTarget: mode,
+        executionMode: 'auto',
+        requiresHumanApproval: false,
         projectId: projectId || undefined,
         source: 'generation-studio',
         sourceTitle: sourceTitle || undefined,
-        suiteState: {
-            status: 'draft',
-            approvedPlanVersion: 0,
-            sharedStyleGuide: '',
-            cards: [],
-        },
+        recentAssetPolicy: 'current-project-feed',
     };
 }
 
@@ -841,7 +848,7 @@ function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
             sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
             sessionId,
             contextId,
-            title: typeof record.title === 'string' ? record.title : '套图制作',
+            title: typeof record.title === 'string' ? record.title : 'Agent 模式',
         } satisfies AgentSessionFeedEntry;
     }
 
@@ -1134,6 +1141,125 @@ function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobProjection
         status: 'running',
         assets: assetsFromJobProjection(job),
     };
+}
+
+function generatedAssetKind(asset: GeneratedAsset, request: GenerationRequest): StudioMode {
+    if (isVideoAsset(asset)) return 'video';
+    if (isAudioAsset(asset)) return 'audio';
+    return request.type;
+}
+
+function buildRecentGenerationAssetSummaries(
+    entries: FeedEntry[],
+    projectId: string,
+    source?: GenerationFeedSource,
+): GenerationAgentAssetSummary[] {
+    const normalizedProjectId = projectId.trim();
+    const normalizedSource = String(source || '').trim();
+    return entries
+        .filter(isGenerationFeedEntry)
+        .filter((entry) => {
+            if (normalizedProjectId) {
+                return entry.request.projectId === normalizedProjectId
+                    || entry.assets.some((asset) => asset.projectId === normalizedProjectId);
+            }
+            if (normalizedSource === 'standalone') {
+                return entry.source === 'standalone' || entry.source === 'generation_studio';
+            }
+            return !normalizedSource || entry.source === normalizedSource;
+        })
+        .flatMap((entry) => entry.assets.map((asset) => ({
+            kind: generatedAssetKind(asset, entry.request),
+            title: asset.title,
+            id: asset.id,
+            relativePath: asset.relativePath,
+            previewUrl: asset.previewUrl,
+            prompt: asset.prompt || entry.request.prompt,
+            model: asset.model || entry.request.model,
+            projectId: asset.projectId || entry.request.projectId || undefined,
+            createdAt: asset.updatedAt || entry.completedAt || entry.createdAt,
+        } satisfies GenerationAgentAssetSummary)))
+        .reverse()
+        .slice(0, 6);
+}
+
+function latestAssetOfKind(
+    assets: GenerationAgentAssetSummary[],
+    kind: StudioMode,
+): GenerationAgentAssetSummary | undefined {
+    return assets.find((asset) => asset.kind === kind);
+}
+
+function summarizeReferenceItems(items: ReferenceItem[]): Array<{ name: string; kind: 'image' | 'video' | 'audio' | 'file' }> {
+    return items.map((item) => {
+        const mimeType = dataUrlMimeType(item.dataUrl);
+        const kind = mimeType.startsWith('image/')
+            ? 'image'
+            : mimeType.startsWith('video/')
+                ? 'video'
+                : mimeType.startsWith('audio/')
+                    ? 'audio'
+                    : 'file';
+        return { name: item.name, kind };
+    });
+}
+
+function sanitizeGenerationRequestForAgent(request: GenerationRequest): Record<string, unknown> {
+    if (request.type === 'video') {
+        return {
+            ...request,
+            referenceItems: summarizeReferenceItems(request.referenceItems),
+            firstClip: request.firstClip ? summarizeReferenceItems([request.firstClip])[0] : null,
+            drivingAudio: request.drivingAudio ? summarizeReferenceItems([request.drivingAudio])[0] : null,
+        };
+    }
+    if (request.type === 'image') {
+        return {
+            ...request,
+            aspectRatio: 'agent-decides',
+            size: 'agent-decides',
+            referenceItems: summarizeReferenceItems(request.referenceItems),
+        };
+    }
+    return { ...request };
+}
+
+function buildGenerationAgentRuntimeContext(params: {
+    mode: StudioMode;
+    request: GenerationRequest;
+    source?: GenerationFeedSource;
+    sourceTitle?: string;
+    recentAssets: GenerationAgentAssetSummary[];
+    attachmentNote?: string;
+}): string {
+    const latest = {
+        image: latestAssetOfKind(params.recentAssets, 'image') || null,
+        video: latestAssetOfKind(params.recentAssets, 'video') || null,
+        audio: latestAssetOfKind(params.recentAssets, 'audio') || null,
+    };
+    return [
+        '[GenerationAgentContext]',
+        JSON.stringify({
+            executionMode: 'auto',
+            noSecondConfirmation: true,
+            currentMode: params.mode,
+            preferredRole: generationAgentRoleForMode(params.mode),
+            source: params.source || 'standalone',
+            sourceTitle: params.sourceTitle || '',
+            currentRequest: sanitizeGenerationRequestForAgent(params.request),
+            recentAssets: params.recentAssets,
+            latestAssets: latest,
+            fuzzyReferencePolicy: 'When the user says 上一张图/刚才那张/之前的图片, use latestAssets.image by default; for video/audio use the matching latest asset.',
+            imageSizingPolicy: 'In Agent mode, image aspectRatio and size are selected by the agent from the user goal. Ignore composer defaults unless the user explicitly asks for a ratio or pixel size.',
+            attachmentNote: params.attachmentNote || '',
+            toolIntent: params.mode === 'image'
+                ? 'Call image.generate after refining the prompt.'
+                : params.mode === 'video'
+                    ? 'Call video.generate after refining storyboard, mode and references. If the video needs expressive TTS, first invoke the tts-director skill, then call voice.speech and use the completed audio.'
+                    : 'Call voice.speech after refining the literal spoken text. For expressive, long-form, poetic, ad, character, or multi-emotion speech, first invoke the tts-director skill and submit one segments request.',
+        }, null, 2),
+        '[/GenerationAgentContext]',
+    ].join('\n');
 }
 
 function placeholderCountForRequest(request: GenerationRequest): number {
@@ -2062,7 +2188,7 @@ export function GenerationStudio({
     const [settings, setSettings] = useState<SettingsShape>({});
     const [contextIntent, setContextIntent] = useState<GenerationIntent | null>(null);
     const [studioMode, setStudioMode] = useState<StudioMode>('image');
-    const [imageCreationSurface, setImageCreationSurface] = useState<ImageCreationSurface>('manual');
+    const [generationSurface, setGenerationSurface] = useState<GenerationSurface>('manual');
     const [, setBindTarget] = useState('');
     const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => readPersistedFeedEntries());
     const [previewAsset, setPreviewAsset] = useState<GeneratedAsset | null>(null);
@@ -2117,22 +2243,27 @@ export function GenerationStudio({
     const [isLoadingAudioVoices, setIsLoadingAudioVoices] = useState(false);
     const [audioError, setAudioError] = useState('');
     const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
-    const isAgentMode = studioMode === 'image' && imageCreationSurface === 'agent';
+    const isAgentMode = generationSurface === 'agent';
+    const activeGenerationProjectId = studioMode === 'image'
+        ? imageProjectId
+        : studioMode === 'video'
+            ? videoProjectId
+            : audioProjectId;
     const generationAgentTitle = useMemo(
-        () => contextIntent?.sourceTitle ? `套图制作 · ${contextIntent.sourceTitle}` : '套图制作',
+        () => contextIntent?.sourceTitle ? `Agent 模式 · ${contextIntent.sourceTitle}` : 'Agent 模式',
         [contextIntent?.sourceTitle],
     );
     const generationAgentContextId = useMemo(
-        () => buildGenerationAgentContextId(imageProjectId, contextIntent?.source, contextIntent?.sourceTitle),
-        [contextIntent?.source, contextIntent?.sourceTitle, imageProjectId],
+        () => buildGenerationAgentContextId(activeGenerationProjectId, contextIntent?.source, contextIntent?.sourceTitle),
+        [activeGenerationProjectId, contextIntent?.source, contextIntent?.sourceTitle],
     );
     const generationAgentInitialContext = useMemo(
-        () => buildGenerationAgentInitialContext(imageProjectId, contextIntent?.sourceTitle),
-        [contextIntent?.sourceTitle, imageProjectId],
+        () => buildGenerationAgentInitialContext(activeGenerationProjectId, contextIntent?.sourceTitle),
+        [activeGenerationProjectId, contextIntent?.sourceTitle],
     );
     const generationAgentSessionMetadata = useMemo(
-        () => buildGenerationAgentSessionMetadata(imageProjectId, contextIntent?.sourceTitle),
-        [contextIntent?.sourceTitle, imageProjectId],
+        () => buildGenerationAgentSessionMetadata(studioMode, activeGenerationProjectId, contextIntent?.sourceTitle),
+        [activeGenerationProjectId, contextIntent?.sourceTitle, studioMode],
     );
     const trackedJobIds = useMemo(
         () => feedEntries
@@ -2289,7 +2420,7 @@ export function GenerationStudio({
             } catch (error) {
                 if (requestId !== agentSessionRequestIdRef.current) return;
                 console.error('Failed to initialize generation agent session:', error);
-                setAgentSessionError(error instanceof Error ? error.message : '套图制作会话初始化失败');
+                setAgentSessionError(error instanceof Error ? error.message : 'Agent 模式会话初始化失败');
             } finally {
                 if (requestId === agentSessionRequestIdRef.current) {
                     setIsAgentSessionLoading(false);
@@ -2428,6 +2559,7 @@ export function GenerationStudio({
             ? `${effectiveAudioModel} · ${audioVoiceId ? shortVoiceId(audioVoiceId) : '未选音色'} · ${audioResponseFormat}`
             : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
     const activeError = studioMode === 'image' ? imageError : studioMode === 'audio' ? audioError : videoError;
+    const visibleError = isAgentMode ? (agentSessionError || activeError) : activeError;
 
     useEffect(() => {
         setImageModel((prev) => {
@@ -3058,18 +3190,111 @@ export function GenerationStudio({
         return [];
     }, [videoFirstFrame, videoLastFrame, videoMode, videoReferences]);
 
+    const currentAgentRequest = useMemo<GenerationRequest>(() => {
+        if (studioMode === 'video') {
+            const effectiveReferences = videoMode === 'reference-guided'
+                ? videoReferences.filter(Boolean) as ReferenceItem[]
+                : videoMode === 'first-last-frame'
+                    ? [videoFirstFrame, videoLastFrame].filter(Boolean) as ReferenceItem[]
+                    : [];
+            const effectiveVideoMode = effectiveReferences.length > 0 && videoMode === 'text-to-video'
+                ? 'reference-guided'
+                : videoMode;
+            return {
+                type: 'video',
+                prompt: videoPrompt,
+                title: videoTitle,
+                projectId: videoProjectId,
+                model: effectiveVideoModel,
+                aspectRatio: videoAspectRatio,
+                resolution: videoResolution,
+                durationSeconds: videoDurationSeconds,
+                generateAudio: videoGenerateAudio,
+                generationMode: effectiveVideoMode,
+                referenceItems: effectiveReferences,
+                firstClip: videoFirstClip,
+                drivingAudio: videoDrivingAudio,
+            };
+        }
+        if (studioMode === 'audio') {
+            return {
+                type: 'audio',
+                prompt: audioPrompt,
+                title: audioTitle,
+                projectId: audioProjectId,
+                model: effectiveAudioModel,
+                voiceId: audioVoiceId,
+                languageBoost: audioLanguageBoost,
+                responseFormat: audioResponseFormat,
+            };
+        }
+        const effectiveImageMode: ImageGenerationMode = imageReferences.length > 0
+            ? (imageMode === 'text-to-image' ? 'reference-guided' : imageMode)
+            : 'text-to-image';
+        return {
+            type: 'image',
+            prompt: imagePrompt,
+            title: imageTitle,
+            projectId: imageProjectId,
+            count: imageCount,
+            model: imageModel,
+            aspectRatio: imageAspectRatio,
+            size: imageSize,
+            quality: imageQuality,
+            generationMode: effectiveImageMode,
+            referenceItems: imageReferences,
+        };
+    }, [
+        audioLanguageBoost,
+        audioProjectId,
+        audioPrompt,
+        audioResponseFormat,
+        audioTitle,
+        audioVoiceId,
+        effectiveAudioModel,
+        effectiveVideoModel,
+        imageAspectRatio,
+        imageCount,
+        imageMode,
+        imageModel,
+        imageProjectId,
+        imagePrompt,
+        imageQuality,
+        imageReferences,
+        imageSize,
+        imageTitle,
+        studioMode,
+        videoAspectRatio,
+        videoDrivingAudio,
+        videoDurationSeconds,
+        videoFirstClip,
+        videoFirstFrame,
+        videoGenerateAudio,
+        videoLastFrame,
+        videoMode,
+        videoProjectId,
+        videoPrompt,
+        videoReferences,
+        videoResolution,
+        videoTitle,
+    ]);
+    const recentAgentAssets = useMemo(
+        () => buildRecentGenerationAssetSummaries(feedEntries, activeGenerationProjectId, contextIntent?.source || 'standalone'),
+        [activeGenerationProjectId, contextIntent?.source, feedEntries],
+    );
+
     const composerGridClass = studioMode === 'audio'
         ? 'grid gap-4'
         : studioMode === 'video' && videoMode === 'first-last-frame'
         ? 'grid items-start gap-4 md:grid-cols-[196px_minmax(0,1fr)]'
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
-    const currentHeaderHint = isAgentMode ? '套图制作 · 对话驱动' : currentConfigHint;
+    const currentHeaderHint = isAgentMode ? 'Agent 模式 · 对话驱动' : currentConfigHint;
     const canSendAgentMessage = isAgentMode
         && Boolean(agentSessionId)
         && !isAgentSessionLoading
         && !agentExecutionActive
-        && (imagePrompt.trim().length > 0 || Boolean(agentAttachment));
+        && (currentAgentRequest.prompt.trim().length > 0 || Boolean(agentAttachment));
     const handlePickAgentAttachment = useCallback(async () => {
         if (!agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
         try {
@@ -3088,68 +3313,113 @@ export function GenerationStudio({
         }
     }, [agentExecutionActive, agentSessionId, isAgentSessionLoading]);
     const handleSendAgentMessage = useCallback(async () => {
-        const content = imagePrompt.trim();
+        const content = currentAgentRequest.prompt.trim();
         if ((!content && !agentAttachment) || !agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
-        let attachment: UploadedFileAttachment | undefined;
-        let attachmentContextNote = '';
+        const attachments: UploadedFileAttachment[] = [];
+        const attachmentContextNotes: string[] = [];
 
-        if (agentAttachment && attachmentVisualKind(agentAttachment) === 'image') {
+        const createInlineAttachment = async (item: ReferenceItem, fallbackName: string): Promise<UploadedFileAttachment> => {
+            const result = await window.ipcRenderer.chat.createInlineAttachment({
+                dataUrl: item.dataUrl,
+                fileName: item.name || fallbackName,
+                sessionId: agentSessionId,
+            }) as { success?: boolean; error?: string; attachment?: UploadedFileAttachment };
+            if (!result?.success || !result.attachment) {
+                throw new Error(result?.error || '附件创建失败');
+            }
+            return result.attachment;
+        };
+
+        if (currentAgentRequest.type === 'image' && agentAttachment && attachmentVisualKind(agentAttachment) === 'image') {
             try {
                 const uploadedImage = await attachmentToReferenceItem(agentAttachment);
                 const combinedReferences = uploadedImage
-                    ? [uploadedImage, ...imageReferences]
-                    : [...imageReferences];
+                    ? [uploadedImage, ...currentAgentRequest.referenceItems]
+                    : [...currentAgentRequest.referenceItems];
                 const contactSheet = await buildReferenceContactSheet(combinedReferences);
-                const result = await window.ipcRenderer.chat.createInlineAttachment({
-                    dataUrl: contactSheet.dataUrl,
-                    fileName: contactSheet.fileName,
-                    sessionId: agentSessionId,
-                }) as { success?: boolean; error?: string; attachment?: UploadedFileAttachment };
-                if (!result?.success || !result.attachment) {
-                    throw new Error(result?.error || '参考图附件创建失败');
-                }
-                attachment = result.attachment;
-                attachmentContextNote = contactSheet.note;
+                attachments.push(await createInlineAttachment({ name: contactSheet.fileName, dataUrl: contactSheet.dataUrl }, contactSheet.fileName));
+                attachmentContextNotes.push(contactSheet.note);
             } catch (error) {
                 console.error('Failed to merge generation references:', error);
                 setImageError(error instanceof Error ? error.message : '参考图附件创建失败');
                 return;
             }
         } else if (agentAttachment) {
-            attachment = agentAttachment;
-            if (imageReferences.length > 0) {
-                attachmentContextNote = `当前轮次还存在 ${imageReferences.length} 张创作参考图未随消息附带；如需让 AI 读取这些图，请移除当前文件附件，或把参考图直接通过左侧图片区发送。`;
+            attachments.push(agentAttachment);
+            if (currentAgentRequest.type === 'image' && currentAgentRequest.referenceItems.length > 0) {
+                attachmentContextNotes.push(`当前轮次还存在 ${currentAgentRequest.referenceItems.length} 张创作参考图未随消息附带；如需让 AI 读取这些图，请移除当前文件附件，或把参考图直接通过左侧图片区发送。`);
             }
-        } else if (imageReferences.length > 0) {
+        } else if (currentAgentRequest.type === 'image' && currentAgentRequest.referenceItems.length > 0) {
             try {
-                const contactSheet = await buildReferenceContactSheet(imageReferences);
-                const result = await window.ipcRenderer.chat.createInlineAttachment({
-                    dataUrl: contactSheet.dataUrl,
-                    fileName: contactSheet.fileName,
-                    sessionId: agentSessionId,
-                }) as { success?: boolean; error?: string; attachment?: UploadedFileAttachment };
-                if (!result?.success || !result.attachment) {
-                    throw new Error(result?.error || '参考图附件创建失败');
-                }
-                attachment = result.attachment;
-                attachmentContextNote = contactSheet.note;
+                const contactSheet = await buildReferenceContactSheet(currentAgentRequest.referenceItems);
+                attachments.push(await createInlineAttachment({ name: contactSheet.fileName, dataUrl: contactSheet.dataUrl }, contactSheet.fileName));
+                attachmentContextNotes.push(contactSheet.note);
             } catch (error) {
                 console.error('Failed to create inline agent attachment:', error);
                 setImageError(error instanceof Error ? error.message : '参考图附件创建失败');
                 return;
             }
         }
+        if (currentAgentRequest.type === 'video') {
+            try {
+                const imageReferences = currentAgentRequest.referenceItems.filter(referenceItemIsImage);
+                if (imageReferences.length > 0) {
+                    const contactSheet = await buildReferenceContactSheet(imageReferences);
+                    attachments.push(await createInlineAttachment({ name: contactSheet.fileName, dataUrl: contactSheet.dataUrl }, contactSheet.fileName));
+                    attachmentContextNotes.push(`视频参考图：${contactSheet.note}`);
+                }
+                if (currentAgentRequest.firstClip?.dataUrl) {
+                    attachments.push(await createInlineAttachment(currentAgentRequest.firstClip, currentAgentRequest.firstClip.name || 'first-clip.mp4'));
+                    attachmentContextNotes.push(`视频续写起始素材：${currentAgentRequest.firstClip.name || 'first-clip'}`);
+                }
+                if (currentAgentRequest.drivingAudio?.dataUrl) {
+                    attachments.push(await createInlineAttachment(currentAgentRequest.drivingAudio, currentAgentRequest.drivingAudio.name || 'driving-audio.mp3'));
+                    attachmentContextNotes.push(`驱动音频素材：${currentAgentRequest.drivingAudio.name || 'driving-audio'}`);
+                }
+            } catch (error) {
+                console.error('Failed to prepare generation agent video attachments:', error);
+                setVideoError(error instanceof Error ? error.message : '参考素材附件创建失败');
+                return;
+            }
+        }
         ensureAgentFeedEntry(agentSessionId);
-        const messageContent = [content, attachmentContextNote].filter(Boolean).join('\n\n').trim();
+        const runtimeContext = buildGenerationAgentRuntimeContext({
+            mode: studioMode,
+            request: currentAgentRequest,
+            source: contextIntent?.source || 'standalone',
+            sourceTitle: contextIntent?.sourceTitle,
+            recentAssets: recentAgentAssets,
+            attachmentNote: attachmentContextNotes.join('\n'),
+        });
+        const messageContent = [content, runtimeContext, attachmentContextNotes.join('\n')].filter(Boolean).join('\n\n').trim();
         setAgentPendingMessage({
             content: messageContent,
-            displayContent: content || (attachment ? `请处理这个附件：${attachment.name}` : undefined),
-            attachment,
+            displayContent: content || (attachments[0] ? `请处理这个附件：${attachments[0].name}` : undefined),
+            attachments: attachments.length > 0 ? attachments : undefined,
         });
-        setImagePrompt('');
-        setImageError('');
+        if (studioMode === 'image') {
+            setImagePrompt('');
+            setImageError('');
+        } else if (studioMode === 'video') {
+            setVideoPrompt('');
+            setVideoError('');
+        } else {
+            setAudioPrompt('');
+            setAudioError('');
+        }
         setAgentAttachment(null);
-    }, [agentAttachment, agentExecutionActive, agentSessionId, ensureAgentFeedEntry, imagePrompt, imageReferences, isAgentSessionLoading]);
+    }, [
+        agentAttachment,
+        agentExecutionActive,
+        agentSessionId,
+        contextIntent?.source,
+        contextIntent?.sourceTitle,
+        currentAgentRequest,
+        ensureAgentFeedEntry,
+        isAgentSessionLoading,
+        recentAgentAssets,
+        studioMode,
+    ]);
     const studioToolbar = (
         <div className="flex items-center gap-2.5">
             <button
@@ -3191,36 +3461,34 @@ export function GenerationStudio({
                 <Music2 className="h-4 w-4" />
                 生音频
             </button>
-            {studioMode === 'image' && (
-                <button
-                    type="button"
-                    role="switch"
-                    aria-checked={isAgentMode}
-                    aria-label="套图制作"
-                    onClick={() => setImageCreationSurface((prev) => prev === 'agent' ? 'manual' : 'agent')}
-                    className="inline-flex items-center gap-3 rounded-full px-1 py-1 text-[14px] font-medium text-text-secondary transition-colors"
+            <button
+                type="button"
+                role="switch"
+                aria-checked={isAgentMode}
+                aria-label="Agent 模式"
+                onClick={() => setGenerationSurface((prev) => prev === 'agent' ? 'manual' : 'agent')}
+                className="inline-flex items-center gap-3 rounded-full px-1 py-1 text-[14px] font-medium text-text-secondary transition-colors"
+            >
+                <span className="inline-flex items-center gap-2">
+                    <Sparkles className={clsx('h-4 w-4 transition-colors', isAgentMode ? 'text-brand-red' : 'text-text-tertiary')} />
+                    <span>Agent 模式</span>
+                </span>
+                <span
+                    className={clsx(
+                        'relative inline-flex h-7 w-12 shrink-0 rounded-full border transition-colors duration-200',
+                        isAgentMode
+                            ? 'border-brand-red/40 bg-brand-red'
+                            : 'border-border bg-surface-tertiary',
+                    )}
                 >
-                    <span className="inline-flex items-center gap-2">
-                        <Sparkles className={clsx('h-4 w-4 transition-colors', isAgentMode ? 'text-brand-red' : 'text-text-tertiary')} />
-                        <span>套图制作</span>
-                    </span>
                     <span
                         className={clsx(
-                            'relative inline-flex h-7 w-12 shrink-0 rounded-full border transition-colors duration-200',
-                            isAgentMode
-                                ? 'border-brand-red/40 bg-brand-red'
-                                : 'border-border bg-surface-tertiary',
+                            'absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.22)] transition-transform duration-200',
+                            isAgentMode ? 'translate-x-[22px]' : 'translate-x-0.5',
                         )}
-                    >
-                        <span
-                            className={clsx(
-                                'absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.22)] transition-transform duration-200',
-                                isAgentMode ? 'translate-x-[22px]' : 'translate-x-0.5',
-                            )}
-                        />
-                    </span>
-                </button>
-            )}
+                    />
+                </span>
+            </button>
             <div className="ml-auto hidden text-[12px] text-text-tertiary md:block">{currentHeaderHint}</div>
         </div>
     );
@@ -3411,18 +3679,22 @@ export function GenerationStudio({
                                                         disabled={imageModelOptions.length === 0}
                                                         emptyText="未添加生图模型"
                                                     />
-                                                    <ImageAspectRatioPicker
-                                                        value={imageAspectRatio}
-                                                        onChange={setImageAspectRatio}
-                                                    />
-                                                    <PopoverSelect
-                                                        value={imageSize}
-                                                        onChange={setImageSize}
-                                                        options={IMAGE_SIZE_OPTIONS}
-                                                        className="min-w-[82px]"
-                                                        title="图片尺寸"
-                                                        panelClassName="w-[248px]"
-                                                    />
+                                                    {!isAgentMode && (
+                                                        <>
+                                                            <ImageAspectRatioPicker
+                                                                value={imageAspectRatio}
+                                                                onChange={setImageAspectRatio}
+                                                            />
+                                                            <PopoverSelect
+                                                                value={imageSize}
+                                                                onChange={setImageSize}
+                                                                options={IMAGE_SIZE_OPTIONS}
+                                                                className="min-w-[82px]"
+                                                                title="图片尺寸"
+                                                                panelClassName="w-[248px]"
+                                                            />
+                                                        </>
+                                                    )}
                                                     <PopoverSelect
                                                         value={String(imageCount)}
                                                         onChange={(value) => setImageCount(Number(value) || 1)}
@@ -3490,13 +3762,21 @@ export function GenerationStudio({
                                                     />
                                                     <button
                                                         type="button"
-                                                        onClick={handleGenerateAudio}
-                                                        disabled={!hasVoiceConfig || !audioVoiceId.trim()}
+                                                        onClick={isAgentMode ? handleSendAgentMessage : handleGenerateAudio}
+                                                        disabled={isAgentMode ? !canSendAgentMessage : (!hasVoiceConfig || !audioVoiceId.trim())}
                                                         className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
                                                         title="生成音频"
                                                         aria-label="生成音频"
                                                     >
-                                                        <Sparkles className="h-5 w-5" />
+                                                        {isAgentMode ? (
+                                                            agentExecutionActive ? (
+                                                                <Loader2 className="h-5 w-5 animate-spin" />
+                                                            ) : (
+                                                                <ArrowUp className="h-5 w-5" />
+                                                            )
+                                                        ) : (
+                                                            <Sparkles className="h-5 w-5" />
+                                                        )}
                                                     </button>
                                                 </>
                                             ) : (
@@ -3544,11 +3824,19 @@ export function GenerationStudio({
                                                     />
                                                     <button
                                                         type="button"
-                                                        onClick={handleGenerateVideo}
-                                                        disabled={!hasVideoConfig}
+                                                        onClick={isAgentMode ? handleSendAgentMessage : handleGenerateVideo}
+                                                        disabled={isAgentMode ? !canSendAgentMessage : !hasVideoConfig}
                                                         className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
                                                     >
-                                                        <Sparkles className="h-5 w-5" />
+                                                        {isAgentMode ? (
+                                                            agentExecutionActive ? (
+                                                                <Loader2 className="h-5 w-5 animate-spin" />
+                                                            ) : (
+                                                                <ArrowUp className="h-5 w-5" />
+                                                            )
+                                                        ) : (
+                                                            <Sparkles className="h-5 w-5" />
+                                                        )}
                                                     </button>
                                                 </>
                                             )}
@@ -3567,9 +3855,9 @@ export function GenerationStudio({
                                             </div>
                                         )}
 
-                                        {((isAgentMode && studioMode === 'image') ? (agentSessionError || imageError) : activeError) && (
+                                        {visibleError && (
                                             <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
-                                                {(isAgentMode && studioMode === 'image') ? (agentSessionError || imageError) : activeError}
+                                                {visibleError}
                                             </div>
                                         )}
 
@@ -3579,13 +3867,13 @@ export function GenerationStudio({
                                             </div>
                                         )}
 
-                                        {studioMode === 'video' && !hasVideoConfig && (
+                                        {studioMode === 'video' && !isAgentMode && !hasVideoConfig && (
                                             <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 未检测到生视频配置。请先完成官方视频登录或填写视频生成所需的 API Key。
                                             </div>
                                         )}
 
-                                        {studioMode === 'audio' && !hasVoiceConfig && (
+                                        {studioMode === 'audio' && !isAgentMode && !hasVoiceConfig && (
                                             <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 未检测到声音合成配置。请先到“设置 → AI 模型”填写 TTS 配置。
                                             </div>

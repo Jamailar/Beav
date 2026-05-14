@@ -15,6 +15,24 @@ const IMAGE_TASK_POLL_INTERVAL_MS: u64 = 2000;
 const IMAGE_TASK_POLL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 const IMAGE_REQUEST_TIMEOUT_SECONDS: u64 = 240;
 
+fn redbox_official_route_suffixes() -> Vec<String> {
+    let mut suffixes = vec![
+        format!("/{}/v1", crate::app_brand_slug()),
+        "/redbox/v1".to_string(),
+        "/thrive/v1".to_string(),
+    ];
+    suffixes.dedup();
+    suffixes
+}
+
+pub(crate) fn is_redbox_official_endpoint(endpoint: &str) -> bool {
+    let normalized = normalize_base_url(endpoint).to_lowercase();
+    is_redbox_compatible_endpoint(&normalized)
+        && redbox_official_route_suffixes()
+            .iter()
+            .any(|suffix| normalized.contains(suffix))
+}
+
 pub(crate) fn resolve_image_generation_settings(
     settings: &Value,
 ) -> Option<(String, Option<String>, String, String, String)> {
@@ -37,11 +55,12 @@ pub(crate) fn resolve_video_generation_settings(
     let endpoint = payload_string(settings, "video_endpoint").map(|endpoint| {
         let normalized = normalize_base_url(&endpoint);
         let normalized_lower = normalized.to_lowercase();
-        let official_route = format!("/{}/v1", crate::app_brand_slug());
-        if normalized_lower.contains("api.ziz.hk") && !normalized_lower.contains(&official_route) {
+        if normalized_lower.contains("api.ziz.hk")
+            && !is_redbox_official_endpoint(&normalized_lower)
+        {
             crate::official_base_url_for_realm("cn")
         } else if normalized_lower.contains("api.thrivingos.com")
-            && !normalized_lower.contains(&official_route)
+            && !is_redbox_official_endpoint(&normalized_lower)
         {
             crate::official_base_url_for_realm("global")
         } else {
@@ -170,9 +189,7 @@ fn is_official_gemini_endpoint(endpoint: &str) -> bool {
 }
 
 fn is_redbox_official_image_endpoint(endpoint: &str) -> bool {
-    let normalized = normalize_base_url(endpoint).to_lowercase();
-    is_redbox_compatible_endpoint(&normalized)
-        && normalized.contains(&format!("/{}/v1", crate::app_brand_slug()))
+    is_redbox_official_endpoint(endpoint)
 }
 
 fn resolve_gemini_openai_endpoint(endpoint: &str) -> String {
@@ -2347,10 +2364,27 @@ mod tests {
         let official_global_base_url = crate::official_base_url_for_realm("global");
         assert!(is_redbox_official_image_endpoint(&official_cn_base_url));
         assert!(is_redbox_official_image_endpoint(&official_global_base_url));
+        assert!(is_redbox_official_image_endpoint(
+            "https://api.ziz.hk/thrive/v1"
+        ));
         assert_eq!(
             normalize_image_generation_url(&official_cn_base_url),
             format!("{official_cn_base_url}/images/generations")
         );
+    }
+
+    #[test]
+    fn resolve_video_generation_settings_preserves_legacy_thrive_official_endpoint() {
+        let settings = json!({
+            "video_endpoint": "https://api.ziz.hk/thrive/v1",
+            "video_model": "wan2.7-t2v-video"
+        });
+        let (endpoint, _api_key, model) =
+            resolve_video_generation_settings(&settings).expect("video settings");
+
+        assert_eq!(endpoint, "https://api.ziz.hk/thrive/v1");
+        assert_eq!(model, "wan2.7-t2v-video");
+        assert!(is_redbox_official_endpoint(&endpoint));
     }
 
     #[test]

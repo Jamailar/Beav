@@ -53,6 +53,10 @@ Use this exact order:
 3. **Generate the complete voice track with TTS**
    - Call `Operate(resource="voice", operation="speech", input={ ... })` with the full approved spoken script and the resolved `voiceId`.
    - Prefer one complete audio asset for the whole talking-head segment unless the user explicitly wants separate clips.
+   - For expressive narration, long scripts, poetry, ads, or any multi-emotion performance, activate `tts-director` first with `Operate(resource="skills", operation="invoke", input={ "name": "tts-director" })`, then use its guidance to split the approved script into semantic beats and assign intentional `emotion`, `speed`, `pitch`, punctuation, and pauses.
+   - Add restrained delivery controls when they improve the approved performance: use `speed` for pace, `pitch` for tone, `emotion` for mood, expressive punctuation such as `～`, `？`, `！`, `……`, and MiniMax text markers such as `<#0.6#>`, `(laughs)`, `(sighs)`, or `(breath)` inside `input` only where the spoken rhythm needs them.
+   - Do not write control instructions into the spoken text. For example, pass `"emotion":"happy"` and `speed:1.08` instead of making the character say “用开心快速的语气”.
+   - If the approved voice track needs multiple emotional beats, submit one `voice.speech` call with ordered `segments`; the media runtime will generate each segment and merge the final audio. Do not make repeated `voice.speech` calls and then manually merge.
    - Wait until the TTS result contains a usable audio asset path, URL, or asset id.
    - Do not start video generation while the TTS job is only queued or running.
 4. **Generate video with visual reference plus generated audio**
@@ -76,7 +80,20 @@ Recommended TTS payload shape:
 ```json
 {
   "voiceId": "voice_xxx",
-  "input": "完整、已确认的口播台词。",
+  "segments": [
+    {
+      "input": "完整、已确认的口播开场。<#0.5#>",
+      "speed": 0.98,
+      "pitch": 0,
+      "emotion": "calm"
+    },
+    {
+      "input": "自然地进入更有感染力的重点(laughs)。",
+      "speed": 1.05,
+      "pitch": 0,
+      "emotion": "happy"
+    }
+  ],
   "title": "Jamba welcome voiceover",
   "waitForCompletion": true
 }
@@ -372,6 +389,12 @@ If the script contains multiple shots, a named character, an important environme
 - After resolving the voice, call `Operate(resource="voice", operation="speech", input={ ... })` before the video tool:
   - `input`: the full approved spoken script
   - `voiceId`: the selected character asset's stored voice id
+  - `speed`: optional speech speed, 0.5-2.0; use subtle defaults such as 0.95 for steady narration or 1.05-1.12 for energetic口播
+  - `pitch`: optional pitch, -12 to 12; keep 0 unless the character or user intent calls for a higher/lower tone
+  - `emotion`: optional MiniMax emotion: `happy`, `sad`, `angry`, `fearful`, `disgusted`, `surprised`, `calm`, `fluent`, `whipser`/`whisper`
+  - MiniMax text controls: use expressive punctuation such as `～`, `？`, `！`, `……`, `？！`, `！！` for tone, `<#0.6#>` for intentional pauses, and `(laughs)`, `(sighs)`, `(breath)`, `(chuckle)` for light expression when useful
+  - Before building expressive or multi-beat TTS payloads, activate `tts-director` with `Operate(resource="skills", operation="invoke", input={ "name": "tts-director" })`
+  - `segments`: use this for one long voice track with multiple emotional beats; submit once and let the media runtime merge the final audio
   - `title`: a clear audio asset title
   - `projectId` / `boundManuscriptPath`: include them when known
   - `waitForCompletion`: true when the runtime supports it, because video generation needs the completed audio asset

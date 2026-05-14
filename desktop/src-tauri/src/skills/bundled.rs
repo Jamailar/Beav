@@ -23,6 +23,7 @@ mod tests {
                 "image-prompt-optimizer",
                 "member-skill-distiller",
                 "skill-creator",
+                "tts-director",
                 "video-director",
                 "wander-synthesis",
                 "writing-style",

@@ -24,6 +24,7 @@ pub const RUNTIME_ROLE_IDS: &[&str] = &[
     "copywriter",
     "image-director",
     "video-director",
+    "audio-director",
     "reviewer",
     "ops-coordinator",
     "research_agent",

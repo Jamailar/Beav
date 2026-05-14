@@ -89,6 +89,10 @@ fn route_source<'a>(
     mode: &str,
     default_source_id: &str,
 ) -> Option<&'a Value> {
+    if mode == "official" {
+        return sources.iter().find(|source| source_is_official(source));
+    }
+
     let explicit_source_id = route
         .get("sourceId")
         .or_else(|| route.get("source_id"))
@@ -102,10 +106,6 @@ fn route_source<'a>(
         {
             return Some(source);
         }
-    }
-
-    if mode == "official" {
-        return sources.iter().find(|source| source_is_official(source));
     }
 
     if mode == "custom" {
@@ -351,5 +351,81 @@ pub fn next_memory_maintenance_at_ms(response: &str, now_ms: i64) -> i64 {
         now_ms + 5 * 60 * 1000
     } else {
         now_ms + 20 * 60 * 1000
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn routed_settings(route: Value) -> Value {
+        json!({
+            "api_endpoint": "https://custom.example/v1",
+            "api_key": "sk-root",
+            "model_name": "custom-default",
+            "default_ai_source_id": "custom-source",
+            "ai_sources_json": serde_json::to_string(&vec![
+                json!({
+                    "id": "redbox_official_auto",
+                    "presetId": "redbox-official",
+                    "baseURL": "https://api.ziz.hk/redbox/v1",
+                    "apiKey": "",
+                    "model": "official-model",
+                    "protocol": "openai"
+                }),
+                json!({
+                    "id": "custom-source",
+                    "presetId": "openai",
+                    "baseURL": "https://custom.example/v1",
+                    "apiKey": "sk-custom",
+                    "model": "custom-model",
+                    "protocol": "openai"
+                })
+            ]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "redclaw": route
+            })).unwrap()
+        })
+    }
+
+    #[test]
+    fn official_route_ignores_conflicting_custom_source_id() {
+        let settings = routed_settings(json!({
+            "mode": "official",
+            "sourceId": "custom-source",
+            "model": "official-route-model"
+        }));
+
+        let config = resolve_chat_config(
+            &settings,
+            Some(&json!({
+                "runtimeMode": "redclaw"
+            })),
+        )
+        .expect("official route should resolve");
+
+        assert_eq!(config.base_url, "https://api.ziz.hk/redbox/v1");
+        assert_eq!(config.model_name, "official-route-model");
+    }
+
+    #[test]
+    fn custom_route_uses_explicit_custom_source_id() {
+        let settings = routed_settings(json!({
+            "mode": "custom",
+            "sourceId": "custom-source",
+            "model": "custom-route-model"
+        }));
+
+        let config = resolve_chat_config(
+            &settings,
+            Some(&json!({
+                "runtimeMode": "redclaw"
+            })),
+        )
+        .expect("custom route should resolve");
+
+        assert_eq!(config.base_url, "https://custom.example/v1");
+        assert_eq!(config.api_key.as_deref(), Some("sk-custom"));
+        assert_eq!(config.model_name, "custom-route-model");
     }
 }

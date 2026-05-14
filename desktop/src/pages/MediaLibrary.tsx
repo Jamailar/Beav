@@ -215,6 +215,7 @@ function normalizeGeneratedAsset(asset: GeneratedAsset): GeneratedAsset {
 
 function isVideoAsset(asset: { mimeType?: string; relativePath?: string; absolutePath?: string; previewUrl?: string }): boolean {
     const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return false;
     if (mimeType.startsWith('video/')) return true;
     const source = String(asset.relativePath || asset.absolutePath || asset.previewUrl || '').trim();
     return /\.(mp4|webm|mov|m4v|avi|mkv)(?:[?#].*)?$/i.test(source);
@@ -231,10 +232,11 @@ function getMediaAssetPlayableUrl(asset: { previewUrl?: string; absolutePath?: s
     return asset.previewUrl || asset.absolutePath || asset.relativePath || '';
 }
 
-function isAudioAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
+function isAudioAsset(asset: { mimeType?: string; relativePath?: string; absolutePath?: string; previewUrl?: string }): boolean {
     const mimeType = String(asset.mimeType || '').toLowerCase();
     if (mimeType.startsWith('audio/')) return true;
-    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(String(asset.relativePath || '').trim());
+    const source = String(asset.relativePath || asset.absolutePath || asset.previewUrl || '').trim();
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i.test(source);
 }
 
 function isTtsAsset(asset: Pick<MediaAsset, 'provider' | 'providerTemplate' | 'sourceDomain' | 'sourceLink'>): boolean {
@@ -242,6 +244,42 @@ function isTtsAsset(asset: Pick<MediaAsset, 'provider' | 'providerTemplate' | 's
         || asset.providerTemplate === 'tts'
         || asset.sourceDomain === 'voice'
         || String(asset.sourceLink || '').startsWith('voice:');
+}
+
+function AudioAssetCover({
+    label,
+    src,
+    onReady,
+}: {
+    label: string;
+    src: string;
+    onReady?: () => void;
+}) {
+    return (
+        <div className="flex aspect-[16/7] min-h-[132px] flex-col justify-between gap-4 bg-surface-secondary px-4 py-4">
+            <div className="flex flex-1 items-center justify-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-accent-primary/20 bg-accent-primary/10 text-accent-primary shadow-sm">
+                    <Music2 className="h-7 w-7" />
+                </div>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 text-xs font-medium text-text-secondary truncate">{label}</div>
+                <span className="shrink-0 rounded-md border border-border bg-surface-primary/70 px-2 py-0.5 text-[10px] text-text-tertiary">
+                    音频
+                </span>
+            </div>
+            {src ? (
+                <audio
+                    src={resolveAssetUrl(src)}
+                    className="w-full"
+                    controls
+                    preload="metadata"
+                    onClick={(event) => event.stopPropagation()}
+                    onLoadedMetadata={onReady}
+                />
+            ) : null}
+        </div>
+    );
 }
 
 const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -1153,7 +1191,20 @@ export function MediaLibrary({
                                             </div>
 
                                             <div className="bg-surface-secondary">
-                                                {isVideoAsset(asset) ? (
+                                                {isAudioAsset(asset) ? (
+                                                    asset.exists ? (
+                                                        <AudioAssetCover
+                                                            label={isTtsAsset(asset) ? '声音合成' : '音频'}
+                                                            src={getMediaAssetPlayableUrl(asset)}
+                                                            onReady={() => measureAssetCard(asset.id)}
+                                                        />
+                                                    ) : (
+                                                        <div className="flex aspect-[16/7] min-h-[132px] flex-col items-center justify-center gap-2 bg-surface-secondary px-4 text-center text-xs text-text-tertiary">
+                                                            <Music2 className="h-7 w-7 text-accent-primary/70" />
+                                                            音频文件不可用
+                                                        </div>
+                                                    )
+                                                ) : isVideoAsset(asset) ? (
                                                     asset.thumbnailUrl && asset.exists ? (
                                                         <img
                                                             src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
@@ -1176,33 +1227,16 @@ export function MediaLibrary({
                                                             <Clapperboard className="h-5 w-5" />
                                                         </div>
                                                     )
-                                                ) : (asset.thumbnailUrl || asset.previewUrl) && asset.exists ? (
-                                                    isAudioAsset(asset) ? (
-                                                        <div className="space-y-3 px-4 py-5">
-                                                            <div className="flex items-center gap-2 text-sm font-medium text-text-secondary">
-                                                                <Music2 className="h-4 w-4 text-accent-primary" />
-                                                                {isTtsAsset(asset) ? '声音合成' : '音频'}
-                                                            </div>
-                                                            <audio
-                                                                src={resolveAssetUrl(asset.previewUrl)}
-                                                                className="w-full"
-                                                                controls
-                                                                preload="metadata"
-                                                                onClick={(event) => event.stopPropagation()}
-                                                                onLoadedMetadata={() => measureAssetCard(asset.id)}
-                                                            />
-                                                        </div>
-                                                    ) : (
-                                                        <img
-                                                            src={resolveAssetUrl(asset.previewUrl)}
-                                                            alt={asset.title || asset.id}
-                                                            className="block w-full h-auto"
-                                                            onLoad={() => measureAssetCard(asset.id)}
-                                                        />
-                                                    )
+                                                ) : (asset.thumbnailUrl || asset.previewUrl || asset.absolutePath || asset.relativePath) && asset.exists ? (
+                                                    <img
+                                                        src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
+                                                        alt={asset.title || asset.id}
+                                                        className="block w-full h-auto"
+                                                        onLoad={() => measureAssetCard(asset.id)}
+                                                    />
                                                 ) : (
                                                     <div className="min-h-[220px] w-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
-                                                        {asset.source === 'planned' ? '计划素材（尚未生成）' : (isAudioAsset(asset) ? '音频文件不可用' : isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
+                                                        {asset.source === 'planned' ? '计划素材（尚未生成）' : (isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
                                                     </div>
                                                 )}
                                             </div>
@@ -1521,7 +1555,16 @@ export function MediaLibrary({
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         {generatedAssets.map((asset) => (
                                             <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                                                {isVideoAsset(asset) ? (
+                                                {isAudioAsset(asset) ? (
+                                                    asset.exists ? (
+                                                        <AudioAssetCover
+                                                            label="音频"
+                                                            src={asset.previewUrl || asset.relativePath || ''}
+                                                        />
+                                                    ) : (
+                                                        <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
+                                                    )
+                                                ) : isVideoAsset(asset) ? (
                                                     asset.thumbnailUrl && asset.exists ? (
                                                         <img
                                                             src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
@@ -1542,18 +1585,8 @@ export function MediaLibrary({
                                                             <Clapperboard className="h-5 w-5" />
                                                         </div>
                                                     )
-                                                ) : (asset.thumbnailUrl || asset.previewUrl) && asset.exists ? (
-                                                    isAudioAsset(asset) ? (
-                                                        <div className="flex aspect-video flex-col justify-center gap-4 bg-surface-secondary px-4">
-                                                            <div className="inline-flex items-center gap-2 text-sm font-medium text-text-secondary">
-                                                                <Music2 className="h-4 w-4 text-accent-primary" />
-                                                                音频
-                                                            </div>
-                                                            <audio src={resolveAssetUrl(asset.previewUrl)} className="w-full" controls preload="metadata" />
-                                                        </div>
-                                                    ) : (
-                                                        <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full aspect-video object-cover" />
-                                                    )
+                                                ) : (asset.thumbnailUrl || asset.previewUrl || asset.relativePath) && asset.exists ? (
+                                                    <img src={resolveAssetUrl(asset.previewUrl || asset.thumbnailUrl || asset.relativePath || '')} alt={asset.title || asset.id} className="w-full aspect-video object-cover" />
                                                 ) : (
                                                     <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
                                                 )}

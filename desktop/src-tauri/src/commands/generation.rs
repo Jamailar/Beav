@@ -9,9 +9,7 @@ use std::sync::mpsc;
 use tauri::{AppHandle, State};
 
 fn is_redbox_official_video_endpoint(endpoint: &str) -> bool {
-    let normalized = normalize_base_url(endpoint).to_lowercase();
-    (normalized.contains("api.ziz.hk") || normalized.contains("api.thrivingos.com"))
-        && normalized.contains(&format!("/{}/v1", app_brand_slug()))
+    crate::media_generation::is_redbox_official_endpoint(endpoint)
 }
 const MAX_IMAGE_BATCH_ITEMS: usize = 6;
 const IMAGE_BATCH_PARALLELISM: usize = 4;
@@ -1520,6 +1518,13 @@ mod tests {
         assert_eq!(items[1].title.as_deref(), Some("第二张"));
         assert!(items[1].prompt.contains("Visual brief: 细节补图"));
         assert!(items[1].prompt.contains("planning labels"));
+    }
+
+    #[test]
+    fn legacy_thrive_gateway_is_detected_as_official_video_endpoint() {
+        assert!(is_redbox_official_video_endpoint(
+            "https://api.ziz.hk/thrive/v1"
+        ));
     }
 
     #[test]

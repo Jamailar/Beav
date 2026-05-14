@@ -71,7 +71,12 @@ pub fn handle_voice_channel(
                 voice_service::synthesize_speech(state, payload)
             } else {
                 (|| {
-                    let submitted = media_runtime::submit_media_job(app, state, "audio", payload)?;
+                    let job_kind = if voice_service::is_speech_sequence_payload(payload) {
+                        "audio_sequence"
+                    } else {
+                        "audio"
+                    };
+                    let submitted = media_runtime::submit_media_job(app, state, job_kind, payload)?;
                     if payload_field(payload, "waitForCompletion")
                         .and_then(Value::as_bool)
                         .unwrap_or(false)

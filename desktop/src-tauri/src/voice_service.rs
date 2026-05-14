@@ -39,6 +39,16 @@ fn payload_bool_alias(payload: &Value, keys: &[&str]) -> Option<bool> {
         .find_map(|key| payload_field(payload, key).and_then(Value::as_bool))
 }
 
+fn payload_f64_alias(payload: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| payload_field(payload, key).and_then(Value::as_f64))
+}
+
+fn payload_i64_alias(payload: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| payload_field(payload, key).and_then(Value::as_i64))
+}
+
 fn clean_base_url(value: String) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
@@ -731,28 +741,151 @@ fn decode_audio_response(
     Ok((audio, fallback_ext.to_string()))
 }
 
-pub(crate) fn synthesize_speech(
-    state: &State<'_, AppState>,
+fn nested_payload_field<'a>(payload: &'a Value, object_key: &str, key: &str) -> Option<&'a Value> {
+    payload
+        .get(object_key)
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(key))
+}
+
+fn nested_payload_f64_alias(payload: &Value, object_key: &str, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| nested_payload_field(payload, object_key, key).and_then(Value::as_f64))
+}
+
+fn nested_payload_i64_alias(payload: &Value, object_key: &str, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| nested_payload_field(payload, object_key, key).and_then(Value::as_i64))
+}
+
+fn nested_payload_string_alias(payload: &Value, object_key: &str, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        nested_payload_field(payload, object_key, key)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    })
+}
+
+fn speech_speed(payload: &Value) -> Result<Option<f64>, String> {
+    let speed = payload_f64_alias(payload, &["speed", "speed_rate"])
+        .or_else(|| nested_payload_f64_alias(payload, "voice_setting", &["speed", "speed_rate"]));
+    if let Some(value) = speed {
+        if !(0.5..=2.0).contains(&value) {
+            return Err("voice.speech speed must be between 0.5 and 2.0".to_string());
+        }
+    }
+    Ok(speed)
+}
+
+fn speech_pitch(payload: &Value) -> Result<Option<i64>, String> {
+    let pitch = payload_i64_alias(payload, &["pitch"])
+        .or_else(|| nested_payload_i64_alias(payload, "voice_setting", &["pitch"]));
+    if let Some(value) = pitch {
+        if !(-12..=12).contains(&value) {
+            return Err("voice.speech pitch must be between -12 and 12".to_string());
+        }
+    }
+    Ok(pitch)
+}
+
+fn speech_emotion(payload: &Value) -> Result<Option<String>, String> {
+    let emotion = payload_string(payload, "emotion")
+        .or_else(|| nested_payload_string_alias(payload, "voice_setting", &["emotion"]))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if value == "whisper" {
+                "whipser".to_string()
+            } else {
+                value
+            }
+        });
+    if let Some(value) = emotion.as_deref() {
+        const SUPPORTED: &[&str] = &[
+            "happy",
+            "sad",
+            "angry",
+            "fearful",
+            "disgusted",
+            "surprised",
+            "calm",
+            "fluent",
+            "whipser",
+        ];
+        if !SUPPORTED.contains(&value) {
+            return Err(format!(
+                "voice.speech emotion must be one of {}",
+                SUPPORTED.join(", ")
+            ));
+        }
+    }
+    Ok(emotion)
+}
+
+fn build_speech_request_body(
     payload: &Value,
-) -> Result<Value, String> {
-    let input = payload_string(payload, "input")
-        .or_else(|| payload_string(payload, "text"))
-        .ok_or_else(|| "voice.speech requires input".to_string())?;
-    let voice_id = payload_string_alias(payload, &["voiceId", "voice_id", "voice"])
-        .ok_or_else(|| "voice.speech requires voiceId".to_string())?;
-    let config = resolve_voice_config(state, Some(payload))?;
-    let model = payload_string(payload, "model").unwrap_or_else(|| config.tts_model.clone());
-    let response_format = payload_string_alias(payload, &["responseFormat", "response_format"])
-        .unwrap_or_else(|| "mp3".to_string());
+    input: String,
+    voice_id: String,
+    model: String,
+    response_format: String,
+) -> Result<Map<String, Value>, String> {
     let mut body = Map::new();
-    body.insert("model".to_string(), json!(model.clone()));
+    body.insert("model".to_string(), json!(model));
     body.insert("input".to_string(), json!(input));
-    body.insert("voice_id".to_string(), json!(voice_id));
-    body.insert(
-        "response_format".to_string(),
-        json!(response_format.clone()),
-    );
+    body.insert("voice_id".to_string(), json!(voice_id.clone()));
+    body.insert("response_format".to_string(), json!(response_format));
     body.insert("return_audio_binary".to_string(), json!(true));
+
+    if let Some(speed) = speech_speed(payload)? {
+        body.insert("speed".to_string(), json!(speed));
+    }
+    if let Some(pitch) = speech_pitch(payload)? {
+        body.insert("pitch".to_string(), json!(pitch));
+    }
+    if let Some(emotion) = speech_emotion(payload)? {
+        body.insert("emotion".to_string(), json!(emotion));
+    }
+    if let Some(add_silence) =
+        payload_f64_alias(payload, &["addSilence", "add_silence"]).or_else(|| {
+            nested_payload_f64_alias(payload, "voice_setting", &["addSilence", "add_silence"])
+        })
+    {
+        body.insert("add_silence".to_string(), json!(add_silence));
+    }
+    for key in ["prefer_sync_tts", "prefer_async_tts", "async_tts"] {
+        if let Some(value) = payload_field(payload, key).and_then(Value::as_bool) {
+            body.insert(key.to_string(), json!(value));
+        }
+    }
+    if let Some(audio_setting) = payload
+        .get("audio_setting")
+        .filter(|value| value.is_object())
+    {
+        body.insert("audio_setting".to_string(), audio_setting.clone());
+    }
+    for (source, target) in [
+        ("sample_rate", "sample_rate"),
+        ("bitrate", "bitrate"),
+        ("channel", "channel"),
+        ("format", "format"),
+    ] {
+        if let Some(value) = payload_field(payload, source) {
+            body.insert(target.to_string(), value.clone());
+        }
+    }
+
+    if let Some(voice_setting) = payload
+        .get("voice_setting")
+        .and_then(Value::as_object)
+        .filter(|object| !object.is_empty())
+    {
+        let mut merged = voice_setting.clone();
+        merged
+            .entry("voice_id".to_string())
+            .or_insert_with(|| json!(voice_id));
+        body.insert("voice_setting".to_string(), Value::Object(merged));
+    }
+
     if let Some(language_boost) =
         payload_string_alias(payload, &["languageBoost", "language_boost"])
     {
@@ -763,6 +896,149 @@ pub(crate) fn synthesize_speech(
             body.entry(key.clone()).or_insert(value.clone());
         }
     }
+    Ok(body)
+}
+
+pub(crate) fn speech_sequence_segment_count(payload: &Value) -> usize {
+    payload
+        .get("segments")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+pub(crate) fn is_speech_sequence_payload(payload: &Value) -> bool {
+    speech_sequence_segment_count(payload) > 1
+}
+
+pub(crate) fn speech_sequence_segments(payload: &Value) -> Result<Vec<Value>, String> {
+    let segments = payload
+        .get("segments")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "voice.speech sequence requires segments".to_string())?;
+    if segments.is_empty() {
+        return Err("voice.speech sequence requires at least one segment".to_string());
+    }
+    if segments.len() > 50 {
+        return Err("voice.speech sequence supports at most 50 segments".to_string());
+    }
+    let mut normalized = Vec::with_capacity(segments.len());
+    for (index, segment) in segments.iter().enumerate() {
+        let input = payload_string(segment, "input")
+            .or_else(|| payload_string(segment, "text"))
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("voice.speech sequence segment {} requires input", index + 1))?;
+        let mut item = segment.clone();
+        if let Some(object) = item.as_object_mut() {
+            object.insert("input".to_string(), json!(input));
+        }
+        normalized.push(item);
+    }
+    Ok(normalized)
+}
+
+fn merge_object_field(target: &mut Map<String, Value>, parent: &Value, child: &Value, key: &str) {
+    let mut merged = parent
+        .get(key)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(child_object) = child.get(key).and_then(Value::as_object) {
+        for (child_key, child_value) in child_object {
+            merged.insert(child_key.clone(), child_value.clone());
+        }
+    }
+    if !merged.is_empty() {
+        target.insert(key.to_string(), Value::Object(merged));
+    }
+}
+
+pub(crate) fn speech_sequence_segment_payload(
+    parent: &Value,
+    segment: &Value,
+    index: usize,
+) -> Result<Value, String> {
+    let mut object = Map::new();
+    for key in [
+        "voiceId",
+        "voice_id",
+        "voice",
+        "voiceRef",
+        "model",
+        "responseFormat",
+        "response_format",
+        "format",
+        "languageBoost",
+        "language_boost",
+        "speed",
+        "speed_rate",
+        "pitch",
+        "emotion",
+        "addSilence",
+        "add_silence",
+        "prefer_sync_tts",
+        "prefer_async_tts",
+        "async_tts",
+        "projectId",
+        "boundManuscriptPath",
+        "sessionId",
+        "ownerSessionId",
+    ] {
+        if let Some(value) = payload_field(parent, key) {
+            object.insert(key.to_string(), value.clone());
+        }
+    }
+    merge_object_field(&mut object, parent, segment, "voice_setting");
+    merge_object_field(&mut object, parent, segment, "audio_setting");
+    if let Some(parent_extra) = parent.get("extra").and_then(Value::as_object) {
+        object.insert("extra".to_string(), Value::Object(parent_extra.clone()));
+    }
+    if let Some(segment_object) = segment.as_object() {
+        for (key, value) in segment_object {
+            if key == "voice_setting" || key == "audio_setting" {
+                continue;
+            }
+            object.insert(key.clone(), value.clone());
+        }
+    }
+    let input = payload_string(&Value::Object(object.clone()), "input")
+        .or_else(|| payload_string(&Value::Object(object.clone()), "text"))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("voice.speech sequence segment {} requires input", index + 1))?;
+    object.insert("input".to_string(), json!(input));
+    let parent_title =
+        payload_string(parent, "title").unwrap_or_else(|| "TTS sequence".to_string());
+    object
+        .entry("title".to_string())
+        .or_insert_with(|| json!(format!("{parent_title} segment {}", index + 1)));
+    object.insert("runtimeBypass".to_string(), json!(true));
+    Ok(Value::Object(object))
+}
+
+fn synthesize_speech_inner(
+    state: &State<'_, AppState>,
+    payload: &Value,
+    register_asset: bool,
+    provider_template: &str,
+) -> Result<Value, String> {
+    let input = payload_string(payload, "input")
+        .or_else(|| payload_string(payload, "text"))
+        .ok_or_else(|| "voice.speech requires input".to_string())?;
+    let voice_id = payload_string_alias(payload, &["voiceId", "voice_id", "voice"])
+        .ok_or_else(|| "voice.speech requires voiceId".to_string())?;
+    let config = resolve_voice_config(state, Some(payload))?;
+    let model = payload_string(payload, "model").unwrap_or_else(|| config.tts_model.clone());
+    let response_format =
+        payload_string_alias(payload, &["responseFormat", "response_format", "format"])
+            .or_else(|| nested_payload_string_alias(payload, "audio_setting", &["format"]))
+            .unwrap_or_else(|| "mp3".to_string());
+    let body = build_speech_request_body(
+        payload,
+        input.clone(),
+        voice_id.clone(),
+        model.clone(),
+        response_format.clone(),
+    )?;
 
     let client = Client::builder()
         .timeout(Duration::from_secs(180))
@@ -823,7 +1099,7 @@ pub(crate) fn synthesize_speech(
         title: Some(title),
         prompt: Some(input),
         provider: Some("voice".to_string()),
-        provider_template: Some("tts".to_string()),
+        provider_template: Some(provider_template.to_string()),
         model: Some(model),
         aspect_ratio: None,
         size: None,
@@ -839,11 +1115,13 @@ pub(crate) fn synthesize_speech(
         thumbnail_url: None,
         exists: true,
     };
-    with_store_mut(state, |store| {
-        store.media_assets.insert(0, asset.clone());
-        Ok(())
-    })?;
-    persist_media_workspace_catalog(state)?;
+    if register_asset {
+        with_store_mut(state, |store| {
+            store.media_assets.insert(0, asset.clone());
+            Ok(())
+        })?;
+        persist_media_workspace_catalog(state)?;
+    }
     Ok(json!({
         "success": true,
         "asset": asset,
@@ -851,6 +1129,20 @@ pub(crate) fn synthesize_speech(
         "path": absolute_path.display().to_string(),
         "relativePath": relative_path,
     }))
+}
+
+pub(crate) fn synthesize_speech(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    synthesize_speech_inner(state, payload, true, "tts")
+}
+
+pub(crate) fn synthesize_speech_artifact(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    synthesize_speech_inner(state, payload, false, "tts.segment")
 }
 
 fn voice_status(record: &SubjectRecord) -> Option<String> {
@@ -1056,4 +1348,188 @@ pub(crate) fn patch_subject_voice_failure(
         store.subjects = subjects;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speech_request_body_forwards_minimax_delivery_controls() {
+        let payload = json!({
+            "speed": 1.05,
+            "pitch": -1,
+            "emotion": "whisper",
+            "add_silence": 0.25,
+            "prefer_sync_tts": true,
+            "audio_setting": {
+                "sample_rate": 32000,
+                "bitrate": 128000,
+                "channel": 1
+            }
+        });
+
+        let body = build_speech_request_body(
+            &payload,
+            "第一段<#0.6#>第二段(laughs)。".to_string(),
+            "male-qn-qingse".to_string(),
+            "speech-2.8-hd".to_string(),
+            "mp3".to_string(),
+        )
+        .expect("request body");
+
+        assert_eq!(body.get("speed").and_then(Value::as_f64), Some(1.05));
+        assert_eq!(body.get("pitch").and_then(Value::as_i64), Some(-1));
+        assert_eq!(body.get("emotion").and_then(Value::as_str), Some("whipser"));
+        assert_eq!(body.get("add_silence").and_then(Value::as_f64), Some(0.25));
+        assert_eq!(
+            body.get("prefer_sync_tts").and_then(Value::as_bool),
+            Some(true)
+        );
+        let body_value = Value::Object(body.clone());
+        assert_eq!(
+            body_value
+                .pointer("/audio_setting/sample_rate")
+                .and_then(Value::as_i64),
+            Some(32000)
+        );
+        assert_eq!(
+            body.get("return_audio_binary").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn speech_request_body_reads_nested_voice_setting_controls() {
+        let payload = json!({
+            "voice_setting": {
+                "speed": 0.92,
+                "pitch": 2,
+                "emotion": "calm"
+            }
+        });
+
+        let body = build_speech_request_body(
+            &payload,
+            "慢一点，稳一点。".to_string(),
+            "voice_xxx".to_string(),
+            "speech-2.8-turbo".to_string(),
+            "mp3".to_string(),
+        )
+        .expect("request body");
+
+        assert_eq!(body.get("speed").and_then(Value::as_f64), Some(0.92));
+        assert_eq!(body.get("pitch").and_then(Value::as_i64), Some(2));
+        assert_eq!(body.get("emotion").and_then(Value::as_str), Some("calm"));
+        let body_value = Value::Object(body.clone());
+        assert_eq!(
+            body_value
+                .pointer("/voice_setting/voice_id")
+                .and_then(Value::as_str),
+            Some("voice_xxx")
+        );
+    }
+
+    #[test]
+    fn speech_request_body_rejects_invalid_delivery_controls() {
+        let payload = json!({
+            "speed": 2.5,
+            "pitch": 0,
+            "emotion": "happy"
+        });
+        let error = build_speech_request_body(
+            &payload,
+            "文本".to_string(),
+            "voice_xxx".to_string(),
+            "speech-2.8-turbo".to_string(),
+            "mp3".to_string(),
+        )
+        .expect_err("speed should be rejected");
+
+        assert!(error.contains("speed"));
+    }
+
+    #[test]
+    fn speech_sequence_segment_payload_inherits_and_overrides_controls() {
+        let parent = json!({
+            "voiceId": "voice_parent",
+            "model": "speech-2.8-hd",
+            "speed": 0.95,
+            "emotion": "calm",
+            "audio_setting": {
+                "sample_rate": 32000,
+                "channel": 1
+            },
+            "voice_setting": {
+                "pitch": 0,
+                "add_silence": 0.2
+            },
+            "segments": [
+                {
+                    "input": "第一段",
+                    "speed": 1.08,
+                    "emotion": "whisper",
+                    "voice_setting": {
+                        "pitch": 2
+                    }
+                }
+            ]
+        });
+        let segment = parent
+            .get("segments")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .expect("segment");
+        let payload = speech_sequence_segment_payload(&parent, segment, 0).expect("payload");
+
+        assert_eq!(
+            payload.get("voiceId").and_then(Value::as_str),
+            Some("voice_parent")
+        );
+        assert_eq!(payload.get("speed").and_then(Value::as_f64), Some(1.08));
+        assert_eq!(
+            payload.get("emotion").and_then(Value::as_str),
+            Some("whisper")
+        );
+        assert_eq!(
+            payload
+                .pointer("/audio_setting/sample_rate")
+                .and_then(Value::as_i64),
+            Some(32000)
+        );
+        assert_eq!(
+            payload
+                .pointer("/voice_setting/pitch")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .pointer("/voice_setting/add_silence")
+                .and_then(Value::as_f64),
+            Some(0.2)
+        );
+        let body = build_speech_request_body(
+            &payload,
+            "第一段".to_string(),
+            "voice_parent".to_string(),
+            "speech-2.8-hd".to_string(),
+            "mp3".to_string(),
+        )
+        .expect("body");
+        assert_eq!(body.get("emotion").and_then(Value::as_str), Some("whipser"));
+    }
+
+    #[test]
+    fn speech_sequence_detection_requires_multiple_segments() {
+        assert!(!is_speech_sequence_payload(
+            &json!({ "segments": [{ "input": "一段" }] })
+        ));
+        assert!(is_speech_sequence_payload(&json!({
+            "segments": [
+                { "input": "一段" },
+                { "input": "二段" }
+            ]
+        })));
+    }
 }
