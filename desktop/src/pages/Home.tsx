@@ -7,7 +7,7 @@ import type { ThrivePluginHomeAction, ThrivePluginHomeResponse, ThrivePluginHome
 interface HomeProps {
     isActive?: boolean;
     onNavigateToCoverStudio?: () => void;
-    onNavigateToGenerationStudio?: (mode: 'image' | 'video' | 'audio') => void;
+    onNavigateToGenerationStudio?: (mode: 'image' | 'video' | 'audio' | 'cover') => void;
     onOpenManuscript?: (filePath: string) => void;
     onNavigateToRedClaw?: (message: {
         content: string;
@@ -466,7 +466,7 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
         }
         if ('target' in command) {
             if (command.target === 'coverStudio') {
-                onNavigateToCoverStudio?.();
+                onNavigateToGenerationStudio?.('cover');
             } else if (command.target === 'generationStudio') {
                 onNavigateToGenerationStudio?.(command.mode === 'video' ? 'video' : 'image');
             }
@@ -530,7 +530,7 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                             description="生成适合发布的视觉封面"
                             icon={ImagePlus}
                             tintClassName="bg-emerald-500/10 text-emerald-700"
-                            onClick={() => onNavigateToCoverStudio?.()}
+                            onClick={() => onNavigateToGenerationStudio?.('cover')}
                         />
                         <QuickAppButton
                             label="生图"
