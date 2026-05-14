@@ -4173,13 +4173,13 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "media.edit",
         namespace: "media",
-        description: "Edit an existing local video with controlled ffmpeg operations and register the outputs in the media library. Use for user requests to cut, trim, split, concatenate, mute, speed-change, crop, or export an uploaded video.",
+        description: "Edit an existing local video with controlled ffmpeg operations and register the outputs in the media library. Use this instead of shell for user requests to cut, trim, split, concatenate, mute, speed-change, crop, or export an uploaded video. Reuse the already resolved attachment sourcePath/toolPath; do not search for the file again before editing.",
         input_schema: media_edit_input_schema,
         output_schema: media_output_schema,
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::CompatOnly,
+        visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "media.transcribe",
@@ -4608,7 +4608,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "shell" => Some(ToolDescriptor {
             name: "shell",
-            description: "Execute arbitrary shell commands inside a sandboxed environment with policy-controlled access. Use this for all CLI operations including curl, ffmpeg, gh, npm, pip, node, python, which, git, rg, jq, and any host-installed tool. The sandbox allows reading system paths and the workspace, blocks destructive operations by default. Commands that need network access, write outside the workspace, or elevated privileges will trigger an approval flow.",
+            description: "Execute one host command inside a sandboxed environment with policy-controlled access. The command string is parsed into argv and is not interpreted by a shell, so pipes, redirects, command substitution, process substitution, glob expansion, and command chaining are not supported here. Prefer structured Operate actions such as media.edit for supported app workflows; use this only when a direct CLI command is needed. Commands that need network access, write outside the workspace, or elevated privileges will trigger an approval flow.",
             kind: ToolKind::Shell,
             requires_approval: false,
             concurrency_safe: false,
@@ -4790,11 +4790,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "shell",
-                "description": "Execute arbitrary shell commands inside a sandboxed environment with policy-controlled access. Use this for all CLI operations including curl, ffmpeg, gh, npm, pip, node, python, which, git, rg, jq, and any host-installed tool. The sandbox allows reading system paths and the workspace, blocks destructive operations by default. Commands that need network access, write outside the workspace, or elevated privileges will trigger an approval flow.",
+                "description": "Execute one host command inside a sandboxed environment with policy-controlled access. The command string is parsed into argv and is not interpreted by a shell, so pipes, redirects, command substitution, process substitution, glob expansion, and command chaining are not supported here. Prefer structured Operate actions such as media.edit for supported app workflows; use this only when a direct CLI command is needed. Commands that need network access, write outside the workspace, or elevated privileges will trigger an approval flow.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": { "type": "string", "description": "The shell command to execute. Supports pipes, redirects, and all standard shell syntax." },
+                        "command": { "type": "string", "description": "Single command line parsed into argv. Shell metacharacters such as pipes, redirects, &&, $(...), <(...), and globs are not interpreted." },
                         "cwd": { "type": "string", "description": "Working directory for the command." },
                         "maxChars": { "type": "integer", "minimum": 200, "maximum": 40000, "description": "Maximum output characters." },
                         "usePty": { "type": "boolean", "description": "Use PTY for interactive or long-running commands." },
@@ -5170,7 +5170,7 @@ mod tests {
         assert!(actions.contains(&"image.generate"));
         assert!(actions.contains(&"video.generate"));
         assert!(actions.contains(&"video.analyze"));
-        assert!(!actions.contains(&"media.edit"));
+        assert!(actions.contains(&"media.edit"));
         assert!(actions.contains(&"media.transcribe"));
         assert!(actions.contains(&"voice.clone"));
         assert!(actions.contains(&"voice.bindAsset"));
