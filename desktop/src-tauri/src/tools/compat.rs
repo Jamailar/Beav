@@ -703,6 +703,12 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("video.generate"),
         ),
+        ("voice", "speech" | "tts" | "run" | "generate") => app_cli_action_call(
+            "voice.speech",
+            payload,
+            Some("Operate"),
+            Some("voice.speech"),
+        ),
         ("video", "analyze") => app_cli_action_call(
             "video.analyze",
             payload,
@@ -1837,6 +1843,41 @@ mod tests {
             Some(&json!("project_read"))
         );
         assert!(normalized.arguments.get("__compat").is_some());
+    }
+
+    #[test]
+    fn normalizes_operate_voice_speech_to_voice_speech_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "voice",
+                "operation": "speech",
+                "input": {
+                    "input": "君不见黄河之水天上来。",
+                    "voice": "voice_2eee156a6468427bb185a831"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("voice.speech"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("input")),
+            Some(&json!("君不见黄河之水天上来。"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("voice")),
+            Some(&json!("voice_2eee156a6468427bb185a831"))
+        );
     }
 
     #[test]
