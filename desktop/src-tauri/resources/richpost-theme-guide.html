@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RedBox Richpost Theme Guide</title>
+    <style>
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+          sans-serif;
+        color: #1f2933;
+        background: #f7f3ea;
+      }
+
+      main {
+        max-width: 820px;
+        margin: 0 auto;
+        padding: 40px 24px 64px;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 32px;
+        line-height: 1.2;
+      }
+
+      h2 {
+        margin: 32px 0 12px;
+        font-size: 20px;
+      }
+
+      p,
+      li {
+        font-size: 15px;
+        line-height: 1.7;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: rgba(31, 41, 51, 0.08);
+      }
+
+      pre {
+        overflow: auto;
+        padding: 16px;
+        border-radius: 8px;
+        background: #18202a;
+        color: #f6f2ea;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Richpost Theme Guide</h1>
+      <p>
+        Richpost themes package layout tokens, page masters, and static assets for reusable
+        long-form visual posts.
+      </p>
+
+      <h2>Bundle Structure</h2>
+      <ul>
+        <li><code>theme.json</code>: theme metadata, slots, and supported surfaces.</li>
+        <li><code>layout.tokens.json</code>: spacing, typography, color, and export metrics.</li>
+        <li><code>masters/*.master.html</code>: cover, body, ending, or custom section masters.</li>
+        <li><code>assets/*</code>: local images, SVGs, and other static theme resources.</li>
+      </ul>
+
+      <h2>Minimal Theme</h2>
+      <pre><code>{
+  "id": "crossroads-mint",
+  "name": "Crossroads Mint",
+  "version": "1.0.0",
+  "surfaces": ["richpost"],
+  "masters": {
+    "cover": "masters/cover.master.html",
+    "body": "masters/body.master.html",
+    "ending": "masters/ending.master.html"
+  }
+}</code></pre>
+
+      <h2>Implementation Notes</h2>
+      <p>
+        Keep templates deterministic and offline-friendly. Theme bundles should not execute
+        arbitrary JavaScript or depend on remote assets at render time.
+      </p>
+    </main>
+  </body>
+</html>

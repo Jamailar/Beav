@@ -98,6 +98,7 @@ import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { playTestNotificationSound } from '../notifications/audio';
 import { DEFAULT_NOTIFICATION_SETTINGS, parseNotificationSettings } from '../notifications/types';
 import { APP_BRAND } from '../config/brand';
+import { SHOW_CURRENT_RELEASE_NOTES_EVENT } from '../utils/currentReleaseNotes';
 
 const MIN_CHAT_MAX_TOKENS = 1024;
 const DEFAULT_CHAT_MAX_TOKENS = 262144;
@@ -3849,6 +3850,12 @@ export function Settings({
     });
   }, [activeTab, persistDeveloperModeState]);
 
+  const handleShowCurrentReleaseNotes = useCallback(() => {
+    window.dispatchEvent(new CustomEvent(SHOW_CURRENT_RELEASE_NOTES_EVENT, {
+      detail: { version: appVersion || '2.0.0' },
+    }));
+  }, [appVersion]);
+
   const handleOpenDownloadPage = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.openAppReleasePage(APP_BRAND.downloadUrl);
@@ -6305,7 +6312,7 @@ export function Settings({
     </div>
   );
 
-  const tabs = [
+  const tabs: Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }> = [
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
     { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
     { id: 'team', labelKey: 'settings.tabs.team', icon: Users },
@@ -6314,7 +6321,7 @@ export function Settings({
     { id: 'profile', labelKey: 'settings.tabs.profile', icon: FileText },
     { id: 'tools', labelKey: 'settings.tabs.tools', icon: Wrench },
     { id: 'experimental', labelKey: 'settings.tabs.experimental', icon: FlaskConical },
-  ] satisfies Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }>;
+  ];
 
   return (
     <div className="flex h-full min-w-0 text-text-primary">
@@ -6384,6 +6391,7 @@ export function Settings({
                 handleUploadPendingReport={handleUploadPendingReport}
                 handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
+                handleShowCurrentReleaseNotes={handleShowCurrentReleaseNotes}
                 handleOpenDownloadPage={handleOpenDownloadPage}
                 handleOpenAppOnboarding={onOpenAppOnboarding}
               />

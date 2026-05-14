@@ -33,6 +33,7 @@ const REDBOX_XHS_DETAIL_ACTIONS_ID = 'redbox-xhs-detail-actions';
 const REDBOX_XHS_PROFILE_ACTIONS_ID = 'redbox-xhs-profile-actions';
 const REDBOX_XHS_STYLE_ID = 'redbox-xhs-dom-style';
 const REDBOX_XHS_DETAIL_HOST_TAG = 'redbox-xhs-explore';
+const USER_PROFILE_FEATURE_ENABLED = false;
 
 function normalizeText(value) {
     return String(value || '').trim();
@@ -637,7 +638,7 @@ function detectPageInfo() {
     }
 
     if (/(^|\.)xiaohongshu\.com$/i.test(hostname) || /(^|\.)rednote\.com$/i.test(hostname)) {
-        if (isXhsProfilePath()) {
+        if (USER_PROFILE_FEATURE_ENABLED && isXhsProfilePath()) {
             return {
                 kind: 'xhs-profile',
                 action: 'xhs:collect-current-blogger',
@@ -1162,6 +1163,7 @@ function summarizeActionResponse(response, fallback) {
 }
 
 async function runXhsDomAction(action, options = {}) {
+    if (!USER_PROFILE_FEATURE_ENABLED && (action === 'blogger' || action === 'bloggerNotes')) return;
     const actionMap = {
         save: { type: 'save-xhs', pending: '保存中...', done: '已保存到 RedBox' },
         download: { type: 'xhs:download-current-note', pending: '下载中...', done: '已创建下载任务' },
@@ -1628,6 +1630,7 @@ function findXhsProfileActionMount() {
 }
 
 function injectXhsProfileActions() {
+    if (!USER_PROFILE_FEATURE_ENABLED) return;
     if (!isXhsProfilePath()) return;
     let container = document.getElementById(REDBOX_XHS_PROFILE_ACTIONS_ID);
     if (container?.isConnected) return;
@@ -1736,7 +1739,7 @@ function ensureXhsDomButtons(pageInfo) {
     } else {
         document.getElementById(REDBOX_XHS_DETAIL_ACTIONS_ID)?.remove();
     }
-    if (isXhsProfilePath() || pageInfo?.kind === 'xhs-profile') {
+    if (USER_PROFILE_FEATURE_ENABLED && (isXhsProfilePath() || pageInfo?.kind === 'xhs-profile')) {
         injectXhsProfileActions(pageInfo);
     } else {
         document.getElementById(REDBOX_XHS_PROFILE_ACTIONS_ID)?.remove();
@@ -1765,7 +1768,7 @@ function removeXhsDomButtons() {
 }
 
 function getRedboxOverlayConfig(pageInfo) {
-    if (isXhsProfilePath() || pageInfo?.kind === 'xhs-profile') {
+    if (USER_PROFILE_FEATURE_ENABLED && (isXhsProfilePath() || pageInfo?.kind === 'xhs-profile')) {
         return {
             variant: 'profile',
             title: 'RedBox 博主采集',

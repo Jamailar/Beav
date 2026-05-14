@@ -9,10 +9,10 @@ export type RedBoxOfficialVideoMode =
 export const REDBOX_OFFICIAL_VIDEO_BASE_URL = `https://api.ziz.hk/${APP_BRAND.variant}/v1`;
 
 export const REDBOX_OFFICIAL_VIDEO_MODELS = {
-  'text-to-video': 'wan2.7-t2v-video',
-  'reference-guided': 'wan2.7-r2v-video',
-  'first-last-frame': 'wan2.7-i2v-video',
-  'continuation': 'wan2.7-i2v-video',
+  'text-to-video': 'seedance-2.0',
+  'reference-guided': 'seedance-2.0',
+  'first-last-frame': 'seedance-2.0',
+  'continuation': 'seedance-2.0',
 } as const;
 
 export const REDBOX_OFFICIAL_VIDEO_MODEL_LIST = [

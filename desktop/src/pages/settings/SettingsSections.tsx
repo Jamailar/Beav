@@ -361,6 +361,7 @@ interface GeneralSettingsSectionProps {
     handleUploadPendingReport: (reportId: string) => Promise<void>;
     handleDismissPendingReport: (reportId: string) => Promise<void>;
     handleVersionTap: () => void;
+    handleShowCurrentReleaseNotes: () => void;
     handleOpenDownloadPage: () => Promise<void>;
     handleOpenAppOnboarding?: () => void;
 }
@@ -584,6 +585,7 @@ function GeneralSettingsSectionInner({
     handleUploadPendingReport,
     handleDismissPendingReport,
     handleVersionTap,
+    handleShowCurrentReleaseNotes,
     handleOpenDownloadPage,
     handleOpenAppOnboarding,
 }: GeneralSettingsSectionProps) {
@@ -671,6 +673,13 @@ function GeneralSettingsSectionInner({
                                 {appVersion ?? t('settings.general.loading')}
                             </button>
                         </p>
+                        <button
+                            type="button"
+                            onClick={handleShowCurrentReleaseNotes}
+                            className="mt-1 text-xs text-accent-primary hover:text-accent-hover transition-colors"
+                        >
+                            {t('settings.general.viewCurrentReleaseNotes')}
+                        </button>
                         <p className="text-xs text-text-tertiary mt-1">
                             {t('settings.general.updateDescription')}
                         </p>

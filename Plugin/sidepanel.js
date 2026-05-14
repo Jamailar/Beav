@@ -1,6 +1,7 @@
 const elements = {
   serverStatus: document.getElementById('server-status'),
   workspaceName: document.getElementById('workspace-name'),
+  accountFooter: document.getElementById('account-footer'),
   boundAccountName: document.getElementById('bound-account-name'),
   accountBindingNotice: document.getElementById('account-binding-notice'),
   accountBindingTitle: document.getElementById('account-binding-title'),
@@ -52,6 +53,7 @@ const elements = {
   taskLogList: document.getElementById('task-log-list'),
 };
 
+const USER_PROFILE_FEATURE_ENABLED = false;
 let context = null;
 let refreshing = false;
 let capturePendingAction = '';
@@ -107,7 +109,9 @@ function bindEvents() {
   elements.taskQueuePause.addEventListener('click', () => void controlActiveTask('pause'));
   elements.taskQueueResume.addEventListener('click', () => void controlActiveTask('resume'));
   elements.taskQueueCancel.addEventListener('click', () => void controlActiveTask('cancel'));
-  elements.accountBindingAction.addEventListener('click', () => void bindCurrentProfileAsAccount());
+  if (USER_PROFILE_FEATURE_ENABLED) {
+    elements.accountBindingAction.addEventListener('click', () => void bindCurrentProfileAsAccount());
+  }
   elements.captureActions.addEventListener('click', (event) => {
     const button = event.target?.closest?.('button[data-action]');
     if (!button) return;
@@ -277,6 +281,12 @@ function renderConnection(health) {
     return;
   }
 
+  if (!USER_PROFILE_FEATURE_ENABLED) {
+    elements.serverStatus.textContent = '已链接';
+    elements.serverStatus.className = 'status ok';
+    return;
+  }
+
   const payload = extractHealthPayload(health);
   if (payload?.accountBindingStatus === 'hasAccountProfile') {
     elements.serverStatus.textContent = '已链接 · 已有账号档案';
@@ -289,6 +299,14 @@ function renderConnection(health) {
 }
 
 function renderWorkspaceAndAccounts(nextContext, healthPayload) {
+  elements.accountFooter?.classList.toggle('hidden', !USER_PROFILE_FEATURE_ENABLED);
+  if (!USER_PROFILE_FEATURE_ENABLED) {
+    elements.workspaceName.textContent = healthPayload?.success
+      ? `当前空间：${cleanTitle(healthPayload.workspaceName || healthPayload.spaceName || '') || '已连接'}`
+      : '当前空间：未连接';
+    elements.boundAccountName.textContent = '';
+    return;
+  }
   if (!healthPayload?.success) {
     elements.workspaceName.textContent = '当前空间：未连接';
     elements.boundAccountName.textContent = '未连接 RedBox';
@@ -327,6 +345,11 @@ function renderWorkspaceAndAccounts(nextContext, healthPayload) {
 }
 
 function renderAccountBindingNotice(nextContext, healthPayload) {
+  if (!USER_PROFILE_FEATURE_ENABLED) {
+    elements.accountBindingNotice.classList.add('hidden');
+    elements.accountBindingAction.disabled = true;
+    return;
+  }
   const hasBoundAccount = healthPayload?.accountBindingStatus === 'hasAccountProfile';
   const isConnected = healthPayload?.success === true;
   elements.accountBindingNotice.classList.toggle('hidden', !isConnected || hasBoundAccount);
@@ -489,6 +512,7 @@ function renderCaptureActions(nextContext) {
 
 async function runCaptureAction(action) {
   if (!action || capturePendingAction) return;
+  if (!USER_PROFILE_FEATURE_ENABLED && (action === 'blogger' || action === 'bloggerNotes')) return;
   const meta = getCaptureActionMeta(action);
   if (!meta.type) return;
   const tabId = Number(context?.tab?.id || 0);
@@ -545,6 +569,7 @@ async function runCaptureAction(action) {
 }
 
 async function bindCurrentProfileAsAccount() {
+  if (!USER_PROFILE_FEATURE_ENABLED) return;
   if (capturePendingAction) return;
   const tabId = Number(context?.tab?.id || 0);
   if (!tabId) {
@@ -663,6 +688,7 @@ function getBloggerNotesOptions() {
 }
 
 async function startBloggerNotesCollection() {
+  if (!USER_PROFILE_FEATURE_ENABLED) return;
   const tabId = Number(context?.tab?.id || 0);
   if (!tabId) {
     renderBloggerNotesProgress({
@@ -766,6 +792,14 @@ function renderBloggerNotesProgress({
 }
 
 function renderBloggerNotesPanel(nextContext) {
+  if (!USER_PROFILE_FEATURE_ENABLED) {
+    elements.bloggerNotesPanel.classList.add('hidden');
+    elements.bloggerNotesControls.classList.add('hidden');
+    elements.bloggerNotesPause.classList.add('hidden');
+    elements.bloggerNotesResume.classList.add('hidden');
+    elements.bloggerNotesCancel.classList.add('hidden');
+    return;
+  }
   const tab = nextContext?.tab || {};
   const pageInfo = nextContext?.pageInfo || {};
   const identity = nextContext?.pageIdentity || {};
@@ -845,6 +879,14 @@ function getCaptureActionConfig(nextContext) {
     };
   }
   if (platform === 'xhs' && pageType === 'profile') {
+    if (!USER_PROFILE_FEATURE_ENABLED) {
+      return {
+        variant: 'xhs-profile-hidden',
+        title: 'RedBox 博主采集',
+        subtitle: '小红书博主页',
+        actions: [],
+      };
+    }
     return {
       variant: 'xhs-profile',
       title: 'RedBox 博主采集',
