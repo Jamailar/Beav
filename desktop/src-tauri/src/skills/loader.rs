@@ -656,15 +656,6 @@ mod tests {
     }
 
     #[test]
-    fn load_skill_bundle_sections_prefers_builtin_skill_root() {
-        let loaded = load_skill_bundle_sections_from_sources("remotion-best-practices", None);
-        assert!(!loaded.body.trim().is_empty());
-        assert!(loaded.rules.contains_key("calculate-metadata.md"));
-        assert!(loaded.rules.contains_key("compositions.md"));
-        assert!(loaded.rules.contains_key("timing.md"));
-    }
-
-    #[test]
     fn load_skill_bundle_sections_ignores_deprecated_builtin_skill() {
         for skill_name in [
             "dbs-xhs-title",

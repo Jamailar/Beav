@@ -51,8 +51,8 @@ pub struct ActionDescriptor {
 }
 
 const APP_CLI_DESCRIPTION: &str = "Structured business actions for the current runtime mode. Always call it with `action` and an optional `payload` object.";
-const REDBOX_EDITOR_DESCRIPTION: &str = "Structured editor actions for the currently bound video/audio manuscript package. Use the script-first flow and controlled ffmpeg/remotion actions.";
-const READ_DESCRIPTION: &str = "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion. Do not use bash/curl for web pages.";
+const REDBOX_EDITOR_DESCRIPTION: &str = "Structured editor actions for the currently bound video/audio manuscript package. Use the script-first flow and controlled ffmpeg actions.";
+const READ_DESCRIPTION: &str = "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, or editor://current/script. Do not use bash/curl for web pages.";
 const LIST_DESCRIPTION: &str = "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, assets:// for asset library entries, or media:// for media.";
 const SEARCH_DESCRIPTION: &str = "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and assets:// for asset library lookup. This is not a web search tool.";
 const WRITE_DESCRIPTION: &str = "Write content to a virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
@@ -785,14 +785,25 @@ fn voice_bind_asset_input_schema() -> Value {
 fn voice_speech_input_schema() -> Value {
     object_schema(
         &[
-            ("input", string_schema("Text to synthesize.")),
+            (
+                "input",
+                string_schema(
+                    "Final narration script text to synthesize. Pass exactly what should be spoken, do not pass control instructions."
+                ),
+            ),
             (
                 "voiceId",
-                string_schema("Platform voice id returned by voice.clone or stored on an asset."),
+                string_schema(
+                    "Exact platform voice id to use for synthesis. Required unless `voice` is provided.",
+                ),
             ),
             (
                 "voice",
                 string_schema("OpenAI-compatible alias for voiceId."),
+            ),
+            (
+                "voiceRef",
+                string_schema("Alias for voiceId, commonly from asset references."),
             ),
             (
                 "model",
@@ -827,7 +838,7 @@ fn voice_speech_input_schema() -> Value {
         ],
         &["input", "voiceId"],
         Some(
-            "Queue speech synthesis with a cloned or platform voice id and save the audio into the media library when the job completes.",
+            "Generate narration audio from `input` using a specific voice id. Use `Operate(resource=\"voice\", operation=\"speech\", input={\"voiceId\":\"<platform voice id>\",\"input\":\"<literal script text>\"})`. The `input` field is the exact spoken text only.",
         ),
     )
 }
@@ -2446,24 +2457,6 @@ fn editor_ffmpeg_edit_input_schema() -> Value {
     )
 }
 
-fn editor_remotion_generate_input_schema() -> Value {
-    object_schema(
-        &[
-            ("filePath", editor_file_locator_schema()),
-            (
-                "instructions",
-                string_schema("Remotion generation instructions."),
-            ),
-            (
-                "scene",
-                json!({ "type": "object", "additionalProperties": true }),
-            ),
-        ],
-        &["instructions"],
-        None,
-    )
-}
-
 fn editor_export_input_schema() -> Value {
     object_schema(
         &[
@@ -2472,7 +2465,7 @@ fn editor_export_input_schema() -> Value {
                 "renderMode",
                 json!({
                     "type": "string",
-                    "enum": ["full", "motion-layer"],
+                    "enum": ["full"],
                 }),
             ),
         ],
@@ -2497,8 +2490,7 @@ fn virtual_path_schema(description: &str) -> Value {
             "knowledge://",
             "profiles://creator_profile",
             "manuscripts://current",
-            "editor://current/script",
-            "editor://current/remotion"
+            "editor://current/script"
         ]
     })
 }
@@ -2539,6 +2531,8 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "subject",
             "image",
             "video",
+            "voice",
+            "media",
             "web",
             "task",
             "editor",
@@ -2567,8 +2561,22 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
 fn redbox_operation_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'static str> {
     let mut operations = if descriptors.is_empty() {
         [
-            "list", "get", "search", "create", "update", "delete", "run", "generate", "export",
-            "confirm", "cancel", "resume", "install", "verify",
+            "list",
+            "get",
+            "search",
+            "create",
+            "update",
+            "delete",
+            "run",
+            "generate",
+            "speech",
+            "transcribe",
+            "export",
+            "confirm",
+            "cancel",
+            "resume",
+            "install",
+            "verify",
         ]
         .into_iter()
         .collect::<Vec<_>>()
@@ -2596,6 +2604,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "subjects" => Some("subject"),
         "image" => Some("image"),
         "video" => Some("video"),
+        "voice" => Some("voice"),
         "media" => Some("media"),
         "web" => Some("web"),
         "skills" => Some("skill"),
@@ -2625,6 +2634,7 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
         "confirm" | "approve" => Some("confirm"),
         "invoke" | "call" | "execute" => Some("run"),
         "generate" => Some("generate"),
+        "speech" => Some("speech"),
         "transcribe" => Some("transcribe"),
         "install" | "save" | "importLocal" => Some("install"),
         "verify" | "diagnose" | "inspect" | "detect" | "discover" | "discoverLocal" | "test" => {
@@ -2673,6 +2683,12 @@ fn redbox_input_schema() -> Value {
         "description": "Structured operation input. For image generation, put prompt/count/aspectRatio/size/quality/referenceImages here; do not hide the requested ratio inside prompt text only.",
         "properties": {
             "prompt": { "type": "string", "description": "Generation or operation prompt." },
+            "input": { "type": "string", "description": "Literal text input for speech/TTS. For voice.speech, this is exactly what should be spoken." },
+            "voiceId": { "type": "string", "description": "Platform voice id for speech/TTS, usually read from an asset's voice.voiceId." },
+            "title": { "type": "string", "description": "Optional generated media title." },
+            "responseFormat": { "type": "string", "description": "Optional audio format for speech/TTS, usually mp3 or wav." },
+            "languageBoost": { "type": "string", "description": "Optional language boost for speech/TTS, such as zh-CN." },
+            "waitForCompletion": { "type": "boolean", "description": "For generated media needed by the next step, set true so the tool returns the completed asset path." },
             "count": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Number of images or generated items." },
             "aspectRatio": image_aspect_ratio_schema("Image output ratio. Required for image generation when the user specifies square/portrait/landscape/vertical/wide or a ratio like 3:4."),
             "ratio": image_aspect_ratio_schema("Alias for aspectRatio; prefer aspectRatio in new calls."),
@@ -2721,7 +2737,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::CompatOnly,
+        visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "model_config.read",
@@ -4006,39 +4022,6 @@ const REDBOX_EDITOR_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
-        action: "remotion_read",
-        namespace: "remotion",
-        description: "Read the current Remotion context.",
-        input_schema: editor_script_read_input_schema,
-        output_schema: editor_output_schema,
-        mutating: false,
-        concurrency_safe: true,
-        runtime_modes: ALL_EDITOR_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
-    },
-    ActionDescriptor {
-        action: "remotion_generate",
-        namespace: "remotion",
-        description: "Generate or update Remotion overlays from instructions.",
-        input_schema: editor_remotion_generate_input_schema,
-        output_schema: editor_output_schema,
-        mutating: true,
-        concurrency_safe: false,
-        runtime_modes: ALL_EDITOR_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
-    },
-    ActionDescriptor {
-        action: "remotion_save",
-        namespace: "remotion",
-        description: "Persist the current Remotion scene state.",
-        input_schema: editor_remotion_generate_input_schema,
-        output_schema: editor_output_schema,
-        mutating: true,
-        concurrency_safe: false,
-        runtime_modes: ALL_EDITOR_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
-    },
-    ActionDescriptor {
         action: "export",
         namespace: "export",
         description: "Export the current editor project output.",
@@ -4956,6 +4939,22 @@ mod tests {
             redbox.pointer("/function/parameters/properties/resource/enum/0"),
             Some(&json!("manuscript"))
         );
+        let resources = redbox
+            .pointer("/function/parameters/properties/resource/enum")
+            .and_then(Value::as_array)
+            .expect("resource enum should exist");
+        assert!(resources.contains(&json!("voice")));
+        let operations = redbox
+            .pointer("/function/parameters/properties/operation/enum")
+            .and_then(Value::as_array)
+            .expect("operation enum should exist");
+        assert!(operations.contains(&json!("speech")));
+        assert!(redbox
+            .pointer("/function/parameters/properties/input/properties/voiceId")
+            .is_some());
+        assert!(redbox
+            .pointer("/function/parameters/properties/input/properties/waitForCompletion")
+            .is_some());
         assert_eq!(
             redbox.pointer("/function/parameters/properties/input/properties/aspectRatio/enum/1"),
             Some(&json!("3:4"))
@@ -5026,6 +5025,7 @@ mod tests {
             .and_then(Value::as_array)
             .expect("action enum should exist");
         for action in [
+            "web.fetch",
             "cli_runtime.execution.get",
             "mcp.list",
             "mcp.discoverLocal",
@@ -5037,7 +5037,6 @@ mod tests {
             assert!(actions.iter().any(|item| item == action), "{action}");
         }
         for action in [
-            "web.fetch",
             "cli_runtime.inspect",
             "cli_runtime.diagnose",
             "cli_runtime.discover",

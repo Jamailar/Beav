@@ -93,7 +93,7 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "Write" => normalize_write_call(arguments),
         "Operate" | "Redbox" => normalize_redbox_call(arguments),
         "workflow" | "app_cli" => normalize_app_cli_call(arguments),
-        "bash" | "Bash" => passthrough("shell", arguments),
+        "shell" | "bash" | "Bash" => passthrough("shell", arguments),
         "tool_search" => passthrough("tool_search", arguments),
         "redbox_list_spaces" => app_query("spaces.list", arguments),
         "redbox_list_advisors" => app_query("advisors.list", arguments),
@@ -314,7 +314,6 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
         "editor" => {
             let action = match editor_resource_name(&resource_path).as_str() {
                 "project" => "project_read",
-                "remotion" => "remotion_read",
                 _ => "script_read",
             };
             universal_editor_call(action, &object, Some("Read"), Some(path))
@@ -373,14 +372,14 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
         ),
         "assets" | "asset" if !resource_path.trim_matches('/').is_empty() => app_cli_action_call(
             "assets.get",
-            json!({ "id": resource_path.trim_matches('/') }),
+            json!({ "id": asset_id_from_resource_path(&resource_path) }),
             Some("Read"),
             Some(path),
         ),
         "subjects" | "subject" if !resource_path.trim_matches('/').is_empty() => {
             app_cli_action_call(
                 "assets.get",
-                json!({ "id": resource_path.trim_matches('/') }),
+                json!({ "id": asset_id_from_resource_path(&resource_path) }),
                 Some("Read"),
                 Some(path),
             )
@@ -400,6 +399,16 @@ fn normalize_list_call(arguments: &Value) -> NormalizedToolCall {
         "knowledge" => universal_fs_call("knowledge.list", resource_path, &object, Some("List")),
         "manuscripts" => {
             app_cli_action_call("manuscripts.list", json!({}), Some("List"), Some(path))
+        }
+        "assets" | "asset" | "subjects" | "subject"
+            if !resource_path.trim_matches('/').is_empty() =>
+        {
+            app_cli_action_call(
+                "assets.get",
+                json!({ "id": asset_id_from_resource_path(&resource_path) }),
+                Some("List"),
+                Some(path),
+            )
         }
         "assets" | "asset" | "subjects" | "subject" => app_cli_action_call(
             "assets.search",
@@ -476,25 +485,13 @@ fn normalize_write_call(arguments: &Value) -> NormalizedToolCall {
     let (scheme, resource_path) = split_virtual_path(path);
     match scheme.as_str() {
         "editor" => {
-            let action = match editor_resource_name(&resource_path).as_str() {
-                "remotion" => "remotion_save",
-                _ => "script_update",
-            };
             let mut payload = Map::new();
-            payload.insert(
-                if action == "remotion_save" {
-                    "scene"
-                } else {
-                    "content"
-                }
-                .to_string(),
-                content,
-            );
+            payload.insert("content".to_string(), content);
             copy_universal(&mut payload, &object, "source");
             NormalizedToolCall {
                 name: "editor",
                 arguments: Value::Object(with_action_payload(
-                    action,
+                    "script_update",
                     payload,
                     Some("Write"),
                     Some(path),
@@ -705,7 +702,7 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ),
         ("voice", "speech" | "tts" | "run" | "generate") => app_cli_action_call(
             "voice.speech",
-            payload,
+            normalize_voice_speech_payload(payload),
             Some("Operate"),
             Some("voice.speech"),
         ),
@@ -981,6 +978,58 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
     }
 }
 
+fn normalize_voice_speech_payload(payload: Value) -> Value {
+    let mut payload = payload.as_object().cloned().unwrap_or_default();
+
+    if let Some(raw_nested_input_payload) = payload.remove("input") {
+        if let Value::Object(nested_voice_payload) = raw_nested_input_payload {
+            if !payload.contains_key("input") {
+                if let Some(input) = nested_voice_payload
+                    .get("input")
+                    .or_else(|| nested_voice_payload.get("text"))
+                    .or_else(|| nested_voice_payload.get("script"))
+                {
+                    payload.insert("input".to_string(), input.clone());
+                }
+            }
+            if !payload.contains_key("voiceId") && !payload.contains_key("voice_id") {
+                if let Some(voice_id) = nested_voice_payload
+                    .get("voiceId")
+                    .or_else(|| nested_voice_payload.get("voice_id"))
+                    .or_else(|| nested_voice_payload.get("voice"))
+                    .or_else(|| nested_voice_payload.get("voiceRef"))
+                    .or_else(|| nested_voice_payload.get("voice_ref"))
+                    .or_else(|| nested_voice_payload.get("id"))
+                {
+                    payload.insert("voiceId".to_string(), voice_id.clone());
+                }
+            }
+        } else {
+            payload.insert("input".to_string(), raw_nested_input_payload);
+        }
+    }
+
+    if !payload.contains_key("input") {
+        if let Some(text) = payload.remove("text").or_else(|| payload.remove("script")) {
+            payload.insert("input".to_string(), text);
+        }
+    }
+    if !payload.contains_key("voiceId") && !payload.contains_key("voice_id") {
+        if let Some(voice) = payload
+            .remove("voice")
+            .or_else(|| payload.remove("voiceRef"))
+            .or_else(|| payload.remove("voice_ref"))
+            .or_else(|| payload.remove("id"))
+        {
+            payload.insert("voiceId".to_string(), voice);
+        }
+    }
+    payload
+        .entry("waitForCompletion".to_string())
+        .or_insert(json!(true));
+    Value::Object(payload)
+}
+
 fn normalize_redbox_editor_operation(operation: &str, payload: Value) -> NormalizedToolCall {
     let workflow = payload
         .get("workflow")
@@ -991,12 +1040,10 @@ fn normalize_redbox_editor_operation(operation: &str, payload: Value) -> Normali
     let action = match (operation, workflow.as_str()) {
         ("export", _) => "export",
         (_, "ffmpeg.edit" | "ffmpeg_edit") => "ffmpeg_edit",
-        (_, "remotion.save" | "remotion_save") => "remotion_save",
-        (_, "remotion.read" | "remotion_read") => "remotion_read",
         (_, "script.update" | "script_update") => "script_update",
         (_, "script.confirm" | "script_confirm") => "script_confirm",
         (_, "project.read" | "project_read") => "project_read",
-        _ => "remotion_generate",
+        _ => "project_read",
     };
     let payload = payload.as_object().cloned().unwrap_or_default();
     NormalizedToolCall {
@@ -1026,6 +1073,14 @@ fn split_virtual_path(path: &str) -> (String, String) {
         );
     }
     ("workspace".to_string(), trimmed.to_string())
+}
+
+fn asset_id_from_resource_path(resource_path: &str) -> &str {
+    resource_path
+        .trim_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or_default()
 }
 
 fn web_resource_url(resource_path: &str) -> String {
@@ -1176,9 +1231,6 @@ fn normalize_action_token(value: &str) -> String {
         "script-update" => "script_update".to_string(),
         "script-confirm" => "script_confirm".to_string(),
         "ffmpeg-edit" => "ffmpeg_edit".to_string(),
-        "remotion-read" => "remotion_read".to_string(),
-        "remotion-generate" => "remotion_generate".to_string(),
-        "remotion-save" => "remotion_save".to_string(),
         "selection-set" => "selection_set".to_string(),
         "playhead-seek" => "playhead_seek".to_string(),
         "focus-clip" => "focus_clip".to_string(),
@@ -1809,6 +1861,51 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_asset_get_id_from_operate_and_virtual_paths() {
+        let operate = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "asset",
+                "operation": "get",
+                "id": "subject_1774704234274_53536cc0"
+            }),
+        );
+        assert_eq!(operate.name, "workflow");
+        assert_eq!(operate.arguments.get("action"), Some(&json!("assets.get")));
+        assert_eq!(
+            operate
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("id")),
+            Some(&json!("subject_1774704234274_53536cc0"))
+        );
+
+        let read = normalize_tool_call(
+            "Read",
+            &json!({ "path": "assets://subject_1774704234274_53536cc0/subject.json" }),
+        );
+        assert_eq!(read.arguments.get("action"), Some(&json!("assets.get")));
+        assert_eq!(
+            read.arguments
+                .get("payload")
+                .and_then(|value| value.get("id")),
+            Some(&json!("subject_1774704234274_53536cc0"))
+        );
+
+        let list = normalize_tool_call(
+            "List",
+            &json!({ "path": "assets://subject_1774704234274_53536cc0" }),
+        );
+        assert_eq!(list.arguments.get("action"), Some(&json!("assets.get")));
+        assert_eq!(
+            list.arguments
+                .get("payload")
+                .and_then(|value| value.get("id")),
+            Some(&json!("subject_1774704234274_53536cc0"))
+        );
+    }
+
+    #[test]
     fn translates_legacy_app_cli_command_into_structured_action() {
         let normalized = normalize_tool_call(
             "workflow",
@@ -1875,9 +1972,67 @@ mod tests {
             normalized
                 .arguments
                 .get("payload")
-                .and_then(|value| value.get("voice")),
+                .and_then(|value| value.get("voiceId")),
             Some(&json!("voice_2eee156a6468427bb185a831"))
         );
+    }
+
+    #[test]
+    fn normalizes_voice_speech_payload_aliases_for_compat() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "voice",
+                "operation": "speech",
+                "input": {
+                    "text": "君不见黄河之水天上来。",
+                    "id": "voice_2eee156a6468427bb185a831"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        let payload = normalized
+            .arguments
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("payload exists");
+        assert_eq!(payload.get("input"), Some(&json!("君不见黄河之水天上来。")));
+        assert_eq!(
+            payload.get("voiceId"),
+            Some(&json!("voice_2eee156a6468427bb185a831"))
+        );
+        assert!(payload.get("text").is_none());
+        assert!(payload.get("id").is_none());
+    }
+
+    #[test]
+    fn normalizes_voice_speech_payload_aliases_for_voice_ref() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "voice",
+                "operation": "speech",
+                "input": {
+                    "script": "君不见黄河之水天上来。",
+                    "voiceRef": "voice_2eee156a6468427bb185a831"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        let payload = normalized
+            .arguments
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("payload exists");
+        assert_eq!(payload.get("input"), Some(&json!("君不见黄河之水天上来。")));
+        assert_eq!(
+            payload.get("voiceId"),
+            Some(&json!("voice_2eee156a6468427bb185a831"))
+        );
+        assert!(payload.get("script").is_none());
+        assert!(payload.get("voiceRef").is_none());
     }
 
     #[test]

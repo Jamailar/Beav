@@ -1630,6 +1630,7 @@ export function Settings({
   const [thrivePluginsLoading, setThrivePluginsLoading] = useState(false);
   const [thrivePluginBusyId, setThrivePluginBusyId] = useState('');
   const [thrivePluginStatusMessage, setThrivePluginStatusMessage] = useState('');
+  const [thrivePluginRepoInput, setThrivePluginRepoInput] = useState('');
   const [cliRuntimeTools, setCliRuntimeTools] = useState<CliRuntimeToolRecord[]>([]);
   const [cliRuntimeEnvironments, setCliRuntimeEnvironments] = useState<CliRuntimeEnvironmentRecord[]>([]);
   const [cliRuntimeInstallDraft, setCliRuntimeInstallDraft] = useState<{
@@ -4635,6 +4636,38 @@ export function Settings({
       setThrivePluginBusyId('');
     }
   }, [loadThrivePluginMarketplace, loadThrivePlugins]);
+
+  const handleInstallThrivePluginFromRepo = useCallback(async () => {
+    const repo = thrivePluginRepoInput
+      .trim()
+      .replace(/^https:\/\/github\.com\//, '')
+      .replace(/\/$/, '')
+      .replace(/\.git$/, '');
+    if (!repo) {
+      setThrivePluginStatusMessage('请输入 GitHub 仓库，例如 owner/codex-plugin');
+      return;
+    }
+    const id = repo.split('/').pop() || repo;
+    setThrivePluginBusyId(`repo:${repo}`);
+    setThrivePluginStatusMessage(`正在安装 ${repo}`);
+    try {
+      const result = await window.ipcRenderer.plugins.installMarketplace({ id, repo });
+      if (result.success === false) {
+        throw new Error(result.error || '插件安装失败');
+      }
+      setThrivePluginRepoInput('');
+      setThrivePluginStatusMessage(result.plugin ? `已安装 ${result.plugin.displayName}` : '插件已安装');
+      await Promise.all([
+        loadThrivePlugins(),
+        loadThrivePluginMarketplace(),
+      ]);
+    } catch (error) {
+      console.error('Failed to install Thrive plugin from repo', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadThrivePluginMarketplace, loadThrivePlugins, thrivePluginRepoInput]);
 
   const handleToggleThrivePlugin = useCallback(async (plugin: ThrivePluginSummary) => {
     setThrivePluginBusyId(plugin.id);
@@ -7879,9 +7912,12 @@ export function Settings({
                 thrivePluginsLoading={thrivePluginsLoading}
                 thrivePluginBusyId={thrivePluginBusyId}
                 thrivePluginStatusMessage={thrivePluginStatusMessage}
+                thrivePluginRepoInput={thrivePluginRepoInput}
+                setThrivePluginRepoInput={setThrivePluginRepoInput}
                 handleRefreshThrivePlugins={loadThrivePlugins}
                 handleRefreshThrivePluginMarketplace={loadThrivePluginMarketplace}
                 handleInstallThriveMarketplacePlugin={handleInstallThriveMarketplacePlugin}
+                handleInstallThrivePluginFromRepo={handleInstallThrivePluginFromRepo}
                 handleToggleThrivePlugin={handleToggleThrivePlugin}
                 handleUninstallThrivePlugin={handleUninstallThrivePlugin}
                 handleOpenThrivePluginDataDir={handleOpenThrivePluginDataDir}

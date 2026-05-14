@@ -1358,11 +1358,15 @@ fn raw_plugin_manifest_url(repo: &str, branch: &str, manifest_path: &str) -> Str
     format!("https://raw.githubusercontent.com/{repo}/{branch}/{manifest_path}")
 }
 
+fn github_repo_archive_url(repo: &str, branch: &str) -> String {
+    format!("https://github.com/{repo}/archive/refs/heads/{branch}.zip")
+}
+
 fn load_marketplace_manifest(
     client: &reqwest::blocking::Client,
     repo: &str,
     fallback_name: &str,
-) -> Result<(RawThrivePluginManifest, String), String> {
+) -> Result<(RawThrivePluginManifest, String, String), String> {
     let repo = normalize_github_repo(repo)?;
     let mut last_error = String::new();
     for branch in ["main", "master"] {
@@ -1378,7 +1382,7 @@ fn load_marketplace_manifest(
                         manifest.name = fallback_name.to_string();
                     }
                     validate_thrive_plugin_manifest(Path::new("."), &manifest)?;
-                    return Ok((manifest, url));
+                    return Ok((manifest, url, branch.to_string()));
                 }
                 Err(error) => {
                     last_error = error;
@@ -1488,7 +1492,7 @@ fn list_thrive_plugin_marketplace(
         match normalize_github_repo(&entry.repo) {
             Ok(repo) => {
                 match load_marketplace_manifest(&client, &repo, &entry.id) {
-                    Ok((manifest, manifest_url)) => {
+                    Ok((manifest, manifest_url, branch)) => {
                         let plugin_id =
                             plugin_id_for_manifest(&manifest, THRIVE_PLUGIN_COMMUNITY_MARKETPLACE);
                         item.version = manifest.version.clone();
@@ -1506,7 +1510,10 @@ fn list_thrive_plugin_marketplace(
                                 item.package_url = Some(package_url);
                                 item.package_asset_name = Some(asset_name);
                             }
-                            Ok(None) => {}
+                            Ok(None) => {
+                                item.package_url = Some(github_repo_archive_url(&repo, &branch));
+                                item.package_asset_name = Some(format!("{branch} source archive"));
+                            }
                             Err(error) => {
                                 item.error = Some(error);
                             }
@@ -1557,15 +1564,12 @@ fn install_thrive_plugin_from_marketplace(
     {
         package_url.to_string()
     } else {
-        let (manifest, _manifest_url) = load_marketplace_manifest(&client, &repo, fallback_name)?;
+        let (manifest, _manifest_url, branch) =
+            load_marketplace_manifest(&client, &repo, fallback_name)?;
         let resolved_version = version.or(manifest.version.as_deref());
         find_marketplace_release_asset(&client, &repo, resolved_version)?
             .map(|(package_url, _asset_name)| package_url)
-            .ok_or_else(|| {
-                format!(
-                    "plugin repo `{repo}` does not have a supported release asset (.thriveplugin, .rbxplugin, .zip)"
-                )
-            })?
+            .unwrap_or_else(|| github_repo_archive_url(&repo, &branch))
     };
 
     let temp_root = thrive_plugins_root(state)?

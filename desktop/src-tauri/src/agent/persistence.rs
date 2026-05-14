@@ -71,6 +71,10 @@ pub fn persist_chat_exchange(
             .metadata
             .as_ref()
             .and_then(knowledge_references_from_session_metadata);
+        let explicit_asset_refs = session
+            .metadata
+            .as_ref()
+            .and_then(asset_references_from_session_metadata);
         let mut user_references = Vec::<Value>::new();
         if let Some(actor) = member_reply_actor.as_ref() {
             user_references.push(json!({
@@ -85,27 +89,36 @@ pub fn persist_chat_exchange(
         if let Some(refs) = explicit_knowledge_refs.as_ref() {
             user_references.extend(refs.iter().cloned());
         }
-        let user_message_metadata =
-            if member_reply_actor.is_some() || explicit_knowledge_refs.is_some() {
-                Some(json!({
-                    "references": user_references,
-                    "replyActor": member_reply_actor.clone(),
-                    "activeSpeaker": active_speaker_metadata.clone(),
-                    "explicitKnowledgeRefs": explicit_knowledge_refs.clone().unwrap_or_default(),
-                }))
-            } else {
-                None
-            };
-        let assistant_message_metadata =
-            if member_reply_actor.is_some() || explicit_knowledge_refs.is_some() {
-                Some(json!({
-                    "replyActor": member_reply_actor.clone(),
-                    "activeSpeaker": active_speaker_metadata.clone(),
-                    "explicitKnowledgeRefs": explicit_knowledge_refs.clone().unwrap_or_default(),
-                }))
-            } else {
-                None
-            };
+        if let Some(refs) = explicit_asset_refs.as_ref() {
+            user_references.extend(refs.iter().cloned());
+        }
+        let user_message_metadata = if member_reply_actor.is_some()
+            || explicit_knowledge_refs.is_some()
+            || explicit_asset_refs.is_some()
+        {
+            Some(json!({
+                "references": user_references,
+                "replyActor": member_reply_actor.clone(),
+                "activeSpeaker": active_speaker_metadata.clone(),
+                "explicitKnowledgeRefs": explicit_knowledge_refs.clone().unwrap_or_default(),
+                "explicitAssetRefs": explicit_asset_refs.clone().unwrap_or_default(),
+            }))
+        } else {
+            None
+        };
+        let assistant_message_metadata = if member_reply_actor.is_some()
+            || explicit_knowledge_refs.is_some()
+            || explicit_asset_refs.is_some()
+        {
+            Some(json!({
+                "replyActor": member_reply_actor.clone(),
+                "activeSpeaker": active_speaker_metadata.clone(),
+                "explicitKnowledgeRefs": explicit_knowledge_refs.clone().unwrap_or_default(),
+                "explicitAssetRefs": explicit_asset_refs.clone().unwrap_or_default(),
+            }))
+        } else {
+            None
+        };
 
         if persist_user_message {
             store.chat_messages.push(ChatMessageRecord {
@@ -170,10 +183,16 @@ pub fn persist_chat_exchange(
         bundle_messages_snapshot = chat_messages_for_session(store, &final_session_id)
             .into_iter()
             .map(|item| {
-                json!({
+                let mut message = json!({
                     "role": item.role,
                     "content": item.content
-                })
+                });
+                if let Some(metadata) = item.metadata {
+                    if let Some(object) = message.as_object_mut() {
+                        object.insert("metadata".to_string(), metadata);
+                    }
+                }
+                message
             })
             .collect::<Vec<_>>();
         Ok(())
@@ -324,6 +343,42 @@ fn knowledge_references_from_session_metadata(metadata: &Value) -> Option<Vec<Va
             for field in ["tags", "fileCount", "hasTranscript"] {
                 if let Some(value) = object.get(field) {
                     reference.insert(field.to_string(), value.clone());
+                }
+            }
+            Some(Value::Object(reference))
+        })
+        .collect::<Vec<_>>();
+    if references.is_empty() {
+        None
+    } else {
+        Some(references)
+    }
+}
+
+fn asset_references_from_session_metadata(metadata: &Value) -> Option<Vec<Value>> {
+    let references = metadata
+        .get("explicitAssetRefs")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|item| {
+            let object = item.as_object()?;
+            let asset_id = object
+                .get("assetId")
+                .or_else(|| object.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let mut reference = serde_json::Map::new();
+            reference.insert("type".to_string(), json!("asset"));
+            reference.insert("assetId".to_string(), json!(asset_id));
+            if let Some(value) = object
+                .get("name")
+                .or_else(|| object.get("title"))
+                .and_then(Value::as_str)
+            {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    reference.insert("name".to_string(), json!(trimmed));
                 }
             }
             Some(Value::Object(reference))

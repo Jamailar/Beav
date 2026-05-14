@@ -275,7 +275,7 @@ export function deriveAnimationLayers(project: EditorProjectFile): EditorAnimati
         return project.animationLayers
             .map((layer, index) => ({
                 ...layer,
-                name: layer.name || `动画层 ${index + 1}`,
+                name: layer.name || `视频层 ${index + 1}`,
                 trackId: layer.trackId || 'M1',
                 enabled: layer.enabled !== false,
                 fromMs: Math.max(0, layer.fromMs || 0),
@@ -293,7 +293,7 @@ export function deriveAnimationLayers(project: EditorProjectFile): EditorAnimati
         .filter(isMotionItem)
         .map((item, index) => ({
             id: item.id,
-            name: String(item.props.overlayTitle || item.templateId || `动画层 ${index + 1}`),
+            name: String(item.props.overlayTitle || item.templateId || `视频层 ${index + 1}`),
             trackId: item.trackId || 'M1',
             enabled: item.enabled,
             fromMs: item.fromMs,
@@ -726,7 +726,7 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
             if (command.item.type === 'motion') {
                 next.animationLayers.push({
                     id: command.item.id,
-                    name: String(command.item.props.overlayTitle || command.item.templateId || '动画层'),
+                    name: String(command.item.props.overlayTitle || command.item.templateId || '视频层'),
                     trackId: command.item.trackId,
                     enabled: command.item.enabled,
                     fromMs: command.item.fromMs,

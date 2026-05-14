@@ -86,6 +86,14 @@ fn write_video_analysis_cache(path: &Path, value: &Value) {
     }
 }
 
+fn channel_needs_runtime_context(channel: &str) -> bool {
+    channel.starts_with("voice:")
+        || channel.starts_with("media:")
+        || channel.starts_with("generation:")
+        || channel.starts_with("image-gen:")
+        || channel.starts_with("video-gen:")
+}
+
 fn video_analysis_agent_system_prompt() -> &'static str {
     r#"你是应用内部专用 Video Analysis Agent。
 你只负责根据提供的视频和用户指令输出结构化视频理解结果，不写最终发布文案，不冒充主聊天 agent。
@@ -1289,26 +1297,15 @@ impl<'a> AppCliExecutor<'a> {
             "get" => self.call_channel(
                 "subjects:get",
                 json!({
-                    "id": args
-                        .string(&["id"])
-                        .or_else(|| args.positionals.first().cloned())
+                    "id": subject_id_from_args_or_payload(&args, payload)
                         .ok_or_else(|| "subjects get requires --id".to_string())?
                 }),
             ),
             "search" => self.call_channel(
                 "subjects:search",
                 json!({
-                    "query": args
-                        .string(&["query", "q"])
-                        .or_else(|| {
-                            if args.positionals.is_empty() {
-                                None
-                            } else {
-                                Some(args.positionals.join(" "))
-                            }
-                        })
-                        .unwrap_or_default(),
-                    "categoryId": args.string(&["category-id", "category"])
+                    "query": subject_query_from_args_or_payload(&args, payload).unwrap_or_default(),
+                    "categoryId": subject_category_from_args_or_payload(&args, payload)
                 }),
             ),
             "create" => self.call_channel("subjects:create", merge_payload(&args.options, payload)),
@@ -1318,6 +1315,7 @@ impl<'a> AppCliExecutor<'a> {
                 json!({
                     "id": args
                         .string(&["id"])
+                        .or_else(|| payload_string_alias(payload, &["id", "assetId", "subjectId"]))
                         .or_else(|| args.positionals.first().cloned())
                         .ok_or_else(|| "subjects delete requires --id".to_string())?
                 }),
@@ -3946,6 +3944,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
     }
 
     fn call_channel(&self, channel: &str, payload: Value) -> Result<Value, String> {
+        let payload = self.payload_with_runtime_context(channel, payload);
         if let Some(result) =
             commands::system::handle_system_channel(self.app, self.state, channel, &payload)
         {
@@ -4032,6 +4031,29 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return result;
         }
         Err(format!("workflow channel not handled: {channel}"))
+    }
+
+    fn payload_with_runtime_context(&self, channel: &str, payload: Value) -> Value {
+        if !channel_needs_runtime_context(channel) {
+            return payload;
+        }
+        let Value::Object(mut object) = payload else {
+            return payload;
+        };
+        if let Some(session_id) = self.session_id {
+            object
+                .entry("sessionId".to_string())
+                .or_insert_with(|| json!(session_id));
+            object
+                .entry("ownerSessionId".to_string())
+                .or_insert_with(|| json!(session_id));
+        }
+        if let Some(tool_call_id) = self.tool_call_id {
+            object
+                .entry("toolCallId".to_string())
+                .or_insert_with(|| json!(tool_call_id));
+        }
+        Value::Object(object)
     }
 
     fn bound_writing_session_target(&self) -> Option<BoundWritingSessionTarget> {
@@ -5089,6 +5111,29 @@ fn payload_string_alias(payload: &Value, keys: &[&str]) -> Option<String> {
         .find_map(|key| payload_string(payload, key))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn subject_id_from_args_or_payload(args: &CliArgs, payload: &Value) -> Option<String> {
+    args.string(&["id"])
+        .or_else(|| payload_string_alias(payload, &["id", "assetId", "subjectId"]))
+        .or_else(|| args.positionals.first().cloned())
+}
+
+fn subject_query_from_args_or_payload(args: &CliArgs, payload: &Value) -> Option<String> {
+    args.string(&["query", "q"])
+        .or_else(|| payload_string_alias(payload, &["query", "q", "name"]))
+        .or_else(|| {
+            if args.positionals.is_empty() {
+                None
+            } else {
+                Some(args.positionals.join(" "))
+            }
+        })
+}
+
+fn subject_category_from_args_or_payload(args: &CliArgs, payload: &Value) -> Option<String> {
+    args.string(&["category-id", "category"])
+        .or_else(|| payload_string_alias(payload, &["categoryId", "category-id", "category"]))
 }
 
 fn skill_name_from_args_or_payload(args: &CliArgs, payload: &Value) -> Option<String> {
@@ -6398,6 +6443,29 @@ mod tests {
         assert_eq!(
             normalized.pointer("/payload/title"),
             Some(&json!("测试标题"))
+        );
+    }
+
+    #[test]
+    fn subject_helpers_accept_payload_id_and_query() {
+        let args = CliArgs::default();
+        assert_eq!(
+            subject_id_from_args_or_payload(
+                &args,
+                &json!({ "assetId": "subject_1774704234274_53536cc0" })
+            ),
+            Some("subject_1774704234274_53536cc0".to_string())
+        );
+        assert_eq!(
+            subject_query_from_args_or_payload(&args, &json!({ "name": "Jamba" })),
+            Some("Jamba".to_string())
+        );
+        assert_eq!(
+            subject_category_from_args_or_payload(
+                &args,
+                &json!({ "categoryId": "subject_cat_person" })
+            ),
+            Some("subject_cat_person".to_string())
         );
     }
 

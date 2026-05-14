@@ -21,7 +21,7 @@ pub fn tool_search_payload(plan: &ToolRegistryPlan, payload: &Value) -> Value {
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let action_results = search_actions(
+    let mut action_results = search_actions(
         &plan.direct_app_cli_actions,
         &plan.deferred_app_cli_actions,
         ActionSearchParams {
@@ -31,6 +31,21 @@ pub fn tool_search_payload(plan: &ToolRegistryPlan, payload: &Value) -> Value {
             include_direct,
         },
     );
+    if !include_direct
+        && action_results.is_empty()
+        && (!plan.direct_app_cli_actions.is_empty() || !plan.direct_mcp_tools.is_empty())
+    {
+        action_results = search_actions(
+            &plan.direct_app_cli_actions,
+            &plan.deferred_app_cli_actions,
+            ActionSearchParams {
+                query: &query,
+                namespace: namespace.as_deref(),
+                limit,
+                include_direct: true,
+            },
+        );
+    }
     let mcp_results = search_mcp_tools(
         &plan.direct_mcp_tools,
         &plan.deferred_mcp_tools,

@@ -816,7 +816,7 @@ export function RedClawHistorySidebarSection({
                 ))}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 custom-scrollbar">
+            <div className="redclaw-history-scroll min-h-0 flex-1 overflow-y-auto px-2 custom-scrollbar">
                 {activeTab === 'manuscripts' ? (
                     <div
                         className={clsx(
@@ -1219,23 +1219,22 @@ export function RedClawHistorySidebarSection({
             )}
             {renameTarget && (
                 <div
-                    className="fixed inset-0 z-[130] flex items-center justify-center bg-black/30 px-4"
+                    className="redclaw-rename-dialog-backdrop fixed inset-0 z-[130] flex items-center justify-center px-4"
                     onMouseDown={closeRenameDialog}
                 >
                     <div
-                        className="w-full max-w-[420px] rounded-2xl border border-border bg-surface-primary p-5 shadow-2xl"
+                        className="redclaw-rename-dialog w-full max-w-[420px] rounded-2xl p-5"
                         onMouseDown={(event) => event.stopPropagation()}
                     >
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <h3 className="text-lg font-bold text-text-primary">重命名对话</h3>
-                                <p className="mt-1 text-sm text-text-tertiary">保持简短且易识别</p>
+                                <h3 className="redclaw-rename-dialog-title text-lg font-bold">重命名对话</h3>
                             </div>
                             <button
                                 type="button"
                                 onClick={closeRenameDialog}
                                 disabled={isRenaming}
-                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                className="redclaw-rename-dialog-close flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50"
                                 title="关闭"
                                 aria-label="关闭"
                             >
@@ -1258,18 +1257,18 @@ export function RedClawHistorySidebarSection({
                                 }
                             }}
                             disabled={isRenaming}
-                            className="mt-5 h-11 w-full rounded-xl border border-border bg-surface-secondary px-3 text-sm text-text-primary outline-none transition focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/15 disabled:opacity-60"
+                            className="redclaw-rename-dialog-input mt-5 h-11 w-full rounded-xl px-3 text-sm outline-none transition disabled:opacity-60"
                             maxLength={80}
                         />
                         {renameError && (
-                            <div className="mt-2 text-xs text-red-500">{renameError}</div>
+                            <div className="redclaw-rename-dialog-error mt-2 text-xs">{renameError}</div>
                         )}
                         <div className="mt-5 flex items-center justify-end gap-2">
                             <button
                                 type="button"
                                 onClick={closeRenameDialog}
                                 disabled={isRenaming}
-                                className="h-9 rounded-xl border border-border px-4 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                className="redclaw-rename-dialog-secondary h-9 rounded-xl px-4 text-sm transition-colors disabled:opacity-50"
                             >
                                 取消
                             </button>
@@ -1277,7 +1276,7 @@ export function RedClawHistorySidebarSection({
                                 type="button"
                                 onClick={() => void submitRenameDialog()}
                                 disabled={isRenaming || !renameTitle.trim()}
-                                className="inline-flex h-9 items-center gap-2 rounded-xl bg-text-primary px-4 text-sm font-medium text-white transition-colors hover:bg-text-primary/90 disabled:opacity-50"
+                                className="redclaw-rename-dialog-primary inline-flex h-9 items-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors disabled:opacity-50"
                             >
                                 {isRenaming && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                                 保存

@@ -20,8 +20,10 @@ import {
   Loader2,
   Mic,
   Music2,
+  Package,
   Plus,
   Search,
+  Sparkles,
   Square,
   StopCircle,
   UserRound,
@@ -100,7 +102,7 @@ export interface ChatComposerHandle {
   blur: () => void;
   syncHeight: () => void;
   resetHeight: () => void;
-  getTextarea: () => HTMLTextAreaElement | null;
+  getTextarea: () => HTMLElement | null;
 }
 
 export interface ChatMemberMentionOption {
@@ -123,6 +125,29 @@ export interface ChatKnowledgeMentionOption {
   updatedAt?: string;
   fileCount?: number;
   hasTranscript?: boolean;
+}
+
+export interface ChatSkillMentionOption {
+  name: string;
+  description?: string;
+  location?: string;
+  sourceScope?: string;
+  isBuiltin?: boolean;
+  aliases?: string[];
+}
+
+export interface ChatAssetMentionOption {
+  id: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  categoryId?: string;
+  primaryPreviewUrl?: string;
+  previewUrls?: string[];
+  imagePaths?: string[];
+  absoluteImagePaths?: string[];
+  voicePath?: string;
+  absoluteVoicePath?: string;
 }
 
 type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
@@ -176,6 +201,12 @@ export interface ChatComposerProps {
   selectedKnowledgeMentions?: ChatKnowledgeMentionOption[];
   onSelectedKnowledgeMentionsChange?: (items: ChatKnowledgeMentionOption[]) => void;
   onKnowledgeMentionSearchQueryChange?: (query: string) => void;
+  skillMentionOptions?: ChatSkillMentionOption[];
+  selectedSkillMentions?: ChatSkillMentionOption[];
+  onSelectedSkillMentionsChange?: (items: ChatSkillMentionOption[]) => void;
+  assetMentionOptions?: ChatAssetMentionOption[];
+  selectedAssetMentions?: ChatAssetMentionOption[];
+  onSelectedAssetMentionsChange?: (items: ChatAssetMentionOption[]) => void;
 }
 
 const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
@@ -345,6 +376,29 @@ function memberMentionMatches(member: ChatMemberMentionOption, query: string): b
   ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
 }
 
+function skillMentionMatches(skill: ChatSkillMentionOption, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return [
+    skill.name,
+    skill.description,
+    skill.location,
+    skill.sourceScope,
+    ...(skill.aliases || []),
+  ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+}
+
+function assetMentionMatches(asset: ChatAssetMentionOption, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return [
+    asset.name,
+    asset.description,
+    asset.categoryId,
+    ...(asset.tags || []),
+  ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+}
+
 function knowledgeMentionMatches(item: ChatKnowledgeMentionOption, query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return true;
@@ -394,6 +448,206 @@ function renderMemberMentionAvatar(member: ChatMemberMentionOption, darkEmbedded
   );
 }
 
+function readEditorText(root: HTMLElement | null): string {
+  if (!root) return '';
+  let text = '';
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent || '';
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as HTMLElement;
+    if (element.dataset.inlineMention) {
+      text += String(element.dataset.mentionLabel || element.textContent || '').trim();
+      return;
+    }
+    if (element.tagName === 'BR') {
+      if (element.dataset.editorSentinel) return;
+      text += '\n';
+      return;
+    }
+    node.childNodes.forEach(visit);
+  };
+  root.childNodes.forEach(visit);
+  return text.replace(/\u00a0/g, ' ');
+}
+
+function readEditorMentionKeys(root: HTMLElement | null, kind: 'member' | 'skill' | 'asset'): string[] {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>(`[data-inline-mention="${kind}"]`))
+    .map((node) => String(node.dataset.mentionKey || '').trim())
+    .filter(Boolean);
+}
+
+function editorCaretTextOffset(root: HTMLElement | null): number {
+  if (!root) return 0;
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return readEditorText(root).length;
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer)) return readEditorText(root).length;
+  const beforeRange = range.cloneRange();
+  beforeRange.selectNodeContents(root);
+  beforeRange.setEnd(range.startContainer, range.startOffset);
+  const container = document.createElement('div');
+  container.appendChild(beforeRange.cloneContents());
+  return readEditorText(container).length;
+}
+
+function createMentionTokenElement(
+  kind: 'member' | 'skill' | 'asset',
+  key: string,
+  label: string,
+  darkEmbedded: boolean,
+): HTMLElement {
+  const token = document.createElement('span');
+  token.contentEditable = 'false';
+  token.dataset.inlineMention = kind;
+  token.dataset.mentionKey = key;
+  token.dataset.mentionLabel = `@${label}`;
+  token.className = clsx(
+    'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 align-baseline text-[0.95em] font-medium',
+    kind === 'asset'
+      ? darkEmbedded ? 'bg-white/[0.07] text-[#7eaed8]' : 'bg-[#edf6fb] text-[#4d8fb6]'
+      : darkEmbedded ? 'bg-white/[0.07] text-[#9fbf72]' : 'bg-[#f2f7e9] text-[#7fa35c]',
+  );
+  token.textContent = `@${label}`;
+  return token;
+}
+
+function deleteEditorTextRange(root: HTMLElement, start: number, end: number) {
+  if (end <= start) return;
+  const segments: Array<{
+    node: Text | HTMLElement;
+    kind: 'text' | 'mention' | 'break';
+    start: number;
+    end: number;
+  }> = [];
+  let offset = 0;
+  const visit = (current: Node) => {
+    if (current.nodeType === Node.TEXT_NODE) {
+      const node = current as Text;
+      const length = node.textContent?.length || 0;
+      if (length > 0) {
+        segments.push({ node, kind: 'text', start: offset, end: offset + length });
+      }
+      offset += length;
+      return;
+    }
+    if (current.nodeType !== Node.ELEMENT_NODE) return;
+    const element = current as HTMLElement;
+    if (element.dataset.inlineMention) {
+      const length = String(element.dataset.mentionLabel || element.textContent || '').trim().length;
+      segments.push({ node: element, kind: 'mention', start: offset, end: offset + length });
+      offset += length;
+      return;
+    }
+    if (element.tagName === 'BR') {
+      if (!element.dataset.editorSentinel) {
+        segments.push({ node: element, kind: 'break', start: offset, end: offset + 1 });
+        offset += 1;
+      }
+      return;
+    }
+    current.childNodes.forEach(visit);
+  };
+  root.childNodes.forEach(visit);
+
+  let caretNode: Text | null = null;
+  let caretOffset = 0;
+  segments
+    .filter((segment) => start < segment.end && end > segment.start)
+    .forEach((segment) => {
+      if (segment.kind !== 'text') {
+        segment.node.remove();
+        return;
+      }
+      const node = segment.node as Text;
+      const text = node.textContent || '';
+      const localStart = Math.max(0, start - segment.start);
+      const localEnd = Math.min(text.length, end - segment.start);
+      node.textContent = `${text.slice(0, localStart)}${text.slice(localEnd)}`;
+      if (!caretNode) {
+        caretNode = node;
+        caretOffset = localStart;
+      }
+    });
+
+  if (caretNode) {
+    const range = document.createRange();
+    range.setStart(caretNode, Math.min(caretOffset, caretNode.textContent?.length || 0));
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+}
+
+function placeEditorCaretAfterNode(root: HTMLElement, node: Node | null) {
+  if (!node || !root.contains(node)) return;
+  const range = document.createRange();
+  range.setStartAfter(node);
+  range.collapse(true);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function insertNodeAtCurrentSelection(root: HTMLElement, node: Node): Node | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    root.appendChild(node);
+    const spacer = document.createTextNode(' ');
+    root.appendChild(spacer);
+    placeEditorCaretAfterNode(root, spacer);
+    return spacer;
+  }
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer)) {
+    root.appendChild(node);
+    const spacer = document.createTextNode(' ');
+    root.appendChild(spacer);
+    placeEditorCaretAfterNode(root, spacer);
+    return spacer;
+  }
+  range.deleteContents();
+  const spacer = document.createTextNode(' ');
+  range.insertNode(spacer);
+  range.insertNode(node);
+  placeEditorCaretAfterNode(root, spacer);
+  return spacer;
+}
+
+function placeEditorCaretAtStart(root: HTMLElement | null) {
+  if (!root) return;
+  ensureEditorEmptySentinel(root);
+  const range = document.createRange();
+  const sentinel = root.querySelector<HTMLElement>('[data-editor-sentinel="true"]');
+  if (sentinel) {
+    range.setStartBefore(sentinel);
+  } else {
+    range.selectNodeContents(root);
+  }
+  range.collapse(true);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function ensureEditorEmptySentinel(root: HTMLElement | null) {
+  if (!root) return;
+  const hasMeaningfulContent = readEditorText(root).trim()
+    || root.querySelector('[data-inline-mention]');
+  if (hasMeaningfulContent) return;
+  let sentinel = root.querySelector<HTMLBRElement>('[data-editor-sentinel="true"]');
+  if (!sentinel) {
+    root.replaceChildren();
+    sentinel = document.createElement('br');
+    sentinel.dataset.editorSentinel = 'true';
+    root.appendChild(sentinel);
+  }
+}
+
 function ComposerRecordingStatus({
   darkEmbedded,
   elapsedMs,
@@ -430,7 +684,7 @@ function ComposerRecordingStatus({
   );
 }
 
-function isImeComposingEvent(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
+function isImeComposingEvent(event: React.KeyboardEvent<HTMLElement>): boolean {
   const synthetic = event as React.KeyboardEvent<HTMLTextAreaElement> & { isComposing?: boolean };
   const native = event.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
   return Boolean(native?.isComposing) || Boolean(synthetic.isComposing) || native?.keyCode === 229;
@@ -935,8 +1189,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   selectedKnowledgeMentions = [],
   onSelectedKnowledgeMentionsChange,
   onKnowledgeMentionSearchQueryChange,
+  skillMentionOptions = [],
+  selectedSkillMentions = [],
+  onSelectedSkillMentionsChange,
+  assetMentionOptions = [],
+  selectedAssetMentions = [],
+  onSelectedAssetMentionsChange,
 }, ref) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<HTMLDivElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const memberPickerRef = useRef<HTMLDivElement>(null);
   const knowledgePickerRef = useRef<HTMLDivElement>(null);
@@ -948,6 +1208,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const [knowledgeQuery, setKnowledgeQuery] = useState('');
   const [knowledgeMentionActiveIndex, setKnowledgeMentionActiveIndex] = useState(0);
   const [isComposing, setIsComposing] = useState(false);
+  const [isEditorEmpty, setIsEditorEmpty] = useState(true);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const darkEmbedded = theme === 'dark';
   const palette = getChatComposerPalette(theme);
@@ -957,19 +1218,37 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   );
   const attachmentBusy = attachmentStatus === 'uploading';
   const hasKnowledgeMentions = selectedKnowledgeMentions.length > 0;
-  const submitDisabled = disabled || isBusy || attachmentBusy || (!value.trim() && !attachment && !hasKnowledgeMentions);
+  const hasSkillMentions = selectedSkillMentions.length > 0;
+  const hasAssetMentions = selectedAssetMentions.length > 0;
+  const submitDisabled = disabled || isBusy || attachmentBusy || (!value.trim() && !attachment && !hasKnowledgeMentions && !hasSkillMentions && !hasAssetMentions);
   const showAttachmentButton = Boolean(onPickAttachment);
   const showModelSelector = Boolean(onSelectedModelKeyChange);
   const showAudioButton = Boolean(onAudioAction);
   const showCancelButton = Boolean(onCancel) && showCancelWhenBusy && isBusy;
   const canOpenModelPicker = showModelSelector && modelOptions.length > 0;
   const memberMentionEnabled = Boolean(onSelectedMemberMentionChange);
+  const skillMentionEnabled = Boolean(onSelectedSkillMentionsChange);
+  const assetMentionEnabled = Boolean(onSelectedAssetMentionsChange);
   const knowledgeMentionEnabled = Boolean(onSelectedKnowledgeMentionsChange);
   const filteredMemberMentionOptions = useMemo(() => (
     memberMentionOptions
       .filter((member) => memberMentionMatches(member, memberMentionTrigger?.query || ''))
       .slice(0, 8)
   ), [memberMentionOptions, memberMentionTrigger?.query]);
+  const selectedSkillNames = useMemo(() => new Set(selectedSkillMentions.map((item) => item.name)), [selectedSkillMentions]);
+  const filteredSkillMentionOptions = useMemo(() => (
+    skillMentionOptions
+      .filter((skill) => !selectedSkillNames.has(skill.name))
+      .filter((skill) => skillMentionMatches(skill, memberMentionTrigger?.query || ''))
+      .slice(0, 8)
+  ), [memberMentionTrigger?.query, selectedSkillNames, skillMentionOptions]);
+  const selectedAssetIds = useMemo(() => new Set(selectedAssetMentions.map((item) => item.id)), [selectedAssetMentions]);
+  const filteredAssetMentionOptions = useMemo(() => (
+    assetMentionOptions
+      .filter((asset) => !selectedAssetIds.has(asset.id))
+      .filter((asset) => assetMentionMatches(asset, memberMentionTrigger?.query || ''))
+      .slice(0, 8)
+  ), [assetMentionOptions, memberMentionTrigger?.query, selectedAssetIds]);
   const selectedKnowledgeIds = useMemo(() => new Set(selectedKnowledgeMentions.map((item) => item.id)), [selectedKnowledgeMentions]);
   const filteredKnowledgeMentionOptions = useMemo(() => (
     (onKnowledgeMentionSearchQueryChange
@@ -977,7 +1256,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       : knowledgeMentionOptions.filter((item) => knowledgeMentionMatches(item, knowledgeQuery))
     ).slice(0, 120)
   ), [knowledgeMentionOptions, knowledgeQuery, onKnowledgeMentionSearchQueryChange]);
-  const showMemberMentionPicker = memberMentionEnabled && Boolean(memberMentionTrigger);
+  const showMemberMentionPicker = (memberMentionEnabled || skillMentionEnabled || assetMentionEnabled) && Boolean(memberMentionTrigger);
   const showKnowledgeMentionPicker = knowledgeMentionEnabled && Boolean(knowledgeMentionTrigger);
   const modelPickerClass = darkEmbedded
     ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[rgb(var(--color-background))] shadow-xl z-[130]'
@@ -986,21 +1265,80 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const sendButtonClass = submitDisabled ? palette.sendButtonIdle : palette.sendButtonActive;
 
   const syncHeight = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, textareaMaxHeight)}px`;
+    const editor = textareaRef.current;
+    if (!editor) return;
+    editor.style.height = 'auto';
+    editor.style.height = `${Math.min(editor.scrollHeight, textareaMaxHeight)}px`;
   }, [textareaMaxHeight]);
 
   const resetHeight = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = 'auto';
+    const editor = textareaRef.current;
+    if (!editor) return;
+    editor.style.height = 'auto';
   }, []);
+
+  const syncEditorState = useCallback(() => {
+    const editor = textareaRef.current;
+    const nextValue = readEditorText(editor);
+    setIsEditorEmpty(
+      !nextValue.trim()
+      && readEditorMentionKeys(editor, 'member').length === 0
+      && readEditorMentionKeys(editor, 'skill').length === 0
+      && readEditorMentionKeys(editor, 'asset').length === 0,
+    );
+    onValueChange(nextValue);
+    const memberIds = readEditorMentionKeys(editor, 'member');
+    const nextMember = memberIds[0]
+      ? memberMentionOptions.find((member) => member.id === memberIds[0]) || selectedMemberMention
+      : null;
+    if ((nextMember?.id || '') !== (selectedMemberMention?.id || '')) {
+      onSelectedMemberMentionChange?.(nextMember);
+    }
+    const skillNames = new Set(readEditorMentionKeys(editor, 'skill'));
+    const nextSkills = skillMentionOptions.filter((skill) => skillNames.has(skill.name));
+    if (
+      nextSkills.length !== selectedSkillMentions.length
+      || nextSkills.some((skill, index) => skill.name !== selectedSkillMentions[index]?.name)
+    ) {
+      onSelectedSkillMentionsChange?.(nextSkills);
+    }
+    const assetIds = new Set(readEditorMentionKeys(editor, 'asset'));
+    const nextAssets = assetMentionOptions.filter((asset) => assetIds.has(asset.id));
+    if (
+      nextAssets.length !== selectedAssetMentions.length
+      || nextAssets.some((asset, index) => asset.id !== selectedAssetMentions[index]?.id)
+    ) {
+      onSelectedAssetMentionsChange?.(nextAssets);
+    }
+    syncHeight();
+  }, [assetMentionOptions, memberMentionOptions, onSelectedAssetMentionsChange, onSelectedMemberMentionChange, onSelectedSkillMentionsChange, onValueChange, selectedAssetMentions, selectedMemberMention, selectedSkillMentions, skillMentionOptions, syncHeight]);
 
   useEffect(() => {
     syncHeight();
   }, [attachment, syncHeight, suppressed, value, variant]);
+
+  useEffect(() => {
+    const editor = textareaRef.current;
+    if (!editor) return;
+    const hasMentionTokens = editor.querySelectorAll('[data-inline-mention]').length > 0;
+    const currentText = readEditorText(editor);
+    if (!value) {
+      if (!currentText && !hasMentionTokens) {
+        ensureEditorEmptySentinel(editor);
+        syncHeight();
+        return;
+      }
+      editor.replaceChildren();
+      ensureEditorEmptySentinel(editor);
+      setIsEditorEmpty(true);
+      syncHeight();
+      return;
+    }
+    if (document.activeElement === editor || hasMentionTokens || currentText === value) return;
+    editor.textContent = value;
+    setIsEditorEmpty(false);
+    syncHeight();
+  }, [syncHeight, value]);
 
   useEffect(() => {
     if (!showModelPicker) return;
@@ -1016,7 +1354,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   useEffect(() => {
     if (!showMemberMentionPicker) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (!memberPickerRef.current?.contains(event.target as Node) && !textareaRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !memberPickerRef.current?.contains(target)
+        && !textareaRef.current?.contains(target)
+      ) {
         setMemberMentionTrigger(null);
       }
     };
@@ -1050,6 +1392,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   useEffect(() => {
     setMemberMentionActiveIndex(0);
   }, [memberMentionTrigger?.query]);
+
+  useEffect(() => {
+    if (!showMemberMentionPicker) return;
+    const activeOption = memberPickerRef.current?.querySelector<HTMLElement>(
+      `[data-mention-option-index="${memberMentionActiveIndex}"]`,
+    );
+    activeOption?.scrollIntoView({ block: 'nearest' });
+  }, [memberMentionActiveIndex, showMemberMentionPicker]);
 
   useEffect(() => {
     setKnowledgeMentionActiveIndex(0);
@@ -1093,7 +1443,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       setKnowledgeMentionTrigger(null);
       return;
     }
-    const memberTrigger = memberMentionEnabled ? getActiveMemberMentionTrigger(nextValue, caretIndex) : null;
+    const memberTrigger = (memberMentionEnabled || skillMentionEnabled || assetMentionEnabled) ? getActiveMemberMentionTrigger(nextValue, caretIndex) : null;
     const knowledgeTrigger = knowledgeMentionEnabled ? getActiveKnowledgeMentionTrigger(nextValue, caretIndex) : null;
     const nextTrigger = memberTrigger && knowledgeTrigger
       ? (memberTrigger.start >= knowledgeTrigger.start ? 'member' : 'knowledge')
@@ -1116,43 +1466,89 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     }
     setMemberMentionTrigger(null);
     setKnowledgeMentionTrigger(null);
-  }, [disabled, isBusy, knowledgeMentionEnabled, memberMentionEnabled, readOnly]);
+  }, [assetMentionEnabled, disabled, isBusy, knowledgeMentionEnabled, memberMentionEnabled, readOnly, skillMentionEnabled]);
 
   const selectMemberMention = useCallback((member: ChatMemberMentionOption) => {
     const trigger = memberMentionTrigger;
     onSelectedMemberMentionChange?.(member);
     setMemberMentionTrigger(null);
     if (trigger) {
-      const nextValue = `${value.slice(0, trigger.start)}${value.slice(trigger.end)}`;
-      onValueChange(nextValue);
+      const editor = textareaRef.current;
+      if (!editor) return;
+      deleteEditorTextRange(editor, trigger.start, trigger.end);
+      const caretNode = insertNodeAtCurrentSelection(editor, createMentionTokenElement('member', member.id, member.name, darkEmbedded));
+      syncEditorState();
       window.requestAnimationFrame(() => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-        const nextCaret = Math.min(trigger.start, nextValue.length);
-        textarea.focus();
-        textarea.setSelectionRange(nextCaret, nextCaret);
+        editor.focus({ preventScroll: true });
+        placeEditorCaretAfterNode(editor, caretNode);
         syncHeight();
       });
     } else {
       textareaRef.current?.focus();
     }
-  }, [memberMentionTrigger, onSelectedMemberMentionChange, onValueChange, syncHeight, value]);
+  }, [darkEmbedded, memberMentionTrigger, onSelectedMemberMentionChange, syncEditorState, syncHeight]);
+
+  const selectSkillMention = useCallback((skill: ChatSkillMentionOption) => {
+    const trigger = memberMentionTrigger;
+    const exists = selectedSkillNames.has(skill.name);
+    if (!exists) {
+      onSelectedSkillMentionsChange?.([...selectedSkillMentions, skill]);
+    }
+    setMemberMentionTrigger(null);
+    if (trigger) {
+      const editor = textareaRef.current;
+      if (!editor) return;
+      deleteEditorTextRange(editor, trigger.start, trigger.end);
+      const caretNode = insertNodeAtCurrentSelection(editor, createMentionTokenElement('skill', skill.name, skill.name, darkEmbedded));
+      syncEditorState();
+      window.requestAnimationFrame(() => {
+        editor.focus({ preventScroll: true });
+        placeEditorCaretAfterNode(editor, caretNode);
+        syncHeight();
+      });
+    } else {
+      textareaRef.current?.focus();
+    }
+  }, [darkEmbedded, memberMentionTrigger, onSelectedSkillMentionsChange, selectedSkillMentions, selectedSkillNames, syncEditorState, syncHeight]);
+
+  const selectAssetMention = useCallback((asset: ChatAssetMentionOption) => {
+    const trigger = memberMentionTrigger;
+    const exists = selectedAssetIds.has(asset.id);
+    if (!exists) {
+      onSelectedAssetMentionsChange?.([...selectedAssetMentions, asset]);
+    }
+    setMemberMentionTrigger(null);
+    if (trigger) {
+      const editor = textareaRef.current;
+      if (!editor) return;
+      deleteEditorTextRange(editor, trigger.start, trigger.end);
+      const caretNode = insertNodeAtCurrentSelection(editor, createMentionTokenElement('asset', asset.id, asset.name, darkEmbedded));
+      syncEditorState();
+      window.requestAnimationFrame(() => {
+        editor.focus({ preventScroll: true });
+        placeEditorCaretAfterNode(editor, caretNode);
+        syncHeight();
+      });
+    } else {
+      textareaRef.current?.focus();
+    }
+  }, [darkEmbedded, memberMentionTrigger, onSelectedAssetMentionsChange, selectedAssetIds, selectedAssetMentions, syncEditorState, syncHeight]);
 
   const removeKnowledgeTriggerText = useCallback((keepPickerOpen = false) => {
     const trigger = knowledgeMentionTrigger;
     if (!trigger) return;
-    const nextValue = `${value.slice(0, trigger.start)}${value.slice(trigger.end)}`;
-    onValueChange(nextValue);
+    const editor = textareaRef.current;
+    if (!editor) return;
+    deleteEditorTextRange(editor, trigger.start, trigger.end);
+    syncEditorState();
     setKnowledgeMentionTrigger(keepPickerOpen ? { start: trigger.start, end: trigger.start, query: '' } : null);
     window.requestAnimationFrame(() => {
       const textarea = keepPickerOpen ? null : textareaRef.current;
       if (!textarea) return;
-      const nextCaret = Math.min(trigger.start, nextValue.length);
       textarea.focus();
-      textarea.setSelectionRange(nextCaret, nextCaret);
       syncHeight();
     });
-  }, [knowledgeMentionTrigger, onValueChange, syncHeight, value]);
+  }, [knowledgeMentionTrigger, syncEditorState, syncHeight]);
 
   const toggleKnowledgeMention = useCallback((item: ChatKnowledgeMentionOption) => {
     const exists = selectedKnowledgeIds.has(item.id);
@@ -1171,7 +1567,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     );
   }, [onSelectedKnowledgeMentionsChange, selectedKnowledgeMentions]);
 
-  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     if (showKnowledgeMentionPicker) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -1180,18 +1576,19 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       }
     }
     if (showMemberMentionPicker) {
+      const mentionOptionCount = filteredMemberMentionOptions.length + filteredSkillMentionOptions.length + filteredAssetMentionOptions.length;
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         setMemberMentionActiveIndex((current) => (
-          filteredMemberMentionOptions.length > 0 ? (current + 1) % filteredMemberMentionOptions.length : 0
+          mentionOptionCount > 0 ? (current + 1) % mentionOptionCount : 0
         ));
         return;
       }
       if (event.key === 'ArrowUp') {
         event.preventDefault();
         setMemberMentionActiveIndex((current) => (
-          filteredMemberMentionOptions.length > 0
-            ? (current - 1 + filteredMemberMentionOptions.length) % filteredMemberMentionOptions.length
+          mentionOptionCount > 0
+            ? (current - 1 + mentionOptionCount) % mentionOptionCount
             : 0
         ));
         return;
@@ -1201,11 +1598,29 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         setMemberMentionTrigger(null);
         return;
       }
-      if ((event.key === 'Enter' || event.key === 'Tab') && filteredMemberMentionOptions.length > 0) {
+      if ((event.key === 'Enter' || event.key === 'Tab') && mentionOptionCount > 0) {
         event.preventDefault();
-        selectMemberMention(filteredMemberMentionOptions[Math.min(memberMentionActiveIndex, filteredMemberMentionOptions.length - 1)]);
+        if (memberMentionActiveIndex < filteredMemberMentionOptions.length) {
+          selectMemberMention(filteredMemberMentionOptions[memberMentionActiveIndex]);
+        } else if (memberMentionActiveIndex < filteredMemberMentionOptions.length + filteredSkillMentionOptions.length) {
+          const skillIndex = memberMentionActiveIndex - filteredMemberMentionOptions.length;
+          selectSkillMention(filteredSkillMentionOptions[skillIndex]);
+        } else {
+          const assetIndex = Math.min(memberMentionActiveIndex - filteredMemberMentionOptions.length - filteredSkillMentionOptions.length, filteredAssetMentionOptions.length - 1);
+          selectAssetMention(filteredAssetMentionOptions[assetIndex]);
+        }
         return;
       }
+    }
+    if (event.key === 'Enter' && event.shiftKey && !isComposing && !isImeComposingEvent(event)) {
+      event.preventDefault();
+      document.execCommand('insertText', false, '\n');
+      window.requestAnimationFrame(() => {
+        const editor = textareaRef.current;
+        syncEditorState();
+        updateMentionTrigger(readEditorText(editor), editorCaretTextOffset(editor));
+      });
+      return;
     }
     if (event.key === 'Enter' && !event.shiftKey && !isComposing && !isImeComposingEvent(event)) {
       event.preventDefault();
@@ -1213,7 +1628,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         onSubmit();
       }
     }
-  }, [filteredMemberMentionOptions, isComposing, memberMentionActiveIndex, onSubmit, selectMemberMention, showKnowledgeMentionPicker, showMemberMentionPicker, submitDisabled]);
+  }, [filteredAssetMentionOptions, filteredMemberMentionOptions, filteredSkillMentionOptions, isComposing, memberMentionActiveIndex, onSubmit, selectAssetMention, selectMemberMention, selectSkillMention, showKnowledgeMentionPicker, showMemberMentionPicker, submitDisabled, syncEditorState, updateMentionTrigger]);
 
   const handleKnowledgeSearchKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') {
@@ -1284,15 +1699,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   ) : null;
   const textareaClass = primaryAttachment && !showAttachmentInMediaSlot
     ? variant === 'empty'
-      ? 'mt-3 w-full bg-transparent pr-1 pb-1 text-[16px] focus:outline-none resize-none min-h-[64px] max-h-[220px] overflow-y-auto'
-      : 'mt-2.5 w-full bg-transparent pr-1 pb-1 text-[14px] focus:outline-none resize-none min-h-[52px] max-h-[180px] overflow-y-auto'
+      ? 'mt-3 w-full bg-transparent pr-1 pb-1 text-[16px] focus:outline-none min-h-[64px] max-h-[220px] overflow-y-auto whitespace-pre-wrap break-words'
+      : 'mt-2.5 w-full bg-transparent pr-1 pb-1 text-[14px] focus:outline-none min-h-[52px] max-h-[180px] overflow-y-auto whitespace-pre-wrap break-words'
     : showInlineAttachmentPlaceholder || showAttachmentInMediaSlot
       ? variant === 'empty'
-        ? 'w-full bg-transparent px-2 py-0.5 text-[16px] focus:outline-none resize-none min-h-[72px] max-h-[96px] overflow-y-auto'
-        : 'w-full bg-transparent px-2 py-0.5 text-[14px] focus:outline-none resize-none min-h-[56px] max-h-[160px] overflow-y-auto'
+        ? 'w-full bg-transparent px-2 py-0.5 text-[16px] focus:outline-none min-h-[72px] max-h-[96px] overflow-y-auto whitespace-pre-wrap break-words'
+        : 'w-full bg-transparent px-2 py-0.5 text-[14px] focus:outline-none min-h-[56px] max-h-[160px] overflow-y-auto whitespace-pre-wrap break-words'
     : variant === 'empty'
-      ? 'w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto'
-      : 'w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto';
+      ? 'w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none min-h-[100px] overflow-y-auto whitespace-pre-wrap break-words'
+      : 'w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none min-h-[72px] max-h-[280px] overflow-y-auto whitespace-pre-wrap break-words';
 
   const textarea = suppressed ? (
     <button
@@ -1307,29 +1722,93 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       {suppressedLabel}
     </button>
   ) : (
-    <textarea
-      ref={textareaRef}
-      value={value}
-      onChange={(event) => {
-        onValueChange(event.target.value);
-        updateMentionTrigger(event.target.value, event.target.selectionStart || 0);
+    <div
+      className="relative w-full text-left"
+      onMouseDown={(event) => {
+        if (!isEditorEmpty) return;
+        event.preventDefault();
+        const editor = textareaRef.current;
+        ensureEditorEmptySentinel(editor);
+        editor?.focus();
+        placeEditorCaretAtStart(editor);
       }}
-      onFocus={onFocus}
-      onCompositionStart={() => setIsComposing(true)}
-      onCompositionEnd={() => setIsComposing(false)}
-      onKeyDown={handleKeyDown}
-      onClick={(event) => updateMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart || 0)}
-      onSelect={(event) => updateMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart || 0)}
-      placeholder={placeholder}
-      className={clsx(textareaClass, palette.text)}
-      spellCheck={false}
-      autoCorrect="off"
-      autoCapitalize="off"
-      readOnly={readOnly || isBusy}
-      aria-disabled={disabled || isBusy}
-      rows={1}
-    />
+    >
+      {isEditorEmpty ? (
+        <div className={clsx(
+          'pointer-events-none absolute select-none',
+          primaryAttachment && !showAttachmentInMediaSlot
+            ? variant === 'empty' ? 'left-0 top-3 text-[16px]' : 'left-0 top-2.5 text-[14px]'
+            : showInlineAttachmentPlaceholder || showAttachmentInMediaSlot
+              ? variant === 'empty' ? 'left-2 top-0.5 text-[16px]' : 'left-2 top-0.5 text-[14px]'
+              : variant === 'empty' ? 'left-4 top-3 text-[16px]' : 'left-3.5 top-2.5 text-[14px]',
+          darkEmbedded ? 'text-white/30' : 'text-text-tertiary',
+        )}>
+          {placeholder}
+        </div>
+      ) : null}
+      <div
+        ref={textareaRef}
+        contentEditable={!readOnly && !isBusy}
+        suppressContentEditableWarning
+        onInput={() => {
+          const editor = textareaRef.current;
+          syncEditorState();
+          updateMentionTrigger(readEditorText(editor), editorCaretTextOffset(editor));
+        }}
+        onFocus={(event) => {
+          onFocus?.();
+          if (isEditorEmpty) {
+            ensureEditorEmptySentinel(event.currentTarget);
+            placeEditorCaretAtStart(event.currentTarget);
+            window.requestAnimationFrame(() => placeEditorCaretAtStart(event.currentTarget));
+          }
+        }}
+        onMouseDown={(event) => {
+          if (!isEditorEmpty) return;
+          event.preventDefault();
+          ensureEditorEmptySentinel(event.currentTarget);
+          event.currentTarget.focus();
+          placeEditorCaretAtStart(event.currentTarget);
+        }}
+        onCompositionStart={() => setIsComposing(true)}
+        onCompositionEnd={(event) => {
+          setIsComposing(false);
+          const editor = event.currentTarget;
+          window.requestAnimationFrame(() => {
+            syncEditorState();
+            updateMentionTrigger(readEditorText(editor), editorCaretTextOffset(editor));
+          });
+        }}
+        onKeyDown={handleKeyDown}
+        onClick={(event) => {
+          const target = event.target as HTMLElement;
+          const token = target.closest<HTMLElement>('[data-inline-mention]');
+          if (token && event.detail >= 2) {
+            token.remove();
+            syncEditorState();
+            return;
+          }
+          updateMentionTrigger(readEditorText(event.currentTarget), editorCaretTextOffset(event.currentTarget));
+        }}
+        onKeyUp={(event) => updateMentionTrigger(readEditorText(event.currentTarget), editorCaretTextOffset(event.currentTarget))}
+        onPaste={(event) => {
+          event.preventDefault();
+          const text = event.clipboardData.getData('text/plain');
+          document.execCommand('insertText', false, text);
+        }}
+        className={clsx(
+          textareaClass,
+          'text-left',
+          palette.text,
+        )}
+        spellCheck={false}
+        aria-disabled={disabled || isBusy}
+        role="textbox"
+        aria-multiline="true"
+      />
+    </div>
   );
+  const textareaWithInlineMentions = textarea;
 
   return (
     <form onSubmit={handleFormSubmit} className={clsx('relative w-full', className)}>
@@ -1337,19 +1816,22 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         <div
           ref={memberPickerRef}
           className={clsx(
-            'absolute bottom-full left-3 z-[140] mb-2 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border shadow-xl',
+            'absolute bottom-full left-3 z-[140] mb-2 h-[min(52vh,360px)] w-72 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border shadow-xl',
             darkEmbedded ? 'border-white/10 bg-[rgb(var(--color-background))] text-white' : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-text-primary',
           )}
         >
-          <div className={clsx('px-3 py-2 text-[11px] font-medium', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
-            选择成员
-          </div>
+          {filteredMemberMentionOptions.length > 0 ? (
+            <div className={clsx('px-3 py-2 text-[11px] font-medium', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+              成员
+            </div>
+          ) : null}
           {filteredMemberMentionOptions.length > 0 ? filteredMemberMentionOptions.map((member, index) => {
             const active = index === memberMentionActiveIndex;
             return (
               <button
                 key={member.id}
                 type="button"
+                data-mention-option-index={index}
                 onMouseEnter={() => setMemberMentionActiveIndex(index)}
                 onClick={() => selectMemberMention(member)}
                 className={clsx(
@@ -1370,11 +1852,89 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                 </span>
               </button>
             );
-          }) : (
-            <div className={clsx('px-3 pb-3 text-sm', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
-              没有匹配的成员
+          }) : null}
+          {filteredSkillMentionOptions.length > 0 ? (
+            <div className={clsx('px-3 py-2 text-[11px] font-medium', filteredMemberMentionOptions.length > 0 ? 'border-t' : '', darkEmbedded ? 'border-white/10 text-white/45' : 'border-[rgb(var(--color-divider))] text-text-tertiary')}>
+              Skills
             </div>
-          )}
+          ) : null}
+          {filteredSkillMentionOptions.length > 0 ? filteredSkillMentionOptions.map((skill, index) => {
+            const optionIndex = filteredMemberMentionOptions.length + index;
+            const active = optionIndex === memberMentionActiveIndex;
+            return (
+              <button
+                key={skill.name}
+                type="button"
+                data-mention-option-index={optionIndex}
+                onMouseEnter={() => setMemberMentionActiveIndex(optionIndex)}
+                onClick={() => selectSkillMention(skill)}
+                className={clsx(
+                  'flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors',
+                  active
+                    ? darkEmbedded ? 'bg-white/10' : 'bg-[rgb(var(--color-surface-secondary))]'
+                    : darkEmbedded ? 'hover:bg-white/[0.06]' : 'hover:bg-[rgb(var(--color-surface-secondary))]',
+                )}
+              >
+                <span className={clsx('flex h-8 w-8 shrink-0 items-center justify-center rounded-full', darkEmbedded ? 'bg-white/[0.08] text-white/72' : 'bg-[rgb(var(--color-accent-muted))] text-[rgb(var(--color-accent-primary))]')}>
+                  <Sparkles className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{skill.name}</span>
+                  {skill.description ? (
+                    <span className={clsx('block truncate text-[11px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+                      {skill.description}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          }) : null}
+          {filteredAssetMentionOptions.length > 0 ? (
+            <div className={clsx('px-3 py-2 text-[11px] font-medium', (filteredMemberMentionOptions.length > 0 || filteredSkillMentionOptions.length > 0) ? 'border-t' : '', darkEmbedded ? 'border-white/10 text-white/45' : 'border-[rgb(var(--color-divider))] text-text-tertiary')}>
+              资产
+            </div>
+          ) : null}
+          {filteredAssetMentionOptions.length > 0 ? filteredAssetMentionOptions.map((asset, index) => {
+            const optionIndex = filteredMemberMentionOptions.length + filteredSkillMentionOptions.length + index;
+            const active = optionIndex === memberMentionActiveIndex;
+            const preview = String(asset.primaryPreviewUrl || asset.previewUrls?.[0] || asset.absoluteImagePaths?.[0] || asset.imagePaths?.[0] || '').trim();
+            return (
+              <button
+                key={asset.id}
+                type="button"
+                data-mention-option-index={optionIndex}
+                onMouseEnter={() => setMemberMentionActiveIndex(optionIndex)}
+                onClick={() => selectAssetMention(asset)}
+                className={clsx(
+                  'flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors',
+                  active
+                    ? darkEmbedded ? 'bg-white/10' : 'bg-[rgb(var(--color-surface-secondary))]'
+                    : darkEmbedded ? 'hover:bg-white/[0.06]' : 'hover:bg-[rgb(var(--color-surface-secondary))]',
+                )}
+              >
+                <span className={clsx('flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg', darkEmbedded ? 'bg-white/[0.08] text-white/72' : 'bg-[#edf6fb] text-[#4d8fb6]')}>
+                  {preview ? (
+                    <img src={resolveAssetUrl(preview)} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <Package className="h-4 w-4" />
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{asset.name}</span>
+                  {asset.description || asset.tags?.length ? (
+                    <span className={clsx('block truncate text-[11px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+                      {asset.description || asset.tags?.join('、')}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          }) : null}
+          {filteredMemberMentionOptions.length === 0 && filteredSkillMentionOptions.length === 0 && filteredAssetMentionOptions.length === 0 ? (
+            <div className={clsx('px-3 pb-3 text-sm', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+              没有匹配项
+            </div>
+          ) : null}
         </div>
       ) : null}
       {showKnowledgeMentionPicker ? (
@@ -1462,26 +2022,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         </div>
       ) : null}
       <ChatComposerFrame theme={theme} variant={variant}>
-        {selectedMemberMention || selectedKnowledgeMentions.length > 0 ? (
+        {selectedKnowledgeMentions.length > 0 ? (
           <div className={clsx('flex flex-wrap items-center gap-2 px-3 pt-2', variant === 'empty' ? 'pb-1' : 'pb-0.5')}>
-            {selectedMemberMention ? (
-              <span className={clsx(
-                'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
-                darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))]',
-              )}>
-                {renderMemberMentionAvatar(selectedMemberMention, darkEmbedded)}
-                <span className="truncate">@{selectedMemberMention.name}</span>
-                <button
-                  type="button"
-                  onClick={() => onSelectedMemberMentionChange?.(null)}
-                  className={clsx('ml-0.5 rounded-full p-0.5 transition-colors', darkEmbedded ? 'hover:bg-white/10' : 'hover:bg-black/5')}
-                  aria-label={`移除 @${selectedMemberMention.name}`}
-                  title="移除成员"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ) : null}
             {selectedKnowledgeMentions.map((item) => {
               const cover = String(item.cover || '').trim();
               return (
@@ -1529,7 +2071,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               darkEmbedded={darkEmbedded}
               onRemove={() => onClearAttachment?.()}
             />
-            {textarea}
+            {textareaWithInlineMentions}
           </>
         ) : showAttachmentInMediaSlot ? (
           <div className={clsx(
@@ -1538,7 +2080,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           )}>
             {inlineAttachmentSlot}
             <div className="min-w-0 flex-1">
-              {textarea}
+              {textareaWithInlineMentions}
             </div>
           </div>
         ) : primaryAttachment ? (
@@ -1549,7 +2091,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               variant={variant}
               onRemove={() => onClearAttachment?.()}
             >
-              {textarea}
+              {textareaWithInlineMentions}
             </ComposerAttachmentPreview>
           </div>
         ) : showInlineAttachmentPlaceholder ? (
@@ -1559,10 +2101,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           )}>
             {inlineAttachmentSlot}
             <div className="min-w-0 flex-1">
-              {textarea}
+              {textareaWithInlineMentions}
             </div>
           </div>
-        ) : textarea}
+        ) : textareaWithInlineMentions}
 
         <div className={clsx('flex items-center gap-2', variant === 'empty' ? 'px-2 pb-1' : 'px-1.5 pb-0.5')}>
           <div className="flex shrink-0 items-center gap-1">

@@ -16,7 +16,7 @@ use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_ru
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{AppStore, ChatSessionRecord};
 
-pub const DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS: usize = 24;
+pub const DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS: usize = 48;
 
 #[derive(Debug, Clone, Default)]
 pub struct ToolRegistryPlanParams<'a> {
@@ -382,7 +382,15 @@ fn select_direct_app_cli_actions(
     if descriptors.is_empty() || max_direct_actions == 0 {
         return Vec::new();
     }
-    let allowed_actions = normalized_allowed_app_cli_actions(metadata);
+    let mut allowed_actions = normalized_allowed_app_cli_actions(metadata);
+    if !allowed_actions.is_empty()
+        && metadata_is_artifact_authoring_manuscript(metadata)
+        && !allowed_actions
+            .iter()
+            .any(|item| item == "team.guide.create")
+    {
+        allowed_actions.insert(0, "team.guide.create".to_string());
+    }
     if !allowed_actions.is_empty() {
         return descriptors
             .iter()
@@ -391,32 +399,54 @@ fn select_direct_app_cli_actions(
             .collect();
     }
     let preferred_namespaces = preferred_app_cli_namespaces(runtime_mode, task_intent);
-    let preferred_namespaces = direct_namespaces_from_metadata(metadata)
-        .filter(|items| !items.is_empty())
-        .unwrap_or(preferred_namespaces);
+    let explicit_direct_namespaces =
+        direct_namespaces_from_metadata(metadata).filter(|items| !items.is_empty());
+    let uses_explicit_direct_namespaces = explicit_direct_namespaces.is_some();
+    let preferred_namespaces = explicit_direct_namespaces.unwrap_or(preferred_namespaces);
     let pinned_actions = pinned_direct_app_cli_actions(runtime_mode, task_intent);
-    let max_direct_actions = if pinned_actions.is_empty() {
+    let max_direct_actions = if uses_explicit_direct_namespaces {
         max_direct_actions
     } else {
-        max_direct_actions.max(26)
+        max_direct_actions
+            .max(DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS.len() + pinned_actions.len())
+            .max(if pinned_actions.is_empty() { 0 } else { 26 })
     };
     let mut selected = Vec::<ActionDescriptor>::new();
+    if !uses_explicit_direct_namespaces {
+        for action in intent_priority_app_cli_actions(task_intent) {
+            if !push_direct_app_cli_action(&mut selected, descriptors, action, max_direct_actions) {
+                return selected;
+            }
+        }
+        for action in DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS {
+            if !push_direct_app_cli_action(&mut selected, descriptors, action, max_direct_actions) {
+                return selected;
+            }
+        }
+    }
+    if has_active_skill(metadata, "video-director") {
+        for action in [
+            "assets.get",
+            "assets.search",
+            "voice.speech",
+            "image.generate",
+            "video.generate",
+        ] {
+            if !push_direct_app_cli_action(&mut selected, descriptors, action, max_direct_actions) {
+                return selected;
+            }
+        }
+    }
     for action in pinned_actions {
-        if selected.len() >= max_direct_actions {
+        if !push_direct_app_cli_action(&mut selected, descriptors, action, max_direct_actions) {
             return selected;
         }
-        if selected
-            .iter()
-            .any(|descriptor| descriptor.action == *action)
-        {
-            continue;
-        }
-        if let Some(descriptor) = descriptors
-            .iter()
-            .copied()
-            .find(|descriptor| descriptor.action == *action)
-        {
-            selected.push(descriptor);
+    }
+    if has_explicit_asset_refs(metadata) {
+        for action in ["assets.get", "assets.search"] {
+            if !push_direct_app_cli_action(&mut selected, descriptors, action, max_direct_actions) {
+                return selected;
+            }
         }
     }
     for namespace in preferred_namespaces {
@@ -425,6 +455,12 @@ fn select_direct_app_cli_actions(
             .copied()
             .filter(|descriptor| descriptor.namespace == namespace)
         {
+            if selected
+                .iter()
+                .any(|selected| selected.action == descriptor.action)
+            {
+                continue;
+            }
             if selected.len() >= max_direct_actions {
                 return selected;
             }
@@ -432,6 +468,79 @@ fn select_direct_app_cli_actions(
         }
     }
     selected
+}
+
+fn intent_priority_app_cli_actions(task_intent: Option<&str>) -> &'static [&'static str] {
+    match task_intent
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "image" | "image-generation" | "cover" => &["image.generate"],
+        "video" | "video-generation" => &["video.generate"],
+        "video-analysis" | "video_analyze" | "video-analyze" => &["video.analyze"],
+        "voice" | "tts" | "speech" => &["voice.speech"],
+        _ => &[],
+    }
+}
+
+const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
+    "web.fetch",
+    "model_config.read",
+    "model_config.effective",
+    "memory.list",
+    "memory.search",
+    "memory.recall",
+    "memory.diagnostics",
+    "redclaw.profile.bundle",
+    "redclaw.profile.read",
+    "redclaw.task.preview",
+    "redclaw.task.list",
+    "redclaw.task.stats",
+    "manuscripts.list",
+    "assets.search",
+    "assets.get",
+    "voice.speech",
+    "voice.list",
+    "voice.get",
+    "team.guide.create",
+    "team.session.list",
+    "team.session.get",
+    "team.members.list",
+    "team.task.list",
+    "approval.request",
+    "skills.list",
+    "skills.invoke",
+    "image.generate",
+    "video.generate",
+    "video.analyze",
+    "media.transcribe",
+];
+
+fn push_direct_app_cli_action(
+    selected: &mut Vec<ActionDescriptor>,
+    descriptors: &[ActionDescriptor],
+    action: &str,
+    max_direct_actions: usize,
+) -> bool {
+    if selected.len() >= max_direct_actions {
+        return false;
+    }
+    if selected
+        .iter()
+        .any(|descriptor| descriptor.action == action)
+    {
+        return true;
+    }
+    if let Some(descriptor) = descriptors
+        .iter()
+        .copied()
+        .find(|descriptor| descriptor.action == action)
+    {
+        selected.push(descriptor);
+    }
+    true
 }
 
 fn pinned_direct_app_cli_actions(
@@ -456,6 +565,7 @@ fn pinned_direct_app_cli_actions(
     if wants_host_cli || (!media_intent && matches!(runtime_mode, "team" | "redclaw" | "knowledge"))
     {
         &[
+            "web.fetch",
             "video.analyze",
             "team.guide.create",
             "media.transcribe",
@@ -521,7 +631,8 @@ fn deferred_action_entry(descriptor: &ActionDescriptor) -> DeferredActionEntry {
 }
 
 fn is_team_escalation_action(action: &str) -> bool {
-    action.starts_with("team.") || action.starts_with("redclaw.task.")
+    (action.starts_with("team.") && action != "team.guide.create")
+        || action.starts_with("redclaw.task.")
 }
 
 fn session_metadata<'a>(store: &'a AppStore, session_id: Option<&str>) -> Option<&'a Value> {
@@ -568,6 +679,46 @@ fn metadata_bool(metadata: Option<&Value>, field: &str) -> Option<bool> {
 fn metadata_is_artifact_authoring_manuscript(metadata: Option<&Value>) -> bool {
     metadata_string(metadata, "executionProfile").as_deref() == Some("artifact-authoring")
         && metadata_string(metadata, "artifactType").as_deref() == Some("manuscript")
+}
+
+fn has_explicit_asset_refs(metadata: Option<&Value>) -> bool {
+    metadata
+        .and_then(|item| item.get("explicitAssetRefs"))
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("assetId")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+            })
+        })
+}
+
+fn has_active_skill(metadata: Option<&Value>, skill_name: &str) -> bool {
+    let wanted = skill_name.trim();
+    if wanted.is_empty() {
+        return false;
+    }
+    if metadata_string_list(metadata, "activeSkills")
+        .iter()
+        .any(|item| item.eq_ignore_ascii_case(wanted))
+    {
+        return true;
+    }
+    metadata
+        .and_then(|item| item.get("sessionSkillState"))
+        .and_then(|item| item.get("active"))
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("skillName")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|value| value.eq_ignore_ascii_case(wanted))
+            })
+        })
 }
 
 fn normalize_runtime_mode(runtime_mode: &str) -> &str {
@@ -858,7 +1009,7 @@ mod tests {
         assert!(!plan.has_direct_app_cli_action("media.edit"));
         assert!(plan.has_direct_app_cli_action("media.transcribe"));
         assert!(plan.has_direct_app_cli_action("team.guide.create"));
-        assert!(!plan.has_direct_app_cli_action("web.fetch"));
+        assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
@@ -868,6 +1019,57 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("image.generate"));
         assert!(plan.has_direct_app_cli_action("model_config.effective"));
         assert!(plan.has_direct_app_cli_action("model_config.read"));
+    }
+
+    #[test]
+    fn explicit_asset_refs_make_asset_lookup_direct() {
+        let metadata = json!({
+            "explicitAssetRefs": [{
+                "assetId": "subject_1774704234274_53536cc0",
+                "name": "Jamba"
+            }]
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("assets.get"));
+        assert!(plan.has_direct_app_cli_action("assets.search"));
+        assert!(!plan.has_deferred_app_cli_action("assets.get"));
+        assert!(!plan.has_deferred_app_cli_action("assets.search"));
+    }
+
+    #[test]
+    fn video_director_skill_makes_generation_actions_direct() {
+        let metadata = json!({
+            "sessionSkillState": {
+                "active": [{
+                    "skillName": "video-director",
+                    "requestedScope": "session"
+                }]
+            },
+            "activeSkills": ["video-director"]
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+
+        for action in [
+            "assets.get",
+            "assets.search",
+            "voice.speech",
+            "image.generate",
+            "video.generate",
+        ] {
+            assert!(
+                plan.has_direct_app_cli_action(action),
+                "{action} should be direct"
+            );
+        }
     }
 
     #[test]
@@ -881,7 +1083,7 @@ mod tests {
         assert!(!plan.has_direct_app_cli_action("media.edit"));
         assert!(plan.has_direct_app_cli_action("media.transcribe"));
         assert!(plan.has_direct_app_cli_action("team.guide.create"));
-        assert!(!plan.has_direct_app_cli_action("web.fetch"));
+        assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));

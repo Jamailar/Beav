@@ -973,13 +973,9 @@ pub fn runtime_context_messages_for_session(
 
     let items = chat_messages_for_session(store, session_id)
         .into_iter()
-        .map(|item| {
-            json!({
-                "role": item.role,
-                "content": item.content
-            })
-        })
+        .map(runtime_history_message_from_chat_record)
         .collect::<Vec<_>>();
+    let items = sanitize_runtime_history_messages(&items);
     let mut result = bundle_messages_for_runtime(
         &items,
         session_resume_summary_prompt(store, session_id),
@@ -1075,6 +1071,19 @@ pub fn sanitize_runtime_history_messages(messages: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+fn runtime_history_message_from_chat_record(item: ChatMessageRecord) -> Value {
+    let mut message = json!({
+        "role": item.role,
+        "content": item.content
+    });
+    if let Some(metadata) = item.metadata {
+        if let Some(object) = message.as_object_mut() {
+            object.insert("metadata".to_string(), metadata);
+        }
+    }
+    message
+}
+
 fn sanitize_runtime_history_message(message: &Value) -> Option<Value> {
     let role = message
         .get("role")
@@ -1108,6 +1117,8 @@ fn sanitize_runtime_history_message(message: &Value) -> Option<Value> {
             if content.is_empty() || is_internal_runtime_history_user_message(&content) {
                 None
             } else {
+                let content =
+                    append_runtime_history_reference_context(content, message.get("metadata"));
                 Some(json!({
                     "role": "user",
                     "content": content
@@ -1115,6 +1126,61 @@ fn sanitize_runtime_history_message(message: &Value) -> Option<Value> {
             }
         }
         _ => None,
+    }
+}
+
+fn append_runtime_history_reference_context(
+    mut content: String,
+    metadata: Option<&Value>,
+) -> String {
+    let reference_context = runtime_history_asset_reference_context(metadata);
+    if !reference_context.is_empty() {
+        content.push_str("\n\n");
+        content.push_str(&reference_context);
+    }
+    content
+}
+
+fn runtime_history_asset_reference_context(metadata: Option<&Value>) -> String {
+    let Some(items) = metadata
+        .and_then(|item| item.get("explicitAssetRefs"))
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty())
+    else {
+        return String::new();
+    };
+    let mut lines = vec![
+        "Referenced assets from this user message:".to_string(),
+        "- These are resolved asset-library selections originally made with `@`.".to_string(),
+    ];
+    let mut rendered_count = 0usize;
+    for item in items.iter().take(12) {
+        let asset_id = item
+            .get("assetId")
+            .or_else(|| item.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(asset_id) = asset_id else {
+            continue;
+        };
+        let name = item
+            .get("name")
+            .or_else(|| item.get("title"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("未命名资产");
+        rendered_count += 1;
+        lines.push(format!(
+            "{}. name: {}; id: {}",
+            rendered_count, name, asset_id
+        ));
+    }
+    if rendered_count == 0 {
+        String::new()
+    } else {
+        lines.join("\n")
     }
 }
 
@@ -2306,6 +2372,36 @@ mod tests {
             Some("先记录一个中间说明")
         );
         assert!(sanitized[0].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn sanitize_runtime_history_messages_keeps_compact_asset_context() {
+        let messages = vec![json!({
+            "role": "user",
+            "content": "做一个 @Jamba 的口播视频",
+            "metadata": {
+                "explicitAssetRefs": [{
+                    "assetId": "subject_1774704234274_53536cc0",
+                    "name": "Jamba",
+                    "imagePaths": ["/private/huge/path.png"],
+                    "voicePath": "/private/voice.wav"
+                }]
+            }
+        })];
+
+        let sanitized = sanitize_runtime_history_messages(&messages);
+        let content = sanitized[0]
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        assert!(content.contains("做一个 @Jamba 的口播视频"));
+        assert!(content.contains("Referenced assets from this user message"));
+        assert!(content.contains("name: Jamba"));
+        assert!(content.contains("id: subject_1774704234274_53536cc0"));
+        assert!(!content.contains("imagePaths"));
+        assert!(!content.contains("voicePath"));
+        assert!(!content.contains("/private/huge/path.png"));
     }
 
     #[test]

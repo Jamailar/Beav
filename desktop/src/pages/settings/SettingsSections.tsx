@@ -2443,9 +2443,12 @@ interface ToolsSettingsSectionProps {
     thrivePluginsLoading: boolean;
     thrivePluginBusyId: string;
     thrivePluginStatusMessage: string;
+    thrivePluginRepoInput: string;
+    setThrivePluginRepoInput: Dispatch<SetStateAction<string>>;
     handleRefreshThrivePlugins: () => Promise<void>;
     handleRefreshThrivePluginMarketplace: () => Promise<void>;
     handleInstallThriveMarketplacePlugin: (plugin: ThrivePluginMarketplaceItem) => Promise<void>;
+    handleInstallThrivePluginFromRepo: () => Promise<void>;
     handleToggleThrivePlugin: (plugin: ThrivePluginSummary) => Promise<void>;
     handleUninstallThrivePlugin: (plugin: ThrivePluginSummary) => Promise<void>;
     handleOpenThrivePluginDataDir: (pluginId?: string) => Promise<void>;
@@ -2593,9 +2596,12 @@ export function ToolsSettingsSection({
     thrivePluginsLoading,
     thrivePluginBusyId,
     thrivePluginStatusMessage,
+    thrivePluginRepoInput,
+    setThrivePluginRepoInput,
     handleRefreshThrivePlugins,
     handleRefreshThrivePluginMarketplace,
     handleInstallThriveMarketplacePlugin,
+    handleInstallThrivePluginFromRepo,
     handleToggleThrivePlugin,
     handleUninstallThrivePlugin,
     handleOpenThrivePluginDataDir,
@@ -3865,6 +3871,28 @@ export function ToolsSettingsSection({
                                 </button>
                             </div>
                         </div>
+                        <form
+                            className="flex items-center gap-2 border-b border-border px-4 py-3"
+                            onSubmit={(event) => {
+                                event.preventDefault();
+                                void handleInstallThrivePluginFromRepo();
+                            }}
+                        >
+                            <input
+                                value={thrivePluginRepoInput}
+                                onChange={(event) => setThrivePluginRepoInput(event.target.value)}
+                                placeholder="owner/repo 或 GitHub URL"
+                                className="min-w-0 flex-1 rounded border border-border bg-surface-secondary px-3 py-2 text-xs text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent-primary"
+                            />
+                            <button
+                                type="submit"
+                                disabled={!thrivePluginRepoInput.trim() || thrivePluginBusyId.startsWith('repo:')}
+                                className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                            >
+                                <Download className="h-3 w-3" />
+                                {thrivePluginBusyId.startsWith('repo:') ? '安装中' : '安装'}
+                            </button>
+                        </form>
                         <div className="min-h-0 flex-1 overflow-auto">
                             {thrivePluginMarketplaceLoading && thrivePluginMarketplace.length === 0 ? (
                                 <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-tertiary">

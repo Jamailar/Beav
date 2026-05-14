@@ -3,17 +3,15 @@ use std::fs;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    app_brand_display_name, append_debug_trace_global, escape_html, format_http_error_message,
-    http_error_debug_line, http_error_details_from_value, normalize_anthropic_base_url,
-    normalize_base_url, now_ms, payload_field, payload_string, run_curl_json,
-    run_curl_json_response,
+    app_brand_display_name, app_brand_slug, append_debug_trace_global, escape_html,
+    format_http_error_message, http_error_debug_line, http_error_details_from_value,
+    normalize_anthropic_base_url, normalize_base_url, now_ms, payload_field, payload_string,
+    run_curl_json, run_curl_json_response,
 };
 
-pub(crate) const REDBOX_OFFICIAL_CN_BASE_URL: &str = "https://api.ziz.hk/thrive/v1";
-pub(crate) const REDBOX_OFFICIAL_GLOBAL_BASE_URL: &str = "https://api.thrivingos.com/thrive/v1";
-pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = REDBOX_OFFICIAL_CN_BASE_URL;
+const REDBOX_OFFICIAL_CN_GATEWAY_ROOT: &str = "https://api.ziz.hk";
+const REDBOX_OFFICIAL_GLOBAL_GATEWAY_ROOT: &str = "https://api.thrivingos.com";
 pub(crate) const REDBOX_OFFICIAL_DEFAULT_REALM: &str = "cn";
-const REDBOX_APP_SLUG: &str = "thrive";
 pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-updated";
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
 const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
@@ -741,11 +739,16 @@ pub(crate) fn normalize_official_realm(value: &str) -> String {
     }
 }
 
-pub(crate) fn official_base_url_for_realm(realm: &str) -> &'static str {
-    match normalize_official_realm(realm).as_str() {
-        "global" => REDBOX_OFFICIAL_GLOBAL_BASE_URL,
-        _ => REDBOX_OFFICIAL_CN_BASE_URL,
-    }
+fn official_base_url_for_gateway_root(root: &str) -> String {
+    format!("{}/{}/v1", normalize_base_url(root), app_brand_slug())
+}
+
+pub(crate) fn official_base_url_for_realm(realm: &str) -> String {
+    let root = match normalize_official_realm(realm).as_str() {
+        "global" => REDBOX_OFFICIAL_GLOBAL_GATEWAY_ROOT,
+        _ => REDBOX_OFFICIAL_CN_GATEWAY_ROOT,
+    };
+    official_base_url_for_gateway_root(root)
 }
 
 pub(crate) fn official_realm_label(realm: &str) -> &'static str {
@@ -760,13 +763,13 @@ pub(crate) fn official_realms_payload(active_realm: &str) -> Value {
         {
             "id": "cn",
             "label": official_realm_label("cn"),
-            "baseUrl": REDBOX_OFFICIAL_CN_BASE_URL,
+            "baseUrl": official_base_url_for_realm("cn"),
             "active": normalize_official_realm(active_realm) != "global",
         },
         {
             "id": "global",
             "label": official_realm_label("global"),
-            "baseUrl": REDBOX_OFFICIAL_GLOBAL_BASE_URL,
+            "baseUrl": official_base_url_for_realm("global"),
             "active": normalize_official_realm(active_realm) == "global",
         }
     ])
@@ -786,22 +789,30 @@ pub(crate) fn official_settings_models(settings: &Value) -> Vec<Value> {
 }
 
 pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
+    fn gateway_route_suffixes() -> Vec<String> {
+        let mut suffixes = vec![
+            format!("/{}/v1", app_brand_slug()),
+            format!("/{}", app_brand_slug()),
+            "/redbox/v1".to_string(),
+            "/redbox".to_string(),
+            "/thrive/v1".to_string(),
+            "/thrive".to_string(),
+            "/api/v1".to_string(),
+            "/v1".to_string(),
+        ];
+        suffixes.dedup();
+        suffixes
+    }
+
     fn normalize_gateway_root(value: &str) -> String {
         let normalized = normalize_base_url(value);
         if normalized.is_empty() {
-            return "https://api.ziz.hk".to_string();
+            return REDBOX_OFFICIAL_CN_GATEWAY_ROOT.to_string();
         }
 
         if let Ok(mut url) = url::Url::parse(&normalized) {
             let mut pathname = url.path().trim_end_matches('/').to_string();
-            for suffix in [
-                format!("/{REDBOX_APP_SLUG}/v1"),
-                format!("/{REDBOX_APP_SLUG}"),
-                "/redbox/v1".to_string(),
-                "/redbox".to_string(),
-                "/api/v1".to_string(),
-                "/v1".to_string(),
-            ] {
+            for suffix in gateway_route_suffixes() {
                 if pathname.eq_ignore_ascii_case(&suffix) {
                     pathname.clear();
                     break;
@@ -820,14 +831,7 @@ pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
             return normalize_base_url(url.as_str());
         }
 
-        for suffix in [
-            format!("/{REDBOX_APP_SLUG}/v1"),
-            format!("/{REDBOX_APP_SLUG}"),
-            "/redbox/v1".to_string(),
-            "/redbox".to_string(),
-            "/api/v1".to_string(),
-            "/v1".to_string(),
-        ] {
+        for suffix in gateway_route_suffixes() {
             if normalized.to_lowercase().ends_with(&suffix.to_lowercase()) {
                 return normalize_base_url(&normalized[..normalized.len() - suffix.len()]);
             }
@@ -838,13 +842,8 @@ pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
 
     let configured = payload_string(settings, "redbox_official_base_url")
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            official_base_url_for_realm(&official_realm_from_settings(settings)).to_string()
-        });
-    format!(
-        "{}/{REDBOX_APP_SLUG}/v1",
-        normalize_gateway_root(&configured)
-    )
+        .unwrap_or_else(|| official_base_url_for_realm(&official_realm_from_settings(settings)));
+    official_base_url_for_gateway_root(&normalize_gateway_root(&configured))
 }
 
 pub(crate) fn official_ai_api_key_from_settings(settings: &Value) -> Option<String> {
@@ -1366,6 +1365,20 @@ mod tests {
     }
 
     #[test]
+    fn official_base_url_uses_current_brand_slug() {
+        assert_eq!(
+            official_base_url_for_realm("cn"),
+            format!("https://api.ziz.hk/{}/v1", app_brand_slug())
+        );
+        assert_eq!(
+            official_base_url_from_settings(
+                &json!({ "redbox_official_base_url": "https://api.ziz.hk/thrive/v1" })
+            ),
+            format!("https://api.ziz.hk/{}/v1", app_brand_slug())
+        );
+    }
+
+    #[test]
     fn official_sync_preserves_user_selected_custom_default_route() {
         let custom_sources = vec![json!({
             "id": "custom-source",
@@ -1471,11 +1484,12 @@ mod tests {
 
     #[test]
     fn official_sync_updates_route_when_official_is_current_default() {
+        let official_cn_base_url = official_base_url_for_realm("cn");
         let official_sources = vec![json!({
             "id": "redbox_official_auto",
             "name": format!("{} Official", app_brand_display_name()),
             "presetId": "redbox-official",
-            "baseURL": REDBOX_OFFICIAL_BASE_URL,
+            "baseURL": official_cn_base_url.clone(),
             "apiKey": "old-official-key",
             "model": "old-model",
             "models": ["old-model"],
@@ -1499,7 +1513,7 @@ mod tests {
         );
         assert_eq!(
             payload_string(&settings, "api_endpoint").as_deref(),
-            Some(REDBOX_OFFICIAL_BASE_URL)
+            Some(official_cn_base_url.as_str())
         );
         assert_eq!(
             payload_string(&settings, "api_key").as_deref(),

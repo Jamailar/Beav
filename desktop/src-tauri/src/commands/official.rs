@@ -4,8 +4,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    app_brand_display_name, append_debug_trace_state, auth, create_official_payment_form,
-    emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
+    app_brand_display_name, app_brand_slug, append_debug_trace_state, auth,
+    create_official_payment_form, emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
     fetch_official_models_for_settings, make_id, normalize_base_url,
     normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
     official_ai_api_key_from_settings, official_base_url_for_realm,
@@ -1105,9 +1105,10 @@ fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Val
     let refresh_token =
         session_refresh_token(settings).ok_or_else(|| "当前会话缺少 refresh token".to_string())?;
     if let Some(app_slug) = session_refresh_token_app_slug(settings) {
-        if app_slug != "thrive" {
+        if app_slug != app_brand_slug() {
             return Err(format!(
-                "旧账号体系登录态不可用于 Thrive，请重新登录。tokenAppSlug={app_slug}"
+                "旧账号体系登录态不可用于 {}，请重新登录。tokenAppSlug={app_slug}",
+                app_brand_display_name()
             ));
         }
     }
@@ -1873,7 +1874,7 @@ pub fn handle_official_channel(
                     Ok(json!({
                         "success": true,
                         "gatewayBase": official_base_url_from_settings(&store.settings),
-                        "appSlug": "thrive",
+                        "appSlug": app_brand_slug(),
                         "activeRealm": active_realm.clone(),
                         "realms": official_realms_payload(&active_realm),
                         "defaultWechatState": "redconvert-desktop",
@@ -3207,6 +3208,7 @@ mod tests {
 
     #[test]
     fn sync_official_route_credentials_uses_normalized_official_base_url() {
+        let official_cn_base_url = official_base_url_for_realm("cn");
         let mut settings = json!({
             "redbox_official_base_url": "https://api.ziz.hk",
             "redbox_auth_session_json": serde_json::to_string(&json!({
@@ -3226,7 +3228,7 @@ mod tests {
 
         assert_eq!(
             payload_string(&settings, "api_endpoint").as_deref(),
-            Some("https://api.ziz.hk/thrive/v1")
+            Some(official_cn_base_url.as_str())
         );
         assert_eq!(
             payload_string(&settings, "api_key").as_deref(),
@@ -3240,7 +3242,7 @@ mod tests {
                 .first()
                 .and_then(|item| payload_string(item, "baseURL"))
                 .as_deref(),
-            Some("https://api.ziz.hk/thrive/v1")
+            Some(official_cn_base_url.as_str())
         );
         assert_eq!(
             sources
@@ -3277,11 +3279,12 @@ mod tests {
 
     #[test]
     fn switch_official_realm_sets_global_endpoint_without_reusing_cn_session() {
+        let official_global_base_url = official_base_url_for_realm("global");
         let mut settings = json!({
             "redbox_official_realm": "cn",
             "redbox_official_base_url": "https://api.ziz.hk",
             "redbox_auth_session_json": "",
-            "api_endpoint": "https://api.ziz.hk/thrive/v1",
+            "api_endpoint": official_base_url_for_realm("cn"),
             "api_key": "",
         });
 
@@ -3293,11 +3296,11 @@ mod tests {
         );
         assert_eq!(
             payload_string(&settings, "redbox_official_base_url").as_deref(),
-            Some("https://api.thrivingos.com/thrive/v1")
+            Some(official_global_base_url.as_str())
         );
         assert_eq!(
             payload_string(&settings, "api_endpoint").as_deref(),
-            Some("https://api.thrivingos.com/thrive/v1")
+            Some(official_global_base_url.as_str())
         );
         assert!(official_settings_session(&settings).is_none());
     }
@@ -3322,7 +3325,17 @@ mod tests {
 
     #[test]
     fn refresh_official_auth_rejects_legacy_redbox_refresh_token_before_http() {
-        let token = "header.eyJhcHBTbHVnIjoicmVkYm94IiwidHlwZSI6InJlZnJlc2gifQ.signature";
+        use base64::Engine;
+
+        let incompatible_slug = if app_brand_slug() == "redbox" {
+            "thrive"
+        } else {
+            "redbox"
+        };
+        let token_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+            r#"{{"appSlug":"{incompatible_slug}","type":"refresh"}}"#
+        ));
+        let token = format!("header.{token_payload}.signature");
         let mut settings = json!({
             "redbox_official_realm": "cn",
             "redbox_auth_session_json": serde_json::to_string(&json!({
@@ -3333,15 +3346,19 @@ mod tests {
 
         let error = refresh_official_auth_session_in_settings(&mut settings)
             .expect_err("legacy token should be rejected locally");
-        assert!(error.contains("旧账号体系登录态不可用于 Thrive"));
+        assert!(error.contains(&format!(
+            "旧账号体系登录态不可用于 {}",
+            app_brand_display_name()
+        )));
         assert_eq!(
             session_refresh_token_app_slug(&settings).as_deref(),
-            Some("redbox")
+            Some(incompatible_slug)
         );
     }
 
     #[test]
     fn merge_official_settings_preserves_custom_default_route_from_stale_update() {
+        let official_cn_base_url = official_base_url_for_realm("cn");
         let mut settings = json!({
             "default_ai_source_id": "custom-source",
             "api_endpoint": "https://custom.example/v1",
@@ -3353,7 +3370,7 @@ mod tests {
                     "id": "redbox_official_auto",
                     "name": format!("{} Official", app_brand_display_name()),
                     "presetId": "redbox-official",
-                    "baseURL": "https://api.ziz.hk/thrive/v1",
+                    "baseURL": official_cn_base_url,
                     "apiKey": "",
                     "model": "qwen3.5-plus",
                     "models": ["qwen3.5-plus"],
@@ -3379,7 +3396,7 @@ mod tests {
             }))
             .unwrap(),
             "default_ai_source_id": "redbox_official_auto",
-            "api_endpoint": "https://api.ziz.hk/thrive/v1",
+            "api_endpoint": official_base_url_for_realm("cn"),
             "api_key": "official-key",
             "model_name": "gpt-5.5",
             "model_name_wander": "",
@@ -3393,7 +3410,7 @@ mod tests {
                 "id": "redbox_official_auto",
                 "name": format!("{} Official", app_brand_display_name()),
                 "presetId": "redbox-official",
-                "baseURL": "https://api.ziz.hk/thrive/v1",
+                "baseURL": official_base_url_for_realm("cn"),
                 "apiKey": "official-key",
                 "model": "gpt-5.5",
                 "models": ["gpt-5.5"],
@@ -3478,6 +3495,7 @@ mod tests {
 
     #[test]
     fn clear_official_auth_state_resets_official_source_and_falls_back_default_source() {
+        let official_cn_base_url = official_base_url_for_realm("cn");
         let mut settings = json!({
             "redbox_official_base_url": "https://api.ziz.hk",
             "redbox_auth_session_json": serde_json::to_string(&json!({
@@ -3490,7 +3508,7 @@ mod tests {
                     "id": "redbox_official_auto",
                     "name": format!("{} Official", app_brand_display_name()),
                     "presetId": "redbox-official",
-                    "baseURL": "https://api.ziz.hk/thrive/v1",
+                    "baseURL": official_cn_base_url,
                     "apiKey": "official-token",
                     "models": ["qwen3.5-plus"],
                     "modelsMeta": [{ "id": "qwen3.5-plus" }],
@@ -3510,7 +3528,7 @@ mod tests {
             ])
             .unwrap(),
             "default_ai_source_id": "redbox_official_auto",
-            "api_endpoint": "https://api.ziz.hk/thrive/v1",
+            "api_endpoint": official_base_url_for_realm("cn"),
             "api_key": "official-token",
             "model_name": "qwen3.5-plus",
             "video_api_key": "official-token",

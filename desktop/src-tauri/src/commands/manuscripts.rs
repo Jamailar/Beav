@@ -12,7 +12,6 @@ use crate::runtime::{
     request_runtime_approval, resolve_runtime_approval_by_source_key,
     ManuscriptScriptConfirmPayload, RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
-use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
 use crate::*;
 use base64::Engine;
 use pulldown_cmark::{
@@ -1010,117 +1009,14 @@ fn confirm_editor_project_script(project: &mut Value) -> Result<Value, String> {
         .unwrap_or(Value::Null))
 }
 
-fn first_orchestration_output_artifact(orchestration: &Value) -> Result<(String, String), String> {
-    let output = orchestration
-        .get("outputs")
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .ok_or_else(|| "动画子代理没有返回输出".to_string())?;
-    let status = output
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    if status != "completed" {
-        let summary = output
-            .get("summary")
-            .and_then(Value::as_str)
-            .unwrap_or("动画子代理执行失败");
-        return Err(summary.to_string());
-    }
-    let artifact = output
-        .get("artifact")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            output
-                .get("summary")
-                .and_then(Value::as_str)
-                .unwrap_or("动画子代理未返回 artifact")
-                .to_string()
-        })?;
-    let summary = output
-        .get("summary")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    Ok((artifact.to_string(), summary))
-}
-
 fn run_animation_director_subagent(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    session_id: Option<&str>,
-    model_config: Option<&Value>,
-    user_input: &str,
-) -> Result<(Value, String), String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let base_prompt_patch =
-        load_redbox_prompt("runtime/agents/video_editor/animation_director.txt")
-            .unwrap_or_default();
-    let skill_prompt_patch = build_remotion_best_practices_prompt_patch(state, user_input);
-    let system_prompt_patch = [base_prompt_patch, skill_prompt_patch]
-        .into_iter()
-        .filter(|item| !item.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let metadata = json!({
-        "intent": "direct_answer",
-        "useRealSubagents": true,
-        "subagentRoles": ["animation-director"],
-        "allowedTools": ["resource"],
-        "systemPromptPatch": system_prompt_patch,
-    });
-    let route =
-        crate::runtime::runtime_direct_route_record("video-editor", user_input, Some(&metadata));
-    let task_id = make_id("video-animation");
-    let orchestration =
-        crate::commands::runtime_orchestration::run_subagent_orchestration_for_task(
-            Some(app),
-            state,
-            &settings_snapshot,
-            "video-editor",
-            &task_id,
-            session_id,
-            &route,
-            user_input,
-            Some(&metadata),
-            model_config,
-        )?;
-    let (artifact, summary) = first_orchestration_output_artifact(&orchestration)?;
-    let parsed = parse_json_value_from_text(&artifact)
-        .ok_or_else(|| "动画子代理返回的 artifact 不是合法 JSON".to_string())?;
-    Ok((parsed, summary))
-}
-
-fn selected_remotion_rule_names(bundle: &crate::skills::SkillBundleSections) -> Vec<String> {
-    let mut rules = bundle.rules.keys().cloned().collect::<Vec<_>>();
-    rules.sort();
-    rules
-}
-
-fn build_remotion_best_practices_prompt_patch(
-    state: &State<'_, AppState>,
+    _app: &AppHandle,
+    _state: &State<'_, AppState>,
+    _session_id: Option<&str>,
+    _model_config: Option<&Value>,
     _user_input: &str,
-) -> String {
-    let workspace = workspace_root(state).ok();
-    let bundle =
-        load_skill_bundle_sections_from_sources("remotion-best-practices", workspace.as_deref());
-    let (_, skill_body) = split_skill_body(&bundle.body);
-    let mut sections = Vec::<String>::new();
-    if !skill_body.trim().is_empty() {
-        sections.push(skill_body);
-    }
-    for rule_name in selected_remotion_rule_names(&bundle) {
-        let Some(rule_body) = bundle.rules.get(&rule_name) else {
-            continue;
-        };
-        let (_, rule_content) = split_skill_body(rule_body);
-        if rule_content.trim().is_empty() {
-            continue;
-        }
-        sections.push(format!("## Loaded rule: {rule_name}\n{rule_content}"));
-    }
-    sections.join("\n\n")
+) -> Result<(Value, String), String> {
+    Err("该生成功能已关闭".to_string())
 }
 
 fn normalize_package_block_text(value: &str) -> String {
@@ -9809,21 +9705,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#FF0000")
         );
-    }
-
-    #[test]
-    fn selected_remotion_rule_names_loads_all_builtin_remotion_rules() {
-        let bundle = load_skill_bundle_sections_from_sources("remotion-best-practices", None);
-        let rules = selected_remotion_rule_names(&bundle);
-        assert!(rules.contains(&"animations.md".to_string()));
-        assert!(rules.contains(&"assets.md".to_string()));
-        assert!(rules.contains(&"calculate-metadata.md".to_string()));
-        assert!(rules.contains(&"compositions.md".to_string()));
-        assert!(rules.contains(&"sequencing.md".to_string()));
-        assert!(rules.contains(&"subtitles.md".to_string()));
-        assert!(rules.contains(&"text-animations.md".to_string()));
-        assert!(rules.contains(&"timing.md".to_string()));
-        assert!(rules.contains(&"transitions.md".to_string()));
     }
 
     #[test]

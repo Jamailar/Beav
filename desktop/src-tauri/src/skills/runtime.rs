@@ -153,15 +153,6 @@ mod tests {
                 is_builtin: Some(true),
                 disabled: Some(false),
             },
-            SkillRecord {
-                name: "remotion-best-practices".to_string(),
-                description: "desc".to_string(),
-                location: "skills://remotion-best-practices".to_string(),
-                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [bash, workflow, editor]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
-                source_scope: Some("builtin".to_string()),
-                is_builtin: Some(true),
-                disabled: Some(false),
-            },
         ]
     }
 
@@ -250,9 +241,7 @@ mod tests {
         );
         assert!(state.skills_section.contains("redclaw-guide: desc"));
         assert!(state.skills_section.contains("xhs-title: desc"));
-        assert!(!state
-            .skills_section
-            .contains("remotion-best-practices: desc"));
+        assert!(!state.skills_section.contains("video-editor"));
     }
 
     #[test]

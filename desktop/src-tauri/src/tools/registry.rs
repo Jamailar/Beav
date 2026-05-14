@@ -594,7 +594,7 @@ mod tests {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
 
-        assert!(!resources.contains(&"web"));
+        assert!(resources.contains(&"web"));
         assert!(resources.contains(&"cli_runtime"));
         assert!(resources.contains(&"media"));
         assert!(operations.contains(&"get"));
