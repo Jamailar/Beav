@@ -426,7 +426,7 @@ export function MediaLibrary({
     const [model, setModel] = useState('');
     const [aspectRatio, setAspectRatio] = useState('3:4');
     const [size, setSize] = useState('');
-    const [quality, setQuality] = useState('auto');
+    const [quality, setQuality] = useState('medium');
     const [generationMode, setGenerationMode] = useState<'text-to-image' | 'reference-guided' | 'image-to-image'>('text-to-image');
     const [referenceImages, setReferenceImages] = useState<Array<{ name: string; dataUrl: string }>>([]);
     const [isReadingRefImages, setIsReadingRefImages] = useState(false);
@@ -527,7 +527,7 @@ export function MediaLibrary({
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality === 'low' ? 'auto' : next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' || next.image_quality === 'medium' || next.image_quality === 'high' ? next.image_quality : 'medium');
         } catch (e) {
             if (requestId !== loadSettingsRequestRef.current) return;
             console.error('Failed to load image settings:', e);
@@ -834,7 +834,7 @@ export function MediaLibrary({
                 providerTemplate: settings.image_provider_template || undefined,
                 aspectRatio: aspectRatio.trim() || undefined,
                 size: size.trim() || undefined,
-                quality: quality.trim() || undefined,
+                quality: quality.trim() || 'medium',
             }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
 
             if (!result?.success) {
@@ -1519,11 +1519,9 @@ export function MediaLibrary({
                                     <option value="auto">auto</option>
                                 </select>
                                 <select value={quality} onChange={(event) => setQuality(event.target.value)} className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary">
-                                    <option value="auto">默认（2K / medium）</option>
+                                    <option value="low">low</option>
                                     <option value="medium">medium</option>
                                     <option value="high">high</option>
-                                    <option value="standard">standard</option>
-                                    <option value="hd">hd</option>
                                 </select>
                                 <select value={count} onChange={(event) => setCount(Number(event.target.value))} className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary">
                                     <option value={1}>1 张</option>

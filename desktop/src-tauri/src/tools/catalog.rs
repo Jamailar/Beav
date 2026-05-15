@@ -157,7 +157,7 @@ fn image_quality_schema(description: &str) -> Value {
     json!({
         "type": "string",
         "description": description,
-        "enum": ["auto", "standard", "medium", "high", "hd"],
+        "enum": ["low", "medium", "high"],
     })
 }
 
@@ -2170,7 +2170,7 @@ fn image_generate_input_schema() -> Value {
             (
                 "aspectRatio",
                 image_aspect_ratio_schema(
-                    "Required when the user asks for a specific image ratio. Supported values: 1:1 square, 3:4 portrait/Xiaohongshu card, 4:3 landscape, 9:16 vertical story, 16:9 wide.",
+                    "Required image output ratio. Supported values: 1:1 square, 3:4 portrait/Xiaohongshu card, 4:3 landscape, 9:16 vertical story, 16:9 wide. Pick one explicitly; do not leave it empty.",
                 ),
             ),
             (
@@ -2181,12 +2181,14 @@ fn image_generate_input_schema() -> Value {
             ),
             (
                 "quality",
-                image_quality_schema("Optional image quality hint."),
+                image_quality_schema(
+                    "Required image quality hint. Choose exactly one of low, medium, or high.",
+                ),
             ),
             (
                 "resolution",
                 image_resolution_schema(
-                    "Optional image resolution tier for providers that expose one, such as 1K or 2K.",
+                    "Required image resolution tier for image providers. Use 2K by default for product/main images unless the user asks for 1K or 4K.",
                 ),
             ),
             ("title", string_schema("Optional media asset title.")),
@@ -2246,7 +2248,7 @@ fn image_generate_input_schema() -> Value {
                 ),
             ),
         ],
-        &["prompt"],
+        &["prompt", "aspectRatio", "quality", "resolution"],
         None,
     )
 }
@@ -2956,7 +2958,7 @@ fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
 fn redbox_input_schema() -> Value {
     json!({
         "type": "object",
-        "description": "Structured operation input. For image generation, put prompt/count/aspectRatio/size/quality/referenceImages here; do not hide the requested ratio inside prompt text only.",
+        "description": "Structured operation input. For image generation, put prompt/count/aspectRatio/resolution/quality/referenceImages here; aspectRatio, resolution, and quality are required and must be non-empty.",
         "properties": {
             "prompt": { "type": "string", "description": "Generation or operation prompt." },
             "input": { "type": "string", "description": "Literal text input for speech/TTS. For expressive or multi-tone long narration, invoke tts-director first and prefer segments. MiniMax pause markers like <#0.6#> and tone tags like (laughs) are allowed when intentional." },
@@ -2994,11 +2996,11 @@ fn redbox_input_schema() -> Value {
             "async_tts": { "type": "boolean", "description": "Force async TTS when supported." },
             "waitForCompletion": { "type": "boolean", "description": "For generated media needed by the next step, set true so the tool returns the completed asset path." },
             "count": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Number of images or generated items." },
-            "aspectRatio": image_aspect_ratio_schema("Image output ratio. Required for image generation when the user specifies square/portrait/landscape/vertical/wide or a ratio like 3:4."),
+            "aspectRatio": image_aspect_ratio_schema("Required image output ratio for image generation. Pick one explicitly, such as 1:1, 3:4, 4:3, 9:16, or 16:9."),
             "ratio": image_aspect_ratio_schema("Alias for aspectRatio; prefer aspectRatio in new calls."),
             "size": image_size_schema("Optional explicit output size. Prefer aspectRatio unless exact pixels were requested."),
-            "quality": image_quality_schema("Optional image quality hint."),
-            "resolution": image_resolution_schema("Optional image resolution tier for image providers that expose one, such as 1K or 2K."),
+            "quality": image_quality_schema("Required non-empty image quality hint. Choose exactly one of low, medium, or high."),
+            "resolution": image_resolution_schema("Required non-empty image resolution tier for image providers, usually 2K unless the user asks otherwise."),
             "generationMode": {
                 "type": "string",
                 "enum": ["text-to-image", "reference-guided", "image-to-image", "text-to-video", "first-last-frame", "continuation"],

@@ -1534,7 +1534,11 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                     model: String(settings?.image_model || 'gpt-image-1'),
                     aspectRatio: String(settings?.image_aspect_ratio || '3:4'),
                     size: String(settings?.image_size || ''),
-                    quality: String(settings?.image_quality === 'low' ? 'auto' : settings?.image_quality || 'auto'),
+                    quality: String(
+                        settings?.image_quality === 'low' || settings?.image_quality === 'medium' || settings?.image_quality === 'high'
+                            ? settings.image_quality
+                            : 'medium',
+                    ),
                     count: 1,
                     projectId: '',
                     titlePrefix: title.slice(0, 32),

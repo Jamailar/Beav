@@ -351,7 +351,7 @@ const normalizeTemplate = (raw: unknown): CoverTemplate | null => {
         titleGuide: String(item.titleGuide || item.prompt || ''),
         promptSwitches: normalizePromptSwitches(item.promptSwitches),
         model: String(item.model || 'gpt-image-1'),
-        quality: String(item.quality || 'auto'),
+        quality: String(item.quality || 'medium'),
         count: Math.max(1, Math.min(4, Number.isFinite(count) ? Math.floor(count) : 1)),
         updatedAt: String(item.updatedAt || new Date().toISOString()),
         prompt: String(item.prompt || ''),
@@ -380,7 +380,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
     const [templateImage, setTemplateImage] = useState<{ name: string; dataUrl: string } | null>(null);
     const [count, setCount] = useState(1);
     const [model, setModel] = useState('gpt-image-1');
-    const [quality, setQuality] = useState('auto');
+    const [quality, setQuality] = useState('medium');
 
     const [baseImage, setBaseImage] = useState<{ name: string; dataUrl: string } | null>(null);
     const [promptSwitches, setPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_PROMPT_SWITCHES);
@@ -435,7 +435,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
         setTemplateImage(null);
         setCount(1);
         setModel(settings.image_model || 'gpt-image-1');
-        setQuality(settings.image_quality === 'low' ? 'auto' : settings.image_quality || 'auto');
+        setQuality(settings.image_quality === 'low' || settings.image_quality === 'medium' || settings.image_quality === 'high' ? settings.image_quality : 'medium');
         setBaseImage(null);
         setPromptSwitches(DEFAULT_PROMPT_SWITCHES);
         setTitleInputMode('titles');
@@ -451,7 +451,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
             setSettings(next);
             setSpaceId(next.active_space_id || 'default');
             setModel(next.image_model || 'gpt-image-1');
-            setQuality(next.image_quality === 'low' ? 'auto' : next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' || next.image_quality === 'medium' || next.image_quality === 'high' ? next.image_quality : 'medium');
         } catch (error) {
             console.error('Failed to load cover settings:', error);
         }
@@ -589,7 +589,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
         setActiveTemplateId(template.id);
         setCount(Math.max(1, Math.min(4, Number(template.count) || 1)));
         setModel(template.model || 'gpt-image-1');
-        setQuality(template.quality === 'low' ? 'auto' : template.quality || 'auto');
+        setQuality(template.quality === 'low' || template.quality === 'medium' || template.quality === 'high' ? template.quality : 'medium');
         setPromptSwitches(normalizePromptSwitches(template.promptSwitches));
         setTemplateImage(template.templateImage
             ? { name: `${template.name}-模板图`, dataUrl: template.templateImage }
@@ -748,7 +748,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
                     model: model.trim() || undefined,
                     provider: settings.image_provider || undefined,
                     providerTemplate: imageTemplate || undefined,
-                    quality: quality.trim() || undefined,
+                    quality: quality.trim() || 'medium',
                 }) as { success?: boolean; error?: string; assets?: CoverAsset[] };
 
                 if (!result?.success) {
@@ -1127,11 +1127,9 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
                                     onChange={(event) => setQuality(event.target.value)}
                                     className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none"
                                 >
-                                    <option value="auto">默认（2K / medium）</option>
+                                    <option value="low">low</option>
                                     <option value="medium">medium</option>
                                     <option value="high">high</option>
-                                    <option value="standard">standard</option>
-                                    <option value="hd">hd</option>
                                 </select>
                                 <select
                                     value={count}
