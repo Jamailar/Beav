@@ -901,6 +901,15 @@ fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
             prompt.push_str(defaults);
         }
     }
+    if runtime_mode == "redclaw" {
+        let video_rules = "Video generation execution rules: do not treat storyboard Sound text as real audio by itself. When calling video.generate from an approved storyboard, pass storyboardShots or storyboardMarkdown, pass durationSeconds matching the approved final time range, and if the approved Sound column requires music, ambience, or simple sound design but no completed drivingAudio exists, set generateAudio=true. If exact narration or character speech is required, generate or select a real audio asset first and pass it as drivingAudio; otherwise ask for a voice/audio choice instead of claiming the final video will contain narration.";
+        if prompt.trim().is_empty() {
+            prompt = video_rules.to_string();
+        } else {
+            prompt.push_str("\n\n");
+            prompt.push_str(video_rules);
+        }
+    }
     prompt
 }
 

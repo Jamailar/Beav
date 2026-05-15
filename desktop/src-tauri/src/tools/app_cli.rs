@@ -3922,6 +3922,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 object.insert("toolName".to_string(), json!("workflow"));
             }
         }
+        apply_video_storyboard_payload_defaults(&mut merged, video_project_state.as_ref());
         if let Some(compiled_prompt) =
             compile_video_generation_prompt(&merged, video_project_state.as_ref())
         {
@@ -5547,6 +5548,92 @@ fn extract_video_storyboard(
         .unwrap_or_default()
 }
 
+fn parse_storyboard_time_numbers(value: &str) -> Vec<f64> {
+    let mut numbers = Vec::<f64>::new();
+    let mut current = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            current.push(ch);
+        } else if !current.is_empty() {
+            if let Ok(number) = current.parse::<f64>() {
+                numbers.push(number);
+            }
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        if let Ok(number) = current.parse::<f64>() {
+            numbers.push(number);
+        }
+    }
+    numbers
+}
+
+fn infer_storyboard_duration_seconds(shots: &[VideoStoryboardShot]) -> Option<i64> {
+    let max_seconds = shots
+        .iter()
+        .flat_map(|shot| parse_storyboard_time_numbers(&shot.time))
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .fold(0.0_f64, f64::max);
+    if max_seconds > 0.0 {
+        Some(max_seconds.ceil() as i64)
+    } else {
+        None
+    }
+}
+
+fn storyboard_sound_needs_audio(sound: &str) -> bool {
+    let compact = sound.trim().to_ascii_lowercase();
+    if compact.is_empty() {
+        return false;
+    }
+    !matches!(
+        compact.as_str(),
+        "未指定"
+            | "无"
+            | "无声"
+            | "静音"
+            | "none"
+            | "no audio"
+            | "silent"
+            | "silence"
+            | "mute"
+            | "muted"
+    )
+}
+
+fn storyboard_requests_audio(shots: &[VideoStoryboardShot]) -> bool {
+    shots
+        .iter()
+        .any(|shot| storyboard_sound_needs_audio(&shot.sound))
+}
+
+fn apply_video_storyboard_payload_defaults(payload: &mut Value, project_state: Option<&Value>) {
+    let storyboard = extract_video_storyboard(payload, project_state);
+    if storyboard.is_empty() {
+        return;
+    }
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if !object.contains_key("durationSeconds") {
+        if let Some(duration_seconds) = infer_storyboard_duration_seconds(&storyboard) {
+            object.insert("durationSeconds".to_string(), json!(duration_seconds));
+        }
+    }
+    if !object.contains_key("generateAudio")
+        && object
+            .get("drivingAudio")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        && storyboard_requests_audio(&storyboard)
+    {
+        object.insert("generateAudio".to_string(), json!(true));
+    }
+}
+
 fn default_reference_image_label(generation_mode: &str, index: usize) -> String {
     match generation_mode {
         "first-last-frame" if index == 0 => "first-frame visual reference".to_string(),
@@ -5578,6 +5665,7 @@ fn compile_video_generation_prompt(
     let reference_image_labels =
         value_string_list(payload_field(payload, "referenceImageLabels"), 5);
     let driving_audio = payload_string(payload, "drivingAudio");
+    let generate_audio = payload_bool(payload, &["generateAudio"]).unwrap_or(false);
     let driving_audio_label = payload_string(payload, "drivingAudioLabel").unwrap_or_else(|| {
         "driving audio reference for tone, speaking rhythm, and beat timing".to_string()
     });
@@ -5605,6 +5693,10 @@ fn compile_video_generation_prompt(
     }
     if driving_audio.is_some() {
         asset_lines.push(format!("Audio 1: {driving_audio_label}"));
+    } else if generate_audio {
+        asset_lines.push(
+            "Audio generation: create native background music, ambience, or simple sound design from the approved Sound beats.".to_string(),
+        );
     }
     if !asset_lines.is_empty() {
         sections.push(asset_lines.join("\n"));
@@ -5670,6 +5762,11 @@ fn compile_video_generation_prompt(
     if driving_audio.is_some() {
         execution_rules
             .push("Align body rhythm, lip-sync feel, and timing accents with Audio 1.".to_string());
+    } else if generate_audio {
+        execution_rules.push(
+            "Generate native audio that follows the approved Sound column; do not leave the video silent unless the Sound column says silent."
+                .to_string(),
+        );
     }
     sections.push(format!(
         "Execution requirements:\n- {}",
@@ -6350,6 +6447,67 @@ mod tests {
 
         assert!(
             prompt.contains("Beat 1 (0-2s): Picture: Jamba 左右摇摆; Sound: 轻快配音; Shot: 中景.")
+        );
+    }
+
+    #[test]
+    fn video_storyboard_defaults_infer_duration_and_audio() {
+        let mut payload = json!({
+            "prompt": "生成视频",
+            "generationMode": "reference-guided",
+            "storyboardShots": [
+                {
+                    "time": "0-3s",
+                    "picture": "黑色包包旋转展示。",
+                    "sound": "低沉节奏背景音乐起。",
+                    "shot": "全景"
+                },
+                {
+                    "time": "3-12s",
+                    "picture": "镜头推进到五金和皮革细节。",
+                    "sound": "音乐渐强。",
+                    "shot": "特写"
+                }
+            ]
+        });
+
+        apply_video_storyboard_payload_defaults(&mut payload, None);
+
+        assert_eq!(
+            payload_field(&payload, "durationSeconds").and_then(Value::as_i64),
+            Some(12)
+        );
+        assert_eq!(
+            payload_field(&payload, "generateAudio").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn video_storyboard_defaults_preserve_explicit_audio_and_duration() {
+        let mut payload = json!({
+            "prompt": "生成视频",
+            "durationSeconds": 6,
+            "generateAudio": false,
+            "storyboardShots": [
+                {
+                    "time": "0-12s",
+                    "picture": "黑色包包展示。",
+                    "sound": "轻节奏背景音乐。",
+                    "shot": "全景"
+                }
+            ]
+        });
+
+        apply_video_storyboard_payload_defaults(&mut payload, None);
+
+        assert_eq!(
+            payload_field(&payload, "durationSeconds").and_then(Value::as_i64),
+            Some(6)
+        );
+        assert_eq!(
+            payload_field(&payload, "generateAudio").and_then(Value::as_bool),
+            Some(false)
         );
     }
 
