@@ -3836,7 +3836,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
 
     fn handle_video_generate(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
         let mut merged = build_generation_payload(args, payload);
-        let wait_for_completion = payload_bool(&merged, &["waitForCompletion"]).unwrap_or(false);
+        let wait_for_completion = video_generation_should_wait(self.session_id, &merged);
         let video_project_path = self
             .video_project_locator_from_generate(args, payload)
             .map(|locator| self.resolve_video_project_path(locator))
@@ -3927,8 +3927,8 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 object.insert("prompt".to_string(), json!(compiled_prompt));
             }
         }
-        self.emit_tool_partial("视频生成已提交到宿主，正在准备 provider 请求。");
         if !wait_for_completion {
+            self.emit_tool_partial("视频生成任务已提交，后台会持续等待结果。");
             let submitted = self.call_channel("generation:submit-video", merged)?;
             let follow_up = submitted
                 .get("jobId")
@@ -3967,6 +3967,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             }
             return Ok(result);
         }
+        self.emit_tool_partial("视频生成任务已提交，正在等待视频完成。");
         let result = self.call_channel("video-gen:generate", merged)?;
         if let Some(project_path) = video_project_path {
             if let Some(assets) = result.get("assets").and_then(Value::as_array) {
@@ -5233,6 +5234,26 @@ fn image_generation_delivery_mode(
     ImageGenerationDeliveryMode::AsyncSubmit
 }
 
+fn video_generation_should_wait(session_id: Option<&str>, payload: &Value) -> bool {
+    if let Some(explicit_wait) = payload_bool(payload, &["waitForCompletion"]) {
+        return explicit_wait;
+    }
+    if payload_bool(
+        payload,
+        &[
+            "backgroundFollowup",
+            "background",
+            "asyncSubmit",
+            "submitOnly",
+        ],
+    )
+    .unwrap_or(false)
+    {
+        return false;
+    }
+    session_id.is_some()
+}
+
 fn compile_image_batch_prompt(
     base_prompt: &str,
     shared_style_guide: Option<&str>,
@@ -6433,6 +6454,24 @@ mod tests {
             image_generation_delivery_mode(None, &json!({ "waitForCompletion": true }), 1),
             ImageGenerationDeliveryMode::InlineWait
         );
+    }
+
+    #[test]
+    fn video_generation_waits_by_default_inside_session() {
+        assert!(video_generation_should_wait(Some("session-1"), &json!({})));
+        assert!(!video_generation_should_wait(None, &json!({})));
+        assert!(!video_generation_should_wait(
+            Some("session-1"),
+            &json!({ "waitForCompletion": false })
+        ));
+        assert!(!video_generation_should_wait(
+            Some("session-1"),
+            &json!({ "backgroundFollowup": true })
+        ));
+        assert!(video_generation_should_wait(
+            None,
+            &json!({ "waitForCompletion": true })
+        ));
     }
 
     #[test]
