@@ -2244,7 +2244,7 @@ fn image_generate_input_schema() -> Value {
             (
                 "waitForCompletion",
                 bool_schema(
-                    "Whether to block until the generation job completes. Defaults to false.",
+                    "Whether to block until the generation job completes. Single-image chat generation defaults to inline waiting; multi-image chat generation uses a background follow-up unless this is explicitly true.",
                 ),
             ),
         ],
@@ -2289,7 +2289,7 @@ fn video_generate_input_schema() -> Value {
             (
                 "waitForCompletion",
                 bool_schema(
-                    "Whether to block until the generation job completes. Defaults to false.",
+                    "Whether to block until the generation job completes. In chat sessions this defaults to true; set true when the user is waiting for the finished video, and only set false for explicit background execution.",
                 ),
             ),
         ],

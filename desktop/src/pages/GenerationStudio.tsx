@@ -1192,11 +1192,36 @@ function imageCountFromJob(job: MediaJobProjection, request: Record<string, unkn
     return Math.max(1, job.artifacts?.length || 1);
 }
 
+function imagePlanItemsFromJobRequest(request: Record<string, unknown>): Record<string, unknown>[] {
+    return Array.isArray(request.imagePlanItems)
+        ? request.imagePlanItems.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        : [];
+}
+
+function promptFromJobRequest(request: Record<string, unknown>): string {
+    const prompt = stringField(request, ['prompt', 'compiledPrompt', 'userPrompt', 'input', 'text', 'summary']);
+    if (prompt) return prompt;
+    const imagePlanPrompts = imagePlanItemsFromJobRequest(request)
+        .map((item) => stringField(item, ['compiledPrompt', 'prompt', 'title']))
+        .filter(Boolean);
+    if (imagePlanPrompts.length > 0) return imagePlanPrompts.join('\n\n');
+    return stringField(request, ['sharedStyleGuide', 'sequenceGoal']);
+}
+
+function titleFromImagePlanItems(request: Record<string, unknown>): string {
+    const titles = imagePlanItemsFromJobRequest(request)
+        .map((item) => stringField(item, ['title']))
+        .filter(Boolean);
+    if (titles.length === 0) return '';
+    if (titles.length === 1) return titles[0];
+    return `${titles[0]} 等 ${titles.length} 张`;
+}
+
 function requestFromJobProjection(job: MediaJobProjection): GenerationRequest | null {
     const request = job.request || {};
-    const prompt = stringField(request, ['prompt', 'compiledPrompt', 'userPrompt', 'input', 'text', 'summary']);
+    const prompt = promptFromJobRequest(request);
     if (!prompt) return null;
-    const title = stringField(request, ['title', 'name']);
+    const title = stringField(request, ['title', 'name']) || titleFromImagePlanItems(request);
     const projectId = job.projectId || stringField(request, ['projectId']);
     const model = job.providerModel || stringField(request, ['model']);
     const generationMode = stringField(request, ['generationMode', 'mode']);
@@ -1397,6 +1422,17 @@ function generatedAssetKind(asset: GeneratedAsset, request: GenerationRequest): 
     return request.type;
 }
 
+function isStandaloneGenerationSource(source: GenerationFeedSource): boolean {
+    return [
+        'standalone',
+        'generation_studio',
+        'generation-studio',
+        'tool',
+        'chat',
+        'redclaw',
+    ].includes(String(source || '').trim());
+}
+
 function buildRecentGenerationAssetSummaries(
     entries: FeedEntry[],
     projectId: string,
@@ -1412,7 +1448,7 @@ function buildRecentGenerationAssetSummaries(
                     || entry.assets.some((asset) => asset.projectId === normalizedProjectId);
             }
             if (normalizedSource === 'standalone') {
-                return entry.source === 'standalone' || entry.source === 'generation_studio';
+                return isStandaloneGenerationSource(entry.source);
             }
             return !normalizedSource || entry.source === normalizedSource;
         })

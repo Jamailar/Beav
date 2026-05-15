@@ -902,7 +902,7 @@ fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
         }
     }
     if runtime_mode == "redclaw" {
-        let video_rules = "Video generation execution rules: do not treat storyboard Sound text as real audio by itself. When calling video.generate from an approved storyboard, pass storyboardShots or storyboardMarkdown, pass durationSeconds matching the approved final time range, and if the approved Sound column requires music, ambience, or simple sound design but no completed drivingAudio exists, set generateAudio=true. If exact narration or character speech is required, generate or select a real audio asset first and pass it as drivingAudio; otherwise ask for a voice/audio choice instead of claiming the final video will contain narration.";
+        let video_rules = "Video generation execution rules: when the user asks to make, continue, or turn a generated/attached/reference image into a video, invoke the video-director skill before planning unless it is already active. Do not treat storyboard Sound text as real audio by itself. When calling video.generate from an approved storyboard, pass storyboardShots or storyboardMarkdown, pass durationSeconds matching the approved final time range, and if the approved Sound column requires music, ambience, or simple sound design but no completed drivingAudio exists, set generateAudio=true. If exact narration or character speech is required, generate or select a real audio asset first and pass it as drivingAudio; otherwise ask for a voice/audio choice instead of claiming the final video will contain narration. After the user confirms a video plan, the next assistant turn must call video.generate with waitForCompletion=true unless the user explicitly asked for background execution, or ask one blocking question. Never say a video generation has started, is queued, or is complete without a video.generate tool result.";
         if prompt.trim().is_empty() {
             prompt = video_rules.to_string();
         } else {
@@ -1203,5 +1203,15 @@ mod tests {
         assert!(!section.contains("imagePaths"));
         assert!(!section.contains("voicePath"));
         assert!(!section.contains("/private/huge/path.png"));
+    }
+
+    #[test]
+    fn redclaw_overlay_requires_video_director_and_real_generation_call() {
+        let prompt = runtime_agent_overlay_prompt("redclaw");
+
+        assert!(prompt.contains("video-director"));
+        assert!(prompt.contains("video.generate"));
+        assert!(prompt.contains("waitForCompletion=true"));
+        assert!(prompt.contains("Never say a video generation has started"));
     }
 }
