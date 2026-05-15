@@ -465,6 +465,7 @@ export function MediaLibrary({
     const hasLoadedSnapshotRef = useRef(false);
     const loadDataRequestRef = useRef(0);
     const loadSettingsRequestRef = useRef(0);
+    const deletedAssetIdsRef = useRef<Set<string>>(new Set());
     const assetCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
     const loadData = useCallback(async () => {
@@ -486,6 +487,7 @@ export function MediaLibrary({
             } else {
                 const nextAssets = (Array.isArray(mediaResult.assets) ? mediaResult.assets : [])
                     .map(normalizeMediaAsset)
+                    .filter((asset) => !deletedAssetIdsRef.current.has(asset.id))
                     .sort(compareMediaAssetsByCreatedAtDesc);
                 setAssets(nextAssets);
                 setDrafts((prev) => Object.fromEntries(
@@ -753,12 +755,21 @@ export function MediaLibrary({
                 delete next[asset.id];
                 return next;
             });
+            deletedAssetIdsRef.current.add(asset.id);
+            setAssets((prev) => prev.filter((item) => item.id !== asset.id));
             setBindTarget((prev) => {
                 const next = { ...prev };
                 delete next[asset.id];
                 return next;
             });
             setExpandedAssetId((prev) => prev === asset.id ? null : prev);
+            setPreviewAsset((prev) => prev?.asset.id === asset.id ? null : prev);
+            setMeasuredCardHeights((prev) => {
+                if (!(asset.id in prev)) return prev;
+                const next = { ...prev };
+                delete next[asset.id];
+                return next;
+            });
             await loadData();
         } catch (e) {
             console.error('Failed to delete media asset:', e);

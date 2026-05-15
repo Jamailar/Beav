@@ -385,8 +385,8 @@ function RedClawImageGenerationProgressPanel({
                 const progress = getRedClawImageJobOverallProgress(job);
                 const failed = isMediaJobTerminal(job.status) && !isMediaJobSuccessful(job.status);
                 return (
-                    <div key={job.jobId} className="rounded-[18px] border border-border bg-surface-secondary/80 p-3 shadow-sm">
-                        <div className="mb-2.5 flex items-center justify-between gap-3">
+                    <div key={job.jobId} className="py-1">
+                        <div className="mb-3 flex items-center justify-between gap-3">
                             <div className="min-w-0">
                                 <div className="truncate text-[12px] font-semibold text-text-primary">
                                     {getRedClawImageJobTitle(job)}
@@ -399,7 +399,7 @@ function RedClawImageGenerationProgressPanel({
                                 {failed ? '失败' : '生成中'}
                             </div>
                         </div>
-                        <div className="grid max-w-[460px] grid-cols-5 gap-2">
+                        <div className="grid max-w-[620px] grid-cols-5 gap-2.5">
                             {Array.from({ length: expected }).map((_, index) => (
                                 <RedClawImageGenerationPlaceholder
                                     key={`${job.jobId}-${index}`}

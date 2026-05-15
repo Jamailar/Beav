@@ -2299,7 +2299,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     onMouseDown={() => setPreviewImage(null)}
                 >
                     <div
-                        className="relative max-h-full max-w-5xl"
+                        className="relative flex max-h-[calc(100vh-48px)] max-w-[calc(100vw-48px)] items-center justify-center"
                         onMouseDown={(event) => event.stopPropagation()}
                     >
                         <button
@@ -2313,7 +2313,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         <img
                             src={resolveAssetUrl(previewImage.previewUrl)}
                             alt={previewImage.name}
-                            className="max-h-[82vh] max-w-[88vw] rounded-xl bg-white object-contain shadow-2xl"
+                            className="block h-auto max-h-full w-auto max-w-full rounded-xl bg-white object-contain shadow-2xl"
                         />
                     </div>
                 </div>
