@@ -1817,6 +1817,41 @@ mod tests {
     }
 
     #[test]
+    fn direct_image_attachment_prompt_exposes_tool_reference() {
+        let attachment = json!({
+            "type": "uploaded-file",
+            "name": "WechatIMG1615.jpg",
+            "kind": "image",
+            "mimeType": "image/jpeg",
+            "deliveryMode": "direct-input",
+            "absolutePath": "/Users/Jam/Downloads/WechatIMG1615.jpg",
+            "size": 1234
+        });
+
+        let (prompt_message, history_message) = build_interactive_user_turn_messages(
+            "做一个宣传视频",
+            Some(&attachment),
+            "openai",
+            "qwen3.5-plus",
+        )
+        .expect("turn messages");
+        let prompt = prompt_message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let history = history_message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        assert!(prompt.contains("referenceImages"));
+        assert!(prompt.contains("/Users/Jam/Downloads/WechatIMG1615.jpg"));
+        assert!(prompt.contains("按用户目标选择"));
+        assert!(history.contains("referenceImages"));
+        assert!(history.contains("/Users/Jam/Downloads/WechatIMG1615.jpg"));
+    }
+
+    #[test]
     fn redbox_fs_profile_read_completed_matches_workspace_profile_reads() {
         assert!(redbox_fs_profile_read_completed(&json!({
             "action": "read",
@@ -5035,6 +5070,31 @@ fn interactive_attachment_tool_read_note(
     })
 }
 
+fn interactive_attachment_tool_reference_note(attachment: &Value) -> Option<String> {
+    let name = interactive_attachment_string_field(attachment, "name")
+        .unwrap_or_else(|| "attachment".to_string());
+    let kind = interactive_attachment_kind(attachment);
+    let reference = interactive_attachment_string_field(attachment, "absolutePath")
+        .or_else(|| interactive_attachment_string_field(attachment, "originalAbsolutePath"))
+        .or_else(|| interactive_attachment_string_field(attachment, "workspaceRelativePath"))
+        .or_else(|| interactive_attachment_string_field(attachment, "toolPath"))
+        .or_else(|| interactive_attachment_string_field(attachment, "relativePath"))
+        .or_else(|| interactive_attachment_string_field(attachment, "localUrl"))
+        .or_else(|| interactive_attachment_string_field(attachment, "inlineDataUrl"))
+        .or_else(|| interactive_attachment_string_field(attachment, "attachmentId"));
+    let reference = reference?;
+    let usage = if kind == "image" {
+        "如果后续调用 image.generate/video.generate/media.edit 且任务需要参考这张图，必须在对应工具 input 里显式传 `referenceImages`，例如 `referenceImages:[\"该引用\"]`。如果用户目标不需要该附件，不要传；如果有多个附件，按用户目标选择。"
+    } else if kind == "video" {
+        "如果后续调用 video.analyze/media.transcribe/media.edit 且任务需要这个视频，必须在对应工具 input 里显式传 `sourcePath` 或 `toolPath`。如果用户目标不需要该附件，不要传；如果有多个附件，按用户目标选择。"
+    } else {
+        "如果后续工具调用需要这个附件，必须在对应工具 input 里显式传该引用。不要只在自然语言里提到附件。"
+    };
+    Some(format!(
+        "可用附件资源：文件名 `{name}`，类型 `{kind}`，工具引用 `{reference}`。{usage}"
+    ))
+}
+
 fn interactive_history_attachment_note(
     attachment: &Value,
     embedded_directly: bool,
@@ -5050,6 +5110,13 @@ fn interactive_history_attachment_note(
     } else {
         "需通过工具读取"
     };
+    if kind == "image" {
+        if let Some(reference_note) = interactive_attachment_tool_reference_note(attachment) {
+            return Some(format!(
+                "附件：`{name}`（image，{mode_label}）。{reference_note}"
+            ));
+        }
+    }
     if !embedded_directly && kind == "video" {
         if let Some(relative_path) = relative_path {
             return Some(format!(
@@ -5094,6 +5161,9 @@ fn build_interactive_user_turn_messages(
     let mut notes = Vec::<String>::new();
     let mut history_notes = Vec::<String>::new();
     for attachment in attachments {
+        if let Some(note) = interactive_attachment_tool_reference_note(attachment) {
+            notes.push(note);
+        }
         if let Some(direct_input) =
             interactive_attachment_direct_input_payload(attachment, protocol, model_name)?
         {
