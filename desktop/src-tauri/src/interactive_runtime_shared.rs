@@ -879,7 +879,7 @@ fn build_asset_library_tool_section(workspace_root_value: &str) -> String {
 }
 
 fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
-    match runtime_mode {
+    let mut prompt = match runtime_mode {
         "redclaw" => load_redbox_prompt("runtime/agents/redclaw/base.txt").unwrap_or_default(),
         "image-generation" => {
             load_redbox_prompt("runtime/agents/image_generation/base.txt").unwrap_or_default()
@@ -891,7 +891,17 @@ fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
             load_redbox_prompt("runtime/agents/audio_editor/base.txt").unwrap_or_default()
         }
         _ => String::new(),
+    };
+    if matches!(runtime_mode, "redclaw" | "image-generation") {
+        let defaults = "Image generation default parameters: unless the user explicitly asks for higher quality, exact pixel size, 2K/4K, HD, final production quality, or another resolution/quality tier, call image.generate with quality=\"low\" and resolution=\"1K\". Use higher values only when the user goal clearly requires them.";
+        if prompt.trim().is_empty() {
+            prompt = defaults.to_string();
+        } else {
+            prompt.push_str("\n\n");
+            prompt.push_str(defaults);
+        }
     }
+    prompt
 }
 
 fn team_coordinator_prompt() -> &'static str {
