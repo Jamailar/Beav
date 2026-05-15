@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Jamailar/RedBox/releases">
+  <a href="https://redbox.ziz.hk/download">
     <img src="https://img.shields.io/badge/⬇️%20立即下载-最新版本-E11D48?style=for-the-badge&logo=github&logoColor=white" alt="Download" height="46">
   </a>
 </p>
@@ -128,7 +128,7 @@
 
 ## 快速开始
 
-1. 在 [Releases](https://github.com/Jamailar/RedBox/releases) 下载并安装。
+1. 在 [RedBox 下载页](https://redbox.ziz.hk/download) 下载并安装。
 2. 打开 `设置 -> AI`，填写 Endpoint / Key / Model。
 3. 选择或创建工作空间，测试连接并保存。
 4. 安装并加载 `Plugin/` 里的 Chrome / Edge 扩展。
@@ -142,6 +142,65 @@
 - [GitHub Discussions](https://github.com/Jamailar/RedBox/discussions)
 
 ## 更新日志
+
+### v2.0.0 (2026-05-14)
+
+RedBox 2.0 是一次面向「AI 内容创作工作台」的重大升级。这个版本不再只是单点生成工具，而是把账号定位、角色克隆、角色卡片、素材理解、图文生成、视频生成、剪辑分析、音频克隆和 Agent 连续执行串成一条完整创作链路。
+
+#### 重大更新
+
+- 全新 AI 创作工作流：Agent 现在可以围绕账号、素材、稿件和媒体任务连续工作，自动拆解需求、调用工具、生成结果并汇总交付。
+- 视频生成全面升级到 Seedance 2.0：提升画面质感、运动连贯性、短视频生成稳定性和故事板执行能力。
+
+##### AI 视频理解与自动剪辑切片
+
+现在 AI 可以理解视频内容，分析视频的优点、结构节奏、画面亮点和可复用表达，并自动剪辑出适合二次创作、种草复盘和短视频分发的精彩切片。
+
+![RedBox 2.0 AI 视频理解与自动剪辑切片](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-video-understanding-auto-clips.gif)
+
+##### 自动字幕识别与视频加字幕
+
+支持自动识别视频中的语音内容，生成字幕并直接叠加到视频画面中，让口播、解说、带货和知识类视频更快完成字幕包装。
+
+![RedBox 2.0 自动识别字幕并给视频加字幕](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-auto-subtitles.gif)
+
+##### 角色克隆与角色音频克隆
+
+支持基于账号定位、人物设定和内容风格生成可复用的角色卡片，让固定账号、虚拟角色和品牌 IP 拥有稳定的人设、语气、表达边界和创作参考。角色还可以沉淀专属声音资产，让系列化视频、口播、旁白和虚拟角色内容保持更统一的声线识别度。
+
+![RedBox 2.0 角色克隆与角色卡片预览](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-character-clone-workflow.gif)
+
+##### 商品图智能创作
+
+上传一张商品图，即可自动扩展生成商品套图和短视频素材，帮助电商、种草和品牌内容更快完成从单图到成套内容的生产。
+
+![RedBox 2.0 商品图自动生成套图与视频](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-product-image-to-asset-video.gif)
+
+- 强化图文到视频链路：图片附件、参考素材、封面、分镜和视频任务之间的引用关系更稳定，减少重复上传和上下文丢失。
+- 新增封面创作能力：从选题、文案、图片生成到封面产出，进一步补齐小红书、短视频和账号内容生产的关键环节。
+- 升级 Agent 工具调用系统：媒体编辑、图片生成、视频生成、模型配置、附件引用等能力现在可以被 AI 更直接、更稳定地调用。
+- 优化 RedClaw 创作体验：稿件、对话、知识引用和任务执行的协作链路更清晰，更适合持续写作、改稿和内容策划。
+
+##### 全新桌面 UI
+
+收敛入口层级，降低视觉噪音，让素材、生成、任务、稿件和结果管理更直观。
+
+![RedBox 2.0 全新桌面 UI 体验](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-ui-refresh-workflow.gif)
+
+- 强化会话与素材持久化：聊天图片缩略图、媒体任务记录、视频生成历史、会话附件引用等数据保留更可靠。
+
+#### 稳定性与体验优化
+
+- 改进视频生成等待、历史记录、缩略图、播放状态和任务结果回填。
+- 优化媒体引用解析，减少视频任务找不到图片、封面或上下文素材的问题。
+- 改进 Agent 对视频导演、分镜、音频、时长和最终提示词的理解能力。
+- 优化模型配置管理，让不同生成场景可以更稳定地使用对应模型。
+- 修复语音、图片、视频、附件和兼容层之间的若干调用问题。
+- 调整桌面壳层、侧边栏和设置入口，让高频创作路径更轻、更直接。
+
+#### 这是一个大版本
+
+2.0.0 的重点不是增加几个按钮，而是把 RedBox 从「AI 生成工具集合」升级为「自媒体创作 Agent 工作台」：它可以克隆角色、生成角色卡片、沉淀角色声音资产、理解素材、生成内容、处理媒体、维护角色一致性，并把多步创作任务尽可能交给 AI 连续完成。
 
 ### v1.9.0 (2026-04-04)
 - 优化整体 UI 视觉
@@ -195,9 +254,9 @@
   - App 页面改为懒加载并增加加载占位，减少首屏与切换 Tab 的加载压力
 - 设置页模型管理增强：
   - 新增 AI 模型列表拉取与搜索能力，提升模型选择稳定性
-- YouTube 采集链路增强：
+- YouTube 采集链路调整：
   - 新增全局剪贴板 YouTube 链接捕获入口
-  - 采集前强制执行 yt-dlp 可用性检查
+  - 内置 yt-dlp 下载/安装服务已移除，不再自动拉取或更新第三方二进制
 - 发布流程改进：
   - 发布脚本支持自动写入 Release Notes
   - Release Notes 默认提取 README 对应版本条目，缺失时回退到最近提交摘要
