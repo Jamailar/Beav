@@ -244,6 +244,7 @@ fn render_estimated_subtitles(
     duration_seconds: f64,
     format: &str,
 ) -> Result<String, String> {
+    reject_invalid_estimated_subtitle_text(text)?;
     let cues = split_transcript_cues(text);
     if cues.is_empty() {
         return Err("转写接口只返回了空文本，无法生成字幕".to_string());
@@ -279,6 +280,28 @@ fn render_estimated_subtitles(
         }
     }
     Ok(output)
+}
+
+fn reject_invalid_estimated_subtitle_text(text: &str) -> Result<(), String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("转写接口只返回了空文本，无法生成字幕".to_string());
+    }
+    let normalized = trimmed.to_ascii_lowercase();
+    let is_provider_error = matches!(
+        normalized.as_str(),
+        "bad gateway" | "gateway timeout" | "service unavailable" | "upstream timeout"
+    ) || normalized.contains("502 bad gateway")
+        || normalized.contains("503 service unavailable")
+        || normalized.contains("504 gateway timeout")
+        || normalized.contains("upstream request timeout");
+    if is_provider_error {
+        return Err(format!("转写接口上游错误：{trimmed}"));
+    }
+    if trimmed.chars().count() < 2 {
+        return Err("转写接口返回内容过短，无法生成字幕".to_string());
+    }
+    Ok(())
 }
 
 fn transcribe_with_subtitle_fallback(
@@ -436,6 +459,13 @@ mod tests {
 
         assert!(rendered.contains("1\n00:00:00,000 --> "));
         assert!(rendered.contains("--> 00:00:10,000"));
+    }
+
+    #[test]
+    fn rejects_gateway_error_as_estimated_subtitle_text() {
+        let error = render_estimated_subtitles("Bad Gateway", 93.0, "srt").expect_err("gateway");
+
+        assert!(error.contains("上游错误"));
     }
 
     #[test]

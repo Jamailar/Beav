@@ -158,6 +158,12 @@ RedBox 2.0 是一次面向「AI 内容创作工作台」的重大升级。这个
 
 ![RedBox 2.0 AI 视频理解与自动剪辑切片](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-video-understanding-auto-clips.gif)
 
+##### 自动字幕识别与视频加字幕
+
+支持自动识别视频中的语音内容，生成字幕并直接叠加到视频画面中，让口播、解说、带货和知识类视频更快完成字幕包装。
+
+![RedBox 2.0 自动识别字幕并给视频加字幕](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-auto-subtitles.gif)
+
 ##### 角色克隆与角色音频克隆
 
 支持基于账号定位、人物设定和内容风格生成可复用的角色卡片，让固定账号、虚拟角色和品牌 IP 拥有稳定的人设、语气、表达边界和创作参考。角色还可以沉淀专属声音资产，让系列化视频、口播、旁白和虚拟角色内容保持更统一的声线识别度。

@@ -93,6 +93,61 @@ pub(crate) fn run_curl_transcription_with_parse_format(
     response_format: Option<&str>,
     parse_format: Option<&str>,
 ) -> Result<String, String> {
+    let mut last_error = None;
+    for attempt in 1..=3 {
+        match run_curl_transcription_request(
+            endpoint,
+            api_key,
+            model_name,
+            file_path,
+            mime_type,
+            response_format,
+        ) {
+            Ok(stdout) => {
+                let preferred_format = parse_format
+                    .or(response_format)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("json");
+                match parse_transcription_response(&stdout, preferred_format) {
+                    Ok(transcript) => return Ok(transcript),
+                    Err(error) if attempt < 3 && is_retryable_transcription_error(&error) => {
+                        last_error = Some(error);
+                        std::thread::sleep(std::time::Duration::from_millis(match attempt {
+                            1 => 1_000,
+                            2 => 3_000,
+                            _ => 0,
+                        }));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) if attempt < 3 && is_retryable_transcription_error(&error) => {
+                last_error = Some(error);
+                std::thread::sleep(std::time::Duration::from_millis(match attempt {
+                    1 => 1_000,
+                    2 => 3_000,
+                    _ => 0,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(format!(
+        "转写接口连续重试失败：{}",
+        last_error.unwrap_or_else(|| "unknown transcription error".to_string())
+    ))
+}
+
+fn run_curl_transcription_request(
+    endpoint: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    file_path: &Path,
+    mime_type: &str,
+    response_format: Option<&str>,
+) -> Result<String, String> {
+    const HTTP_STATUS_MARKER: &str = "\n__redbox_http_status__:";
     let mut command = std::process::Command::new("curl");
     configure_background_command(&mut command);
     command
@@ -103,7 +158,9 @@ pub(crate) fn run_curl_transcription_with_parse_format(
         .arg("-F")
         .arg(format!("model={model_name}"))
         .arg("-F")
-        .arg(format!("file=@{};type={mime_type}", file_path.display()));
+        .arg(format!("file=@{};type={mime_type}", file_path.display()))
+        .arg("-w")
+        .arg(format!("{HTTP_STATUS_MARKER}%{{http_code}}"));
     if let Some(format) = response_format
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -116,25 +173,48 @@ pub(crate) fn run_curl_transcription_with_parse_format(
             .arg(format!("Authorization: Bearer {key}"));
     }
     let output = command.output().map_err(|error| error.to_string())?;
+    let raw_stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
             format!("curl failed with status {}", output.status)
         } else {
             stderr
         });
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
+    let (stdout, http_status) = split_curl_http_status(&raw_stdout, HTTP_STATUS_MARKER)?;
+    if !(200..300).contains(&http_status) {
+        return Err(format!("转写接口 HTTP {http_status}: {}", stdout.trim()));
+    }
+    if stdout.trim().is_empty() {
         return Err("转写接口返回了空结果：服务响应 stdout 为空".to_string());
     }
+    Ok(stdout.trim().to_string())
+}
 
-    let preferred_format = parse_format
-        .or(response_format)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("json");
-    parse_transcription_response(&stdout, preferred_format)
+fn split_curl_http_status(stdout: &str, marker: &str) -> Result<(String, u16), String> {
+    let Some((body, status)) = stdout.rsplit_once(marker) else {
+        return Err("转写接口响应缺少 HTTP 状态码".to_string());
+    };
+    let status = status
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| format!("转写接口 HTTP 状态码无效：{error}"))?;
+    Ok((body.to_string(), status))
+}
+
+fn is_retryable_transcription_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("http 502")
+        || normalized.contains("http 503")
+        || normalized.contains("http 504")
+        || normalized.contains("bad gateway")
+        || normalized.contains("service unavailable")
+        || normalized.contains("gateway timeout")
+        || normalized.contains("timed out")
+        || normalized.contains("timeout")
+        || normalized.contains("empty")
+        || normalized.contains("空结果")
 }
 
 pub(crate) fn parse_transcription_response(
@@ -144,6 +224,9 @@ pub(crate) fn parse_transcription_response(
     let stdout = stdout.trim();
     if stdout.is_empty() {
         return Err("转写接口返回了空结果：服务响应 stdout 为空".to_string());
+    }
+    if looks_like_transcription_gateway_error(stdout) {
+        return Err(format!("转写接口上游错误：{stdout}"));
     }
     if preferred_format != "json" && !stdout.starts_with('{') && !stdout.starts_with('[') {
         if is_subtitle_format(preferred_format) && !looks_like_subtitle(stdout, preferred_format) {
@@ -174,6 +257,20 @@ pub(crate) fn parse_transcription_response(
         ));
     }
     Ok(transcript)
+}
+
+fn looks_like_transcription_gateway_error(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    matches!(
+        normalized.as_str(),
+        "bad gateway" | "gateway timeout" | "service unavailable" | "upstream timeout"
+    ) || normalized.contains("502 bad gateway")
+        || normalized.contains("503 service unavailable")
+        || normalized.contains("504 gateway timeout")
+        || normalized.contains("upstream request timeout")
 }
 
 fn extract_transcription_text(value: &Value, preferred_format: &str) -> Option<String> {
@@ -621,6 +718,25 @@ mod tests {
         let error = parse_transcription_response("hello world", "srt").expect_err("plain text");
 
         assert!(error.contains("不是 SRT 字幕"));
+    }
+
+    #[test]
+    fn rejects_gateway_error_text_before_format_fallback() {
+        let error = parse_transcription_response("Bad Gateway", "text").expect_err("gateway");
+
+        assert!(error.contains("上游错误"));
+    }
+
+    #[test]
+    fn parses_curl_http_status_marker() {
+        let (body, status) = split_curl_http_status(
+            "Bad Gateway\n__redbox_http_status__:502",
+            "\n__redbox_http_status__:",
+        )
+        .expect("status marker");
+
+        assert_eq!(body, "Bad Gateway");
+        assert_eq!(status, 502);
     }
 
     #[test]

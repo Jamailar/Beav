@@ -478,6 +478,11 @@ select {
   -webkit-user-select: none;
 }
 
+.app-titlebar > * {
+  position: relative;
+  z-index: 1;
+}
+
 .app-titlebar[data-tauri-drag-region] {
   app-region: drag;
   -webkit-app-region: drag;
@@ -491,6 +496,16 @@ select {
   grid-template-columns: 104px minmax(0, 1fr) auto;
   background: rgb(var(--color-background) / 0.88);
   border-bottom: 1px solid rgb(var(--color-border) / 0.58);
+}
+
+.app-titlebar--windows::before {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--app-titlebar-sidebar-width, 4.5rem);
+  background: var(--app-sidebar-background);
+  backdrop-filter: saturate(1.05) blur(24px);
 }
 
 .app-titlebar-controls,
