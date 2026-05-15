@@ -345,6 +345,31 @@ pub fn resolve_session_file_reference_inputs(
     .unwrap_or(original_inputs)
 }
 
+pub fn session_recent_image_reference_inputs(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    limit: usize,
+) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let fallback_dirs = session_reference_fallback_dirs(state);
+    with_store(state, |store| {
+        let mut refs = Vec::<String>::new();
+        for message in chat_messages_for_session(&store, session_id).iter().rev() {
+            let Some(attachment) = message.attachment.as_ref() else {
+                continue;
+            };
+            collect_image_references_from_value(attachment, &fallback_dirs, &mut refs, limit, 0);
+            if refs.len() >= limit {
+                break;
+            }
+        }
+        Ok(refs)
+    })
+    .unwrap_or_default()
+}
+
 fn resolve_session_file_reference_input_from_store(
     store: &AppStore,
     session_id: &str,
@@ -388,6 +413,99 @@ fn resolve_session_file_reference_input_from_store(
         return resolved;
     }
     trimmed.to_string()
+}
+
+fn collect_image_references_from_value(
+    value: &Value,
+    fallback_dirs: &[PathBuf],
+    refs: &mut Vec<String>,
+    limit: usize,
+    depth: usize,
+) {
+    const MAX_DEPTH: usize = 8;
+    if refs.len() >= limit || depth > MAX_DEPTH {
+        return;
+    }
+    match value {
+        Value::Object(object) => {
+            if let Some(reference) = image_reference_from_object(object, fallback_dirs) {
+                if !refs.iter().any(|item| item == &reference) {
+                    refs.push(reference);
+                }
+                if refs.len() >= limit {
+                    return;
+                }
+            }
+            for nested in object.values() {
+                collect_image_references_from_value(nested, fallback_dirs, refs, limit, depth + 1);
+                if refs.len() >= limit {
+                    return;
+                }
+            }
+        }
+        Value::Array(items) => {
+            for nested in items {
+                collect_image_references_from_value(nested, fallback_dirs, refs, limit, depth + 1);
+                if refs.len() >= limit {
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn image_reference_from_object(
+    value: &serde_json::Map<String, Value>,
+    fallback_dirs: &[PathBuf],
+) -> Option<String> {
+    let get = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|candidate| !candidate.is_empty())
+    };
+    let kind = get("kind").unwrap_or_default().to_ascii_lowercase();
+    let mime_type = get("mimeType").unwrap_or_default().to_ascii_lowercase();
+    let name = get("name").unwrap_or_default().to_ascii_lowercase();
+    let ext = get("ext")
+        .unwrap_or_default()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    let looks_like_image = kind == "image"
+        || mime_type.starts_with("image/")
+        || matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif")
+        || name.ends_with(".png")
+        || name.ends_with(".jpg")
+        || name.ends_with(".jpeg")
+        || name.ends_with(".webp")
+        || name.ends_with(".gif");
+    if !looks_like_image {
+        return None;
+    }
+    if let Some(path) = get("absolutePath")
+        .or_else(|| get("originalAbsolutePath"))
+        .filter(|candidate| Path::new(candidate).exists())
+    {
+        return Some(path.to_string());
+    }
+    if let Some(path) = get("inlineDataUrl").filter(|candidate| candidate.starts_with("data:")) {
+        return Some(path.to_string());
+    }
+    if let Some(path) = get("localUrl").and_then(local_file_url_to_path) {
+        if Path::new(&path).exists() {
+            return Some(path);
+        }
+    }
+    let relative_path = get("workspaceRelativePath")
+        .or_else(|| get("toolPath"))
+        .or_else(|| get("relativePath"));
+    relative_path.and_then(|candidate| {
+        fallback_dirs
+            .iter()
+            .find_map(|root| resolve_reference_from_dir(root, candidate))
+    })
 }
 
 fn session_reference_fallback_dirs(state: &State<'_, AppState>) -> Vec<PathBuf> {
@@ -2611,5 +2729,33 @@ mod tests {
             messages[1].get("content").and_then(Value::as_str),
             Some("after")
         );
+    }
+
+    #[test]
+    fn collect_image_references_reads_uploaded_attachment_arrays() {
+        let mut refs = Vec::<String>::new();
+        collect_image_references_from_value(
+            &json!([
+                {
+                    "type": "uploaded-file",
+                    "kind": "document",
+                    "name": "brief.pdf",
+                    "absolutePath": file!()
+                },
+                {
+                    "type": "uploaded-file",
+                    "kind": "image",
+                    "name": "WechatIMG1615.jpg",
+                    "mimeType": "image/jpeg",
+                    "absolutePath": file!()
+                }
+            ]),
+            &[],
+            &mut refs,
+            4,
+            0,
+        );
+
+        assert_eq!(refs, vec![file!().to_string()]);
     }
 }

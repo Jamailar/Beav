@@ -21,7 +21,8 @@ use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     clear_review_docket_waiters, register_review_docket_waiter,
-    resolve_session_file_reference_inputs, McpServerRecord, SkillRecord,
+    resolve_session_file_reference_inputs, session_recent_image_reference_inputs, McpServerRecord,
+    SkillRecord,
 };
 use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
@@ -3552,6 +3553,9 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         }
         reference_images.extend(subject_reference_images);
         reference_images = self.resolve_reference_image_inputs(reference_images);
+        if reference_images.is_empty() && self.should_auto_use_session_image_references() {
+            reference_images = self.recent_session_image_references(4);
+        }
         dedupe_string_list(&mut reference_images, 4);
         let image_plan_items = extract_image_plan_items(merged.get("imagePlanItems"));
         let requested_count = requested_image_generation_count(&merged, image_plan_items.len());
@@ -3622,13 +3626,12 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             object.remove("model");
             if !reference_images.is_empty() {
                 object.insert("referenceImages".to_string(), json!(reference_images));
-                if object
+                let generation_mode = object
                     .get("generationMode")
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .is_empty()
-                {
+                    .map(str::trim)
+                    .unwrap_or("");
+                if generation_mode.is_empty() || generation_mode == "text-to-image" {
                     object.insert("generationMode".to_string(), json!("reference-guided"));
                 }
             }
@@ -3832,6 +3835,44 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return inputs;
         };
         resolve_session_file_reference_inputs(self.state, session_id, inputs)
+    }
+
+    fn recent_session_image_references(&self, limit: usize) -> Vec<String> {
+        let Some(session_id) = self.session_id else {
+            return Vec::new();
+        };
+        session_recent_image_reference_inputs(self.state, session_id, limit)
+    }
+
+    fn should_auto_use_session_image_references(&self) -> bool {
+        let Some(session_id) = self.session_id else {
+            return false;
+        };
+        with_store(self.state, |store| {
+            let metadata = store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .and_then(|item| item.metadata.as_ref());
+            let Some(metadata) = metadata else {
+                return Ok(false);
+            };
+            let task_intent_is_video = payload_field(metadata, "taskIntent")
+                .and_then(Value::as_str)
+                .map(|value| value.trim() == "video")
+                .unwrap_or(false);
+            let video_director_active = payload_field(metadata, "activeSkills")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|name| name.trim() == "video-director")
+                })
+                .unwrap_or(false);
+            Ok(task_intent_is_video || video_director_active)
+        })
+        .unwrap_or(false)
     }
 
     fn handle_video_generate(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
