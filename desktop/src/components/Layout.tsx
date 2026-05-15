@@ -145,7 +145,6 @@ function AppTitleBar({
   immersiveMode,
   enabled,
   platform,
-  sidebarOverlayWidth,
   content,
   isSidebarCollapsed,
   toggleSidebarCollapsed,
@@ -160,7 +159,6 @@ function AppTitleBar({
   immersiveMode: ImmersiveMode;
   enabled: boolean;
   platform: AppTitleBarPlatform;
-  sidebarOverlayWidth: string;
   content: ReactNode;
   isSidebarCollapsed: boolean;
   toggleSidebarCollapsed: () => void;
@@ -204,7 +202,6 @@ function AppTitleBar({
       data-platform={platform ?? undefined}
       onMouseDown={startWindowDrag}
       onDoubleClick={handleTitleBarDoubleClick}
-      style={{ '--app-titlebar-sidebar-width': sidebarOverlayWidth } as React.CSSProperties}
       className={clsx(
         'app-titlebar shrink-0',
         platform === 'windows' && 'app-titlebar--windows',
@@ -351,9 +348,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
-  const titleBarSidebarOverlayWidth = hasGlobalSidebar
-    ? sidebarVisualCollapsed ? '4.5rem' : `${sidebarWidth}px`
-    : '0px';
   const isGlobalSearchVisible = isGlobalSearchOpen || isGlobalSearchClosing;
   const activeSpaceName = useMemo(
     () => spaces.find((space) => space.id === activeSpaceId)?.name || t('layout.defaultSpaceName'),
@@ -911,7 +905,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         immersiveMode={immersiveMode}
         enabled={usesAppTitleBar}
         platform={titleBarPlatform}
-        sidebarOverlayWidth={titleBarSidebarOverlayWidth}
         content={titleBarContent}
         isSidebarCollapsed={isSidebarCollapsed}
         toggleSidebarCollapsed={toggleSidebarCollapsed}
