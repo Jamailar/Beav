@@ -395,14 +395,15 @@ fn chat_attachment_value_for_path(
 
 fn lightweight_image_attachment_value_for_path(path: &Path, file_size: u64) -> Value {
     let (mime_type, kind, direct_upload_eligible) = guess_mime_and_kind(path);
+    let thumbnail_data_url = inline_image_thumbnail_data_url(path, &mime_type, file_size);
     json!({
         "attachmentId": make_id("attachment"),
         "type": "uploaded-file",
         "name": path.file_name().and_then(|value| value.to_str()).unwrap_or("attachment"),
         "ext": path.extension().and_then(|value| value.to_str()).unwrap_or(""),
         "size": file_size,
-        "thumbnailDataUrl": Value::Null,
-        "thumbnailUrl": Value::Null,
+        "thumbnailDataUrl": thumbnail_data_url,
+        "thumbnailUrl": thumbnail_data_url,
         "workspaceRelativePath": Value::Null,
         "toolPath": Value::Null,
         "absolutePath": path.display().to_string(),
@@ -3352,6 +3353,28 @@ mod tests {
 
         let options = result["options"].as_array().expect("options");
         assert_eq!(options.len(), 1);
+    }
+
+    #[test]
+    fn lightweight_image_attachment_persists_thumbnail_url() {
+        let path =
+            std::env::temp_dir().join(format!("redbox-chat-image-preview-test-{}.jpg", now_ms()));
+        fs::write(&path, b"fake-image-bytes").expect("write temp image");
+
+        let attachment =
+            lightweight_image_attachment_value_for_path(&path, fs::metadata(&path).unwrap().len());
+
+        let thumbnail_url = attachment
+            .get("thumbnailUrl")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(thumbnail_url.starts_with("data:image/jpeg;base64,"));
+        assert_eq!(
+            attachment.get("thumbnailDataUrl").and_then(Value::as_str),
+            Some(thumbnail_url)
+        );
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]
