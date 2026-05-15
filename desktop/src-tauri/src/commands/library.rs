@@ -582,15 +582,43 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
     let title_guide = normalize_optional_string(payload_string(payload, "titleGuide"));
     let template_name = normalize_optional_string(payload_string(payload, "templateName"));
     let prompt_switches = payload_field(payload, "promptSwitches");
+    let has_template_image = payload_string(payload, "templateImage")
+        .map(|item| !item.trim().is_empty())
+        .unwrap_or(false);
+    let has_base_image = payload_string(payload, "baseImage")
+        .map(|item| !item.trim().is_empty())
+        .unwrap_or(false);
 
     let mut parts = vec![
         "你要生成一张适合中文内容平台信息流点击的封面图。".to_string(),
         "画面比例固定为 3:4，标题区域必须清晰、可读、适合直接作为封面文案。".to_string(),
-        "参考图顺序必须按以下规则理解：图1是我想学习的封面图风格，图2是需要被改造成封面的底图。"
-            .to_string(),
-        "请保留图2的核心主体、真实内容和空间关系，把图2做成和图1一样风格的中文封面图。".to_string(),
         "不要出现提示词原文、排版说明、水印、AI 字样或调试文字。".to_string(),
     ];
+
+    match (has_template_image, has_base_image) {
+        (true, true) => {
+            parts.push("参考图顺序必须按以下规则理解：图1是我想学习的封面图风格，图2是需要被改造成封面的底图。".to_string());
+            parts.push(
+                "请保留图2的核心主体、真实内容和空间关系，把图2做成和图1一样风格的中文封面图。"
+                    .to_string(),
+            );
+        }
+        (true, false) => {
+            parts.push("当前只提供了 1 张参考图：图1是封面风格参考，请学习它的构图、标题层级、字体气质、色彩氛围和信息密度，但不要照抄具体文案。".to_string());
+            parts.push("请根据用户给出的标题或标题方向重新生成一张完整中文封面。".to_string());
+        }
+        (false, true) => {
+            parts.push("当前只提供了 1 张参考图：图1是需要被改造成封面的底图。".to_string());
+            parts.push("请保留图1的核心主体、真实内容和空间关系，在此基础上补足封面级标题排版、视觉焦点和信息流点击感。".to_string());
+        }
+        (false, false) => {
+            parts.push(
+                "当前没有参考图，请直接根据标题、标题方向和风格要求生成一张完整中文封面。"
+                    .to_string(),
+            );
+            parts.push("画面需要有明确主体、清晰视觉焦点和适合信息流点击的封面构图。".to_string());
+        }
+    }
 
     if let Some(name) = template_name {
         parts.push(format!("当前使用模板：{name}。"));
@@ -639,10 +667,10 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
     }
 
     let mut switch_notes: Vec<&str> = Vec::new();
-    if cover_prompt_switch_enabled(prompt_switches, "learnTypography", true) {
+    if has_template_image && cover_prompt_switch_enabled(prompt_switches, "learnTypography", true) {
         switch_notes.push("尽量学习模板图的标题字体、字重、描边、阴影和排版节奏");
     }
-    if cover_prompt_switch_enabled(prompt_switches, "learnColorMood", true) {
+    if has_template_image && cover_prompt_switch_enabled(prompt_switches, "learnColorMood", true) {
         switch_notes.push("尽量学习模板图的主辅色与整体色彩氛围");
     }
     if cover_prompt_switch_enabled(prompt_switches, "beautifyFace", false) {
@@ -2267,5 +2295,47 @@ mod tests {
         assert!(prompt.contains("图1是我想学习的封面图风格"));
         assert!(prompt.contains("图2是需要被改造成封面的底图"));
         assert!(prompt.contains("把图2做成和图1一样风格的中文封面图"));
+    }
+
+    #[test]
+    fn cover_generation_prompt_supports_template_only_reference() {
+        let payload = json!({
+            "templateImage": "data:image/png;base64,TEMPLATE",
+            "titles": [{ "type": "main", "text": "测试标题" }],
+        });
+
+        let prompt = build_cover_generation_prompt(&payload, &[]);
+        assert!(prompt.contains("当前只提供了 1 张参考图：图1是封面风格参考"));
+        assert!(prompt.contains("不要照抄具体文案"));
+        assert!(!prompt.contains("图2是需要被改造成封面的底图"));
+    }
+
+    #[test]
+    fn cover_generation_prompt_supports_base_only_reference() {
+        let payload = json!({
+            "baseImage": "data:image/png;base64,BASE",
+            "titles": [{ "type": "main", "text": "测试标题" }],
+        });
+
+        let prompt = build_cover_generation_prompt(&payload, &[]);
+        assert!(prompt.contains("当前只提供了 1 张参考图：图1是需要被改造成封面的底图"));
+        assert!(prompt.contains("保留图1的核心主体"));
+        assert!(!prompt.contains("模板图的标题字体"));
+    }
+
+    #[test]
+    fn cover_generation_request_allows_text_only_cover() {
+        let payload = json!({
+            "titleMode": "prompt",
+            "titlePrompt": "突出反差感",
+            "quality": "high",
+        });
+
+        let prompt = build_cover_generation_prompt(&payload, &[]);
+        assert!(prompt.contains("当前没有参考图"));
+
+        let request_payload = build_cover_generation_request_payload(&payload, "cover prompt");
+        assert_eq!(request_payload.get("referenceImages"), None);
+        assert_eq!(request_payload.get("generationMode"), None);
     }
 }

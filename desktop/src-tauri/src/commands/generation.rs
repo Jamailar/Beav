@@ -448,9 +448,21 @@ pub(crate) fn generate_image_assets(
     let provider = normalize_optional_string(payload_string(payload, "provider"));
     let provider_template = normalize_optional_string(payload_string(payload, "providerTemplate"));
     let model = normalize_optional_string(payload_string(payload, "model"));
-    let aspect_ratio = normalize_optional_string(payload_string(payload, "aspectRatio"));
-    let size = normalize_optional_string(payload_string(payload, "size"));
-    let quality = normalize_optional_string(payload_string(payload, "quality"));
+    let aspect_ratio = normalize_optional_string(
+        payload_string(payload, "aspectRatio")
+            .or_else(|| payload_string(payload, "aspect_ratio"))
+            .or_else(|| payload_string(payload, "ratio")),
+    );
+    let size = normalize_optional_string(
+        payload_string(payload, "size")
+            .or_else(|| payload_string(payload, "imageSize"))
+            .or_else(|| payload_string(payload, "image_size")),
+    );
+    let quality = normalize_optional_string(
+        payload_string(payload, "quality")
+            .or_else(|| payload_string(payload, "imageQuality"))
+            .or_else(|| payload_string(payload, "image_quality")),
+    );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let settings_snapshot = {
         let auth_runtime = state
@@ -1024,6 +1036,7 @@ pub fn handle_generation_channel(
             };
             let relative_path = format!("generated/media-{}-{}.{}", now_ms(), index + 1, file_ext);
             let absolute_path = media_root_path.join(&relative_path);
+            let mut thumbnail_url = None;
             let preview_url = if channel == "video-gen:generate" {
                 let Some((endpoint, api_key, default_model)) = &real_video_config else {
                     return Err("video generation requires a configured video provider".to_string());
@@ -1175,6 +1188,8 @@ pub fn handle_generation_channel(
                             .to_string(),
                     );
                 }
+                thumbnail_url =
+                    crate::ensure_video_thumbnail_for_path(Some(app), state, &absolute_path);
                 if let Some(context) = video_log_context.as_ref() {
                     emit_video_generation_progress(
                         app,
@@ -1423,7 +1438,7 @@ pub fn handle_generation_channel(
                 updated_at: now_rfc3339(),
                 absolute_path: Some(absolute_path.display().to_string()),
                 preview_url: preview_url.clone(),
-                thumbnail_url: None,
+                thumbnail_url,
                 exists: true,
             };
             created.push(asset);

@@ -327,4 +327,33 @@ mod tests {
             .skills_section
             .contains("image-director: image desc"));
     }
+
+    #[test]
+    fn build_skill_runtime_state_lists_tts_director_in_generation_audio_modes() {
+        let skill = SkillRecord {
+            name: "tts-director".to_string(),
+            description: "tts desc".to_string(),
+            location: "skills://tts-director".to_string(),
+            body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation, audio-editor]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# TTS Director\n\nBody".to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        };
+
+        let generation_state = build_skill_runtime_state(
+            &[skill.clone()],
+            "image-generation",
+            None,
+            &["workflow".to_string()],
+        );
+        assert!(generation_state
+            .skills_section
+            .contains("tts-director: tts desc"));
+
+        let audio_editor_state =
+            build_skill_runtime_state(&[skill], "audio-editor", None, &["workflow".to_string()]);
+        assert!(audio_editor_state
+            .skills_section
+            .contains("tts-director: tts desc"));
+    }
 }

@@ -1657,7 +1657,7 @@ pub(crate) fn ensure_video_thumbnail_for_path(
         thumbnail_path.display()
     );
     let output = match std::process::Command::new(&ffmpeg_path)
-        .args(["-v", "error", "-nostdin", "-y", "-ss", "00:00:00.1", "-i"])
+        .args(["-v", "error", "-nostdin", "-y", "-ss", "00:00:00.5", "-i"])
         .arg(&normalized)
         .args([
             "-frames:v",
@@ -10018,6 +10018,17 @@ fn run_startup_background_housekeeping(app: AppHandle) {
         let bootstrap_app = app.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
             run_official_auth_bootstrap_once(bootstrap_app);
+        })
+        .await;
+
+        let pricing_app = app.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let state = pricing_app.state::<AppState>();
+            if let Err(error) =
+                commands::official::refresh_official_pricing_cache(&pricing_app, &state)
+            {
+                eprintln!("[{} official pricing] {error}", app_brand_display_name());
+            }
         })
         .await;
 

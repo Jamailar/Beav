@@ -161,6 +161,14 @@ fn image_quality_schema(description: &str) -> Value {
     })
 }
 
+fn image_resolution_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": description,
+        "enum": ["auto", "1K", "2K", "4K"],
+    })
+}
+
 fn object_schema(
     properties: &[(&str, Value)],
     required: &[&str],
@@ -2175,6 +2183,12 @@ fn image_generate_input_schema() -> Value {
                 "quality",
                 image_quality_schema("Optional image quality hint."),
             ),
+            (
+                "resolution",
+                image_resolution_schema(
+                    "Optional image resolution tier for providers that expose one, such as 1K or 2K.",
+                ),
+            ),
             ("title", string_schema("Optional media asset title.")),
             ("projectId", string_schema("Optional media project id.")),
             ("model", string_schema("Optional model override.")),
@@ -2196,6 +2210,15 @@ fn image_generate_input_schema() -> Value {
                     "type": "array",
                     "items": { "type": "string" },
                     "maxItems": 5,
+                }),
+            ),
+            (
+                "images",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 5,
+                    "description": "Alias for referenceImages, accepted for image-to-image providers that call the field images."
                 }),
             ),
             (
@@ -2241,6 +2264,22 @@ fn video_generate_input_schema() -> Value {
                 }),
             ),
             ("generationMode", string_schema("Video generation mode.")),
+            (
+                "durationSeconds",
+                integer_schema(
+                    "Requested video duration in seconds. Use 5-12 seconds for official video generation unless the user specifies otherwise.",
+                    5,
+                    12,
+                ),
+            ),
+            (
+                "aspectRatio",
+                string_schema("Video aspect ratio, usually 16:9 or 9:16."),
+            ),
+            (
+                "resolution",
+                string_schema("Video resolution, usually 720p or 1080p."),
+            ),
             (
                 "drivingAudio",
                 string_schema("Optional driving audio path."),
@@ -2959,6 +2998,7 @@ fn redbox_input_schema() -> Value {
             "ratio": image_aspect_ratio_schema("Alias for aspectRatio; prefer aspectRatio in new calls."),
             "size": image_size_schema("Optional explicit output size. Prefer aspectRatio unless exact pixels were requested."),
             "quality": image_quality_schema("Optional image quality hint."),
+            "resolution": image_resolution_schema("Optional image resolution tier for image providers that expose one, such as 1K or 2K."),
             "generationMode": {
                 "type": "string",
                 "enum": ["text-to-image", "reference-guided", "image-to-image", "text-to-video", "first-last-frame", "continuation"],
@@ -2969,6 +3009,12 @@ fn redbox_input_schema() -> Value {
                 "items": { "type": "string" },
                 "maxItems": 5,
                 "description": "Reference image URLs, data URLs, asset ids, or local paths."
+            },
+            "images": {
+                "type": "array",
+                "items": { "type": "string" },
+                "maxItems": 5,
+                "description": "Alias for referenceImages; useful for image-to-image APIs whose native payload uses images."
             },
             "planConfirmed": { "type": "boolean", "description": "Whether the user approved a multi-image plan." },
             "sequenceGoal": { "type": "string", "description": "Ordering goal for a multi-image batch." },

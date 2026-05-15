@@ -192,6 +192,12 @@ fn is_redbox_official_image_endpoint(endpoint: &str) -> bool {
     is_redbox_official_endpoint(endpoint)
 }
 
+fn is_openai_official_endpoint(endpoint: &str) -> bool {
+    normalize_base_url(endpoint)
+        .to_lowercase()
+        .contains("api.openai.com")
+}
+
 fn resolve_gemini_openai_endpoint(endpoint: &str) -> String {
     let base = normalize_base_url(endpoint);
     if base.contains("/images/generations") {
@@ -365,6 +371,22 @@ fn normalize_video_duration(value: Option<i64>) -> i64 {
     parsed.clamp(5, 12)
 }
 
+fn payload_video_duration_seconds(payload: &Value) -> i64 {
+    for key in ["durationSeconds", "duration_seconds", "duration", "seconds"] {
+        if let Some(value) = payload_field(payload, key) {
+            let parsed = match value {
+                Value::Number(number) => number.as_i64(),
+                Value::String(text) => text.trim().parse::<i64>().ok(),
+                _ => None,
+            };
+            if parsed.is_some() {
+                return normalize_video_duration(parsed);
+            }
+        }
+    }
+    normalize_video_duration(None)
+}
+
 fn map_aspect_ratio_to_image_size(aspect_ratio: Option<&str>, size: Option<&str>) -> String {
     if let Some(size) = size.map(str::trim).filter(|item| !item.is_empty()) {
         return size.to_string();
@@ -376,6 +398,71 @@ fn map_aspect_ratio_to_image_size(aspect_ratio: Option<&str>, size: Option<&str>
         "16:9" => "2048x1152".to_string(),
         _ => "1024x1024".to_string(),
     }
+}
+
+fn payload_string_any(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| payload_string(payload, key))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_image_aspect_ratio(value: &str) -> Option<String> {
+    let compact = value
+        .trim()
+        .replace('：', ":")
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    match compact.as_str() {
+        "1:1" | "3:4" | "4:3" | "9:16" | "16:9" => Some(compact),
+        _ => None,
+    }
+}
+
+fn payload_image_aspect_ratio(payload: &Value) -> Option<String> {
+    payload_string_any(payload, &["aspectRatio", "aspect_ratio", "ratio"])
+        .and_then(|value| normalize_image_aspect_ratio(&value))
+}
+
+fn payload_image_size(payload: &Value) -> Option<String> {
+    payload_string_any(payload, &["size", "imageSize", "image_size"])
+}
+
+fn payload_image_quality(payload: &Value) -> Option<String> {
+    payload_string_any(payload, &["quality", "imageQuality", "image_quality"])
+}
+
+fn normalize_image_resolution(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let compact = trimmed
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if compact.contains('X') || compact.contains('*') {
+        return None;
+    }
+    match compact.as_str() {
+        "AUTO" => None,
+        "1K" | "1024" | "1024P" => Some("1K".to_string()),
+        "2K" | "2048" | "2048P" => Some("2K".to_string()),
+        "4K" | "4096" | "4096P" => Some("4K".to_string()),
+        "720P" => Some("720p".to_string()),
+        "1080P" => Some("1080p".to_string()),
+        _ => Some(trimmed.to_string()),
+    }
+}
+
+fn payload_image_resolution(payload: &Value) -> Option<String> {
+    payload_string_any(
+        payload,
+        &["resolution", "imageResolution", "image_resolution"],
+    )
+    .and_then(|value| normalize_image_resolution(&value))
 }
 
 fn is_openai_gpt_image_model(model: &str) -> bool {
@@ -488,7 +575,40 @@ fn map_quality_to_openai(quality: Option<&str>) -> Option<String> {
     }
 }
 
-fn map_quality_to_jimeng_resolution(quality: Option<&str>) -> Option<String> {
+fn map_image_resolution_to_native_tier(resolution: Option<&str>) -> Option<String> {
+    match resolution.and_then(normalize_image_resolution).as_deref() {
+        Some("1K") | Some("720p") | Some("1080p") => Some("1K".to_string()),
+        Some("2K") | Some("4K") => Some("2K".to_string()),
+        _ => None,
+    }
+}
+
+fn map_resolution_or_quality_to_image_size(
+    resolution: Option<&str>,
+    quality: Option<&str>,
+) -> String {
+    if let Some(resolution) = map_image_resolution_to_native_tier(resolution) {
+        if resolution.eq_ignore_ascii_case("1k") {
+            return "1K".to_string();
+        }
+        return "2K".to_string();
+    }
+    match quality.map(str::trim).unwrap_or_default() {
+        "high" | "hd" => "2K".to_string(),
+        _ => "1K".to_string(),
+    }
+}
+
+fn map_resolution_or_quality_to_jimeng_resolution(
+    resolution: Option<&str>,
+    quality: Option<&str>,
+) -> Option<String> {
+    if let Some(resolution) = map_image_resolution_to_native_tier(resolution) {
+        if resolution.eq_ignore_ascii_case("1k") {
+            return Some("1k".to_string());
+        }
+        return Some("2k".to_string());
+    }
     match quality.map(str::trim).unwrap_or_default() {
         "high" | "hd" | "low" | "auto" | "" => Some("2k".to_string()),
         "standard" | "medium" => Some("1k".to_string()),
@@ -812,19 +932,61 @@ fn run_form_json(
 }
 
 fn extract_reference_images(payload: &Value, max_count: usize) -> Vec<String> {
-    payload_field(payload, "referenceImages")
+    for key in [
+        "referenceImages",
+        "images",
+        "reference_images",
+        "imageUrls",
+        "image_urls",
+    ] {
+        let items = payload_field(payload, key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .take(max_count)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !items.is_empty() {
+            return items;
+        }
+    }
+    Vec::new()
+}
+
+fn payload_has_nonempty_string_array(payload: &Value, key: &str) -> bool {
+    payload_field(payload, key)
         .and_then(Value::as_array)
-        .map(|items| {
+        .is_some_and(|items| {
             items
                 .iter()
-                .filter_map(|item| item.as_str())
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .take(max_count)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
+                .any(|item| item.as_str().is_some_and(|text| !text.trim().is_empty()))
         })
-        .unwrap_or_default()
+}
+
+fn build_compatible_image_extra_fields(payload: &Value, refs: &[String]) -> Result<Value, String> {
+    let mut fields = serde_json::Map::<String, Value>::new();
+    if !refs.is_empty() {
+        fields.insert(
+            "images".to_string(),
+            json!(refs
+                .iter()
+                .map(|item| normalize_media_value_for_remote(item))
+                .collect::<Result<Vec<_>, _>>()?),
+        );
+    }
+    if let Some(aspect_ratio) = payload_image_aspect_ratio(payload) {
+        fields.insert("aspectRatio".to_string(), json!(aspect_ratio));
+    }
+    if let Some(resolution) = payload_image_resolution(payload) {
+        fields.insert("resolution".to_string(), json!(resolution));
+    }
+    Ok(Value::Object(fields))
 }
 
 fn build_gemini_content_parts(prompt: &str, refs: &[String]) -> Result<Vec<Value>, String> {
@@ -865,28 +1027,36 @@ fn run_openai_image_request(
         .and_then(Value::as_i64)
         .unwrap_or(1)
         .clamp(1, 4);
-    let aspect_ratio = payload_string(payload, "aspectRatio");
-    let size = payload_string(payload, "size");
+    let aspect_ratio = payload_image_aspect_ratio(payload);
+    let size = payload_image_size(payload);
+    let quality = payload_image_quality(payload);
     let generation_mode =
         payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string());
     let refs = extract_reference_images(payload, 4);
+    if is_redbox_official_image_endpoint(endpoint) {
+        return run_openai_json_image_request(
+            &normalize_image_generation_url(endpoint),
+            api_key,
+            model,
+            payload,
+            build_compatible_image_extra_fields(payload, &refs)?,
+        );
+    }
+    if !refs.is_empty()
+        && payload_has_nonempty_string_array(payload, "images")
+        && !is_openai_official_endpoint(endpoint)
+    {
+        return run_openai_json_image_request(
+            &normalize_image_generation_url(endpoint),
+            api_key,
+            model,
+            payload,
+            build_compatible_image_extra_fields(payload, &refs)?,
+        );
+    }
     let should_use_edit_api = !refs.is_empty()
         && (generation_mode == "image-to-image" || generation_mode == "reference-guided");
     if should_use_edit_api {
-        if is_redbox_official_image_endpoint(endpoint) {
-            return run_openai_json_image_request(
-                &normalize_image_generation_url(endpoint),
-                api_key,
-                model,
-                payload,
-                json!({
-                    "images": refs
-                        .iter()
-                        .map(|item| normalize_media_value_for_remote(item))
-                        .collect::<Result<Vec<_>, _>>()?,
-                }),
-            );
-        }
         let materialized_images = refs
             .iter()
             .map(|item| materialize_transport_value_to_temp_file(item, "image-ref"))
@@ -905,7 +1075,7 @@ fn run_openai_image_request(
             count,
             aspect_ratio.as_deref(),
             size.as_deref(),
-            payload_string(payload, "quality").as_deref(),
+            quality.as_deref(),
         );
         let fallback_fields = build_rootflow_edit_form_fields(
             &request_model,
@@ -913,7 +1083,7 @@ fn run_openai_image_request(
             count,
             aspect_ratio.as_deref(),
             size.as_deref(),
-            payload_string(payload, "quality").as_deref(),
+            quality.as_deref(),
         );
         let request_url = normalize_image_edit_url(endpoint);
 
@@ -980,11 +1150,9 @@ fn run_openai_image_request(
         if openai_supports_response_format(&request_model, false) {
             body_object.insert("response_format".to_string(), json!("b64_json"));
         }
-        if let Some(quality) = map_quality_to_strict_openai(
-            &request_model,
-            payload_string(payload, "quality").as_deref(),
-            false,
-        ) {
+        if let Some(quality) =
+            map_quality_to_strict_openai(&request_model, quality.as_deref(), false)
+        {
             body_object.insert("quality".to_string(), json!(quality));
         }
     }
@@ -1075,8 +1243,8 @@ fn run_gemini_generate_content_request(
     };
     let parts = build_gemini_content_parts(&prompt, &refs)?;
     let aspect_ratio = map_aspect_ratio_to_gemini(
-        payload_string(payload, "aspectRatio").as_deref(),
-        payload_string(payload, "size").as_deref(),
+        payload_image_aspect_ratio(payload).as_deref(),
+        payload_image_size(payload).as_deref(),
     );
     run_curl_json(
         "POST",
@@ -1125,39 +1293,32 @@ fn run_gemini_imagen_request(
             "instances": [{ "prompt": payload_string(payload, "prompt").unwrap_or_default() }],
             "parameters": {
                 "sampleCount": payload_field(payload, "count").and_then(Value::as_i64).unwrap_or(1).clamp(1, 4),
-                "imageSize": payload_string(payload, "quality")
-                    .filter(|item| item == "high" || item == "hd")
-                    .map(|_| "2K".to_string())
-                    .unwrap_or_else(|| "1K".to_string()),
+                "imageSize": map_resolution_or_quality_to_image_size(
+                    payload_image_resolution(payload).as_deref(),
+                    payload_image_quality(payload).as_deref(),
+                ),
                 "aspectRatio": map_aspect_ratio_to_gemini(
-                    payload_string(payload, "aspectRatio").as_deref(),
-                    payload_string(payload, "size").as_deref(),
+                    payload_image_aspect_ratio(payload).as_deref(),
+                    payload_image_size(payload).as_deref(),
                 ),
             }
         })),
     )
 }
 
-fn run_openai_json_image_request(
-    endpoint: &str,
-    api_key: Option<&str>,
-    model: &str,
-    payload: &Value,
-    extra_fields: Value,
-) -> Result<Value, String> {
+fn build_openai_json_image_body(model: &str, payload: &Value, extra_fields: Value) -> Value {
     let mut body = json!({
         "model": model,
         "prompt": payload_string(payload, "prompt").unwrap_or_default(),
         "n": payload_field(payload, "count").and_then(Value::as_i64).unwrap_or(1).clamp(1, 4),
         "size": map_aspect_ratio_to_image_size(
-            payload_string(payload, "aspectRatio").as_deref(),
-            payload_string(payload, "size").as_deref(),
+            payload_image_aspect_ratio(payload).as_deref(),
+            payload_image_size(payload).as_deref(),
         ),
         "response_format": "b64_json"
     });
     if let Some(body_object) = body.as_object_mut() {
-        if let Some(quality) = map_quality_to_openai(payload_string(payload, "quality").as_deref())
-        {
+        if let Some(quality) = map_quality_to_openai(payload_image_quality(payload).as_deref()) {
             body_object.insert("quality".to_string(), json!(quality));
         }
         if let Some(extra_object) = extra_fields.as_object() {
@@ -1168,6 +1329,17 @@ fn run_openai_json_image_request(
             }
         }
     }
+    body
+}
+
+fn run_openai_json_image_request(
+    endpoint: &str,
+    api_key: Option<&str>,
+    model: &str,
+    payload: &Value,
+    extra_fields: Value,
+) -> Result<Value, String> {
+    let body = build_openai_json_image_body(model, payload, extra_fields);
     ensure_successful_image_response(
         "openai-images.generate",
         "POST",
@@ -1203,12 +1375,12 @@ fn run_dashscope_image_request(
         .clamp(1, 4);
     let prompt = payload_string(payload, "prompt").unwrap_or_default();
     let size = map_size_to_dashscope(
-        payload_string(payload, "size").as_deref(),
-        payload_string(payload, "aspectRatio").as_deref(),
+        payload_image_size(payload).as_deref(),
+        payload_image_aspect_ratio(payload).as_deref(),
     );
     let interleave_size = map_size_to_dashscope_interleave(
-        payload_string(payload, "size").as_deref(),
-        payload_string(payload, "aspectRatio").as_deref(),
+        payload_image_size(payload).as_deref(),
+        payload_image_aspect_ratio(payload).as_deref(),
     );
 
     for candidate in endpoints {
@@ -1408,10 +1580,13 @@ pub(crate) fn run_image_generation_request(
                     Vec::<String>::new()
                 },
                 "ratio": map_aspect_ratio_to_jimeng_ratio(
-                    payload_string(payload, "aspectRatio").as_deref(),
-                    payload_string(payload, "size").as_deref(),
+                    payload_image_aspect_ratio(payload).as_deref(),
+                    payload_image_size(payload).as_deref(),
                 ),
-                "resolution": map_quality_to_jimeng_resolution(payload_string(payload, "quality").as_deref()),
+                "resolution": map_resolution_or_quality_to_jimeng_resolution(
+                    payload_image_resolution(payload).as_deref(),
+                    payload_image_quality(payload).as_deref(),
+                ),
             }),
         ),
         "midjourney-proxy" => run_curl_json(
@@ -1724,8 +1899,7 @@ pub(crate) fn build_video_request_body(
             .as_deref()
             .unwrap_or("720p"),
     );
-    let duration_seconds =
-        normalize_video_duration(payload_field(payload, "durationSeconds").and_then(Value::as_i64));
+    let duration_seconds = payload_video_duration_seconds(payload);
     let generate_audio = payload_field(payload, "generateAudio")
         .and_then(Value::as_bool)
         .unwrap_or(false);
@@ -2277,6 +2451,20 @@ mod tests {
     }
 
     #[test]
+    fn build_video_request_body_accepts_duration_aliases_for_redbox_endpoint() {
+        let endpoint = "https://api.ziz.hk/redbox/v1/videos/generations/async";
+        let payload = json!({
+            "prompt": "test",
+            "duration": "6",
+        });
+
+        let body = build_video_request_body(endpoint, "wan-test", &payload).expect("body");
+
+        assert_eq!(body.get("duration").and_then(Value::as_i64), Some(6));
+        assert_eq!(body.get("seconds").and_then(Value::as_str), Some("4"));
+    }
+
+    #[test]
     fn build_video_request_body_adds_reference_media_for_redbox_reference_guided() {
         let official_cn_base_url = crate::official_base_url_for_realm("cn");
         let payload = json!({
@@ -2337,12 +2525,54 @@ mod tests {
             Some("medium")
         );
         assert_eq!(
-            map_quality_to_jimeng_resolution(Some("auto")).as_deref(),
+            map_resolution_or_quality_to_jimeng_resolution(None, Some("auto")).as_deref(),
             Some("2k")
         );
         assert_eq!(
-            map_quality_to_jimeng_resolution(Some("low")).as_deref(),
+            map_resolution_or_quality_to_jimeng_resolution(None, Some("low")).as_deref(),
             Some("2k")
+        );
+    }
+
+    #[test]
+    fn image_resolution_overrides_quality_for_native_resolution_fields() {
+        assert_eq!(
+            map_resolution_or_quality_to_image_size(Some("2K"), Some("standard")),
+            "2K"
+        );
+        assert_eq!(
+            map_resolution_or_quality_to_jimeng_resolution(Some("1K"), Some("high")).as_deref(),
+            Some("1k")
+        );
+        assert_eq!(
+            payload_image_resolution(&json!({ "resolution": "2048" })).as_deref(),
+            Some("2K")
+        );
+        assert!(payload_image_resolution(&json!({ "resolution": "1024x1024" })).is_none());
+    }
+
+    #[test]
+    fn compatible_image_body_preserves_resolution_aspect_ratio_and_images() {
+        let payload = json!({
+            "prompt": "融合参考图风格，生成一张电商主图",
+            "images": [
+                "https://example.com/ref-1.png",
+                "https://example.com/ref-2.png"
+            ],
+            "quality": "high",
+            "resolution": "2K",
+            "aspectRatio": "1:1"
+        });
+        let refs = extract_reference_images(&payload, 4);
+        let extra = build_compatible_image_extra_fields(&payload, &refs).expect("extra fields");
+        let body = build_openai_json_image_body("test-image-model", &payload, extra);
+
+        assert_eq!(body.get("quality").and_then(Value::as_str), Some("high"));
+        assert_eq!(body.get("resolution").and_then(Value::as_str), Some("2K"));
+        assert_eq!(body.get("aspectRatio").and_then(Value::as_str), Some("1:1"));
+        assert_eq!(
+            body.get("images").and_then(Value::as_array).map(Vec::len),
+            Some(2)
         );
     }
 

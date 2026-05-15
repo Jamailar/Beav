@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CreditCard, Gem, Globe2, QrCode, RefreshCw, Smartphone, UserRound } from 'lucide-react';
+import { CreditCard, Gem, Globe2, QrCode, RefreshCw, Smartphone, Table2, UserRound } from 'lucide-react';
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
@@ -223,7 +223,7 @@ const buildWechatQrDataUrl = async (value: string): Promise<string> => {
   });
 };
 
-const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
+const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelProps) => {
   const initialPanelSnapshot = readPanelDisplaySnapshot();
   const { snapshot: authState, bootstrapped } = useOfficialAuthState();
   const [loginTab, setLoginTab] = useState<LoginTab>('wechat');
@@ -1068,6 +1068,16 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                 </table>
               </div>
             )}
+            {onOpenPricing ? (
+              <button
+                type="button"
+                onClick={onOpenPricing}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+              >
+                <Table2 className="h-3.5 w-3.5" />
+                查看完整价格表
+              </button>
+            ) : null}
           </div>
         </>
       )}

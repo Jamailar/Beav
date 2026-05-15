@@ -990,7 +990,8 @@ function createIpcRenderer() {
     },
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
-      refresh: () => invokeChannel('redbox-auth:refresh')
+      refresh: () => invokeChannel('redbox-auth:refresh'),
+      getPricing: () => invokeChannel('redbox-auth:pricing')
     },
     llmReadiness: {
       getState: () => invokeChannel('llm-readiness:get-state'),

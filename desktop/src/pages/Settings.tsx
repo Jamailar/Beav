@@ -114,6 +114,189 @@ const DEFAULT_VISUAL_INDEX_PROMPT_VERSION = 'visual-manifest-v2-zh';
 const RUNTIME_PERF_HISTORY_LIMIT = 12;
 const RUNTIME_PERF_TIMELINE_LIMIT = 40;
 const RUNTIME_PERF_CHECKPOINT_WINDOW_MS = 1500;
+type AiPricingRate = Record<string, unknown>;
+
+type AiPricingModel = {
+  model: string;
+  display_name?: string;
+  provider?: string;
+  capability?: string;
+  pricing_mode?: string;
+  points_per_mtoken?: number;
+  points_input_per_mtoken?: number;
+  points_cached_input_per_mtoken?: number;
+  points_cache_write_5m_per_mtoken?: number;
+  points_cache_write_1h_per_mtoken?: number;
+  points_output_per_mtoken?: number;
+  points_per_call?: number;
+  points_per_minute?: number;
+  points_per_100_chars?: number;
+  billing_unit?: string;
+  tts_character_rate?: AiPricingRate;
+  is_default?: boolean;
+  price_table?: AiPricingRate[];
+  image_quality_resolution_rates?: AiPricingRate[];
+  video_resolution_rates?: AiPricingRate[];
+};
+
+type AiPricingGroup = {
+  type: string;
+  label: string;
+  models: AiPricingModel[];
+};
+
+type AiPricingCatalog = {
+  object?: string;
+  updated_at?: number | string;
+  groups: AiPricingGroup[];
+};
+
+const normalizePricingNumber = (value: unknown): number | null => {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+};
+
+const formatPricingPoints = (value: unknown): string => {
+  const numberValue = normalizePricingNumber(value);
+  if (numberValue === null || numberValue <= 0) return '-';
+  return numberValue.toLocaleString();
+};
+
+const hasMeaningfulPricingValue = (value: unknown): boolean => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'number') return Number.isFinite(value) && value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    if (!normalized) return false;
+    const numberValue = Number(normalized);
+    return !Number.isFinite(numberValue) || numberValue !== 0;
+  }
+  return true;
+};
+
+const formatPricingUpdatedAt = (value: unknown): string => {
+  const numberValue = normalizePricingNumber(value);
+  if (numberValue && numberValue > 0) {
+    const timestamp = numberValue > 10_000_000_000 ? numberValue : numberValue * 1000;
+    return new Date(timestamp).toLocaleString();
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toLocaleString();
+  }
+  return '未同步';
+};
+
+const parseAiPricingCatalog = (value: unknown): AiPricingCatalog | null => {
+  const root = value && typeof value === 'object' ? value as Record<string, unknown> : null;
+  const groups = Array.isArray(root?.groups) ? root.groups : [];
+  const normalizedGroups = groups
+    .map((group) => {
+      const groupRecord = group && typeof group === 'object' ? group as Record<string, unknown> : {};
+      const models = Array.isArray(groupRecord.models) ? groupRecord.models : [];
+      return {
+        type: String(groupRecord.type || '').trim() || 'other',
+        label: String(groupRecord.label || groupRecord.type || '其他模型').trim(),
+        models: models
+          .filter((model): model is AiPricingModel => Boolean(model && typeof model === 'object'))
+          .map((model) => model as AiPricingModel),
+      };
+    })
+    .filter((group) => group.models.length > 0);
+  if (!normalizedGroups.length) return null;
+  return {
+    object: typeof root?.object === 'string' ? root.object : undefined,
+    updated_at: typeof root?.updated_at === 'number' || typeof root?.updated_at === 'string' ? root.updated_at : undefined,
+    groups: normalizedGroups,
+  };
+};
+
+const pricingModeLabel = (mode?: string): string => {
+  switch (mode) {
+    case 'per_mtoken':
+      return '每百万 tokens';
+    case 'per_call':
+      return '按次';
+    case 'per_minute':
+      return '按分钟';
+    case 'per_mchar':
+      return '每 100 字符';
+    default:
+      return mode || '-';
+  }
+};
+
+const pricingRateLabel = (key: string): string => {
+  switch (key) {
+    case 'quality':
+      return '质量';
+    case 'resolution':
+      return '分辨率';
+    case 'points_per_call':
+      return '积分/次';
+    case 'points_per_second':
+      return '积分/秒';
+    case 'points_per_minute':
+      return '积分/分钟';
+    case 'points_per_100_chars':
+      return '积分/100 字符';
+    case 'price_rmb_per_call':
+      return '人民币/次';
+    case 'price_rmb_per_second':
+      return '人民币/秒';
+    case 'billing_unit':
+      return '单位';
+    case 'note':
+      return '备注';
+    default:
+      return key;
+  }
+};
+
+const pricingRateValue = (value: unknown): string => {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'number') {
+    return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  }
+  return String(value);
+};
+
+const pricingRateCellValue = (key: string, value: unknown): string => {
+  if (key === 'billing_unit') {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'call') return '次';
+    if (normalized === '100_characters') return '100 字符';
+  }
+  return pricingRateValue(value);
+};
+
+const pricingModelFields = (model: AiPricingModel, groupType?: string): Array<{ label: string; value: string }> => {
+  if (groupType === 'chat') {
+    return hasMeaningfulPricingValue(model.points_per_mtoken)
+      ? [{ label: '百万 tokens', value: formatPricingPoints(model.points_per_mtoken) }]
+      : [];
+  }
+  const usesCharacterBilling = hasMeaningfulPricingValue(model.points_per_100_chars)
+    || String(model.billing_unit || '').trim().toLowerCase() === '100_characters';
+  const fields: Array<{ label: string; raw: unknown; suffix?: string }> = [
+    { label: '百万 tokens', raw: model.points_per_mtoken },
+    { label: '输入', raw: model.points_input_per_mtoken, suffix: ' / 百万 tokens' },
+    { label: '缓存输入', raw: model.points_cached_input_per_mtoken, suffix: ' / 百万 tokens' },
+    { label: '缓存写入 5m', raw: model.points_cache_write_5m_per_mtoken, suffix: ' / 百万 tokens' },
+    { label: '缓存写入 1h', raw: model.points_cache_write_1h_per_mtoken, suffix: ' / 百万 tokens' },
+    { label: '输出', raw: model.points_output_per_mtoken, suffix: ' / 百万 tokens' },
+    { label: '每 100 字符', raw: model.points_per_100_chars, suffix: ' / 100 字符' },
+    { label: '按次', raw: usesCharacterBilling ? 0 : model.points_per_call, suffix: ' / 次' },
+    { label: '按分钟', raw: model.points_per_minute, suffix: ' / 分钟' },
+  ];
+  return fields
+    .filter((field) => hasMeaningfulPricingValue(field.raw))
+    .map((field) => ({
+      label: field.label,
+      value: `${formatPricingPoints(field.raw)}${field.suffix || ''}`,
+    }));
+};
+
 const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
   {
     id: 'latency-smoke',
@@ -895,6 +1078,12 @@ export function Settings({
   const teamAdvisorDragIdRef = useRef<string | null>(null);
   const initialFileIndexDashboardCache = useMemo(() => readCachedFileIndexDashboard(), []);
   const [baseSettingsLoadedRevision, setBaseSettingsLoadedRevision] = useState(0);
+  const [settingsSubView, setSettingsSubView] = useState<'main' | 'ai-pricing'>('main');
+  const [aiPricingCatalog, setAiPricingCatalog] = useState<AiPricingCatalog | null>(null);
+  const [aiPricingLoading, setAiPricingLoading] = useState(false);
+  const [aiPricingError, setAiPricingError] = useState('');
+  const [aiPricingActiveGroup, setAiPricingActiveGroup] = useState('');
+  const [aiPricingSearch, setAiPricingSearch] = useState('');
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
@@ -4545,6 +4734,10 @@ export function Settings({
   }, []);
 
   useEffect(() => subscribeRuntimeEventStream({
+    eventTypes: [
+      'runtime:cli-install-started',
+      'runtime:cli-install-finished',
+    ],
     onCliInstallStarted: ({
       installId,
       toolName,
@@ -6312,6 +6505,202 @@ export function Settings({
     </div>
   );
 
+  const loadAiPricingCatalog = useCallback(async () => {
+    setAiPricingLoading(true);
+    setAiPricingError('');
+    try {
+      const result = await window.ipcRenderer.officialAuth.getPricing();
+      const catalog = parseAiPricingCatalog(result?.pricing);
+      setAiPricingCatalog(catalog);
+      setAiPricingActiveGroup((prev) => {
+        if (prev && catalog?.groups.some((group) => group.type === prev)) return prev;
+        return catalog?.groups[0]?.type || '';
+      });
+      if (!catalog) {
+        setAiPricingError('价格表尚未同步，请重启应用后再查看。');
+      }
+    } catch (error) {
+      setAiPricingError(error instanceof Error ? error.message : '价格表读取失败');
+    } finally {
+      setAiPricingLoading(false);
+    }
+  }, []);
+
+  const handleOpenAiPricing = useCallback(() => {
+    setSettingsSubView('ai-pricing');
+    setActiveTab('ai');
+    void loadAiPricingCatalog();
+  }, [loadAiPricingCatalog]);
+
+  const handleCloseAiPricing = useCallback(() => {
+    setSettingsSubView('main');
+  }, []);
+
+  useEffect(() => {
+    if (settingsSubView !== 'ai-pricing') return;
+    const handleSettingsUpdated = () => {
+      void loadAiPricingCatalog();
+    };
+    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    return () => {
+      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+    };
+  }, [loadAiPricingCatalog, settingsSubView]);
+
+  const activePricingGroup = useMemo(() => (
+    aiPricingCatalog?.groups.find((group) => group.type === aiPricingActiveGroup)
+    || aiPricingCatalog?.groups[0]
+    || null
+  ), [aiPricingActiveGroup, aiPricingCatalog]);
+
+  const filteredPricingModels = useMemo(() => {
+    const query = aiPricingSearch.trim().toLowerCase();
+    const models = activePricingGroup?.models || [];
+    if (!query) return models;
+    return models.filter((model) => [
+      model.model,
+      model.display_name,
+      model.provider,
+      model.capability,
+    ].some((value) => String(value || '').toLowerCase().includes(query)));
+  }, [activePricingGroup, aiPricingSearch]);
+
+  const renderPricingRateTable = (model: AiPricingModel) => {
+    const rows = Array.isArray(model.price_table) && model.price_table.length
+      ? model.price_table
+      : Array.isArray(model.image_quality_resolution_rates) && model.image_quality_resolution_rates.length
+        ? model.image_quality_resolution_rates
+        : Array.isArray(model.video_resolution_rates) && model.video_resolution_rates.length
+          ? model.video_resolution_rates
+          : [];
+    if (!rows.length) return null;
+    const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).filter((key) => (
+      rows.some((row) => hasMeaningfulPricingValue(row[key]))
+    ));
+    if (!keys.length) return null;
+    return (
+      <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
+        <table className="w-full min-w-[560px] text-xs">
+          <thead className="bg-surface-secondary/50 text-text-tertiary">
+            <tr>
+              {keys.map((key) => (
+                <th key={key} className="px-3 py-2 text-left font-medium">{pricingRateLabel(key)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={index} className="border-t border-border/50">
+                {keys.map((key) => (
+                  <td key={key} className="px-3 py-2 text-text-secondary">{pricingRateCellValue(key, row[key])}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderAiPricingPage = () => (
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-surface-primary text-text-primary">
+      <div className="flex items-center justify-between gap-4 border-b border-border px-6 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={handleCloseAiPricing}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+            title="返回 AI 设置"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-text-primary">AI 价格表</h2>
+            <p className="mt-0.5 text-xs text-text-tertiary">
+              更新时间：{formatPricingUpdatedAt(aiPricingCatalog?.updated_at)}
+            </p>
+          </div>
+        </div>
+        <input
+          type="search"
+          value={aiPricingSearch}
+          onChange={(event) => setAiPricingSearch(event.target.value)}
+          placeholder="搜索模型或供应商"
+          className="w-64 rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-sm outline-none transition-colors focus:border-accent-primary"
+        />
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        <div className="w-56 shrink-0 border-r border-border bg-surface-secondary/20 p-4">
+          <div className="space-y-1">
+            {(aiPricingCatalog?.groups || []).map((group) => (
+              <button
+                key={group.type}
+                type="button"
+                onClick={() => setAiPricingActiveGroup(group.type)}
+                className={clsx(
+                  'flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors',
+                  activePricingGroup?.type === group.type
+                    ? 'bg-surface-secondary text-text-primary'
+                    : 'text-text-secondary hover:bg-surface-secondary/60 hover:text-text-primary',
+                )}
+              >
+                <span>{group.label}</span>
+                <span className="text-xs text-text-tertiary">{group.models.length}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-1 overflow-auto p-6">
+          {aiPricingLoading && !aiPricingCatalog ? (
+            <div className="rounded-lg border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">正在读取本地价格表...</div>
+          ) : aiPricingError && !aiPricingCatalog ? (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-600">{aiPricingError}</div>
+          ) : activePricingGroup ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium text-text-primary">{activePricingGroup.label}</h3>
+                  <p className="mt-1 text-xs text-text-tertiary">{filteredPricingModels.length} / {activePricingGroup.models.length} 个模型</p>
+                </div>
+              </div>
+
+              {filteredPricingModels.map((model) => (
+                <div key={`${activePricingGroup.type}:${model.model}`} className="rounded-xl border border-border bg-surface-primary p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm font-semibold text-text-primary">{model.display_name || model.model}</h4>
+                        {model.is_default ? (
+                          <span className="rounded bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">默认</span>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 text-xs text-text-tertiary">{model.provider || '-'} · {pricingModeLabel(model.pricing_mode)}</p>
+                    </div>
+                    {pricingModelFields(model, activePricingGroup.type).length ? (
+                      <div className="flex max-w-full flex-wrap justify-end gap-2 text-right text-xs">
+                        {pricingModelFields(model, activePricingGroup.type).map((field) => (
+                          <div key={field.label} className="rounded-lg border border-border/70 bg-surface-secondary/20 px-2.5 py-1.5">
+                            <div className="text-text-tertiary">{field.label}</div>
+                            <div className="mt-0.5 font-medium text-text-primary">{field.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  {renderPricingRateTable(model)}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">暂无价格表数据。</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   const tabs: Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }> = [
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
     { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
@@ -6325,6 +6714,10 @@ export function Settings({
 
   return (
     <div className="flex h-full min-w-0 text-text-primary">
+      {settingsSubView === 'ai-pricing' ? (
+        renderAiPricingPage()
+      ) : (
+        <>
       {/* Sidebar */}
       <div className="w-48 border-r border-border pt-6 pb-4 flex flex-col gap-1 px-3 bg-surface-secondary/20">
         {onReturn && (
@@ -6415,7 +6808,10 @@ export function Settings({
                   {officialAiPanelEnabled && (
                     <div ref={officialAiPanelRef} className="space-y-4 scroll-mt-6">
                       {OfficialAiPanelComponent ? (
-                        <OfficialAiPanelComponent onReloadSettings={reloadCustomAiSettings} />
+                        <OfficialAiPanelComponent
+                          onReloadSettings={reloadCustomAiSettings}
+                          onOpenPricing={handleOpenAiPricing}
+                        />
                       ) : (
                         <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">
                           正在加载账号信息...
@@ -8355,6 +8751,8 @@ export function Settings({
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

@@ -540,13 +540,14 @@ export function MediaLibrary({
     }, [isActive, loadSettings]);
 
     useEffect(() => {
+        if (!isActive) return;
         const updateColumnCount = () => {
             setMasonryColumnCount(getMasonryColumnCount(window.innerWidth));
         };
         updateColumnCount();
         window.addEventListener('resize', updateColumnCount);
         return () => window.removeEventListener('resize', updateColumnCount);
-    }, []);
+    }, [isActive]);
 
     useEffect(() => {
         if (!contextMenu.visible) return;
@@ -618,6 +619,7 @@ export function MediaLibrary({
     }, [filteredAssets]);
 
     useEffect(() => {
+        if (!isActive) return;
         if (filteredAssets.length === 0) return;
         const frame = window.requestAnimationFrame(() => {
             for (const asset of filteredAssets) {
@@ -625,7 +627,7 @@ export function MediaLibrary({
             }
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [filteredAssets, masonryColumnCount, measureAssetCard]);
+    }, [filteredAssets, isActive, masonryColumnCount, measureAssetCard]);
 
     const masonryColumns = useMemo(() => {
         const columns = Array.from({ length: masonryColumnCount }, () => [] as MediaAsset[]);

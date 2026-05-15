@@ -108,6 +108,16 @@ export function NotificationsHost({ currentView, children = null }: Notification
     };
 
     const runtimeDispose = subscribeRuntimeEventStream({
+      eventTypes: [
+        'runtime:done',
+        'runtime:task-node-changed',
+        'runtime:checkpoint',
+        'runtime:cli-escalation-requested',
+      ],
+      checkpointTypes: [
+        'chat.error',
+        'chat.tool_confirm_request',
+      ],
       onChatDone: (payload) => {
         void deliver(mapRuntimeDoneToNotification(payload, currentContextSnapshot(currentView), settingsRef.current));
       },

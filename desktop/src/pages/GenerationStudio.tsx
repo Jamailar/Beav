@@ -30,7 +30,7 @@ import type { GenerationIntent, PendingChatMessage } from '../App';
 import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
-import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
+import { isMediaJobSuccessful, isMediaJobTerminal, normalizeMediaJobProjection, type MediaJobProjection } from '../features/media-jobs/types';
 import { Chat } from './Chat';
 import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources } from './settings/shared';
 import { resolveAssetUrl } from '../utils/pathManager';
@@ -88,7 +88,10 @@ type GeneratedAsset = {
     title?: string;
     prompt?: string;
     previewUrl?: string;
+    thumbnailUrl?: string;
+    thumbnail_url?: string;
     mimeType?: string;
+    mime_type?: string;
     exists?: boolean;
     projectId?: string;
     provider?: string;
@@ -111,6 +114,7 @@ type ImageGenerationRequest = {
     aspectRatio: string;
     size: string;
     quality: string;
+    resolution: string;
     generationMode: ImageGenerationMode;
     referenceItems: ReferenceItem[];
 };
@@ -214,6 +218,7 @@ interface GenerationStudioProps {
 }
 
 const FEED_STORAGE_KEY = 'redbox:generation-studio:feed:v1';
+const FEED_DELETED_STORAGE_KEY = 'redbox:generation-studio:feed:deleted:v1';
 const GENERATION_AGENT_CONTEXT_TYPE = 'generation-agent';
 
 const IMAGE_ASPECT_RATIO_OPTIONS = [
@@ -225,24 +230,19 @@ const IMAGE_ASPECT_RATIO_OPTIONS = [
     { value: '16:9', label: '16:9' },
 ] as const;
 
-const IMAGE_SIZE_OPTIONS = [
-    { value: '', label: '自动' },
-    { value: '1024x1024', label: '1k' },
-    { value: '1024x1536', label: '1k 竖图' },
-    { value: '1536x1024', label: '1k 横图' },
-    { value: '1536x2048', label: '2k 竖图' },
-    { value: '2048x1536', label: '2k 横图' },
-    { value: '1152x2048', label: '2k 竖屏' },
-    { value: '2048x1152', label: '2k 宽屏' },
-    { value: 'auto', label: 'Auto' },
+const IMAGE_QUALITY_OPTIONS = [
+    { value: 'auto', label: '自动' },
+    { value: 'standard', label: 'standard' },
+    { value: 'medium', label: 'medium' },
+    { value: 'high', label: 'high' },
+    { value: 'hd', label: 'hd' },
 ] as const;
 
-const IMAGE_QUALITY_OPTIONS = [
-    { value: 'auto', label: '默认' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'high', label: '高质量' },
-    { value: 'standard', label: '标准' },
-    { value: 'hd', label: 'HD' },
+const IMAGE_RESOLUTION_OPTIONS = [
+    { value: 'auto', label: '自动' },
+    { value: '1K', label: '1K' },
+    { value: '2K', label: '2K' },
+    { value: '4K', label: '4K' },
 ] as const;
 
 const IMAGE_COUNT_OPTIONS = [
@@ -684,7 +684,8 @@ function buildRequestSummary(request: GenerationRequest): string[] {
         return [
             request.model || '默认模型',
             request.aspectRatio || 'Auto',
-            request.size || '自动尺寸',
+            request.resolution || '自动',
+            request.quality || 'auto',
         ];
     }
     if (request.type === 'audio') {
@@ -867,6 +868,7 @@ function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
         aspectRatio: String(record.aspectRatio || '4:3').trim() || '4:3',
         size: String(record.size || '').trim(),
         quality: String(record.quality || 'auto').trim() || 'auto',
+        resolution: String(record.resolution || 'auto').trim() || 'auto',
         generationMode: imageMode,
         referenceItems: normalizeReferenceItems(record.referenceItems),
     } satisfies ImageGenerationRequest;
@@ -880,14 +882,17 @@ function normalizeGeneratedAssets(value: unknown): GeneratedAsset[] {
             const record = item as Record<string, unknown>;
             const id = String(record.id || '').trim();
             if (!id) return null;
-            return {
-                id,
-                title: typeof record.title === 'string' ? record.title : undefined,
-                prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
-                previewUrl: typeof record.previewUrl === 'string' ? record.previewUrl : undefined,
-                mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
-                exists: typeof record.exists === 'boolean' ? record.exists : undefined,
-                projectId: typeof record.projectId === 'string' ? record.projectId : undefined,
+	            return {
+	                id,
+	                title: typeof record.title === 'string' ? record.title : undefined,
+	                prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
+	                previewUrl: typeof record.previewUrl === 'string' ? record.previewUrl : undefined,
+	                thumbnailUrl: typeof record.thumbnailUrl === 'string' ? record.thumbnailUrl : typeof record.thumbnail_url === 'string' ? record.thumbnail_url : undefined,
+	                thumbnail_url: typeof record.thumbnail_url === 'string' ? record.thumbnail_url : undefined,
+	                mimeType: typeof record.mimeType === 'string' ? record.mimeType : typeof record.mime_type === 'string' ? record.mime_type : undefined,
+	                mime_type: typeof record.mime_type === 'string' ? record.mime_type : undefined,
+	                exists: typeof record.exists === 'boolean' ? record.exists : undefined,
+	                projectId: typeof record.projectId === 'string' ? record.projectId : undefined,
                 provider: typeof record.provider === 'string' ? record.provider : undefined,
                 providerTemplate: typeof record.providerTemplate === 'string' ? record.providerTemplate : undefined,
                 model: typeof record.model === 'string' ? record.model : undefined,
@@ -907,30 +912,30 @@ function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
     const id = String(record.id || '').trim();
     if (!id) return null;
 
-    if (record.kind === 'agent-session') {
-        const sessionId = String(record.sessionId || '').trim();
-        const contextId = String(record.contextId || '').trim();
-        if (!sessionId || !contextId) return null;
-        return {
-            kind: 'agent-session',
-            id,
-            createdAt: Number(record.createdAt || Date.now()),
-            source: String(record.source || 'standalone').trim() || 'standalone',
-            sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
+	    if (record.kind === 'agent-session') {
+	        const sessionId = String(record.sessionId || '').trim();
+	        const contextId = String(record.contextId || '').trim();
+	        if (!sessionId || !contextId) return null;
+	        return {
+	            kind: 'agent-session',
+	            id,
+	            createdAt: feedTime(record.createdAt) || Date.now(),
+	            source: String(record.source || 'standalone').trim() || 'standalone',
+	            sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
             sessionId,
             contextId,
             title: typeof record.title === 'string' ? record.title : 'Agent 模式',
         } satisfies AgentSessionFeedEntry;
     }
 
-    const request = normalizeGenerationRequest(record.request || record);
-    if (!request) return null;
+	    const request = normalizeGenerationRequest(record.request || record);
+	    if (!request) return null;
 
-    return {
-        kind: 'generation',
-        id,
-        createdAt: Number(record.createdAt || Date.now()),
-        source: String(record.source || 'standalone').trim() || 'standalone',
+	    return {
+	        kind: 'generation',
+	        id,
+	        createdAt: feedTime(record.createdAt) || Date.now(),
+	        source: String(record.source || 'standalone').trim() || 'standalone',
         sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
         referencePreview: normalizeReferenceItem(record.referencePreview),
         request,
@@ -947,10 +952,103 @@ function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
     } satisfies GenerationFeedEntry;
 }
 
+type DeletedFeedState = {
+    entryIds: string[];
+    jobIds: string[];
+    clientRequestIds: string[];
+};
+
+function emptyDeletedFeedState(): DeletedFeedState {
+    return { entryIds: [], jobIds: [], clientRequestIds: [] };
+}
+
+function normalizeDeletedFeedState(value: unknown): DeletedFeedState {
+    if (!value || typeof value !== 'object') return emptyDeletedFeedState();
+    const record = value as Record<string, unknown>;
+    const normalizeList = (items: unknown): string[] => (
+        Array.isArray(items)
+            ? Array.from(new Set(items.map((item) => String(item || '').trim()).filter(Boolean)))
+            : []
+    );
+    return {
+        entryIds: normalizeList(record.entryIds),
+        jobIds: normalizeList(record.jobIds),
+        clientRequestIds: normalizeList(record.clientRequestIds),
+    };
+}
+
+function readDeletedFeedState(): DeletedFeedState {
+    if (typeof window === 'undefined') return emptyDeletedFeedState();
+    try {
+        return normalizeDeletedFeedState(JSON.parse(window.localStorage.getItem(FEED_DELETED_STORAGE_KEY) || '{}'));
+    } catch {
+        return emptyDeletedFeedState();
+    }
+}
+
+function persistDeletedFeedState(state: DeletedFeedState): void {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(FEED_DELETED_STORAGE_KEY, JSON.stringify({
+            entryIds: state.entryIds.slice(-500),
+            jobIds: state.jobIds.slice(-500),
+            clientRequestIds: state.clientRequestIds.slice(-500),
+        }));
+    } catch {
+        // ignore persistence errors
+    }
+}
+
+function clientRequestIdFromJob(job: MediaJobProjection | null | undefined): string {
+    const request = job?.request;
+    if (!request || typeof request !== 'object') return '';
+    return String(request.clientRequestId || request.clientFeedEntryId || '').trim();
+}
+
+function isFeedEntryDeleted(entry: FeedEntry, deleted: DeletedFeedState): boolean {
+    if (deleted.entryIds.includes(entry.id)) return true;
+    if (isGenerationFeedEntry(entry)) {
+        if (entry.jobId && deleted.jobIds.includes(entry.jobId)) return true;
+        const requestClientId = String(
+            (entry.request as unknown as Record<string, unknown>).clientRequestId
+            || (entry.request as unknown as Record<string, unknown>).clientFeedEntryId
+            || '',
+        ).trim();
+        if (requestClientId && deleted.clientRequestIds.includes(requestClientId)) return true;
+    }
+    return false;
+}
+
+function isJobDeleted(job: MediaJobProjection, deleted: DeletedFeedState): boolean {
+    return deleted.jobIds.includes(job.jobId)
+        || deleted.entryIds.includes(`job:${job.jobId}`)
+        || deleted.clientRequestIds.includes(clientRequestIdFromJob(job));
+}
+
+function feedTime(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const raw = String(value || '').trim();
+    if (!raw) return 0;
+    if (/^\d+$/.test(raw)) {
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric)) return numeric;
+    }
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortFeedEntries(entries: FeedEntry[]): FeedEntry[] {
+    return [...entries].sort((left, right) => {
+        const timeDelta = feedTime(left.createdAt) - feedTime(right.createdAt);
+        if (timeDelta !== 0) return timeDelta;
+        return left.id.localeCompare(right.id);
+    });
+}
+
 function persistFeedEntries(entries: FeedEntry[]): void {
     if (typeof window === 'undefined') return;
     try {
-        window.localStorage.setItem(FEED_STORAGE_KEY, serializeFeedEntries(entries));
+        window.localStorage.setItem(FEED_STORAGE_KEY, serializeFeedEntries(sortFeedEntries(entries)));
     } catch {
         // ignore persistence errors
     }
@@ -960,13 +1058,23 @@ function readPersistedFeedEntries(): FeedEntry[] {
     if (typeof window === 'undefined') return [];
     try {
         const raw = window.localStorage.getItem(FEED_STORAGE_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return [];
-        return parsed
-            .map(normalizeFeedEntryRecord)
-            .filter((item): item is FeedEntry => Boolean(item))
-            .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
+	        if (!raw) return [];
+	        const parsed = JSON.parse(raw);
+	        if (!Array.isArray(parsed)) return [];
+	        const deleted = readDeletedFeedState();
+	        return parsed
+	            .map(normalizeFeedEntryRecord)
+	            .filter((item): item is FeedEntry => Boolean(item))
+	            .filter((item) => !isFeedEntryDeleted(item, deleted))
+	            .filter((item) => (
+	                !isGenerationFeedEntry(item)
+	                || (item.status === 'running' && !item.jobId)
+	            ))
+	            .sort((a, b) => {
+	                const timeDelta = feedTime(a.createdAt) - feedTime(b.createdAt);
+	                if (timeDelta !== 0) return timeDelta;
+	                return a.id.localeCompare(b.id);
+	            });
     } catch {
         return [];
     }
@@ -1048,10 +1156,19 @@ function assetsFromJobProjection(job: MediaJobProjection): GeneratedAsset[] {
     return (job.artifacts || [])
         .map((artifact) => {
             const metadata = artifact.metadata;
-            if (metadata?.asset && typeof metadata.asset === 'object') {
-                return metadata.asset;
+            const rawAsset = metadata?.asset && typeof metadata.asset === 'object'
+                ? metadata.asset as Record<string, unknown>
+                : metadata;
+            if (rawAsset && typeof rawAsset === 'object') {
+                const asset = rawAsset as GeneratedAsset;
+                return {
+                    ...asset,
+                    previewUrl: asset.previewUrl || artifact.previewUrl || undefined,
+                    thumbnailUrl: asset.thumbnailUrl || asset.thumbnail_url,
+                    mimeType: asset.mimeType || asset.mime_type || artifact.mimeType || undefined,
+                };
             }
-            return metadata;
+            return rawAsset;
         })
         .filter((item): item is GeneratedAsset => Boolean(item && typeof item === 'object' && typeof (item as GeneratedAsset).id === 'string'));
 }
@@ -1143,6 +1260,7 @@ function requestFromJobProjection(job: MediaJobProjection): GenerationRequest | 
         aspectRatio: stringField(request, ['aspectRatio', 'aspect_ratio']) || '4:3',
         size: stringField(request, ['size']),
         quality: stringField(request, ['quality']) || 'auto',
+        resolution: stringField(request, ['resolution']) || 'auto',
         generationMode: normalizedMode,
         referenceItems,
     } satisfies ImageGenerationRequest;
@@ -1156,7 +1274,7 @@ function sourceFromJobProjection(job: MediaJobProjection): GenerationFeedSource 
 function feedEntryFromJobProjection(job: MediaJobProjection): GenerationFeedEntry | null {
     const request = requestFromJobProjection(job);
     if (!request) return null;
-    const createdAt = Date.parse(job.createdAt);
+    const createdAt = feedTime(job.createdAt);
     const base: GenerationFeedEntry = {
         kind: 'generation',
         id: `job:${job.jobId}`,
@@ -1219,6 +1337,55 @@ function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobProjection
         status: 'running',
         assets: assetsFromJobProjection(job),
     };
+}
+
+function isGenerationStudioMediaJob(job: MediaJobProjection): boolean {
+    return job.kind === 'image' || job.kind === 'video' || job.kind === 'audio';
+}
+
+function mergeMediaJobsIntoFeedEntries(
+    entries: FeedEntry[],
+    jobs: MediaJobProjection[],
+    deleted: DeletedFeedState,
+	): FeedEntry[] {
+	    let changed = false;
+	    const next = [...entries];
+	    const sortedJobs = jobs
+	        .filter(isGenerationStudioMediaJob)
+	        .filter((job) => !isJobDeleted(job, deleted))
+	        .sort((left, right) => {
+	            const timeDelta = feedTime(left.createdAt) - feedTime(right.createdAt);
+	            if (timeDelta !== 0) return timeDelta;
+	            return left.jobId.localeCompare(right.jobId);
+	        });
+
+    for (const job of sortedJobs) {
+        const existingIndex = next.findIndex((entry) => isGenerationFeedEntry(entry) && entry.jobId === job.jobId);
+        if (existingIndex >= 0) {
+            const patched = applyJobProjectionToFeedEntry(next[existingIndex], job);
+            if (patched !== next[existingIndex]) {
+                next[existingIndex] = patched;
+                changed = true;
+            }
+            continue;
+        }
+
+        const jobEntry = feedEntryFromJobProjection(job);
+        if (!jobEntry) continue;
+        const pendingIndex = next.findIndex((entry) => isSamePendingGenerationRequest(entry, jobEntry));
+        if (pendingIndex >= 0) {
+            next[pendingIndex] = applyJobProjectionToFeedEntry({
+                ...(next[pendingIndex] as GenerationFeedEntry),
+                jobId: job.jobId,
+                jobStatus: job.status,
+            }, job);
+        } else {
+            next.push(jobEntry);
+        }
+        changed = true;
+    }
+
+    return changed ? sortFeedEntries(next) : entries;
 }
 
 function generatedAssetKind(asset: GeneratedAsset, request: GenerationRequest): StudioMode {
@@ -1827,6 +1994,83 @@ function UploadPreviewCard({
     );
 }
 
+function VideoAssetPreview({
+    asset,
+    src,
+    className,
+    style,
+}: {
+    asset: GeneratedAsset;
+    src: string;
+    className?: string;
+    style?: React.CSSProperties;
+}) {
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+    const posterSeekRef = useRef(false);
+    const [capturedPoster, setCapturedPoster] = useState('');
+    const posterSource = asset.thumbnailUrl || asset.thumbnail_url || capturedPoster;
+    const posterUrl = posterSource ? resolveAssetUrl(posterSource) : undefined;
+    const shouldCapturePoster = !posterSource;
+
+    useEffect(() => {
+        setCapturedPoster('');
+    }, [asset.id, asset.previewUrl, asset.thumbnailUrl, asset.thumbnail_url]);
+
+    const capturePosterFrame = useCallback(() => {
+        if (!shouldCapturePoster || capturedPoster) return;
+        const video = videoRef.current;
+        if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const context = canvas.getContext('2d');
+            if (!context) return;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            setCapturedPoster(canvas.toDataURL('image/jpeg', 0.82));
+        } catch {
+            // Some remote/file URLs cannot be drawn to canvas; the video remains playable.
+        }
+    }, [capturedPoster, shouldCapturePoster]);
+
+    const preparePosterFrame = useCallback(() => {
+        const video = videoRef.current;
+        if (!video || !shouldCapturePoster) return;
+        const targetTime = Math.min(0.5, Math.max(0, (Number.isFinite(video.duration) ? video.duration : 1) - 0.05));
+        if (Math.abs(video.currentTime - targetTime) > 0.05) {
+            try {
+                posterSeekRef.current = true;
+                video.currentTime = targetTime;
+            } catch {
+                capturePosterFrame();
+            }
+        } else {
+            capturePosterFrame();
+        }
+    }, [capturePosterFrame, shouldCapturePoster]);
+
+    return (
+        <video
+            ref={videoRef}
+            src={src}
+            poster={posterUrl}
+            controls
+            preload="metadata"
+            onLoadedData={preparePosterFrame}
+            onSeeked={capturePosterFrame}
+            onPlay={() => {
+                const video = videoRef.current;
+                if (posterSeekRef.current && video) {
+                    posterSeekRef.current = false;
+                    video.currentTime = 0;
+                }
+            }}
+            className={className}
+            style={style}
+        />
+    );
+}
+
 function AssetPreview({
     asset,
     className,
@@ -1851,10 +2095,9 @@ function AssetPreview({
     const src = resolveAssetUrl(asset.previewUrl);
     if (isVideoAsset(asset)) {
         return (
-            <video
+            <VideoAssetPreview
+                asset={asset}
                 src={src}
-                controls
-                preload="metadata"
                 className={clsx('w-full rounded-[16px] bg-black object-cover', interactive && 'pointer-events-none', className)}
                 style={style}
             />
@@ -2021,6 +2264,7 @@ function MetaRow({ request }: { request: GenerationRequest }) {
 
 function FeedEntryMessage({
     entry,
+    isActive,
     onRegenerate,
     onEdit,
     onDelete,
@@ -2028,6 +2272,7 @@ function FeedEntryMessage({
     onOpenAssetMenu,
 }: {
     entry: GenerationFeedEntry;
+    isActive: boolean;
     onRegenerate: (entry: GenerationFeedEntry) => void;
     onEdit: (entry: GenerationFeedEntry) => void;
     onDelete: (entryId: string) => void;
@@ -2045,10 +2290,10 @@ function FeedEntryMessage({
 
     useEffect(() => {
         setNow(Date.now());
-        if (!isRunning) return;
+        if (!isActive || !isRunning) return;
         const timer = window.setInterval(() => setNow(Date.now()), 800);
         return () => window.clearInterval(timer);
-    }, [entry.createdAt, isRunning]);
+    }, [entry.createdAt, isActive, isRunning]);
 
     return (
         <article className="space-y-3">
@@ -2215,6 +2460,22 @@ function FeedEntryMessage({
                                 </div>
                             );
                         }
+                        if (isVideoAsset(asset)) {
+                            return (
+                                <div
+                                    key={asset.id}
+                                    className="group relative overflow-hidden rounded-[16px]"
+                                    onContextMenu={(event) => onOpenAssetMenu(event, asset, entry.id)}
+                                    title="直接播放视频"
+                                >
+                                    <AssetPreview
+                                        asset={asset}
+                                        className={clsx(mediaHeightClass, asset.previewUrl && asset.exists && 'transition-[filter] duration-200')}
+                                        style={{ aspectRatio: normalizeAspectRatio(asset.aspectRatio, placeholderAspectRatio) }}
+                                    />
+                                </div>
+                            );
+                        }
                         return (
                             <button
                                 key={asset.id}
@@ -2286,6 +2547,7 @@ export function GenerationStudio({
     const [generationSurface, setGenerationSurface] = useState<GenerationSurface>('manual');
     const [, setBindTarget] = useState('');
     const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => readPersistedFeedEntries());
+    const deletedFeedStateRef = useRef<DeletedFeedState>(readDeletedFeedState());
     const [previewAsset, setPreviewAsset] = useState<GeneratedAsset | null>(null);
     const [assetContextMenu, setAssetContextMenu] = useState<AssetContextMenuState | null>(null);
     const feedScrollRef = useRef<HTMLElement | null>(null);
@@ -2301,6 +2563,7 @@ export function GenerationStudio({
     const [imageAspectRatio, setImageAspectRatio] = useState('4:3');
     const [imageSize, setImageSize] = useState('');
     const [imageQuality, setImageQuality] = useState('auto');
+    const [imageResolution, setImageResolution] = useState('auto');
     const [imageMode, setImageMode] = useState<ImageGenerationMode>('text-to-image');
     const [imageReferences, setImageReferences] = useState<ReferenceItem[]>([]);
     const [isReadingImageRefs, setIsReadingImageRefs] = useState(false);
@@ -2387,8 +2650,10 @@ export function GenerationStudio({
                 const next = typeof updater === 'function'
                     ? (updater as (prev: FeedEntry[]) => FeedEntry[])(prev)
                     : updater;
-                persistFeedEntries(next);
-                return next;
+                const normalized = sortFeedEntries(next)
+                    .filter((entry) => !isFeedEntryDeleted(entry, deletedFeedStateRef.current));
+                persistFeedEntries(normalized);
+                return normalized;
             });
         },
         [],
@@ -2409,9 +2674,9 @@ export function GenerationStudio({
                 contextId: generationAgentContextId,
                 title: generationAgentTitle,
             };
-            if (existingIndex < 0) {
-                return [...prev, nextEntry].sort((a, b) => a.createdAt - b.createdAt);
-            }
+	            if (existingIndex < 0) {
+	                return sortFeedEntries([...prev, nextEntry]);
+	            }
             const existing = prev[existingIndex] as AgentSessionFeedEntry;
             if (
                 existing.sessionId === nextEntry.sessionId
@@ -2540,54 +2805,34 @@ export function GenerationStudio({
         })();
     }, [ensureAgentFeedEntry, generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode]);
 
-    useEffect(() => {
-        updateFeedEntries((prev) => {
-            let changed = false;
-            const next = prev.map((entry) => {
-                const patched = applyJobProjectionToFeedEntry(
-                    entry,
-                    isGenerationFeedEntry(entry) && entry.jobId ? trackedJobsById[entry.jobId] : null,
-                );
-                if (patched !== entry) {
-                    changed = true;
-                }
-                return patched;
-            });
-            return changed ? next : prev;
-        });
-    }, [trackedJobsById, updateFeedEntries]);
+	    useEffect(() => {
+	        updateFeedEntries((prev) => {
+	            const trackedJobs = Object.values(trackedJobsById);
+	            return mergeMediaJobsIntoFeedEntries(prev, trackedJobs, deletedFeedStateRef.current);
+	        });
+	    }, [trackedJobsById, updateFeedEntries]);
 
-    useEffect(() => {
-        const jobs = Object.values(trackedJobsById)
-            .filter((job) => job.kind === 'image' || job.kind === 'video')
-            .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
-        if (jobs.length === 0) return;
+	    useEffect(() => {
+	        if (!isActive) return;
+	        let cancelled = false;
 
-        updateFeedEntries((prev) => {
-            let changed = false;
-            const next = [...prev];
-            for (const job of jobs) {
-                if (next.some((entry) => isGenerationFeedEntry(entry) && entry.jobId === job.jobId)) {
-                    continue;
-                }
-                const jobEntry = feedEntryFromJobProjection(job);
-                if (!jobEntry) continue;
-                const pendingIndex = next.findIndex((entry) => isSamePendingGenerationRequest(entry, jobEntry));
-                if (pendingIndex >= 0) {
-                    next[pendingIndex] = applyJobProjectionToFeedEntry({
-                        ...(next[pendingIndex] as GenerationFeedEntry),
-                        jobId: job.jobId,
-                        jobStatus: job.status,
-                    }, job);
-                } else {
-                    next.push(jobEntry);
-                }
-                changed = true;
-            }
-            if (!changed) return prev;
-            return next.sort((a, b) => a.createdAt - b.createdAt);
-        });
-    }, [trackedJobsById, updateFeedEntries]);
+	        void (async () => {
+	            try {
+	                const result = await window.ipcRenderer.generation.listJobs({ limit: 100 }) as { items?: unknown[] };
+	                if (cancelled || !Array.isArray(result?.items)) return;
+	                const jobs = result.items
+	                    .map(normalizeMediaJobProjection)
+	                    .filter((item): item is MediaJobProjection => Boolean(item));
+	                updateFeedEntries((prev) => mergeMediaJobsIntoFeedEntries(prev, jobs, deletedFeedStateRef.current));
+	            } catch (error) {
+	                console.error('Failed to bootstrap generation jobs:', error);
+	            }
+	        })();
+
+	        return () => {
+	            cancelled = true;
+	        };
+	    }, [isActive, updateFeedEntries]);
 
     useEffect(() => {
         if (!previewAsset) return;
@@ -2779,6 +3024,7 @@ export function GenerationStudio({
         void (async () => {
             try {
                 const result = await window.ipcRenderer.generation.submitImage({
+                    clientRequestId: entry.id,
                     prompt: request.prompt.trim(),
                     bypassPromptOptimizer: true,
                     projectId: request.projectId.trim() || undefined,
@@ -2792,6 +3038,7 @@ export function GenerationStudio({
                     aspectRatio: request.aspectRatio.trim() || undefined,
                     size: request.size.trim() || undefined,
                     quality: request.quality.trim() || undefined,
+                    resolution: request.resolution.trim() || undefined,
                     source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
                 }) as { success?: boolean; error?: string; jobId?: string };
 
@@ -2856,6 +3103,7 @@ export function GenerationStudio({
         void (async () => {
             try {
                 const result = await window.ipcRenderer.generation.submitVideo({
+                    clientRequestId: entry.id,
                     prompt: request.prompt.trim(),
                     projectId: request.projectId.trim() || undefined,
                     title: request.title.trim() || undefined,
@@ -2914,6 +3162,7 @@ export function GenerationStudio({
         void (async () => {
             try {
                 const result = await window.ipcRenderer.generation.submitAudio({
+                    clientRequestId: entry.id,
                     source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
                     input: request.prompt.trim(),
                     title: request.title.trim() || undefined,
@@ -2949,14 +3198,6 @@ export function GenerationStudio({
     }, [contextIntent?.source, createFeedEntry, hasVoiceConfig, updateFeedEntries]);
 
     const runCoverRequest = useCallback((request: CoverGenerationRequest): boolean => {
-        if (!request.templateImage?.dataUrl) {
-            setCoverError('请先添加参考封面');
-            return false;
-        }
-        if (!request.baseImage?.dataUrl) {
-            setCoverError('请先添加底图');
-            return false;
-        }
         if (!request.prompt.trim()) {
             setCoverError('请先输入封面标题或要求');
             return false;
@@ -3033,6 +3274,7 @@ export function GenerationStudio({
             aspectRatio: imageAspectRatio,
             size: imageSize,
             quality: imageQuality,
+            resolution: imageResolution,
             generationMode: effectiveImageMode,
             referenceItems: imageReferences,
         });
@@ -3048,6 +3290,7 @@ export function GenerationStudio({
         imageProjectId,
         imageQuality,
         imageReferences,
+        imageResolution,
         imageSize,
         imageTitle,
         runImageRequest,
@@ -3194,6 +3437,7 @@ export function GenerationStudio({
             setImageAspectRatio(entry.request.aspectRatio);
             setImageSize(entry.request.size);
             setImageQuality(entry.request.quality);
+            setImageResolution(entry.request.resolution);
             setImageMode(entry.request.generationMode);
             setImageReferences(entry.request.referenceItems);
             return;
@@ -3224,7 +3468,22 @@ export function GenerationStudio({
     }, []);
 
     const handleDeleteEntry = useCallback((entryId: string) => {
-        updateFeedEntries((prev) => prev.filter((entry) => entry.id !== entryId));
+        updateFeedEntries((prev) => {
+            const entry = prev.find((item) => item.id === entryId);
+            if (entry) {
+                const deleted = normalizeDeletedFeedState(deletedFeedStateRef.current);
+                deleted.entryIds = Array.from(new Set([...deleted.entryIds, entry.id]));
+                if (isGenerationFeedEntry(entry)) {
+                    if (entry.jobId) {
+                        deleted.jobIds = Array.from(new Set([...deleted.jobIds, entry.jobId]));
+                    }
+                    deleted.clientRequestIds = Array.from(new Set([...deleted.clientRequestIds, entry.id]));
+                }
+                deletedFeedStateRef.current = deleted;
+                persistDeletedFeedState(deleted);
+            }
+            return prev.filter((entry) => entry.id !== entryId);
+        });
         setAssetContextMenu((current) => (current?.entryId === entryId ? null : current));
     }, [updateFeedEntries]);
 
@@ -3517,6 +3776,7 @@ export function GenerationStudio({
             aspectRatio: imageAspectRatio,
             size: imageSize,
             quality: imageQuality,
+            resolution: imageResolution,
             generationMode: effectiveImageMode,
             referenceItems: imageReferences,
         };
@@ -3546,6 +3806,7 @@ export function GenerationStudio({
         imagePrompt,
         imageQuality,
         imageReferences,
+        imageResolution,
         imageSize,
         imageTitle,
         studioMode,
@@ -3661,8 +3922,12 @@ export function GenerationStudio({
             if (coverRefs.length > 0) {
                 try {
                     const contactSheet = await buildReferenceContactSheet(coverRefs);
+                    const roleNotes = [
+                        currentAgentRequest.templateImage ? '参考封面' : '',
+                        currentAgentRequest.baseImage ? '底图' : '',
+                    ].filter(Boolean).map((role, index) => `第 ${index + 1} 张是${role}`);
                     attachments.push(await createInlineAttachment({ name: contactSheet.fileName, dataUrl: contactSheet.dataUrl }, contactSheet.fileName));
-                    attachmentContextNotes.push(`封面素材：${contactSheet.note}。第 1 张是参考封面，第 2 张是底图。`);
+                    attachmentContextNotes.push(`封面素材：${contactSheet.note}。${roleNotes.join('，')}。`);
                 } catch (error) {
                     console.error('Failed to prepare generation agent cover attachments:', error);
                     setCoverError(error instanceof Error ? error.message : '封面素材附件创建失败');
@@ -3845,6 +4110,7 @@ export function GenerationStudio({
                                     <FeedEntryMessage
                                         key={entry.id}
                                         entry={entry}
+                                        isActive={isActive}
                                         onRegenerate={handleRegenerate}
                                         onEdit={handleEditEntry}
                                         onDelete={handleDeleteEntry}
@@ -4031,12 +4297,20 @@ export function GenerationStudio({
                                                                 onChange={setImageAspectRatio}
                                                             />
                                                             <PopoverSelect
-                                                                value={imageSize}
-                                                                onChange={setImageSize}
-                                                                options={IMAGE_SIZE_OPTIONS}
+                                                                value={imageResolution}
+                                                                onChange={setImageResolution}
+                                                                options={IMAGE_RESOLUTION_OPTIONS}
                                                                 className="min-w-[82px]"
-                                                                title="图片尺寸"
-                                                                panelClassName="w-[248px]"
+                                                                title="分辨率"
+                                                                panelClassName="w-[220px]"
+                                                            />
+                                                            <PopoverSelect
+                                                                value={imageQuality}
+                                                                onChange={setImageQuality}
+                                                                options={IMAGE_QUALITY_OPTIONS}
+                                                                className="min-w-[86px]"
+                                                                title="质量"
+                                                                panelClassName="w-[220px]"
                                                             />
                                                         </>
                                                     )}

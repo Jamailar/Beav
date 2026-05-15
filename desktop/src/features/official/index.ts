@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 
 export interface OfficialAiPanelProps {
   onReloadSettings: (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => Promise<void> | void;
+  onOpenPricing?: () => void;
 }
 
 export interface OfficialAiPanelModule {

@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
 const WANDER_SYNTHESIS_SKILL: &str = "wander-synthesis";
@@ -393,6 +393,64 @@ fn chat_attachment_value_for_path(
     })
 }
 
+fn lightweight_image_attachment_value_for_path(path: &Path, file_size: u64) -> Value {
+    let (mime_type, kind, direct_upload_eligible) = guess_mime_and_kind(path);
+    json!({
+        "attachmentId": make_id("attachment"),
+        "type": "uploaded-file",
+        "name": path.file_name().and_then(|value| value.to_str()).unwrap_or("attachment"),
+        "ext": path.extension().and_then(|value| value.to_str()).unwrap_or(""),
+        "size": file_size,
+        "thumbnailDataUrl": Value::Null,
+        "thumbnailUrl": Value::Null,
+        "workspaceRelativePath": Value::Null,
+        "toolPath": Value::Null,
+        "absolutePath": path.display().to_string(),
+        "originalAbsolutePath": path.display().to_string(),
+        "localUrl": file_url_for_path(path),
+        "kind": kind,
+        "mimeType": mime_type,
+        "storageMode": "absolute",
+        "directUploadEligible": direct_upload_eligible,
+        "processingStrategy": "direct-input",
+        "deliveryMode": "direct-input",
+        "intakeStatus": "ready",
+        "attachmentLifecycle": "pending",
+        "capabilities": attachment_capabilities("image", false, true),
+        "deliveryPlan": {
+            "mode": "direct-input",
+            "toolPath": Value::Null,
+            "requiresTool": false,
+            "reason": "",
+        },
+        "summary": path.display().to_string(),
+        "requiresMultimodal": true,
+        "mediaAssetId": Value::Null,
+        "mediaRelativePath": Value::Null,
+        "mediaSource": Value::Null,
+    })
+}
+
+fn spawn_chat_attachment_image_import(app: &AppHandle, path: &Path) {
+    let app = app.clone();
+    let path = path.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if let Err(error) =
+            crate::knowledge::import_chat_attachment_image(Some(&app), &state, &path)
+        {
+            append_debug_trace_state(
+                &state,
+                format!(
+                    "[chat-attachment] background image import failed path={} error={}",
+                    path.display(),
+                    error
+                ),
+            );
+        }
+    });
+}
+
 fn merge_session_metadata_fields(
     store: &mut AppStore,
     session_id: &str,
@@ -496,11 +554,13 @@ fn create_chat_attachment_for_path(
     }
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
     let (_, attachment_kind, _) = guess_mime_and_kind(path);
-    let imported_media_asset = if attachment_kind == "image" {
-        crate::knowledge::import_chat_attachment_image(Some(app), state, path).ok()
-    } else {
-        None
-    };
+    if attachment_kind == "image" {
+        let attachment = lightweight_image_attachment_value_for_path(path, metadata.len());
+        register_pending_chat_attachment(state, &attachment);
+        spawn_chat_attachment_image_import(app, path);
+        return Ok(attachment);
+    }
+    let imported_media_asset: Option<MediaAssetRecord> = None;
     let staged = if imported_media_asset.is_some() {
         None
     } else if attachment_can_use_original_media_path(&attachment_kind) {
