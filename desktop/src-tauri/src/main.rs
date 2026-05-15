@@ -10245,6 +10245,23 @@ fn main() {
         ])
         .setup(|app| {
             register_global_app_handle(app.handle().clone());
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(error) = window.set_decorations(false) {
+                    logging::emit_legacy_line(
+                        logging::event::LogSource::Host,
+                        logging::event::LogLevel::Warn,
+                        "window",
+                        "startup.disable_windows_native_titlebar_failed",
+                        format!(
+                            "[{} window init] failed to disable Windows native titlebar: {error}",
+                            app_brand_display_name()
+                        ),
+                        json!({ "error": error.to_string() }),
+                        None,
+                    );
+                }
+            }
             let _ = app.emit("indexing:status", default_indexing_stats());
             let state = app.state::<AppState>();
             if let Ok(Some(report)) = logging::create_startup_recovery_report_if_needed(&state) {

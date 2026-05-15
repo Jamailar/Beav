@@ -1,5 +1,5 @@
 import { Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -130,14 +130,21 @@ function readInitialSidebarWidth(): number {
   return Number.isFinite(storedWidth) ? clampSidebarWidth(storedWidth) : SIDEBAR_DEFAULT_WIDTH;
 }
 
-function shouldUseMacOverlayTitleBar(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /\bMac\b/i.test(navigator.platform || '') || /\bMac OS X\b/i.test(navigator.userAgent || '');
+type AppTitleBarPlatform = 'mac' | 'windows' | null;
+
+function getAppTitleBarPlatform(): AppTitleBarPlatform {
+  if (typeof navigator === 'undefined') return null;
+  const platform = navigator.platform || '';
+  const userAgent = navigator.userAgent || '';
+  if (/\bMac\b/i.test(platform) || /\bMac OS X\b/i.test(userAgent)) return 'mac';
+  if (/\bWin/i.test(platform) || /\bWindows\b/i.test(userAgent)) return 'windows';
+  return null;
 }
 
 function AppTitleBar({
   immersiveMode,
   enabled,
+  platform,
   content,
   isSidebarCollapsed,
   toggleSidebarCollapsed,
@@ -151,6 +158,7 @@ function AppTitleBar({
 }: {
   immersiveMode: ImmersiveMode;
   enabled: boolean;
+  platform: AppTitleBarPlatform;
   content: ReactNode;
   isSidebarCollapsed: boolean;
   toggleSidebarCollapsed: () => void;
@@ -175,12 +183,28 @@ function AppTitleBar({
     });
   };
 
+  const toggleWindowMaximize = () => {
+    void window.ipcRenderer.windowControls.toggleMaximize().catch((error) => {
+      console.warn(`[${APP_BRAND.displayName}] failed to toggle window maximize:`, error);
+    });
+  };
+
+  const handleTitleBarDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (platform !== 'windows' || event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
+    toggleWindowMaximize();
+  };
+
   return (
     <header
       data-tauri-drag-region
+      data-platform={platform ?? undefined}
       onMouseDown={startWindowDrag}
+      onDoubleClick={handleTitleBarDoubleClick}
       className={clsx(
         'app-titlebar shrink-0',
+        platform === 'windows' && 'app-titlebar--windows',
         immersiveMode === 'dark' && 'app-titlebar--dark'
       )}
     >
@@ -237,6 +261,44 @@ function AppTitleBar({
             ? <Sun className="w-[13px] h-[13px]" strokeWidth={1.75} />
             : <Moon className="w-[13px] h-[13px]" strokeWidth={1.75} />}
         </button>
+        {platform === 'windows' && (
+          <div className="app-titlebar-window-controls" data-no-window-drag>
+            <button
+              type="button"
+              onClick={() => {
+                void window.ipcRenderer.windowControls.minimize();
+              }}
+              className="app-titlebar-window-button"
+              title="最小化"
+              aria-label="最小化"
+              data-no-window-drag
+            >
+              <Minus className="h-[14px] w-[14px]" strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              onClick={toggleWindowMaximize}
+              className="app-titlebar-window-button"
+              title="最大化"
+              aria-label="最大化"
+              data-no-window-drag
+            >
+              <Square className="h-[11px] w-[11px]" strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void window.ipcRenderer.windowControls.close();
+              }}
+              className="app-titlebar-window-button app-titlebar-window-button--close"
+              title="关闭"
+              aria-label="关闭"
+              data-no-window-drag
+            >
+              <X className="h-[14px] w-[14px]" strokeWidth={1.8} />
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );
@@ -279,7 +341,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const globalSearchRequestRef = useRef(0);
   const globalSearchAnimationTimerRef = useRef<number | null>(null);
   const isFixedViewportView = false;
-  const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
+  const titleBarPlatform = getAppTitleBarPlatform();
+  const usesAppTitleBar = titleBarPlatform !== null;
   const hasGlobalSidebar = !immersiveMode && !hideGlobalSidebar;
   const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
   const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
@@ -840,7 +903,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     >
       <AppTitleBar
         immersiveMode={immersiveMode}
-        enabled={usesMacOverlayTitleBar}
+        enabled={usesAppTitleBar}
+        platform={titleBarPlatform}
         content={titleBarContent}
         isSidebarCollapsed={isSidebarCollapsed}
         toggleSidebarCollapsed={toggleSidebarCollapsed}
@@ -857,7 +921,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <div
           className={clsx(
             'pointer-events-none absolute left-1/2 z-[80] -translate-x-1/2',
-            usesMacOverlayTitleBar ? 'top-[calc(var(--app-titlebar-height)+0.75rem)]' : 'top-3'
+            usesAppTitleBar ? 'top-[calc(var(--app-titlebar-height)+0.75rem)]' : 'top-3'
           )}
         >
           <div className="inline-flex items-center gap-2 rounded-full border border-red-200/80 bg-red-50/96 px-4 py-2 text-[12px] font-medium text-red-700 shadow-[0_12px_30px_-18px_rgba(220,38,38,0.55)] backdrop-blur">
@@ -872,7 +936,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <aside
           className={clsx(
             'app-sidebar-shell bg-surface-secondary/85 border-r border-border flex flex-col shrink-0 overflow-hidden',
-            usesMacOverlayTitleBar && 'pt-[var(--app-titlebar-height)]',
+            usesAppTitleBar && 'pt-[var(--app-titlebar-height)]',
             isSidebarAnimating && 'app-sidebar-shell--animating',
             sidebarVisualCollapsed ? 'app-sidebar-shell--collapsed' : 'app-sidebar-shell--expanded'
           )}
@@ -918,7 +982,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 <SettingsIcon className="w-[19px] h-[19px]" strokeWidth={1.75} />
                 <span className="text-xs font-medium">{t('nav.settings')}</span>
               </button>
-              {!usesMacOverlayTitleBar && (
+              {!usesAppTitleBar && (
                 <>
                   <button
                     type="button"
@@ -1062,7 +1126,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <div
           className={clsx(
             'flex-1',
-            usesMacOverlayTitleBar && 'pt-[var(--app-titlebar-height)]',
+            usesAppTitleBar && 'pt-[var(--app-titlebar-height)]',
             isFixedViewportView ? 'min-h-0 flex flex-col overflow-hidden' : 'overflow-auto'
           )}
         >

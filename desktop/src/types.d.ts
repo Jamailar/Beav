@@ -958,6 +958,9 @@ declare global {
     ipcRenderer: {
       windowControls: {
         startDragging: () => Promise<void>;
+        minimize: () => Promise<void>;
+        toggleMaximize: () => Promise<void>;
+        close: () => Promise<void>;
       };
       audio: {
         getCaptureCapability: () => Promise<{
