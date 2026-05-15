@@ -771,7 +771,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const [model, setModel] = useState('');
     const [aspectRatio, setAspectRatio] = useState('3:4');
     const [size, setSize] = useState('');
-    const [quality, setQuality] = useState('auto');
+    const [quality, setQuality] = useState('medium');
     const [generationMode, setGenerationMode] = useState<'text-to-image' | 'reference-guided' | 'image-to-image'>('text-to-image');
     const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([]);
     const [isReadingRefImages, setIsReadingRefImages] = useState(false);
@@ -1048,7 +1048,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality === 'low' ? 'auto' : next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' || next.image_quality === 'medium' || next.image_quality === 'high' ? next.image_quality : 'medium');
         } catch (settingsError) {
             console.error('Failed to load image settings:', settingsError);
         }
@@ -2347,7 +2347,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 providerTemplate: settings.image_provider_template || undefined,
                 aspectRatio: aspectRatio.trim() || undefined,
                 size: size.trim() || undefined,
-                quality: quality.trim() || undefined,
+                quality: quality.trim() || 'medium',
                 source: 'manuscripts',
                 manuscriptPath: editorFile || undefined,
             }) as { success?: boolean; error?: string; jobId?: string };

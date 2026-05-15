@@ -231,12 +231,15 @@ const IMAGE_ASPECT_RATIO_OPTIONS = [
 ] as const;
 
 const IMAGE_QUALITY_OPTIONS = [
-    { value: 'auto', label: '自动' },
-    { value: 'standard', label: 'standard' },
+    { value: 'low', label: 'low' },
     { value: 'medium', label: 'medium' },
     { value: 'high', label: 'high' },
-    { value: 'hd', label: 'hd' },
 ] as const;
+
+function normalizeImageQuality(value: unknown): string {
+    const quality = String(value || '').trim();
+    return quality === 'low' || quality === 'medium' || quality === 'high' ? quality : 'medium';
+}
 
 const IMAGE_RESOLUTION_OPTIONS = [
     { value: 'auto', label: '自动' },
@@ -685,7 +688,7 @@ function buildRequestSummary(request: GenerationRequest): string[] {
             request.model || '默认模型',
             request.aspectRatio || 'Auto',
             request.resolution || '自动',
-            request.quality || 'auto',
+            request.quality || 'medium',
         ];
     }
     if (request.type === 'audio') {
@@ -799,7 +802,7 @@ function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
             projectId: String(record.projectId || '').trim(),
             count: Math.max(1, Math.min(4, Number(record.count || 1) || 1)),
             model: String(record.model || '').trim(),
-            quality: String(record.quality || 'auto').trim() || 'auto',
+            quality: normalizeImageQuality(record.quality),
             templateImage: normalizeReferenceItem(record.templateImage),
             baseImage: normalizeReferenceItem(record.baseImage),
             promptSwitches: {
@@ -867,7 +870,7 @@ function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
         model: String(record.model || '').trim(),
         aspectRatio: String(record.aspectRatio || '4:3').trim() || '4:3',
         size: String(record.size || '').trim(),
-        quality: String(record.quality || 'auto').trim() || 'auto',
+        quality: normalizeImageQuality(record.quality),
         resolution: String(record.resolution || 'auto').trim() || 'auto',
         generationMode: imageMode,
         referenceItems: normalizeReferenceItems(record.referenceItems),
@@ -1259,7 +1262,7 @@ function requestFromJobProjection(job: MediaJobProjection): GenerationRequest | 
         model: model || '',
         aspectRatio: stringField(request, ['aspectRatio', 'aspect_ratio']) || '4:3',
         size: stringField(request, ['size']),
-        quality: stringField(request, ['quality']) || 'auto',
+        quality: normalizeImageQuality(stringField(request, ['quality'])),
         resolution: stringField(request, ['resolution']) || 'auto',
         generationMode: normalizedMode,
         referenceItems,
@@ -2562,7 +2565,7 @@ export function GenerationStudio({
     const [imageModel, setImageModel] = useState('');
     const [imageAspectRatio, setImageAspectRatio] = useState('4:3');
     const [imageSize, setImageSize] = useState('');
-    const [imageQuality, setImageQuality] = useState('auto');
+    const [imageQuality, setImageQuality] = useState('medium');
     const [imageResolution, setImageResolution] = useState('auto');
     const [imageMode, setImageMode] = useState<ImageGenerationMode>('text-to-image');
     const [imageReferences, setImageReferences] = useState<ReferenceItem[]>([]);
@@ -2605,7 +2608,7 @@ export function GenerationStudio({
     const [coverProjectId, setCoverProjectId] = useState('');
     const [coverCount, setCoverCount] = useState(1);
     const [coverModel, setCoverModel] = useState('');
-    const [coverQuality, setCoverQuality] = useState('auto');
+    const [coverQuality, setCoverQuality] = useState('medium');
     const [coverTemplateImage, setCoverTemplateImage] = useState<ReferenceItem | null>(null);
     const [coverBaseImage, setCoverBaseImage] = useState<ReferenceItem | null>(null);
     const [coverPromptSwitches, setCoverPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_COVER_PROMPT_SWITCHES);
@@ -2709,8 +2712,8 @@ export function GenerationStudio({
             setCoverModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || '') : prev));
             setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '4:3') : prev));
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
-            setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality === 'low' ? 'auto' : normalizedSettings.image_quality || 'auto') : prev));
-            setCoverQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality === 'low' ? 'auto' : normalizedSettings.image_quality || 'auto') : prev));
+            setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? normalizeImageQuality(normalizedSettings.image_quality) : prev));
+            setCoverQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? normalizeImageQuality(normalizedSettings.image_quality) : prev));
             setAudioModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.voice_tts_model || normalizedSettings.tts_model || 'speech-2.8-turbo') : prev));
         } catch (error) {
             console.error('Failed to load generation studio context:', error);
@@ -3035,10 +3038,10 @@ export function GenerationStudio({
                     model: request.model.trim() || undefined,
                     provider: settings.image_provider || undefined,
                     providerTemplate: settings.image_provider_template || undefined,
-                    aspectRatio: request.aspectRatio.trim() || undefined,
+                    aspectRatio: request.aspectRatio.trim() || '1:1',
                     size: request.size.trim() || undefined,
-                    quality: request.quality.trim() || undefined,
-                    resolution: request.resolution.trim() || undefined,
+                    quality: request.quality.trim() || 'medium',
+                    resolution: request.resolution.trim() || '2K',
                     source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
                 }) as { success?: boolean; error?: string; jobId?: string };
 
@@ -3229,7 +3232,7 @@ export function GenerationStudio({
                     model: request.model.trim() || undefined,
                     provider: settings.image_provider || undefined,
                     providerTemplate: settings.image_provider_template || undefined,
-                    quality: request.quality.trim() || undefined,
+                    quality: request.quality.trim() || 'medium',
                 }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
 
                 if (!result?.success) {
