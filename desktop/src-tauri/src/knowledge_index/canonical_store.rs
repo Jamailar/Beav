@@ -9,7 +9,7 @@ use tauri::State;
 
 use crate::{
     document_parse::{CanonicalDocument, PARSER_NAME, PARSER_VERSION},
-    knowledge_index::{catalog_db_path, migration, schema::ensure_catalog_ready},
+    knowledge_index::{migration, open_catalog_connection, schema::ensure_catalog_ready},
     now_i64, now_iso, AppState,
 };
 
@@ -60,7 +60,7 @@ pub(crate) struct VisualIndexUnitStatusSummary {
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
     ensure_catalog_ready(state)?;
-    Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())
+    open_catalog_connection(state)
 }
 
 pub(crate) fn visual_status_summary(

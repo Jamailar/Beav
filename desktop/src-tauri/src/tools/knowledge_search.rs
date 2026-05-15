@@ -1,5 +1,5 @@
 use glob::{MatchOptions, Pattern};
-use rusqlite::{params, Connection};
+use rusqlite::params;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -7,9 +7,9 @@ use std::time::UNIX_EPOCH;
 use tauri::State;
 
 use crate::knowledge_index::{
-    advisor_source_id, catalog_db_path, citation_anchors, document_blocks,
+    advisor_source_id, citation_anchors, document_blocks,
     hybrid::RetrievalMode,
-    index_status,
+    index_status, open_catalog_connection,
     query_profile::{self, QueryProfile},
     retrieval_audit,
 };
@@ -1358,7 +1358,7 @@ fn visual_evidence_for_block(
         return Ok(Vec::new());
     };
     let wanted_refs = parse_evidence_refs(evidence_refs_json);
-    let conn = Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())?;
+    let conn = open_catalog_connection(state)?;
     let mut stmt = conn
         .prepare(
             r#"

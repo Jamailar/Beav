@@ -17,7 +17,9 @@ pub mod tantivy_index;
 pub mod watcher;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
+use rusqlite::Connection;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -65,6 +67,13 @@ pub(crate) fn catalog_root(state: &State<'_, AppState>) -> Result<PathBuf, Strin
 
 pub(crate) fn catalog_db_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     Ok(catalog_root(state)?.join("knowledge_catalog.sqlite"))
+}
+
+pub(crate) fn open_catalog_connection(state: &State<'_, AppState>) -> Result<Connection, String> {
+    let conn = Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())?;
+    conn.busy_timeout(Duration::from_millis(5_000))
+        .map_err(|error| error.to_string())?;
+    Ok(conn)
 }
 
 pub(crate) fn initialize(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
