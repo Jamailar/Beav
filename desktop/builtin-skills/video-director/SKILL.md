@@ -371,6 +371,24 @@ If the script contains multiple shots, a named character, an important environme
 
 ## Prompt Discipline
 
+- Before writing the final `video.generate` prompt, reconstruct the current approved plan from the conversation context. Use the latest user-confirmed version, not an earlier draft.
+- The reconstruction must include:
+  - the user's original goal and attached/reference files,
+  - the selected slogan/copy,
+  - approved duration, aspect ratio, style, and platform/use case,
+  - the latest approved storyboard table,
+  - the generated storyboard preview image or keyframe asset path, if one exists,
+  - every user correction after the first script draft.
+- Do this silently as reasoning. Do not ask the user to repeat information that already exists in the conversation.
+- The final prompt must be written from that reconstructed plan. Do not write a fresh generic product-video prompt.
+- Before calling `video.generate`, run this self-check:
+  - Does the payload include the latest approved storyboard as `storyboardShots` or `storyboardMarkdown`?
+  - Does the prompt preserve the selected slogan/copy and the approved sound intent?
+  - Does `durationSeconds` match the final storyboard time range?
+  - Are the approved storyboard image/keyframe references included and labeled as strong references when available?
+  - Does each beat contain concrete camera angle, framing, movement, and action details?
+  - If any person appears, are posture, hand/arm movement, gaze, turn, prop interaction, and timing described?
+- If any self-check item fails, revise the prompt/payload before calling `video.generate`; do not proceed with an incomplete prompt.
 - If reference assets are attached, start the final generation prompt by identifying what each asset is for.
 - Use explicit labels such as:
   - `Image 1: approved storyboard contact-sheet reference, strong reference for shot order, composition, framing, and visual continuity`
