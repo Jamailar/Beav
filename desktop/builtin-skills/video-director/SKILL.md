@@ -257,6 +257,8 @@ Use the shot count to choose the grid:
 Rules:
 
 - One generated image may contain at most `9` storyboard panels.
+- A storyboard contact sheet is a single output image. Set `count: 1` and put every panel description inside `prompt`.
+- Do not use `imagePlanItems` for storyboard contact sheets; `imagePlanItems` means separate image outputs unless the tool contract explicitly says otherwise.
 - Do not add extra invented shots to fill empty panels.
 - Keep the panel order left-to-right, top-to-bottom, matching the script table.
 - The preview should show composition, subject placement, camera scale, product/prop position, action beat, lighting, and style continuity.
@@ -265,10 +267,12 @@ Rules:
 
 Reference handling is mandatory:
 
+- Before any `image.generate` or `video.generate` call that depends on prior context, inspect the Current session resources block. If the needed file is not obvious there, call `Operate(resource="session", operation="list", input={ "kind": "image", "limit": 20 })` or `Operate(action="session.resources.list", payload={...})` and use the returned `reference` / `path` value exactly.
 - If the user attached or selected product images, character images, brand images, scene references, or previous generated images, pass them to `image.generate` as `referenceImages`.
 - If the reference comes from the asset library, read the asset first and pass its resolved image path(s) through `referenceImages` or `subjectIds`.
 - If several references exist, include prompt preface lines that define each role, such as `Image 1: product shape and material reference`, `Image 2: character identity reference`, `Image 3: scene mood reference`.
 - Do not describe reference images only in prose while leaving them out of the tool input.
+- Do not invent local paths, filenames, or user folders. Use only user-provided paths, asset-library paths, or `session.resources.*` results.
 - If there are more reference images than the tool supports, prioritize product/character identity first, then scene, then style.
 
 Recommended contact-sheet `image.generate` payload shape:

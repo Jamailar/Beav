@@ -489,6 +489,8 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "web.fetch",
     "model_config.read",
     "model_config.effective",
+    "session.resources.list",
+    "session.resources.get",
     "memory.list",
     "memory.search",
     "memory.recall",

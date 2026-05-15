@@ -64,6 +64,11 @@
   1. `skills`、`prompts`、角色配置定义能力边界和决策原则。
   2. `structured metadata` / `typed payload` / `explicit runtime mode` 承载路由意图。
   3. `tool/runtime` 层负责输入校验、安全边界和执行约束。
+- 不要为了修某个 agent 任务，把自然语言任务语义硬编码进宿主层、runtime、tool 执行器或 schema 分支；这会增强系统脆弱性并降低 agent 处理其他任务的能力。
+- Agent 工作流优化只有两个方向：
+  1. 给 agent 优化更好用的底层基座，让它更方便地获取信息、使用信息、理解工具和调用工具。
+  2. 优化提示词、skills、activationHint、few-shot 示例和工具描述。
+- 中间任务细节必须交给 agent 根据上下文自行判断；宿主层只提供通用能力、结构化上下文、安全边界和可组合工具，不替 agent 做面向具体任务的业务决策。
 - 避免基于用户消息的硬编码关键词做意图路由；若必须约束，优先用 typed state、schema、tool contract、role spec、runtime mode。文本启发式只能是最后手段，且必须窄、显式、可移除。
 - 禁止把 LLM 行为、技能选择、角色选择写成业务关键词硬编码。模型是否使用某个技能，必须由模型基于 skills catalog、activationHint、tool contract 和当前上下文自行决定；宿主层只能提供可调用能力、显式用户/页面传入的 typed intent，或已声明的 runtime mode，不得因为“电商套图/文章卡片/轮播图”等自然语言短语直接写入 `activeSkills` 或强制切换角色。
 - 顶层工具面保持收敛：优先使用 `bash`、`redbox_fs`、`app_cli`、`redbox_editor`；新增能力优先扩 `action + payload`，不要按业务再拆新的顶层工具。
