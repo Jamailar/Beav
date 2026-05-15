@@ -369,6 +369,9 @@ If the user requests changes, revise the table first and wait again.
 If duration or aspect ratio is not yet specified, propose a concrete default and include it in the confirmation block so the user can approve or change it.
 If the script contains multiple shots, a named character, an important environment, or any continuity-sensitive sequence, also ask whether the user wants storyboard stills / keyframes first.
 
+After the user confirms the video plan, the next assistant turn must either call `video.generate` or ask one blocking question required to build a valid payload. Do not reply that generation has started, is queued, or is complete until a `video.generate` tool result exists.
+For chat/agent video creation, set `waitForCompletion: true` unless the user explicitly asks to run it in the background.
+
 ## Prompt Discipline
 
 - Before writing the final `video.generate` prompt, reconstruct the current approved plan from the conversation context. Use the latest user-confirmed version, not an earlier draft.
