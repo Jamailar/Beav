@@ -272,6 +272,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const spaceMenuRef = useRef<HTMLDivElement | null>(null);
   const sidebarAnimationTimerRef = useRef<number | null>(null);
   const sidebarResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const sidebarResizeFrameRef = useRef<number | null>(null);
+  const pendingSidebarWidthRef = useRef(sidebarWidth);
+  const sidebarWidthPersistTimerRef = useRef<number | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const globalSearchRequestRef = useRef(0);
   const globalSearchAnimationTimerRef = useRef<number | null>(null);
@@ -369,7 +372,13 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [isSidebarCollapsed]);
 
   useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+    if (sidebarWidthPersistTimerRef.current !== null) {
+      window.clearTimeout(sidebarWidthPersistTimerRef.current);
+    }
+    sidebarWidthPersistTimerRef.current = window.setTimeout(() => {
+      sidebarWidthPersistTimerRef.current = null;
+      window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+    }, 160);
   }, [sidebarWidth]);
 
   useEffect(() => {
@@ -436,6 +445,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   useEffect(() => () => {
     if (sidebarAnimationTimerRef.current !== null) {
       window.clearTimeout(sidebarAnimationTimerRef.current);
+    }
+    if (sidebarResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(sidebarResizeFrameRef.current);
+    }
+    if (sidebarWidthPersistTimerRef.current !== null) {
+      window.clearTimeout(sidebarWidthPersistTimerRef.current);
     }
     if (globalSearchAnimationTimerRef.current !== null) {
       window.clearTimeout(globalSearchAnimationTimerRef.current);
@@ -678,17 +693,34 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       startX: event.clientX,
       startWidth: sidebarWidth,
     };
+    pendingSidebarWidthRef.current = sidebarWidth;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const resizeState = sidebarResizeStateRef.current;
       if (!resizeState) return;
-      setSidebarWidth(clampSidebarWidth(resizeState.startWidth + moveEvent.clientX - resizeState.startX));
+      const nextWidth = clampSidebarWidth(resizeState.startWidth + moveEvent.clientX - resizeState.startX);
+      if (pendingSidebarWidthRef.current === nextWidth) return;
+      pendingSidebarWidthRef.current = nextWidth;
+      if (sidebarResizeFrameRef.current !== null) return;
+      sidebarResizeFrameRef.current = window.requestAnimationFrame(() => {
+        sidebarResizeFrameRef.current = null;
+        setSidebarWidth((current) => (
+          current === pendingSidebarWidthRef.current ? current : pendingSidebarWidthRef.current
+        ));
+      });
     };
 
     const stopResize = () => {
       sidebarResizeStateRef.current = null;
+      if (sidebarResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(sidebarResizeFrameRef.current);
+        sidebarResizeFrameRef.current = null;
+      }
+      setSidebarWidth((current) => (
+        current === pendingSidebarWidthRef.current ? current : pendingSidebarWidthRef.current
+      ));
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       window.removeEventListener('pointermove', handlePointerMove);

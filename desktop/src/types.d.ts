@@ -1125,6 +1125,12 @@ declare global {
           data?: Record<string, unknown> | null;
           error?: string;
         }>;
+        getPricing: () => Promise<{
+          success: boolean;
+          pricing?: Record<string, unknown> | null;
+          stale?: boolean;
+          error?: string;
+        }>;
       };
       llmReadiness: {
         getState: () => Promise<{

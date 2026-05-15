@@ -22,6 +22,7 @@ const APP_SLUG = APP_BRAND.variant;
 const DEFAULT_POLL_SECONDS = 300;
 const BACKOFF_SECONDS = [60, 120, 300, 600];
 const STORAGE_PREFIX = 'redbox:notifications:server:v1';
+const FOREGROUND_SYNC_THROTTLE_MS = 15_000;
 
 function text(value: unknown, fallback = ''): string {
   const normalized = String(value || '').trim();
@@ -161,6 +162,8 @@ export class NotificationClient {
   private cursor: string | null = null;
   private storageKey: string | null = null;
   private pollTimer: number | null = null;
+  private syncInFlight: Promise<void> | null = null;
+  private lastForegroundSyncAt = 0;
   private failureCount = 0;
   private stopped = true;
 
@@ -183,6 +186,30 @@ export class NotificationClient {
   }
 
   async sync(reason: SyncReason): Promise<void> {
+    const foregroundReason = reason === 'login' || reason === 'focus';
+    const now = Date.now();
+    if (this.syncInFlight) {
+      return this.syncInFlight;
+    }
+    if (foregroundReason && now - this.lastForegroundSyncAt < FOREGROUND_SYNC_THROTTLE_MS) {
+      this.startForegroundPolling();
+      return;
+    }
+    if (foregroundReason) {
+      this.lastForegroundSyncAt = now;
+    }
+
+    const request = this.performSync(reason);
+    const tracked = request.finally(() => {
+      if (this.syncInFlight === tracked) {
+        this.syncInFlight = null;
+      }
+    });
+    this.syncInFlight = tracked;
+    return tracked;
+  }
+
+  private async performSync(reason: SyncReason): Promise<void> {
     const store = useNotificationStore.getState();
     if (reason !== 'poll') {
       store.setRemoteSyncing(true);

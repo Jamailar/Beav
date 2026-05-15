@@ -757,8 +757,22 @@ export function RedClaw({
 
     useEffect(() => {
         return subscribeRuntimeEventStream({
+            eventTypes: [
+                'runtime:stream-start',
+                'runtime:tool-start',
+                'runtime:task-node-changed',
+                'runtime:cli-install-started',
+                'runtime:cli-execution-started',
+                'runtime:cli-escalation-requested',
+                'runtime:done',
+                'runtime:checkpoint',
+            ],
+            checkpointTypes: [
+                'chat.response_end',
+                'chat.cancelled',
+                'chat.error',
+            ],
             onPhaseStart: ({ sessionId }) => markSessionRunning(sessionId),
-            onResponseDelta: ({ sessionId }) => markSessionRunning(sessionId),
             onToolRequest: ({ sessionId }) => markSessionRunning(sessionId),
             onTaskNodeChanged: ({ sessionId, status }) => {
                 if (status === 'running' || status === 'pending') {

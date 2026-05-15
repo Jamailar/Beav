@@ -37,6 +37,9 @@ const IMAGE_FIELDS = [
 const IMAGE_ARRAY_FIELDS = [
   'referenceImages',
   'reference_images',
+  'images',
+  'imageUrls',
+  'image_urls',
 ];
 
 function dataUrlMeta(dataUrl: string): { mimeType: string; payload: string } | null {

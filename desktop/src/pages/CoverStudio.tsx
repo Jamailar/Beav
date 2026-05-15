@@ -416,9 +416,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
     const hasImageConfig = Boolean(resolvedEndpoint) && Boolean(resolvedApiKey);
     const normalizedTitles = useMemo(() => normalizeTitleEntries(titleEntries), [titleEntries]);
     const normalizedTitlePrompt = useMemo(() => titlePrompt.trim(), [titlePrompt]);
-    const hasRequiredInputs = Boolean(templateImage?.dataUrl)
-        && Boolean(baseImage?.dataUrl)
-        && (
+    const hasRequiredInputs = (
             titleInputMode === 'prompt'
                 ? Boolean(normalizedTitlePrompt)
                 : normalizedTitles.length > 0
@@ -707,14 +705,6 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
     }, []);
 
     const handleGenerate = useCallback(() => {
-        if (!templateImage?.dataUrl) {
-            setGenerateError('请先上传模板图');
-            return;
-        }
-        if (!baseImage?.dataUrl) {
-            setGenerateError('请先上传底图');
-            return;
-        }
         if (titleInputMode === 'prompt' && !normalizedTitlePrompt) {
             setGenerateError('请先填写提示词');
             return;
@@ -953,7 +943,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div className="border border-border rounded-lg p-3 space-y-2 bg-surface-secondary/10">
-                                    <div className="text-xs font-medium text-text-primary">图1 模板图（必填）</div>
+                                    <div className="text-xs font-medium text-text-primary">模板图</div>
                                     <label
                                         className={clsx(
                                             'group relative block rounded border overflow-hidden aspect-[3/4] transition-colors',
@@ -981,7 +971,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
                                 </div>
 
                                 <div className="border border-border rounded-lg p-3 space-y-2 bg-surface-secondary/10">
-                                    <div className="text-xs font-medium text-text-primary">图2 底图（必填）</div>
+                                    <div className="text-xs font-medium text-text-primary">底图</div>
                                     <label
                                         className={clsx(
                                             'group relative block rounded border overflow-hidden aspect-[3/4] transition-colors',

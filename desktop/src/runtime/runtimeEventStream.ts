@@ -1,6 +1,7 @@
 import type { RuntimeUnifiedEvent } from '../types';
 
 type UnknownRecord = Record<string, unknown>;
+type RuntimeEventType = RuntimeUnifiedEvent['eventType'];
 
 type RuntimeEnvelopeMeta = {
   runtimeId?: string;
@@ -33,6 +34,8 @@ export interface ToolConfirmRequestPayload {
 }
 
 export interface RuntimeEventStreamHandlers {
+  eventTypes?: readonly RuntimeEventType[];
+  checkpointTypes?: readonly string[];
   getActiveSessionId?: () => string | null | undefined;
   onPhaseStart?: (payload: RuntimeScopedPayload & { phase: string; runtimeMode: string }) => void;
   onThoughtStart?: (payload: RuntimeScopedPayload) => void;
@@ -295,10 +298,7 @@ function normalizeRuntimeEventType(value: unknown): RuntimeUnifiedEvent['eventTy
   }
 }
 
-function parseRuntimeEnvelope(envelope: unknown): RuntimeUnifiedEvent | null {
-  const record = toRecord(envelope);
-  const eventType = normalizeRuntimeEventType(record.eventType);
-  if (!eventType) return null;
+function parseRuntimeEnvelopeRecord(record: UnknownRecord, eventType: RuntimeEventType): RuntimeUnifiedEvent {
   return {
     eventType,
     sessionId: toText(record.sessionId) || null,
@@ -308,6 +308,13 @@ function parseRuntimeEnvelope(envelope: unknown): RuntimeUnifiedEvent | null {
     payload: toRecord(record.payload),
     timestamp: Number(record.timestamp || Date.now()),
   };
+}
+
+function parseRuntimeEnvelope(envelope: unknown): RuntimeUnifiedEvent | null {
+  const record = toRecord(envelope);
+  const eventType = normalizeRuntimeEventType(record.eventType);
+  if (!eventType) return null;
+  return parseRuntimeEnvelopeRecord(record, eventType);
 }
 
 function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope: RuntimeUnifiedEvent): void {
@@ -676,11 +683,22 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
 }
 
 export function subscribeRuntimeEventStream(handlers: RuntimeEventStreamHandlers): () => void {
+  const eventTypeFilter = handlers.eventTypes ? new Set<RuntimeEventType>(handlers.eventTypes) : null;
+  const checkpointTypeFilter = handlers.checkpointTypes ? new Set<string>(handlers.checkpointTypes) : null;
+
   const listener = (_event: unknown, envelope?: unknown) => {
-    const parsed = parseRuntimeEnvelope(envelope);
-    if (!parsed) return;
-    const sessionId = toText(parsed.sessionId);
+    const record = toRecord(envelope);
+    const eventType = normalizeRuntimeEventType(record.eventType);
+    if (!eventType) return;
+    if (eventTypeFilter && !eventTypeFilter.has(eventType)) return;
+    if (checkpointTypeFilter && eventType === 'runtime:checkpoint') {
+      const checkpointType = toText(toRecord(record.payload).checkpointType);
+      if (!checkpointTypeFilter.has(checkpointType)) return;
+    }
+
+    const sessionId = toText(record.sessionId);
     if (shouldSkipBySession(handlers, sessionId)) return;
+    const parsed = parseRuntimeEnvelopeRecord(record, eventType);
     dispatchRuntimeEnvelope(handlers, parsed);
   };
   window.ipcRenderer.on('runtime:event', listener as (...args: unknown[]) => void);

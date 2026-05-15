@@ -788,6 +788,12 @@ pub(crate) fn official_settings_models(settings: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+pub(crate) fn official_settings_pricing(settings: &Value) -> Option<Value> {
+    payload_string(settings, "redbox_official_pricing_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter(|value| value.is_object())
+}
+
 pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
     fn gateway_route_suffixes() -> Vec<String> {
         let mut suffixes = vec![

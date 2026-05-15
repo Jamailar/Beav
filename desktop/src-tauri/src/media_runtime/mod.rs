@@ -2126,6 +2126,7 @@ fn create_video_artifact_metadata(
     relative_path: &str,
     absolute_path: &str,
     preview_url: &str,
+    thumbnail_url: Option<&str>,
 ) -> Value {
     let request = loaded.job.request_json.clone();
     json!({
@@ -2146,6 +2147,7 @@ fn create_video_artifact_metadata(
         "relativePath": relative_path,
         "absolutePath": absolute_path,
         "previewUrl": preview_url,
+        "thumbnailUrl": thumbnail_url,
         "exists": true,
         "updatedAt": now_iso(),
     })
@@ -3119,8 +3121,13 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
         write_video_bytes_to_generated_path(&state, &bytes)?;
     let thumbnail_url =
         ensure_video_thumbnail_for_path(Some(app), &state, PathBuf::from(&absolute_path).as_path());
-    let metadata =
-        create_video_artifact_metadata(&loaded, &relative_path, &absolute_path, &preview_url);
+    let metadata = create_video_artifact_metadata(
+        &loaded,
+        &relative_path,
+        &absolute_path,
+        &preview_url,
+        thumbnail_url.as_deref(),
+    );
     insert_artifact_with_connection(
         &conn,
         job_id,

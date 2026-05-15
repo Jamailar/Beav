@@ -206,7 +206,10 @@ export interface GenerationIntent {
   };
 }
 
-const CLIPBOARD_POLL_INTERVAL_MS = 3200;
+const CLIPBOARD_POLL_FOCUS_DELAY_MS = 1500;
+const CLIPBOARD_POLL_MIN_INTERVAL_MS = 12_000;
+const CLIPBOARD_POLL_IDLE_INTERVAL_MS = 45_000;
+const CLIPBOARD_POLL_MAX_INTERVAL_MS = 120_000;
 
 interface YouTubeClipboardCandidate {
   videoId: string;
@@ -293,6 +296,12 @@ function extractYouTubeCandidateFromClipboard(text: string): YouTubeClipboardCan
   }
 
   return null;
+}
+
+function isEditableElement(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select';
 }
 
 function ViewLoadingFallback() {
@@ -731,44 +740,107 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
 
   useEffect(() => {
     (window as unknown as { __redboxGlobalClipboardWatcher?: boolean }).__redboxGlobalClipboardWatcher = true;
-    let intervalId: number | null = null;
+    let disposed = false;
+    let pollTimerId: number | null = null;
+    let nextPollDelayMs = CLIPBOARD_POLL_MIN_INTERVAL_MS;
+
+    const clearPollTimer = () => {
+      if (pollTimerId !== null) {
+        window.clearTimeout(pollTimerId);
+        pollTimerId = null;
+      }
+    };
+
+    const shouldReadClipboard = () => (
+      !disposed
+      && !clipboardPollingRef.current
+      && !capturePromptOpenRef.current
+      && captureStatusRef.current !== 'saving'
+      && document.visibilityState === 'visible'
+      && document.hasFocus()
+      && !isEditableElement(document.activeElement)
+    );
+
+    const applyClipboardText = (text: string): boolean => {
+      const normalizedText = String(text || '').trim();
+      if (!normalizedText || normalizedText === lastClipboardTextRef.current) {
+        return false;
+      }
+
+      lastClipboardTextRef.current = normalizedText;
+      const candidate = extractYouTubeCandidateFromClipboard(normalizedText);
+      if (!candidate) return false;
+      if (capturedYouTubeSetRef.current.has(candidate.videoId)) return false;
+
+      setClipboardCandidate(candidate);
+      setCaptureStatus('idle');
+      setCaptureMessage('检测到剪贴板里的 YouTube 链接，是否开始后台采集？');
+      setIsCapturePromptOpen(true);
+      return true;
+    };
+
+    const schedulePoll = (delayMs = nextPollDelayMs) => {
+      if (disposed) return;
+      clearPollTimer();
+      pollTimerId = window.setTimeout(() => {
+        pollTimerId = null;
+        void runPoll();
+      }, Math.max(0, delayMs));
+    };
+
+    const runPoll = async () => {
+      if (!shouldReadClipboard()) {
+        schedulePoll(CLIPBOARD_POLL_IDLE_INTERVAL_MS);
+        return;
+      }
+
+      clipboardPollingRef.current = true;
+      try {
+        const text = await window.ipcRenderer.invoke('clipboard:read-text') as string;
+        const foundCandidate = applyClipboardText(text);
+        nextPollDelayMs = foundCandidate
+          ? CLIPBOARD_POLL_IDLE_INTERVAL_MS
+          : Math.min(Math.max(nextPollDelayMs * 2, CLIPBOARD_POLL_MIN_INTERVAL_MS), CLIPBOARD_POLL_MAX_INTERVAL_MS);
+      } finally {
+        clipboardPollingRef.current = false;
+        schedulePoll(nextPollDelayMs);
+      }
+    };
+
     const bootTimerId = window.setTimeout(() => {
-      intervalId = window.setInterval(() => {
-        void (async () => {
-          if (clipboardPollingRef.current) return;
-          if (capturePromptOpenRef.current || captureStatusRef.current === 'saving') return;
-          if (document.visibilityState !== 'visible') return;
-          if (!document.hasFocus()) return;
-
-          clipboardPollingRef.current = true;
-          try {
-            const text = await window.ipcRenderer.invoke('clipboard:read-text') as string;
-            const normalizedText = String(text || '').trim();
-            if (!normalizedText || normalizedText === lastClipboardTextRef.current) {
-              return;
-            }
-
-            lastClipboardTextRef.current = normalizedText;
-            const candidate = extractYouTubeCandidateFromClipboard(normalizedText);
-            if (!candidate) return;
-            if (capturedYouTubeSetRef.current.has(candidate.videoId)) return;
-
-            setClipboardCandidate(candidate);
-            setCaptureStatus('idle');
-            setCaptureMessage('检测到剪贴板里的 YouTube 链接，是否开始后台采集？');
-            setIsCapturePromptOpen(true);
-          } finally {
-            clipboardPollingRef.current = false;
-          }
-        })();
-      }, CLIPBOARD_POLL_INTERVAL_MS);
+      schedulePoll(CLIPBOARD_POLL_FOCUS_DELAY_MS);
     }, CLIPBOARD_POLL_BOOT_DELAY_MS);
 
-    return () => {
-      window.clearTimeout(bootTimerId);
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
+    const handleFocus = () => {
+      nextPollDelayMs = CLIPBOARD_POLL_MIN_INTERVAL_MS;
+      schedulePoll(CLIPBOARD_POLL_FOCUS_DELAY_MS);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleFocus();
+      } else {
+        clearPollTimer();
       }
+    };
+    const handlePaste = (event: ClipboardEvent) => {
+      if (capturePromptOpenRef.current || captureStatusRef.current === 'saving') return;
+      if (applyClipboardText(event.clipboardData?.getData('text') || '')) {
+        nextPollDelayMs = CLIPBOARD_POLL_IDLE_INTERVAL_MS;
+        schedulePoll(nextPollDelayMs);
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('paste', handlePaste);
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(bootTimerId);
+      clearPollTimer();
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('paste', handlePaste);
     };
   }, []);
 

@@ -15,6 +15,7 @@ import {
     Check,
     ChevronDown,
     Clapperboard,
+    FolderOpen,
     Grid2X2,
     ImagePlus,
     List,
@@ -37,6 +38,7 @@ import {
 } from 'lucide-react';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { SelectMenu } from '../components/ui/SelectMenu';
+import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
 
 interface SubjectCategory {
     id: string;
@@ -128,6 +130,13 @@ interface MediaAsset {
     thumbnailUrl?: string;
     thumbnail_url?: string;
     exists?: boolean;
+}
+
+interface MediaAssetContextMenuState {
+    visible: boolean;
+    x: number;
+    y: number;
+    asset: MediaAsset | null;
 }
 
 const UNCATEGORIZED_FILTER = '__uncategorized__';
@@ -474,6 +483,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [retryingVoiceSubjectId, setRetryingVoiceSubjectId] = useState<string | null>(null);
     const [generatingCardSubjectId, setGeneratingCardSubjectId] = useState<string | null>(null);
     const [previewImage, setPreviewImage] = useState<SubjectImageDraft | null>(null);
+    const [mediaContextMenu, setMediaContextMenu] = useState<MediaAssetContextMenuState>({
+        visible: false,
+        x: 0,
+        y: 0,
+        asset: null,
+    });
     const voiceJobsById = useMediaJobsStore((state) => state.jobsById);
 
     const clearAssetModalAnimationHandles = useCallback(() => {
@@ -524,6 +539,19 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             uiDebug('subjects', 'view_unmount');
         };
     }, []);
+
+    useEffect(() => {
+        if (!mediaContextMenu.visible) return;
+        const close = () => setMediaContextMenu((current) => ({ ...current, visible: false, asset: null }));
+        window.addEventListener('click', close);
+        window.addEventListener('scroll', close, true);
+        window.addEventListener('resize', close);
+        return () => {
+            window.removeEventListener('click', close);
+            window.removeEventListener('scroll', close, true);
+            window.removeEventListener('resize', close);
+        };
+    }, [mediaContextMenu.visible]);
 
     const loadData = useCallback(async () => {
         const requestId = loadDataRequestRef.current + 1;
@@ -1248,6 +1276,51 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }
     }, [closeModal, draft.id, draft.name, loadData]);
 
+    const openMediaContextMenu = useCallback((event: React.MouseEvent, asset: MediaAsset) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setMediaContextMenu({
+            visible: true,
+            x: event.clientX,
+            y: event.clientY,
+            asset,
+        });
+    }, []);
+
+    const handleShowMediaInFolder = useCallback(async (asset: MediaAsset) => {
+        const source = asset.absolutePath || asset.relativePath || asset.previewUrl || '';
+        if (!source) {
+            void appAlert('媒体没有可打开的文件路径');
+            return;
+        }
+        try {
+            const result = await window.ipcRenderer.files.showInFolder({ source }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                void appAlert(result?.error || '打开文件夹失败');
+            }
+        } catch (e) {
+            console.error('Failed to show media in folder:', e);
+            void appAlert('打开文件夹失败');
+        }
+    }, []);
+
+    const handleDeleteMediaAsset = useCallback(async (asset: MediaAsset) => {
+        const label = asset.title || asset.id;
+        if (!(await appConfirm(`删除媒体“${label}”？`, { title: '删除媒体', confirmLabel: '删除', tone: 'danger' }))) return;
+        try {
+            const result = await window.ipcRenderer.invoke('media:delete', { assetId: asset.id }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                void appAlert(result?.error || '删除失败');
+                return;
+            }
+            setMediaAssets((current) => current.filter((item) => item.id !== asset.id));
+            await loadData();
+        } catch (e) {
+            console.error('Failed to delete media asset:', e);
+            void appAlert('删除失败');
+        }
+    }, [loadData]);
+
     const categoryTabs = useMemo<SubjectCategoryTab[]>(() => {
         const customCategories = categories.filter((category) => !DEFAULT_SUBJECT_CATEGORY_NAMES.includes(category.name.trim()));
         return [
@@ -1507,6 +1580,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         role="button"
                                         tabIndex={0}
                                         onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                        onContextMenu={(event) => openMediaContextMenu(event, asset)}
                                         onKeyDown={(event) => {
                                             if (event.key !== 'Enter' && event.key !== ' ') return;
                                             event.preventDefault();
@@ -1554,6 +1628,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         key={asset.id}
                                         type="button"
                                         onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                        onContextMenu={(event) => openMediaContextMenu(event, asset)}
                                         className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
                                     >
                                         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
@@ -1697,6 +1772,43 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     </div>
                 )}
             </div>
+
+            {mediaContextMenu.visible && mediaContextMenu.asset && (
+                <LiquidGlassMenuPanel
+                    className="fixed z-[150] min-w-[148px]"
+                    style={{ left: mediaContextMenu.x, top: mediaContextMenu.y }}
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const asset = mediaContextMenu.asset;
+                            setMediaContextMenu({ visible: false, x: 0, y: 0, asset: null });
+                            if (asset) {
+                                void handleShowMediaInFolder(asset);
+                            }
+                        }}
+                        className={getLiquidGlassMenuItemClassName()}
+                    >
+                        <FolderOpen className="h-4 w-4" />
+                        文件夹中打开
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const asset = mediaContextMenu.asset;
+                            setMediaContextMenu({ visible: false, x: 0, y: 0, asset: null });
+                            if (asset) {
+                                void handleDeleteMediaAsset(asset);
+                            }
+                        }}
+                        className={getLiquidGlassMenuItemClassName({ destructive: true })}
+                    >
+                        <Trash2 className="h-4 w-4" />
+                        删除
+                    </button>
+                </LiquidGlassMenuPanel>
+            )}
 
             {isAssetModalVisible && (
                 <div

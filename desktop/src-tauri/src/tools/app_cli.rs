@@ -3547,6 +3547,9 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             .take(4)
             .collect::<Vec<_>>();
         let mut reference_images = value_string_list(merged.get("referenceImages"), 4);
+        if reference_images.is_empty() {
+            reference_images = value_string_list(merged.get("images"), 4);
+        }
         reference_images.extend(subject_reference_images);
         reference_images = self.resolve_reference_image_inputs(reference_images);
         dedupe_string_list(&mut reference_images, 4);
@@ -4939,7 +4942,7 @@ fn build_generation_payload(args: &CliArgs, payload: &Value) -> Value {
     copy_optional_string(
         &mut merged,
         "resolution",
-        args.string(&["resolution", "size"]),
+        args.string(&["resolution", "image-resolution", "imageResolution", "size"]),
     );
     copy_optional_string(
         &mut merged,
@@ -4969,9 +4972,14 @@ fn build_generation_payload(args: &CliArgs, payload: &Value) -> Value {
         merged.insert("subjectIds".to_string(), subject_ids);
     }
     if let Some(reference_images) =
-        comma_list_value(args.value(&["reference-images", "referenceImages"]))
+        comma_list_value(args.value(&["reference-images", "referenceImages", "images"]))
     {
         merged.insert("referenceImages".to_string(), reference_images);
+    }
+    if !merged.contains_key("referenceImages") {
+        if let Some(images) = payload_field(payload, "images").cloned() {
+            merged.insert("referenceImages".to_string(), images);
+        }
     }
     if !merged.contains_key("generationMode") {
         if let Some(mode) = payload_string(payload, "mode").filter(|item| !item.trim().is_empty()) {
@@ -5874,6 +5882,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "voice delete --voice-id <voiceId>",
         ],
         "image" => vec![
+            "image generate --prompt \"...\" [--aspect-ratio 1:1] [--quality high] [--resolution 2K]",
             "image generate --prompt \"...\" [--mode reference-guided] [--reference-images /abs/a.png,/abs/b.png]",
             "image generate --prompt \"...\" [--subject-ids subject_a,subject_b]",
             "image history list",
@@ -6291,6 +6300,29 @@ mod tests {
         assert_eq!(
             payload_string(&merged, "aspectRatio"),
             Some("3:4".to_string())
+        );
+    }
+
+    #[test]
+    fn build_generation_payload_accepts_images_alias_for_image_refs() {
+        let merged = build_generation_payload(
+            &CliArgs::default(),
+            &json!({
+                "prompt": "融合参考图风格",
+                "images": ["https://example.com/ref-1.png", "https://example.com/ref-2.png"],
+                "resolution": "2K"
+            }),
+        );
+
+        assert_eq!(
+            payload_field(&merged, "referenceImages")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            payload_string(&merged, "resolution"),
+            Some("2K".to_string())
         );
     }
 

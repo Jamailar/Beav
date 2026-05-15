@@ -1,7 +1,7 @@
 ---
 name: tts-director
 description: Use when generating expressive TTS, long-form narration, poetry reading, audiobooks, ads, character speech, podcast-style voiceover, or any speech request that needs emotion, tone, speed, pitch, rhythm, pauses, or multi-segment delivery. Convert the final script into a single voice.speech payload with intentional MiniMax controls and ordered segments; do not call TTS repeatedly or hand-merge audio.
-allowedRuntimeModes: [chatroom, redclaw]
+allowedRuntimeModes: [chatroom, redclaw, image-generation, audio-editor]
 allowedTools: [workflow]
 activationScope: turn
 autoActivate: false

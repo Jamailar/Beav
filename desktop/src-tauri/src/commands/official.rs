@@ -12,8 +12,8 @@ use crate::{
     official_base_url_from_settings, official_fallback_products, official_points_snapshot,
     official_realm_from_settings, official_realms_payload, official_response_items,
     official_settings_api_keys, official_settings_call_records_list, official_settings_models,
-    official_settings_orders, official_settings_points, official_settings_session,
-    official_settings_wechat_login, official_sync_source_into_settings,
+    official_settings_orders, official_settings_points, official_settings_pricing,
+    official_settings_session, official_settings_wechat_login, official_sync_source_into_settings,
     official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
     run_official_public_json_request, run_official_public_json_request_response,
     upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
@@ -23,7 +23,7 @@ use crate::{
 const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
 const OFFICIAL_SESSION_MAX_REFRESH_WINDOW_MS: i64 = 5 * 60_000;
 const OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS: i64 = 60_000;
-const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 23] = [
+const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 24] = [
     "redbox_official_realm",
     "redbox_official_base_url",
     "redbox_auth_session_json",
@@ -33,6 +33,7 @@ const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 23] = [
     "redbox_auth_points_json",
     "redbox_official_models_json",
     "redbox_auth_call_records_json",
+    "redbox_official_pricing_json",
     "redbox_auth_wechat_login_json",
     "ai_sources_json",
     "default_ai_source_id",
@@ -1594,6 +1595,36 @@ fn fetch_remote_official_call_records(
     Ok(items)
 }
 
+fn normalize_official_pricing_value(value: &Value) -> Option<Value> {
+    let payload = official_unwrap_response_payload(value);
+    let groups = payload.get("groups")?.as_array()?;
+    if groups.is_empty() {
+        return None;
+    }
+    Some(payload)
+}
+
+pub(crate) fn refresh_official_pricing_cache(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<Value, String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let mut settings = settings_snapshot.clone();
+    let response = run_official_public_json_request(&settings, "GET", "/models/pricing", None)?;
+    let pricing = normalize_official_pricing_value(&response)
+        .ok_or_else(|| "官方价格表接口返回了无法识别的数据结构".to_string())?;
+    write_settings_json_value(&mut settings, "redbox_official_pricing_json", &pricing);
+    apply_official_settings_update(
+        app,
+        state,
+        &settings,
+        "official-pricing-startup-refresh",
+        Some(json!({ "pricing": pricing.clone() })),
+        None,
+    )?;
+    Ok(pricing)
+}
+
 fn update_official_session_user(settings: &mut Value, user: &Value) {
     let next_session = official_settings_session(settings).map(|mut session| {
         if let Some(object) = session.as_object_mut() {
@@ -1850,6 +1881,7 @@ pub fn handle_official_channel(
         | "redbox-auth:me"
         | "redbox-auth:points"
         | "redbox-auth:models"
+        | "redbox-auth:pricing"
         | "redbox-auth:api-keys:list"
         | "redbox-auth:api-keys:create"
         | "redbox-auth:api-keys:set-current"
@@ -2296,6 +2328,14 @@ pub fn handle_official_channel(
                     Ok(json!({
                         "success": true,
                         "models": official_settings_models(&store.settings),
+                    }))
+                }),
+                "redbox-auth:pricing" => with_store(state, |store| {
+                    let pricing = official_settings_pricing(&store.settings);
+                    Ok(json!({
+                        "success": pricing.is_some(),
+                        "pricing": pricing,
+                        "stale": true,
                     }))
                 }),
                 "redbox-auth:api-keys:list" => with_store(state, |store| {
