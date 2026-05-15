@@ -3540,6 +3540,9 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
 
     fn handle_image_generate(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
         let mut merged = build_generation_payload(args, payload);
+        if self.session_id.is_some() {
+            apply_agent_image_generation_defaults(&mut merged);
+        }
         let subject_matches = self.collect_subject_matches(args, payload, 4)?;
         let subject_reference_images = subject_matches
             .iter()
@@ -5233,6 +5236,32 @@ fn image_generation_delivery_mode(
     ImageGenerationDeliveryMode::AsyncSubmit
 }
 
+fn apply_agent_image_generation_defaults(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if object
+        .get("quality")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        object.insert("quality".to_string(), json!("low"));
+    }
+    if object
+        .get("resolution")
+        .or_else(|| object.get("imageResolution"))
+        .or_else(|| object.get("image_resolution"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        object.insert("resolution".to_string(), json!("1K"));
+    }
+}
+
 fn video_generation_should_wait(session_id: Option<&str>, payload: &Value) -> bool {
     if let Some(explicit_wait) = payload_bool(payload, &["waitForCompletion"]) {
         return explicit_wait;
@@ -6452,6 +6481,43 @@ mod tests {
         assert_eq!(
             image_generation_delivery_mode(None, &json!({ "waitForCompletion": true }), 1),
             ImageGenerationDeliveryMode::InlineWait
+        );
+    }
+
+    #[test]
+    fn agent_image_generation_defaults_to_low_and_1k_when_blank() {
+        let mut payload = json!({
+            "prompt": "生成故事板",
+            "quality": "",
+            "resolution": ""
+        });
+
+        apply_agent_image_generation_defaults(&mut payload);
+
+        assert_eq!(payload_string(&payload, "quality"), Some("low".to_string()));
+        assert_eq!(
+            payload_string(&payload, "resolution"),
+            Some("1K".to_string())
+        );
+    }
+
+    #[test]
+    fn agent_image_generation_defaults_do_not_override_explicit_values() {
+        let mut payload = json!({
+            "prompt": "生成主视觉",
+            "quality": "high",
+            "resolution": "2K"
+        });
+
+        apply_agent_image_generation_defaults(&mut payload);
+
+        assert_eq!(
+            payload_string(&payload, "quality"),
+            Some("high".to_string())
+        );
+        assert_eq!(
+            payload_string(&payload, "resolution"),
+            Some("2K".to_string())
         );
     }
 
