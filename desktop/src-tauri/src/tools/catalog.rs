@@ -195,6 +195,56 @@ fn no_payload_schema() -> Value {
     object_schema(&[], &[], None)
 }
 
+fn session_resources_list_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "sessionId",
+                string_schema("Optional session id. Defaults to the current chat session."),
+            ),
+            (
+                "kind",
+                string_schema("Optional resource kind filter, such as image, video, audio, or file."),
+            ),
+            (
+                "query",
+                string_schema("Optional text filter over resource id, name, source, path, and metadata."),
+            ),
+            (
+                "limit",
+                integer_schema("Maximum resources to return.", 1, 100),
+            ),
+            (
+                "includeChildSessions",
+                bool_schema("Whether to include resources produced by child/team sessions."),
+            ),
+        ],
+        &[],
+        Some("List attachments and tool-result files visible in the current session. Use returned reference/path values verbatim in later tool inputs; do not invent local paths."),
+    )
+}
+
+fn session_resources_get_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "id",
+                string_schema("Resource id returned by session.resources.list."),
+            ),
+            (
+                "reference",
+                string_schema("Exact resource reference/path returned by session.resources.list."),
+            ),
+            (
+                "includeChildSessions",
+                bool_schema("Whether to include resources produced by child/team sessions."),
+            ),
+        ],
+        &[],
+        Some("Get one current-session resource by id or exact reference."),
+    )
+}
+
 fn model_config_effective_input_schema() -> Value {
     object_schema(
         &[(
@@ -2811,6 +2861,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "video",
             "voice",
             "media",
+            "session",
             "web",
             "task",
             "editor",
@@ -2884,6 +2935,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "video" => Some("video"),
         "voice" => Some("voice"),
         "media" => Some("media"),
+        "session" => Some("session"),
         "web" => Some("web"),
         "skills" => Some("skill"),
         "mcp" => Some("mcp"),
@@ -3068,6 +3120,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "model_config",
         description: "Resolve the redacted effective AI model config for a runtime mode or route, including provider, protocol, endpoint, model name, and whether credentials exist.",
         input_schema: model_config_effective_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "session.resources.list",
+        namespace: "session.resources",
+        description: "List files and media resources visible in the current session, including user attachments and prior tool-generated assets. Use this when a later tool call needs an exact reference path from the current conversation.",
+        input_schema: session_resources_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "session.resources.get",
+        namespace: "session.resources",
+        description: "Get one current-session file or media resource by id or exact reference path.",
+        input_schema: session_resources_get_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,

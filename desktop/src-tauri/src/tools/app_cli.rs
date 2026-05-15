@@ -706,6 +706,8 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["effective".to_string()];
                 self.handle_model_config(&tokens, payload)
             }
+            "sessionresourceslist" => self.handle_session_resources_list(payload),
+            "sessionresourcesget" => self.handle_session_resources_get(payload),
             "videoanalyze" => self.handle_video_analyze(payload),
             "memorysearch" => {
                 let tokens = vec!["search".to_string()];
@@ -1179,10 +1181,79 @@ impl<'a> AppCliExecutor<'a> {
             "model-config" | "model_config" => self.handle_model_config(args, payload),
             "settings" => self.handle_settings(args, payload),
             "skills" => self.handle_skills(args, payload),
+            "session-resources" | "session_resources" => {
+                self.handle_session_resources(args, payload)
+            }
             "mcp" => self.handle_mcp(args, payload),
             "ai" => self.handle_ai(args, payload),
             other => Err(format!("unsupported app_cli command namespace: {other}")),
         }
+    }
+
+    fn handle_session_resources(
+        &self,
+        tokens: &[String],
+        payload: &Value,
+    ) -> Result<Value, String> {
+        match tokens.first().map(String::as_str).unwrap_or("list") {
+            "list" | "search" => self.handle_session_resources_list(payload),
+            "get" => self.handle_session_resources_get(payload),
+            other => Err(format!("unsupported session-resources action: {other}")),
+        }
+    }
+
+    fn handle_session_resources_list(&self, payload: &Value) -> Result<Value, String> {
+        let payload_session_id = payload_string(payload, "sessionId");
+        let Some(session_id) = self.session_id.or(payload_session_id.as_deref()) else {
+            return Err("session.resources.list requires an active session".to_string());
+        };
+        let include_child_sessions =
+            payload_bool(payload, &["includeChildSessions"]).unwrap_or(true);
+        let limit = payload_field(payload, "limit")
+            .and_then(Value::as_u64)
+            .map(|value| value.clamp(1, 100) as usize)
+            .or(Some(20));
+        let kind = payload_string(payload, "kind");
+        let query = payload_string(payload, "query");
+        with_store(self.state, |store| {
+            Ok(crate::runtime::session_resources_value_for_session(
+                &store,
+                session_id,
+                include_child_sessions,
+                limit,
+                kind.as_deref(),
+                query.as_deref(),
+            ))
+        })
+    }
+
+    fn handle_session_resources_get(&self, payload: &Value) -> Result<Value, String> {
+        let id = payload_string(payload, "id")
+            .or_else(|| payload_string(payload, "reference"))
+            .ok_or_else(|| "session.resources.get requires id or reference".to_string())?;
+        let mut list_payload = json!({
+            "limit": 100,
+            "includeChildSessions": payload_bool(payload, &["includeChildSessions"]).unwrap_or(true),
+        });
+        if let Some(session_id) = payload_string(payload, "sessionId") {
+            if let Some(object) = list_payload.as_object_mut() {
+                object.insert("sessionId".to_string(), json!(session_id));
+            }
+        }
+        let mut listed = self.handle_session_resources_list(&list_payload)?;
+        let items = listed
+            .get_mut("items")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| "session.resources.get failed to load resource list".to_string())?;
+        let found = items.iter().find(|item| {
+            item.get("id").and_then(Value::as_str) == Some(id.as_str())
+                || item.get("reference").and_then(Value::as_str) == Some(id.as_str())
+                || item.get("path").and_then(Value::as_str) == Some(id.as_str())
+        });
+        found
+            .cloned()
+            .map(|resource| json!({ "success": true, "item": resource }))
+            .ok_or_else(|| format!("session resource not found: {id}"))
     }
 
     fn handle_advisors(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {

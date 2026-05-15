@@ -643,6 +643,22 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("memory.search"),
         ),
+        ("session" | "session.resources" | "session_resources", "list" | "search") => {
+            app_cli_action_call(
+                "session.resources.list",
+                payload,
+                Some("Operate"),
+                Some("session.resources.list"),
+            )
+        }
+        ("session" | "session.resources" | "session_resources", "get" | "read") => {
+            app_cli_action_call(
+                "session.resources.get",
+                payload,
+                Some("Operate"),
+                Some("session.resources.get"),
+            )
+        }
         ("memory", "create" | "update") => {
             app_cli_action_call("memory.add", payload, Some("Operate"), Some("memory.add"))
         }
@@ -2390,6 +2406,31 @@ mod tests {
                 "{resource}.{operation}"
             );
             assert_eq!(normalized.arguments.get("command"), None);
+        }
+    }
+
+    #[test]
+    fn normalizes_operate_session_resources_to_structured_actions() {
+        let cases = [
+            ("session", "list", "session.resources.list"),
+            ("session.resources", "get", "session.resources.get"),
+        ];
+
+        for (resource, operation, action) in cases {
+            let normalized = normalize_tool_call(
+                "Operate",
+                &json!({
+                    "resource": resource,
+                    "operation": operation,
+                    "input": { "kind": "image", "id": "media-1" }
+                }),
+            );
+            assert_eq!(normalized.name, "workflow", "{resource}.{operation}");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!(action)),
+                "{resource}.{operation}"
+            );
         }
     }
 

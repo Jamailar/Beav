@@ -55,6 +55,7 @@
 - `Read` / `List` / `Search` / `Write` 使用虚拟路径协议。
 - `Operate` 使用 `resource + operation + id? + input?` 协议。
 - `Operate(resource="image", operation="generate")` 的比例、尺寸、质量必须放在 `input.aspectRatio` / `input.size` / `input.quality`，不要只写进自然语言 prompt。支持的 `aspectRatio` 为 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`。
+- `Operate(resource="session", operation="list|get")` 只负责读取当前会话可见资源索引，返回用户附件和工具结果里出现过的文件 / 媒体引用；模型需要复用上一轮附件或生成产物时，必须使用返回的 `reference` / `path`，不要编造本地路径。
 - `workflow` / `resource` / `editor` 作为内部执行层，仍一律优先走 `action + payload` 协议。
 - 虚拟路径示例：
   - `workspace://README.md`

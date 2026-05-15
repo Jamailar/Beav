@@ -5238,6 +5238,18 @@ fn interactive_runtime_turn_system_prompt(
         session_id,
         runtime_mode,
     ));
+    if let Some(current_session_id) = session_id {
+        if let Ok(Some(resources_prompt)) = with_store(state, |store| {
+            Ok(runtime::session_resources_prompt_for_session(
+                &store,
+                current_session_id,
+                8,
+            ))
+        }) {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&resources_prompt);
+        }
+    }
     system_prompt
 }
 
