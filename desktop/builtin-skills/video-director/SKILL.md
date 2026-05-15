@@ -1,22 +1,25 @@
 ---
 name: video-director
-description: Use when generating short videos, including reference-image video, image-to-video, first/last-frame transitions, and character talking-head videos. Produces a detailed shot script first, generates storyboard contact-sheet preview images through image.generate using four/six/nine-panel grids, includes any product or visual reference images, asks the user to confirm, and only then calls the correct video model. For asset-library character talking-head / 口播 videos, it must synthesize the approved spoken script with the character voice through TTS before calling video generation.
+description: Use when the user asks for a promotional film, ad film, short video, product video, reference-image video, image-to-video, first/last-frame transition, storyboard/keyframes, or character talking-head video. This includes Chinese requests such as 宣传片, 广告片, 短片, 短视频, 视频, 分镜, 分镜图, 参考图生成视频, 图片转视频, 包包/商品/产品宣传片. Produces a detailed script and shot table first, then generates storyboard contact-sheet preview images through image.generate using four/six/nine-panel grids, includes any product or visual reference images, asks the user to confirm, and only then calls the correct video model. For asset-library character talking-head / 口播 videos, it must synthesize the approved spoken script with the character voice through TTS before calling video generation.
 allowedRuntimeModes: [chatroom, redclaw]
 allowedTools: [workflow]
 activationScope: session
+activationHint: Invoke this before any media generation when the user asks for 宣传片, 广告片, 短片, 短视频, 视频, 分镜, 分镜图, 图片转视频, reference-image video, product promotional video, or an attached/reference image to become a video. Do not call image.generate or video.generate first; load this skill and follow its staged workflow.
 ---
 
 # Video Director
 
 Use this skill before calling `Operate(resource="video", operation="generate", input={ ... })` for video work.
 
+If this skill was loaded because the user attached an image and asked for a promotional film / 宣传片 / 视频, treat the attached image as a product or visual reference for the video workflow. Do not generate a replacement product image as an "analysis" step.
+
 ## Default Workflow
 
 Before any video tool call, follow this order:
 
 1. Clarify the intended video mode from the user's goal and assets.
-2. Draft a concise but detailed video script for review.
-3. Generate storyboard contact-sheet preview image(s) with `Operate(resource="image", operation="generate", input={ ... })`.
+2. Draft a concise but detailed video script and shot table for review.
+3. Generate storyboard contact-sheet preview image(s) with `Operate(resource="image", operation="generate", input={ ... })`. The storyboard image is a preview of the planned shots, not a standalone product poster, replacement product render, cover image, or final video keyframe.
 4. Show the script, storyboard preview image(s), and explicit video specs together.
 5. Ask for confirmation or revision.
 6. Default to direct video generation after confirmation.
@@ -27,7 +30,16 @@ Before any video tool call, follow this order:
 
 If the user has not yet confirmed the script, do not generate the video.
 
+If the user has not yet seen and approved the storyboard preview image(s), do not generate the video.
+
 The storyboard contact-sheet preview is mandatory after the first shot script is written. It is not the same as final video keyframes; it is a quick visual proof of the planned shot sequence so the user can approve direction, composition, product placement, and continuity before video generation.
+
+For product promotional videos from an attached/reference image:
+
+- The first `image.generate` call, if any, must be for a storyboard contact sheet after the script and shot table exist.
+- The storyboard prompt must explicitly say it is a multi-panel storyboard preview for the video, and it must preserve the attached/reference product's visible shape, material, color, and distinctive details.
+- Do not call `image.generate` just to "analyze", "extract", "enhance", or recreate the product reference.
+- Do not call `video.generate` until the user confirms the storyboard direction.
 
 ## Asset-Library Character Talking-Head Rule
 
@@ -361,11 +373,16 @@ If the script contains multiple shots, a named character, an important environme
 
 - If reference assets are attached, start the final generation prompt by identifying what each asset is for.
 - Use explicit labels such as:
-  - `Image 1: Jamba portrait reference`
-  - `Image 2: livestream background mood reference`
+  - `Image 1: approved storyboard contact-sheet reference, strong reference for shot order, composition, framing, and visual continuity`
+  - `Image 2: product reference, strong reference for shape, material, color, logo/details, and hardware`
+  - `Image 3: Jamba portrait reference`
+  - `Image 4: livestream background mood reference`
   - `Voice: Jamba voiceId for TTS = voice_xxx`
   - `Audio 1: generated Jamba TTS speech from the approved script`
 - Do this before the motion/camera description so the model does not confuse multiple references.
+- If a storyboard contact sheet, storyboard still, or generated keyframe has been approved, treat that image as the primary visual reference for final video generation.
+- For final `reference-guided` video generation after storyboard approval, pass the approved storyboard image/keyframe path(s) in `referenceImages` whenever available. Do not keep using only the original product photo if an approved storyboard image exists.
+- The final prompt must explicitly say the storyboard image is a **strong reference** for composition, shot order, camera framing, lighting direction, product placement, and continuity. The model should animate from this plan rather than reinterpret the whole scene.
 - If a suitable finished generated speech audio exists and the chosen mode supports audio conditioning, treat it as a first-class reference asset instead of telling the user the platform cannot accept audio.
 - For asset-library character 口播 videos, do not treat a saved `voiceId` as `Audio 1` directly. First synthesize the approved spoken script with TTS, then treat the generated audio asset as `Audio 1`.
 - If the request uses an asset from the asset library and that asset has a saved `voiceId`, use that `voiceId` as the default TTS voice for the spoken script unless the user explicitly asks to disable it or replace it. Do not surface the old reference-audio filename as the important result; the important result is the resolved `voiceId`.
@@ -375,6 +392,13 @@ If the script contains multiple shots, a named character, an important environme
 - Avoid bloated prompts that restate the whole image contents when the real task is only a motion or transition edit.
 - Focus on what should move, how the camera behaves, and what must stay stable.
 - After the user confirms a storyboard table, do not downgrade that approved script into a single generic sentence.
+- The final prompt must use professional cinematic language for every beat:
+  - camera angle: eye-level, low angle, high angle, three-quarter angle, overhead, macro/product detail angle, over-the-shoulder, profile, frontal, rear tracking
+  - framing and lens feel: wide shot, medium shot, medium close-up, close-up, extreme close-up, macro detail, shallow depth of field, compressed telephoto feel, natural wide-angle perspective
+  - camera movement: slow dolly-in, lateral tracking shot, orbit move, pan, tilt, crane down, handheld micro-movement, locked-off shot, rack focus, reveal, whip-pan only when intentionally energetic
+  - pacing and transition: hold, slow reveal, cut on motion, match cut, dissolve, speed ramp, final freeze frame
+- For any beat involving a person, describe physical action precisely. Include posture, hand/arm movement, walking direction, turning motion, gaze, facial expression, interaction with product/prop, timing relative to the camera move, and what must remain stable.
+- Do not use vague action words alone such as “show”, “display”, “model wears it”, or “fashion scene”. Replace them with concrete movement, for example: “model enters frame from camera right, lifts the bag strap onto the shoulder with the right hand, turns three-quarters toward camera, glances down at the gold zipper, then looks forward as the camera performs a slow dolly-in.”
 - The final tool call must carry the approved storyboard structure in `payload.storyboardMarkdown` or `payload.storyboardShots`, so the host can compile the execution prompt from the actual approved beats.
 - `payload.storyboardShots` should use one item per approved row with `time`, `picture`, `sound`, and `shot`.
 - If you only pass a vague summary prompt after script confirmation, that is a failure because it discards the approved shot structure.
@@ -401,6 +425,7 @@ If the script contains multiple shots, a named character, an important environme
 - Use the resulting TTS asset path or URL as `drivingAudio`; never use the character `voiceId` or raw voice sample as `drivingAudio`.
 - Pass no reference images for `text-to-video`.
 - Pass 1 to 5 reference images for `reference-guided`.
+- After storyboard approval, put approved storyboard image/keyframe paths first in `referenceImages`, then product/character identity references, then scene/style references. Label the storyboard reference as strong.
 - Pass exactly two reference images in `首帧,尾帧` order for `first-last-frame`.
 - If a suitable finished audio asset exists, pass it as `drivingAudio` and describe it explicitly as `Audio 1` in the prompt preface.
 - For `reference-guided`, if a suitable finished audio asset exists, also pass it as the mode's voice reference input.
@@ -413,6 +438,16 @@ If the script contains multiple shots, a named character, an important environme
 
 ```json
 {
+  "generationMode": "reference-guided",
+  "referenceImages": [
+    "/absolute/path/to/approved-storyboard-contact-sheet.png",
+    "/absolute/path/to/product-or-character-reference.png"
+  ],
+  "referenceImageLabels": [
+    "approved storyboard contact-sheet reference, strong reference for shot order, composition, framing, lighting direction, product placement, and continuity",
+    "product or character identity reference, strong reference for shape, material, color, face/body identity, and distinctive details"
+  ],
+  "prompt": "Image 1 is the approved storyboard contact-sheet and must be followed as a strong reference for composition, shot order, framing, lighting direction, product placement, and continuity. Image 2 is the product/character identity reference and must preserve the visible identity details. Use professional cinematic camera language for every beat: specify angle, framing, lens feel, camera movement, pacing, and transition. If a person appears, describe posture, hand movement, gaze, body turn, prop interaction, and timing relative to the camera.",
   "storyboardShots": [
     {
       "time": "0-2s",
