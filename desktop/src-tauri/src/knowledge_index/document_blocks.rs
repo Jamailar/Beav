@@ -15,12 +15,12 @@ use crate::{
     },
     knowledge_index::{
         canonical_store::{self, CanonicalDocumentRow},
-        catalog_db_path,
         fingerprint::fingerprint_file,
         hybrid::{
             citation_rerank_bonus, expand_query, query_embedding, semantic_similarity,
             semantic_vector_json, weighted_rrf, RetrievalMode,
         },
+        open_catalog_connection,
         query_profile::{self, QueryLanguage},
         schema::ensure_catalog_ready,
         tantivy_index,
@@ -170,7 +170,7 @@ fn max_indexed_file_bytes_for_path(path: &Path) -> u64 {
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
     ensure_catalog_ready(state)?;
-    Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())
+    open_catalog_connection(state)
 }
 
 pub(crate) fn replace_blocks(

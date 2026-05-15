@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use tauri::State;
 
 use crate::{
-    knowledge_index::{catalog_db_path, schema::ensure_catalog_ready},
+    knowledge_index::{open_catalog_connection, schema::ensure_catalog_ready},
     now_iso, AppState,
 };
 
@@ -13,7 +13,7 @@ static RETRIEVAL_RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
     ensure_catalog_ready(state)?;
-    Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())
+    open_catalog_connection(state)
 }
 
 pub(crate) fn delete_runs_for_source(

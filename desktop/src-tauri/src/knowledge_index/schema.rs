@@ -1,6 +1,7 @@
 use std::fs;
 
 use rusqlite::Connection;
+use std::time::Duration;
 use tauri::State;
 
 use crate::{knowledge_index::catalog_db_path, AppState};
@@ -40,6 +41,8 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let conn = Connection::open(&db_path).map_err(|error| error.to_string())?;
+    conn.busy_timeout(Duration::from_millis(5_000))
+        .map_err(|error| error.to_string())?;
     conn.execute_batch(
         r#"
         PRAGMA journal_mode = WAL;

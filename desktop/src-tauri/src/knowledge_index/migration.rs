@@ -3,7 +3,7 @@ use tauri::State;
 
 use crate::{
     document_parse::VISUAL_DEFAULT_PROMPT_VERSION,
-    knowledge_index::{catalog_db_path, schema::ensure_catalog_ready},
+    knowledge_index::{open_catalog_connection, schema::ensure_catalog_ready},
     now_iso, AppState,
 };
 
@@ -55,7 +55,7 @@ impl MigrationDecision {
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
     ensure_catalog_ready(state)?;
-    Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())
+    open_catalog_connection(state)
 }
 
 pub(crate) fn plan_migration(state: &State<'_, AppState>) -> Result<MigrationDecision, String> {

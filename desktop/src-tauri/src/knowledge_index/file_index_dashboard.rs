@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::{
     knowledge_index::{
-        advisor_source_id, catalog_db_path, document_blocks::is_visual_candidate_path,
+        advisor_source_id, document_blocks::is_visual_candidate_path, open_catalog_connection,
         schema::ensure_catalog_ready,
     },
     with_store, workspace_root, AppState,
@@ -90,7 +90,7 @@ struct SourceStats {
 
 pub(crate) fn dashboard(state: &State<'_, AppState>) -> Result<FileIndexDashboard, String> {
     ensure_catalog_ready(state)?;
-    let conn = Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())?;
+    let conn = open_catalog_connection(state)?;
     let runtime = state
         .knowledge_index_state
         .lock()
