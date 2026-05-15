@@ -1492,6 +1492,15 @@ function createIpcRenderer() {
       startDragging: () => isTauriRuntime()
         ? getCurrentWindow().startDragging()
         : Promise.resolve(),
+      minimize: () => isTauriRuntime()
+        ? getCurrentWindow().minimize()
+        : Promise.resolve(),
+      toggleMaximize: () => isTauriRuntime()
+        ? getCurrentWindow().toggleMaximize()
+        : Promise.resolve(),
+      close: () => isTauriRuntime()
+        ? getCurrentWindow().close()
+        : Promise.resolve(),
     },
     fetchYoutubeInfo: (channelUrl: string) => invokeChannel('advisors:fetch-youtube-info', { channelUrl }),
     downloadYoutubeSubtitles: (params: Record<string, unknown>) => invokeChannel('advisors:download-youtube-subtitles', params),

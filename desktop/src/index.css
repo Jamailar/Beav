@@ -478,8 +478,19 @@ select {
   -webkit-user-select: none;
 }
 
+.app-titlebar[data-tauri-drag-region] {
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
 .app-titlebar--dark {
   background: transparent;
+}
+
+.app-titlebar--windows {
+  grid-template-columns: 104px minmax(0, 1fr) auto;
+  background: rgb(var(--color-background) / 0.88);
+  border-bottom: 1px solid rgb(var(--color-border) / 0.58);
 }
 
 .app-titlebar-controls,
@@ -493,6 +504,10 @@ select {
   gap: 6px;
   height: 100%;
   padding-left: 104px;
+}
+
+.app-titlebar--windows .app-titlebar-controls {
+  padding-left: 14px;
 }
 
 .app-titlebar-sidebar-toggle {
@@ -650,6 +665,12 @@ select {
   box-shadow: none;
 }
 
+.app-titlebar button,
+.app-titlebar [data-no-window-drag] {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
 .app-titlebar-title {
   overflow: hidden;
   text-align: center;
@@ -668,6 +689,11 @@ select {
   min-width: 0;
   height: 100%;
   padding-right: 14px;
+}
+
+.app-titlebar--windows .app-titlebar-actions {
+  gap: 6px;
+  padding-right: 0;
 }
 
 .app-titlebar-button {
@@ -699,6 +725,38 @@ select {
 .app-titlebar-button:hover {
   background: rgb(var(--color-surface-primary) / 0.88);
   color: rgb(var(--color-text-primary) / 1);
+}
+
+.app-titlebar-window-controls {
+  display: inline-flex;
+  align-items: stretch;
+  height: 100%;
+  margin-left: 2px;
+}
+
+.app-titlebar-window-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: rgb(var(--color-text-secondary) / 0.86);
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.app-titlebar-window-button:hover {
+  background: rgb(var(--color-text-primary) / 0.08);
+  color: rgb(var(--color-text-primary) / 1);
+}
+
+.app-titlebar-window-button--close:hover {
+  background: rgb(var(--color-status-error) / 0.95);
+  color: white;
 }
 
 .redclaw-preview-sidebar {
