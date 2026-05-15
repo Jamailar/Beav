@@ -3,7 +3,7 @@ mod followup;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -20,6 +20,7 @@ use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::library::persist_media_workspace_catalog;
+use crate::runtime::resolve_session_file_reference_inputs;
 use crate::*;
 use crate::{commands, with_store, with_store_mut, AppState};
 
@@ -56,7 +57,9 @@ pub struct MediaGenerationRuntime {
     pub dispatcher_join: Option<JoinHandle<()>>,
 }
 
-pub(crate) use followup::{spawn_media_job_followup, tick_media_followups};
+pub(crate) use followup::{
+    spawn_media_job_followup, spawn_media_job_followup_for_kind, tick_media_followups,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1520,9 +1523,10 @@ pub(crate) fn submit_media_job(
     payload: &Value,
 ) -> Result<Value, String> {
     ensure_media_runtime_ready(state)?;
-    let source = infer_job_source(payload);
-    let priority = infer_job_priority(&source, payload);
-    let (provider_key, provider_model) = resolve_provider_metadata(state, kind, payload)?;
+    let payload = normalize_media_job_file_references(state, kind, payload)?;
+    let source = infer_job_source(&payload);
+    let priority = infer_job_priority(&source, &payload);
+    let (provider_key, provider_model) = resolve_provider_metadata(state, kind, &payload)?;
     let conn = open_media_runtime_connection(state)?;
     let job_id = create_media_job_with_connection(
         &conn,
@@ -1531,13 +1535,13 @@ pub(crate) fn submit_media_job(
         &priority,
         &provider_key,
         provider_model.as_deref(),
-        payload,
-        normalize_optional_string(payload_string(payload, "projectId")).as_deref(),
-        normalize_optional_string(payload_string(payload, "manuscriptPath")).as_deref(),
-        normalize_optional_string(payload_string(payload, "videoProjectPath")).as_deref(),
+        &payload,
+        normalize_optional_string(payload_string(&payload, "projectId")).as_deref(),
+        normalize_optional_string(payload_string(&payload, "manuscriptPath")).as_deref(),
+        normalize_optional_string(payload_string(&payload, "videoProjectPath")).as_deref(),
         normalize_optional_string(
-            payload_string(payload, "sessionId")
-                .or_else(|| payload_string(payload, "ownerSessionId")),
+            payload_string(&payload, "sessionId")
+                .or_else(|| payload_string(&payload, "ownerSessionId")),
         )
         .as_deref(),
     )?;
@@ -1554,6 +1558,121 @@ pub(crate) fn submit_media_job(
         "providerModel": provider_model,
         "acceptedAt": now_iso(),
     }))
+}
+
+fn normalize_media_job_file_references(
+    state: &State<'_, AppState>,
+    kind: &str,
+    payload: &Value,
+) -> Result<Value, String> {
+    let Some(session_id) =
+        payload_string(payload, "sessionId").or_else(|| payload_string(payload, "ownerSessionId"))
+    else {
+        return Ok(payload.clone());
+    };
+    let mut normalized = payload.clone();
+    match kind {
+        "image" => {
+            normalize_media_reference_array(
+                state,
+                &session_id,
+                &mut normalized,
+                "referenceImages",
+            )?;
+            normalize_media_reference_array(state, &session_id, &mut normalized, "images")?;
+        }
+        "video" => {
+            normalize_media_reference_array(
+                state,
+                &session_id,
+                &mut normalized,
+                "referenceImages",
+            )?;
+            normalize_media_reference_array(state, &session_id, &mut normalized, "images")?;
+            normalize_media_reference_string(state, &session_id, &mut normalized, "drivingAudio")?;
+            normalize_media_reference_string(state, &session_id, &mut normalized, "firstClip")?;
+        }
+        _ => {}
+    }
+    Ok(normalized)
+}
+
+fn normalize_media_reference_array(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    payload: &mut Value,
+    field: &str,
+) -> Result<(), String> {
+    let Some(values) = payload.get(field).and_then(Value::as_array).cloned() else {
+        return Ok(());
+    };
+    let mut string_indices = Vec::<usize>::new();
+    let mut raw_inputs = Vec::<String>::new();
+    for (index, value) in values.iter().enumerate() {
+        if let Some(raw) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            string_indices.push(index);
+            raw_inputs.push(raw.to_string());
+        }
+    }
+    if raw_inputs.is_empty() {
+        return Ok(());
+    }
+    let resolved = resolve_session_file_reference_inputs(state, session_id, raw_inputs);
+    let mut next_values = values;
+    for (index, resolved_value) in string_indices.into_iter().zip(resolved.into_iter()) {
+        validate_resolved_media_reference(field, &resolved_value)?;
+        next_values[index] = json!(resolved_value);
+    }
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(field.to_string(), Value::Array(next_values));
+    }
+    Ok(())
+}
+
+fn normalize_media_reference_string(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    payload: &mut Value,
+    field: &str,
+) -> Result<(), String> {
+    let Some(raw) = payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+    else {
+        return Ok(());
+    };
+    let resolved = resolve_session_file_reference_inputs(state, session_id, vec![raw])
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    validate_resolved_media_reference(field, &resolved)?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(field.to_string(), json!(resolved));
+    }
+    Ok(())
+}
+
+fn validate_resolved_media_reference(field: &str, value: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("data:")
+        || trimmed.starts_with("file://")
+        || Path::new(trimmed).exists()
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "RESOURCE_RESOLUTION_FAILED: {field} references `{trimmed}`, but it was not found in the current session attachments, tool results, workspace, or media cache. Use an attached file resource instead of a bare filename."
+    ))
 }
 
 pub(crate) fn list_media_jobs(
@@ -4029,6 +4148,20 @@ mod tests {
             "interactive"
         );
         assert_eq!(infer_job_priority("redclaw", &json!({})), "batch");
+    }
+
+    #[test]
+    fn media_reference_validation_rejects_unresolved_bare_filename() {
+        let error = validate_resolved_media_reference("referenceImages", "WechatIMG1615.jpg")
+            .expect_err("bare filenames should not reach provider submission");
+        assert!(error.contains("RESOURCE_RESOLUTION_FAILED"));
+    }
+
+    #[test]
+    fn media_reference_validation_accepts_url_data_and_existing_paths() {
+        validate_resolved_media_reference("referenceImages", "https://example.com/a.png").unwrap();
+        validate_resolved_media_reference("referenceImages", "data:image/png;base64,abc").unwrap();
+        validate_resolved_media_reference("referenceImages", file!()).unwrap();
     }
 
     #[test]

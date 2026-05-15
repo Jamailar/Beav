@@ -3865,12 +3865,13 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             reference_images.extend(project_reference_images);
         }
         reference_images.extend(subject_reference_images);
+        reference_images = self.resolve_reference_image_inputs(reference_images);
         dedupe_string_list(&mut reference_images, 5);
         let explicit_driving_audio = args
             .string(&["driving-audio", "audio-url"])
             .or_else(|| payload_string(payload, "drivingAudio"))
             .filter(|item| !item.trim().is_empty());
-        let inferred_driving_audio = explicit_driving_audio.clone().or_else(|| {
+        let mut inferred_driving_audio = explicit_driving_audio.clone().or_else(|| {
             subject_matches.iter().find_map(|subject| {
                 subject
                     .get("absoluteVoicePath")
@@ -3880,6 +3881,15 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     .map(ToString::to_string)
             })
         });
+        if let Some(driving_audio) = inferred_driving_audio.take() {
+            inferred_driving_audio = self
+                .resolve_reference_image_inputs(vec![driving_audio])
+                .into_iter()
+                .next();
+        }
+        let resolved_first_clip = payload_string(&merged, "firstClip")
+            .map(|first_clip| self.resolve_reference_image_inputs(vec![first_clip]))
+            .and_then(|items| items.into_iter().next());
         if let Some(object) = merged.as_object_mut() {
             if !reference_images.is_empty() {
                 object.insert("referenceImages".to_string(), json!(reference_images));
@@ -3895,6 +3905,9 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             }
             if let Some(driving_audio) = inferred_driving_audio {
                 object.insert("drivingAudio".to_string(), json!(driving_audio));
+            }
+            if let Some(first_clip) = resolved_first_clip {
+                object.insert("firstClip".to_string(), json!(first_clip));
             }
             if let Some(project_path) = video_project_path.clone() {
                 object.insert("videoProjectPath".to_string(), json!(project_path));
@@ -3917,11 +3930,42 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         self.emit_tool_partial("视频生成已提交到宿主，正在准备 provider 请求。");
         if !wait_for_completion {
             let submitted = self.call_channel("generation:submit-video", merged)?;
-            return Ok(merge_video_generation_result(
-                submitted,
-                video_project_path,
-                video_project_state,
-            ));
+            let follow_up = submitted
+                .get("jobId")
+                .and_then(Value::as_str)
+                .and_then(|job_id| {
+                    self.session_id.map(|session_id| {
+                        crate::media_runtime::spawn_media_job_followup_for_kind(
+                            self.app,
+                            self.runtime_mode,
+                            session_id,
+                            job_id,
+                            "video",
+                            1,
+                        )
+                    })
+                })
+                .transpose();
+            let mut result =
+                merge_video_generation_result(submitted, video_project_path, video_project_state);
+            if let Some(object) = result.as_object_mut() {
+                match follow_up {
+                    Ok(Some(follow_up)) => {
+                        object.insert("followUp".to_string(), follow_up);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        object.insert(
+                            "followUp".to_string(),
+                            json!({
+                                "success": false,
+                                "error": error,
+                            }),
+                        );
+                    }
+                }
+            }
+            return Ok(result);
         }
         let result = self.call_channel("video-gen:generate", merged)?;
         if let Some(project_path) = video_project_path {
