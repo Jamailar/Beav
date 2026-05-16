@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { MediaJobLogRecord, MediaJobProjection } from './types';
 
 type MediaJobsState = {
@@ -30,7 +30,7 @@ function emit(): void {
     }
 }
 
-function shallowArrayEqual<T>(left: T[], right: T[]): boolean {
+export function shallowArrayEqual<T>(left: T[], right: T[]): boolean {
     if (left.length !== right.length) return false;
     for (let index = 0; index < left.length; index += 1) {
         if (!Object.is(left[index], right[index])) return false;
@@ -91,10 +91,40 @@ export const mediaJobsStore: MediaJobsStore = {
     },
 };
 
-export function useMediaJobsStore<T>(selector: Selector<T>): T {
+export function useMediaJobsStore<T>(
+    selector: Selector<T>,
+    isEqual: (left: T, right: T) => boolean = Object.is,
+): T {
+    const selectedSnapshotRef = useRef<{ state: MediaJobsState; selected: T } | null>(null);
+    const getSelectedSnapshot = useCallback(() => {
+        const nextState = mediaJobsStore.getState();
+        const nextSelected = selector(nextState);
+        const previous = selectedSnapshotRef.current;
+        if (previous && previous.state === nextState) {
+            return previous.selected;
+        }
+        if (previous && isEqual(previous.selected, nextSelected)) {
+            selectedSnapshotRef.current = { state: nextState, selected: previous.selected };
+            return previous.selected;
+        }
+        selectedSnapshotRef.current = { state: nextState, selected: nextSelected };
+        return nextSelected;
+    }, [isEqual, selector]);
+
     return useSyncExternalStore(
         mediaJobsStore.subscribe,
-        () => selector(mediaJobsStore.getState()),
-        () => selector(mediaJobsStore.getState()),
+        getSelectedSnapshot,
+        getSelectedSnapshot,
     );
+}
+
+export function useMediaJobsByIds(jobIds: string[]): MediaJobProjection[] {
+    const jobIdsKey = jobIds.join('\u0000');
+    const selectJobsById = useCallback((nextState: MediaJobsState) => (
+        (jobIdsKey ? jobIdsKey.split('\u0000') : [])
+            .map((jobId) => nextState.jobsById[jobId])
+            .filter((job): job is MediaJobProjection => Boolean(job))
+    ), [jobIdsKey]);
+
+    return useMediaJobsStore(selectJobsById, shallowArrayEqual);
 }

@@ -10,7 +10,7 @@ import type { TeamWorkbenchSession } from './team-workbench/teamWorkbenchTypes';
 import type { PendingChatMessage } from '../App';
 import { type ChatMessageLinkKind, type ChatMessageLinkTarget } from '../components/MessageItem';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
-import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobTerminal, isMediaJobSuccessful, type MediaJobProjection } from '../features/media-jobs/types';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
@@ -560,12 +560,11 @@ export function RedClaw({
     const [onboardingState, setOnboardingState] = useState<RedclawOnboardingState | undefined>(undefined);
     const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
     const [resolvedPendingMessage, setResolvedPendingMessage] = useState<PendingChatMessage | null>(null);
-    const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
-    const trackedImageJobs = useMemo(() => (
-        Object.values(trackedJobsById)
+    const trackedImageJobs = useMediaJobsStore(useCallback((state) => (
+        Object.values(state.jobsById)
             .filter((job) => job.kind === 'image' && job.ownerSessionId === activeSessionId)
             .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
-    ), [activeSessionId, trackedJobsById]);
+    ), [activeSessionId]), shallowArrayEqual);
     const visibleImageJobs = useMemo(() => {
         return trackedImageJobs.filter((job) => {
             if (isMediaJobSuccessful(job.status)) return false;

@@ -86,6 +86,12 @@
 - 首屏 IPC 只传 summary、ID、path、count、preview；详情按需懒取。
 - 大列表、树、转录、时间线、富媒体初始化不要在首屏一次性做完；使用分页、虚拟化、延迟加载或分阶段 warmup。
 - 页面切换工作必须可取消或可忽略；旧请求不能与最新导航竞争 UI 关键资源。
+- 高频 UI 事件必须合批：`runtime:event` token/thought delta、CLI log、media job progress、drag/resize/mousemove、scroll 派生状态等，不允许逐事件直接触发大范围 `setState` / store notify / React commit。
+- 事件订阅必须窄：页面和组件只订阅自己需要的 session、job、scope、event type 或 id 集合；不要因为方便直接订阅整张 `jobsById`、完整 runtime event stream、全量日志或全局 store 后再在 render/useMemo 中过滤。
+- 外部 store selector 必须保持引用稳定：如果 selector 返回数组/对象，必须使用 equality、按 id 选择、分页或 patch 合并，避免无关对象变更导致全页面重渲染。
+- Chat / runtime 流式内容更新必须保留 flush 边界：response end、cancel、error、clear session、view deactivate/unmount 都要先 flush pending chunk，防止为了降频而丢尾部内容。
+- 媒体卡片和素材网格默认渲染轻量 poster/thumbnail；密集列表里不要直接挂大量 `<video>` 或原图，图片应按可视优先级使用 lazy/async decode，完整预览放到详情/overlay。
+- 任何“流畅度优化”都必须先保护功能语义：不改 AI/runtime 协议、不吞事件、不跳过持久化、不改变任务状态机；优化应只减少无关渲染、无关订阅和主线程重活。
 
 ## Common Change Playbooks
 
@@ -100,6 +106,11 @@
 - 不要把 workspace / file hydration 放到 React hook 或 command handler。
 - 不要让新页面首次渲染依赖 awaited activation-time IPC，这很容易导致“点 tab 就卡住”。
 - 不要在 render 中直接解引用不稳定的嵌套宿主字段；旧持久化数据、部分迁移和陈旧 daemon 快照都可能缺字段。
+- 不要把 WebView 当作 UI 卡顿的默认根因；先查 React commit、主线程 long task、IPC payload/event fanout、列表/媒体渲染、focus/visibility refresh 和 store 订阅面。
+- 不要在 token/thought/log/progress 这类高频路径里每个事件都 `setMessages`、重建大数组、重跑 markdown parse 或刷新整页数据。
+- 不要让一个 media job 更新唤醒所有媒体页面；media queue 真值可以集中，但 renderer 投影必须按 job id / owner / source / visible surface 收窄。
+- 不要在拖拽、resize、mousemove 中同步写 localStorage、做 IPC、扫描数据或更新顶层 shell state；拖动中优先用 ref/CSS variable，结束时再提交 React state。
+- 不要用“加 loading / 加说明文字 / 增加 UI 提示”掩盖卡顿；先做 stale-while-revalidate、合批、虚拟化、懒加载、缓存和后台化。
 - 不要引入基于 ad hoc 字符串匹配的用户意图路由。
 - 外部 URL / 平台 ID / 用户输入只要会落成 workspace 目录名或文件名，必须用 `storage_safe_file_stem` 这类 Windows-safe 规则；不要直接用 `slug_from_relative_path`。
 - 不要把新逻辑继续堆进 `src-tauri/src/main.rs`，除非只是接线。
