@@ -204,6 +204,28 @@ pub(crate) fn list_page(
 ) -> Result<KnowledgeCatalogPage, String> {
     let conn = connection(state)?;
     let workspace_id = workspace_id(state)?;
+    list_page_from_connection(
+        &conn,
+        &workspace_id,
+        cursor,
+        limit,
+        kind,
+        query,
+        sort,
+        ready_for_wander_only,
+    )
+}
+
+fn list_page_from_connection(
+    conn: &Connection,
+    workspace_id: &str,
+    cursor: Option<&str>,
+    limit: usize,
+    kind: Option<&str>,
+    query: Option<&str>,
+    sort: Option<&str>,
+    ready_for_wander_only: bool,
+) -> Result<KnowledgeCatalogPage, String> {
     let limit = limit.clamp(1, 200) as i64;
     let offset = cursor
         .and_then(|value| value.trim().parse::<i64>().ok())
@@ -301,9 +323,9 @@ pub(crate) fn list_page(
                 workspace_id,
                 normalized_kind,
                 normalized_query,
+                ready_for_wander_only as i64,
                 limit,
-                offset,
-                ready_for_wander_only as i64
+                offset
             ],
             row_to_summary,
         )
@@ -674,6 +696,79 @@ mod tests {
         conn
     }
 
+    fn setup_list_page_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE knowledge_items (
+                item_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                note_type TEXT,
+                capture_kind TEXT,
+                title TEXT NOT NULL,
+                author TEXT NOT NULL DEFAULT '',
+                author_id TEXT,
+                author_url TEXT,
+                site_name TEXT,
+                source_url TEXT,
+                folder_path TEXT,
+                root_path TEXT,
+                cover_url TEXT,
+                thumbnail_url TEXT,
+                preview_text TEXT NOT NULL DEFAULT '',
+                scope TEXT NOT NULL DEFAULT 'workspace-shared',
+                owner_type TEXT,
+                owner_id TEXT,
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                language TEXT,
+                has_video INTEGER NOT NULL DEFAULT 0,
+                has_transcript INTEGER NOT NULL DEFAULT 0,
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT,
+                item_hash TEXT NOT NULL DEFAULT '',
+                indexed_at TEXT NOT NULL DEFAULT '',
+                sample_files_json TEXT NOT NULL DEFAULT '[]',
+                file_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE knowledge_document_blocks (
+                source_id TEXT NOT NULL,
+                text TEXT NOT NULL DEFAULT '',
+                normalized_text TEXT NOT NULL DEFAULT '',
+                title TEXT,
+                relative_path TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE knowledge_visual_units (
+                source_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT '',
+                relative_path TEXT NOT NULL DEFAULT '',
+                manifest_json TEXT NOT NULL DEFAULT '{}'
+            );
+            "#,
+        )
+        .expect("create list page tables");
+        for (item_id, title, updated_at) in [
+            ("note-a", "Recent note", "2026-05-16T12:00:00Z"),
+            ("note-b", "Older note", "2026-05-15T12:00:00Z"),
+        ] {
+            conn.execute(
+                r#"
+                INSERT INTO knowledge_items (
+                    item_id, workspace_id, kind, title, author, preview_text, scope,
+                    created_at, updated_at, tags_json, item_hash, indexed_at,
+                    sample_files_json, file_count
+                )
+                VALUES (?1, 'default', 'redbook-note', ?2, '', '', 'workspace-shared',
+                    ?3, ?3, '[]', ?1, ?3, '[]', 0)
+                "#,
+                params![item_id, title, updated_at],
+            )
+            .expect("insert item");
+        }
+        conn
+    }
+
     fn summary(item_id: &str) -> KnowledgeCatalogSummary {
         KnowledgeCatalogSummary {
             item_id: item_id.to_string(),
@@ -713,6 +808,28 @@ mod tests {
             visual_search_evidence_refs: Vec::new(),
             visual_search_thumbnail_path: None,
         }
+    }
+
+    #[test]
+    fn list_page_uses_limit_and_offset_params_after_wander_filter() {
+        let conn = setup_list_page_conn();
+
+        let first_page =
+            list_page_from_connection(&conn, "default", None, 1, None, None, None, false)
+                .expect("list first page");
+
+        assert_eq!(first_page.total, 2);
+        assert_eq!(first_page.items.len(), 1);
+        assert_eq!(first_page.items[0].item_id, "note-a");
+        assert_eq!(first_page.next_cursor.as_deref(), Some("1"));
+
+        let second_page =
+            list_page_from_connection(&conn, "default", Some("1"), 1, None, None, None, false)
+                .expect("list second page");
+
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(second_page.items[0].item_id, "note-b");
+        assert_eq!(second_page.next_cursor, None);
     }
 
     #[test]
