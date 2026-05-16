@@ -1626,7 +1626,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             void appAlert(result?.error || '添加文件失败');
             return;
         }
-        await loadDocumentSources();
+        await loadAllKnowledge();
     };
 
     const handleAddDocumentFolder = async () => {
@@ -1969,14 +1969,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                 扩写公众号
                             </button>
                         )}
-                        <button
-                            onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
-                            className="inline-flex h-9 items-center gap-2 rounded-xl bg-amber-500 px-3.5 text-[12px] font-bold text-white shadow-lg shadow-amber-500/20 transition-all hover:bg-amber-600 active:scale-95"
-                            title="保存封面为模板"
-                        >
-                            <BookmarkPlus className="w-3.5 h-3.5" />
-                            存为封面模板
-                        </button>
                         {selectedNote.video && !selectedNote.transcript && (
                             <button
                                 onClick={() => handleTranscribeNote(selectedNote.id)}
@@ -2032,6 +2024,15 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                             )}
                         </div>
                         </div>
+                        <div className="mt-2 flex justify-center">
+                            <button
+                                onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
+                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-text-tertiary transition-colors hover:text-text-primary"
+                            >
+                                <BookmarkPlus className="w-3 h-3" />
+                                存为封面模板
+                            </button>
+                        </div>
                     </div>
                 )}
 
@@ -2039,35 +2040,46 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                    const orderedImages = orderImages(selectedNote.images);
                    const currentImage = orderedImages[selectedImageIndex];
                    return (
-                       <div className="relative aspect-square bg-black/5 rounded-lg overflow-hidden mb-4">
-                           <img src={resolveAssetUrl(currentImage)} className="w-full h-full object-contain" />
-                           {orderedImages.length > 1 && (
-                               <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded-full">
-                                   {selectedImageIndex + 1}/{orderedImages.length}
-                               </div>
-                           )}
-                           {orderedImages.length > 1 && (
-                               <>
-                                   <button 
-                                       className="absolute left-2 top-1/2 -translate-y-1/2 p-1 bg-black/30 rounded-full text-white hover:bg-black/50"
-                                       onClick={(e) => {
-                                           e.stopPropagation();
-                                           setSelectedImageIndex(prev => prev === 0 ? orderedImages.length - 1 : prev - 1);
-                                       }}
-                                   >
-                                       <ChevronLeft className="w-4 h-4" />
-                                   </button>
-                                   <button 
-                                       className="absolute right-2 top-1/2 -translate-y-1/2 p-1 bg-black/30 rounded-full text-white hover:bg-black/50"
-                                       onClick={(e) => {
-                                            e.stopPropagation();
-                                            setSelectedImageIndex(prev => prev === orderedImages.length - 1 ? 0 : prev + 1);
-                                       }}
-                                   >
-                                       <ChevronRight className="w-4 h-4" />
-                                   </button>
-                               </>
-                           )}
+                       <div className="mb-4">
+                           <div className="relative aspect-square bg-black/5 rounded-lg overflow-hidden">
+                               <img src={resolveAssetUrl(currentImage)} className="w-full h-full object-contain" />
+                               {orderedImages.length > 1 && (
+                                   <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded-full">
+                                       {selectedImageIndex + 1}/{orderedImages.length}
+                                   </div>
+                               )}
+                               {orderedImages.length > 1 && (
+                                   <>
+                                       <button
+                                           className="absolute left-2 top-1/2 -translate-y-1/2 p-1 bg-black/30 rounded-full text-white hover:bg-black/50"
+                                           onClick={(e) => {
+                                               e.stopPropagation();
+                                               setSelectedImageIndex(prev => prev === 0 ? orderedImages.length - 1 : prev - 1);
+                                           }}
+                                       >
+                                           <ChevronLeft className="w-4 h-4" />
+                                       </button>
+                                       <button
+                                           className="absolute right-2 top-1/2 -translate-y-1/2 p-1 bg-black/30 rounded-full text-white hover:bg-black/50"
+                                           onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSelectedImageIndex(prev => prev === orderedImages.length - 1 ? 0 : prev + 1);
+                                           }}
+                                       >
+                                           <ChevronRight className="w-4 h-4" />
+                                       </button>
+                                   </>
+                               )}
+                           </div>
+                           <div className="mt-2 flex justify-center">
+                               <button
+                                   onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
+                                   className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-text-tertiary transition-colors hover:text-text-primary"
+                               >
+                                   <BookmarkPlus className="w-3 h-3" />
+                                   存为封面模板
+                               </button>
+                           </div>
                        </div>
                    );
                 })()}
@@ -2874,18 +2886,12 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                             </div>
                             <div className="flex items-center gap-2 ml-4">
                                 <button
-                                onClick={() => openNoteInRedClaw(selectedNote)}
-                                    className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
+                                    onClick={() => openNoteInRedClaw(selectedNote)}
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-primary text-white shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
+                                    title={`${APP_BRAND.aiDisplayName} 聊天`}
+                                    aria-label={`${APP_BRAND.aiDisplayName} 聊天`}
                                 >
                                     <MessageCircle className="w-4 h-4" />
-                                    {APP_BRAND.aiDisplayName}
-                                </button>
-                                <button
-                                    onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
-                                    className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-amber-500 text-white text-[13px] font-extrabold shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all active:scale-95"
-                                >
-                                    <BookmarkPlus className="w-4 h-4" />
-                                    存为封面模板
                                 </button>
                                 {SHOW_WECHAT_KNOWLEDGE_ACTIONS && isExpandableXiaohongshuNote(selectedNote) && onNavigateToRedClaw && (
                                     <button
@@ -2960,6 +2966,15 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                         )}
                                     </div>
                                     </div>
+                                    <div className="mt-3 flex justify-center">
+                                        <button
+                                            onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
+                                            className="inline-flex items-center gap-1.5 text-[11px] font-bold text-text-tertiary transition-colors hover:text-text-primary"
+                                        >
+                                            <BookmarkPlus className="w-3.5 h-3.5" />
+                                            存为封面模板
+                                        </button>
+                                    </div>
                                 </div>
                             )}
 
@@ -2994,6 +3009,15 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                 </div>
                                             </>
                                         )}
+                                        <div className="mt-3 flex justify-center">
+                                            <button
+                                                onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
+                                                className="inline-flex items-center gap-1.5 text-[11px] font-bold text-text-tertiary transition-colors hover:text-text-primary"
+                                            >
+                                                <BookmarkPlus className="w-3.5 h-3.5" />
+                                                存为封面模板
+                                            </button>
+                                        </div>
                                     </div>
                                 );
                             })()}
@@ -3182,10 +3206,11 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                             <div className="flex items-center gap-2 ml-6">
                                 <button
                                     onClick={() => openVideoInRedClaw(selectedVideo)}
-                                    className="inline-flex h-11 px-5 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
+                                    className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-accent-primary text-white shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
+                                    title={`${APP_BRAND.aiDisplayName} 聊天`}
+                                    aria-label={`${APP_BRAND.aiDisplayName} 聊天`}
                                 >
                                     <MessageCircle className="w-4.5 h-4.5" />
-                                    {APP_BRAND.aiDisplayName}
                                 </button>
                                 <button
                                     onClick={() => setSelectedVideo(null)}

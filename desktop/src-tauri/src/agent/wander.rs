@@ -4,7 +4,9 @@ use crate::agent::{
     resolve_chat_exchange_context, resolve_chat_exchange_response_stage, PreparedSessionAgentTurn,
     PreparedWanderTurn, SessionAgentTurnExecution,
 };
-use crate::commands::chat_state::{is_chat_runtime_cancel_requested, update_chat_runtime_state};
+use crate::commands::chat_state::{
+    begin_chat_runtime_state, is_chat_runtime_cancel_requested, update_chat_runtime_state,
+};
 use crate::AppState;
 
 pub fn execute_prepared_wander_turn(
@@ -16,13 +18,7 @@ pub fn execute_prepared_wander_turn(
     let request = turn.request_cloned();
     let context =
         resolve_chat_exchange_context(state, request.session_id.clone(), request.turn_kind)?;
-    let _ = update_chat_runtime_state(
-        state,
-        &context.working_session_id,
-        true,
-        String::new(),
-        None,
-    );
+    let _ = begin_chat_runtime_state(state, &context.working_session_id);
     let response_stage = resolve_chat_exchange_response_stage(
         Some(app),
         state,

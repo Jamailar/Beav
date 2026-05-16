@@ -1,4 +1,5 @@
 use arboard::{Clipboard, ImageData};
+use base64::Engine;
 use image::ImageReader;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -6,8 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    configure_background_command, normalize_base_url, now_iso, now_ms, payload_string,
-    AdvisorVideoRecord,
+    configure_background_command, normalize_base_url, now_iso, payload_string, AdvisorVideoRecord,
 };
 
 pub(crate) fn write_base64_payload_to_file(
@@ -20,27 +20,11 @@ pub(crate) fn write_base64_payload_to_file(
         .map(|(_, payload)| payload.trim())
         .filter(|payload| !payload.is_empty())
         .unwrap_or_else(|| encoded.trim());
-    let encoded_path = std::env::temp_dir().join(format!("redbox-audio-{}.b64", now_ms()));
-    fs::write(&encoded_path, normalized).map_err(|error| error.to_string())?;
-    let mut command = std::process::Command::new("base64");
-    configure_background_command(&mut command);
-    let output = command
-        .arg("-D")
-        .arg("-i")
-        .arg(&encoded_path)
-        .arg("-o")
-        .arg(output_path)
-        .output()
-        .map_err(|error| error.to_string())?;
-    let _ = fs::remove_file(&encoded_path);
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "base64 decode failed".to_string()
-        } else {
-            stderr
-        });
-    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(normalized)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(normalized))
+        .map_err(|error| format!("base64 decode failed: {error}"))?;
+    fs::write(output_path, bytes).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -172,7 +156,13 @@ fn run_curl_transcription_request(
             .arg("-H")
             .arg(format!("Authorization: Bearer {key}"));
     }
-    let output = command.output().map_err(|error| error.to_string())?;
+    let output = command.output().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "转写接口不可用：未找到 curl 程序".to_string()
+        } else {
+            error.to_string()
+        }
+    })?;
     let raw_stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !output.status.success() {

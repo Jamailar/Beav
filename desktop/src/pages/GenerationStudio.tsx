@@ -1647,6 +1647,10 @@ function buildImageModelOptions(settings: SettingsShape): PickerOption[] {
             }
         }
     }
+    const currentImageModel = String(settings.image_model || '').trim();
+    if (currentImageModel && !optionsByModel.has(currentImageModel)) {
+        optionsByModel.set(currentImageModel, { label: currentImageModel, sourceLabels: ['当前设置'] });
+    }
 
     return Array.from(optionsByModel.entries()).map(([value, option]) => ({
         value,

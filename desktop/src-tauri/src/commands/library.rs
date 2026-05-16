@@ -20,6 +20,7 @@ pub struct KnowledgeListPageRequest {
     pub kind: Option<String>,
     pub query: Option<String>,
     pub sort: Option<String>,
+    pub ready_for_wander_only: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -932,8 +933,15 @@ fn visual_blocks_for_document_source(
 }
 
 pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let page =
-        knowledge_index::catalog::list_page(state, None, 200, Some("redbook-note"), None, None)?;
+    let page = knowledge_index::catalog::list_page(
+        state,
+        None,
+        200,
+        Some("redbook-note"),
+        None,
+        None,
+        false,
+    )?;
     Ok(Value::Array(
         page.items
             .iter()
@@ -943,8 +951,15 @@ pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value,
 }
 
 pub(crate) fn knowledge_list_youtube_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let page =
-        knowledge_index::catalog::list_page(state, None, 200, Some("youtube-video"), None, None)?;
+    let page = knowledge_index::catalog::list_page(
+        state,
+        None,
+        200,
+        Some("youtube-video"),
+        None,
+        None,
+        false,
+    )?;
     Ok(Value::Array(
         page.items
             .iter()
@@ -954,8 +969,15 @@ pub(crate) fn knowledge_list_youtube_value(state: &State<'_, AppState>) -> Resul
 }
 
 pub(crate) fn knowledge_docs_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let page =
-        knowledge_index::catalog::list_page(state, None, 200, Some("document-source"), None, None)?;
+    let page = knowledge_index::catalog::list_page(
+        state,
+        None,
+        200,
+        Some("document-source"),
+        None,
+        None,
+        false,
+    )?;
     Ok(Value::Array(
         page.items
             .iter()
@@ -975,8 +997,92 @@ pub(crate) fn knowledge_list_page_value(
         payload.kind.as_deref(),
         payload.query.as_deref(),
         payload.sort.as_deref(),
+        payload.ready_for_wander_only.unwrap_or(false),
     )?;
     serde_json::to_value(page).map_err(|error| error.to_string())
+}
+
+fn is_knowledge_video_import(path: &Path) -> bool {
+    let (_, kind, _) = guess_mime_and_kind(path);
+    kind == "video"
+}
+
+fn local_video_knowledge_entry_request(
+    path: &Path,
+) -> Result<knowledge::KnowledgeEntryIngestRequest, String> {
+    let normalized = normalize_legacy_workspace_path(path);
+    let source = normalized.display().to_string();
+    let title = normalized
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("本地视频")
+        .to_string();
+    let content_hash = file_content_hash(&normalized)?;
+    Ok(knowledge::KnowledgeEntryIngestRequest {
+        kind: "xhs-video".to_string(),
+        source: knowledge::KnowledgeSourceInput {
+            app_id: Some("manual-import".to_string()),
+            source_url: Some(source.clone()),
+            source_link: Some(source.clone()),
+            captured_at: Some(now_iso()),
+            ..knowledge::KnowledgeSourceInput::default()
+        },
+        content: knowledge::KnowledgeEntryContentInput {
+            title,
+            author: Some("手动导入".to_string()),
+            ..knowledge::KnowledgeEntryContentInput::default()
+        },
+        assets: knowledge::KnowledgeEntryAssetsInput {
+            video_url: Some(source),
+            ..knowledge::KnowledgeEntryAssetsInput::default()
+        },
+        options: knowledge::KnowledgeIngestOptionsInput {
+            dedupe_key: Some(format!("manual-video:{content_hash}")),
+            allow_update: true,
+            summarize: false,
+            transcribe: true,
+        },
+        ..knowledge::KnowledgeEntryIngestRequest::default()
+    })
+}
+
+fn import_selected_knowledge_files(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    selected: &[PathBuf],
+    display_name: &str,
+) -> Result<Value, String> {
+    let (video_files, document_files): (Vec<PathBuf>, Vec<PathBuf>) = selected
+        .iter()
+        .cloned()
+        .partition(|path| is_knowledge_video_import(path));
+
+    let document_result = if document_files.is_empty() {
+        None
+    } else {
+        Some(knowledge::import_document_files(
+            app,
+            state,
+            &document_files,
+            display_name,
+        )?)
+    };
+
+    let mut video_results = Vec::new();
+    for video_file in &video_files {
+        let request = local_video_knowledge_entry_request(video_file)?;
+        video_results.push(knowledge::ingest_entry(Some(app), state, &request)?);
+    }
+
+    Ok(json!({
+        "success": true,
+        "kind": "mixed-file-import",
+        "documents": document_result,
+        "importedVideos": video_results.len(),
+        "videos": video_results,
+    }))
 }
 
 pub(crate) fn knowledge_get_item_detail_value(
@@ -1406,7 +1512,6 @@ pub fn handle_library_channel(
             "knowledge:transcribe" => {
                 let note_id = payload_value_as_string(payload).unwrap_or_default();
                 let _ = ensure_store_hydrated_for_knowledge(state);
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                 let note_snapshot = with_store(state, |store| {
                     Ok(store
                         .knowledge_notes
@@ -1417,64 +1522,18 @@ pub fn handle_library_channel(
                 let Some(note_snapshot) = note_snapshot else {
                     return Ok(json!({ "success": false, "error": "笔记不存在" }));
                 };
-                let transcript = if let Some(video_source) = note_snapshot
+                let Some(video_source) = note_snapshot
                     .video
                     .clone()
                     .or(note_snapshot.video_url.clone())
                     .filter(|item| !item.trim().is_empty())
-                {
-                    if let Some((endpoint, api_key, model_name)) =
-                        resolve_transcription_settings(&settings_snapshot)
-                    {
-                        let temp_dir = store_root(state)?.join("tmp");
-                        fs::create_dir_all(&temp_dir).map_err(|error| error.to_string())?;
-                        let target_path = temp_dir.join(format!("knowledge-{}-media", note_id));
-                        let source_path = resolve_local_path(&video_source);
-                        let mime_type = if video_source.ends_with(".mp3")
-                            || video_source.ends_with(".wav")
-                            || video_source.ends_with(".m4a")
-                        {
-                            "audio/*"
-                        } else {
-                            "video/*"
-                        };
-                        let local_media_path = if let Some(path) =
-                            source_path.filter(|path| path.exists())
-                        {
-                            path
-                        } else {
-                            let bytes = run_curl_bytes("GET", &video_source, None, &[], None)?;
-                            fs::write(&target_path, bytes).map_err(|error| error.to_string())?;
-                            target_path.clone()
-                        };
-                        run_curl_transcription(
-                            &endpoint,
-                            api_key.as_deref(),
-                            &model_name,
-                            &local_media_path,
-                            mime_type,
-                        )
-                        .unwrap_or_else(|_| {
-                            format!(
-                                "Transcript fallback\n\n标题：{}\n\n{}",
-                                note_snapshot.title,
-                                note_snapshot.content.chars().take(240).collect::<String>()
-                            )
-                        })
-                    } else {
-                        format!(
-                            "Transcript fallback\n\n标题：{}\n\n{}",
-                            note_snapshot.title,
-                            note_snapshot.content.chars().take(240).collect::<String>()
-                        )
-                    }
-                } else {
-                    format!(
-                        "Transcript fallback\n\n标题：{}\n\n{}",
-                        note_snapshot.title,
-                        note_snapshot.content.chars().take(240).collect::<String>()
-                    )
+                else {
+                    return Ok(
+                        json!({ "success": false, "error": "这条知识库记录没有可转录的视频来源" }),
+                    );
                 };
+                let transcript =
+                    knowledge::transcribe_note_media_source(state, &note_id, &video_source)?;
                 knowledge::persist_note_transcript(app, state, &note_id, &transcript)
             }
             "knowledge:docs:add-files"
@@ -1487,7 +1546,7 @@ pub fn handle_library_channel(
                 };
 
                 let root = if channel == "knowledge:docs:add-files" {
-                    let selected = pick_files_native("选择要导入的文档文件", false, true)?;
+                    let selected = pick_files_native("选择要导入的文档或视频文件", false, true)?;
                     if selected.is_empty() {
                         return Ok(json!({ "success": false, "error": "未选择文件" }));
                     }
@@ -1496,7 +1555,7 @@ pub fn handle_library_channel(
                         title,
                         with_store(state, |store| Ok(store.active_space_id.clone()))?
                     );
-                    return knowledge::import_document_files(app, state, &selected, &display_name);
+                    return import_selected_knowledge_files(app, state, &selected, &display_name);
                 } else {
                     let selected = pick_files_native(
                         if channel == "knowledge:docs:add-folder" {

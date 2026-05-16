@@ -1228,6 +1228,13 @@ fn apply_official_settings_update(
         merge_official_settings(&mut store.settings, settings);
         Ok(())
     })?;
+    if let Err(error) = crate::model_config::sync_model_config_file(&state.store_path, settings) {
+        log_official_auth(
+            state,
+            "model-config-sync-failed",
+            format!("source={source} error={error}"),
+        );
+    }
     let _ = auth::sync_auth_runtime_from_settings(Some(app), state, settings);
     let _ = app.emit(
         "settings:updated",

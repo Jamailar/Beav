@@ -433,6 +433,20 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     return { success: true };
   }
   if (channel === 'chat:transcribe-audio') {
+    const normalized = message.toLowerCase();
+    if (
+      normalized.includes('program not found')
+      || normalized.includes('not found')
+      || normalized.includes('未找到')
+      || normalized.includes('transcription_unavailable')
+    ) {
+      return {
+        success: false,
+        reason: 'transcription_unavailable',
+        error: '音频已接收，但当前转写服务不可用',
+        diagnostic: message,
+      };
+    }
     return { success: false, error: `${APP_BRAND.displayName} audio transcription failed: ${message}` };
   }
   if (channel === 'audio:get-capture-capability') {

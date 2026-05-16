@@ -42,6 +42,56 @@ function droppedPaths(paths: string[] | null | undefined): string[] {
     .filter(Boolean)));
 }
 
+function pickFilesFromBrowserInput(): Promise<File[]> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.top = '0';
+    input.style.opacity = '0';
+
+    let settled = false;
+    const cleanup = () => {
+      input.removeEventListener('change', handleChange);
+      window.removeEventListener('focus', handleFocus);
+      input.remove();
+    };
+    const finish = (files: File[]) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(focusTimerId);
+      cleanup();
+      resolve(files);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(focusTimerId);
+      cleanup();
+      reject(error);
+    };
+    function handleChange() {
+      finish(droppedFiles(input.files));
+    }
+    function handleFocus() {
+      window.clearTimeout(focusTimerId);
+      focusTimerId = window.setTimeout(() => finish(droppedFiles(input.files)), 250);
+    }
+
+    let focusTimerId = window.setTimeout(() => undefined, 0);
+    input.addEventListener('change', handleChange);
+    window.addEventListener('focus', handleFocus);
+    document.body.appendChild(input);
+    try {
+      input.click();
+    } catch (error) {
+      fail(error);
+    }
+  });
+}
+
 function isTauriRuntime(): boolean {
   if (typeof window === 'undefined') return false;
   const tauriWindow = window as unknown as {
@@ -536,6 +586,18 @@ export function useChatAttachments({
 
   const pickAttachment = useCallback(async () => {
     if (isProcessing) return;
+    if (!allowFileUpload) return;
+    try {
+      const pickedFiles = await pickFilesFromBrowserInput();
+      if (pickedFiles.length === 0) return;
+      for (const file of pickedFiles) {
+        await attachFile(file);
+      }
+      return;
+    } catch (error) {
+      setErrorNotice(error instanceof Error ? error.message : String(error || '选择文件失败'));
+    }
+
     setIsAttachmentUploading(true);
     setErrorNotice(null);
     try {
@@ -557,7 +619,7 @@ export function useChatAttachments({
     } finally {
       setIsAttachmentUploading(false);
     }
-  }, [appendPendingAttachment, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
+  }, [allowFileUpload, appendPendingAttachment, attachFile, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
 
   return {
     clearPendingAttachment,

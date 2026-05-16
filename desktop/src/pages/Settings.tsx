@@ -1787,8 +1787,14 @@ export function Settings({
   }, [filterVideoAnalysisModels, getSourceModelList, selectedVideoAnalysisSource]);
 
   const imageSourceModels = useMemo(() => {
-    return selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
-  }, [getSourceModelList, selectedImageSource]);
+    const models = selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
+    const currentModel = String(formData.image_model || '').trim();
+    if (!currentModel || models.some((model) => model.id === currentModel)) {
+      return models;
+    }
+    const descriptor = toAiModelDescriptor({ id: currentModel, capabilities: ['image'] });
+    return descriptor ? [descriptor, ...models] : models;
+  }, [formData.image_model, getSourceModelList, selectedImageSource]);
 
   const addModelModalRemoteModels = useMemo(() => {
     if (!addModelModalSource) return [];
@@ -7334,7 +7340,7 @@ export function Settings({
                             </label>
                             <AiSourceSelect
                               value={imageSourceId}
-                              sources={aiSources}
+                              sources={displayedAiSources}
                               onChange={(nextSourceId) => handleLinkedSourceChange('image', nextSourceId)}
                               className="w-full"
                             />
