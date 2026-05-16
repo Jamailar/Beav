@@ -62,6 +62,115 @@ const isVideoAssetUrl = (value: string): boolean => {
 };
 
 const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
+const CHAT_VIDEO_MAX_HEIGHT = 512;
+const DEFAULT_CHAT_VIDEO_ASPECT_RATIO = 16 / 9;
+
+function ChatVideoPlayer({
+  src,
+  poster,
+  className,
+  title,
+  onContextMenu,
+}: {
+  src: string;
+  poster?: string;
+  className?: string;
+  title?: string;
+  onContextMenu?: React.MouseEventHandler<HTMLVideoElement>;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const posterSeekRef = useRef(false);
+  const [aspectRatio, setAspectRatio] = useState(DEFAULT_CHAT_VIDEO_ASPECT_RATIO);
+  const [capturedPoster, setCapturedPoster] = useState('');
+  const resolvedPoster = poster || capturedPoster || undefined;
+  const shouldCapturePoster = !poster;
+
+  useEffect(() => {
+    setAspectRatio(DEFAULT_CHAT_VIDEO_ASPECT_RATIO);
+    setCapturedPoster('');
+    posterSeekRef.current = false;
+  }, [src, poster]);
+
+  const updateAspectRatio = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+    const nextRatio = video.videoWidth / video.videoHeight;
+    if (Number.isFinite(nextRatio) && nextRatio > 0) {
+      setAspectRatio(nextRatio);
+    }
+  }, []);
+
+  const capturePosterFrame = useCallback(() => {
+    updateAspectRatio();
+    if (!shouldCapturePoster || capturedPoster) return;
+    const video = videoRef.current;
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      setCapturedPoster(canvas.toDataURL('image/jpeg', 0.82));
+    } catch {
+      // Local/remote media may be unavailable to canvas; the player still renders normally.
+    }
+  }, [capturedPoster, shouldCapturePoster, updateAspectRatio]);
+
+  const preparePosterFrame = useCallback(() => {
+    updateAspectRatio();
+    if (!shouldCapturePoster) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const duration = Number.isFinite(video.duration) ? video.duration : 1;
+    const targetTime = Math.min(0.5, Math.max(0, duration - 0.05));
+    if (Math.abs(video.currentTime - targetTime) > 0.05) {
+      try {
+        posterSeekRef.current = true;
+        video.currentTime = targetTime;
+      } catch {
+        capturePosterFrame();
+      }
+    } else {
+      capturePosterFrame();
+    }
+  }, [capturePosterFrame, shouldCapturePoster, updateAspectRatio]);
+
+  const safeAspectRatio = Number.isFinite(aspectRatio) && aspectRatio > 0
+    ? aspectRatio
+    : DEFAULT_CHAT_VIDEO_ASPECT_RATIO;
+  const maxWidth = `${Math.max(180, Math.round(CHAT_VIDEO_MAX_HEIGHT * safeAspectRatio))}px`;
+
+  return (
+    <div
+      className={clsx('my-3 w-full overflow-hidden rounded-xl border border-border bg-black shadow-sm', className)}
+      style={{ aspectRatio: safeAspectRatio, maxWidth }}
+    >
+      <video
+        ref={videoRef}
+        src={src}
+        poster={resolvedPoster}
+        controls
+        preload="metadata"
+        playsInline
+        className="h-full w-full bg-black object-contain"
+        onLoadedMetadata={updateAspectRatio}
+        onLoadedData={preparePosterFrame}
+        onSeeked={capturePosterFrame}
+        onPlay={() => {
+          const video = videoRef.current;
+          if (posterSeekRef.current && video) {
+            posterSeekRef.current = false;
+            video.currentTime = 0;
+          }
+        }}
+        onContextMenu={onContextMenu}
+        title={title}
+      />
+    </div>
+  );
+}
 
 // 当新增系统提示词或标签时，需要同步在此添加对应的过滤模式
 const INTERNAL_PROTOCOL_BLOCKS = [
@@ -957,11 +1066,8 @@ export const MessageItem = memo(({
       if (!mediaUrl) return <span className="text-xs text-text-tertiary">资源地址无效</span>;
       if (isVideoAssetUrl(mediaUrl)) {
         return (
-          <video
+          <ChatVideoPlayer
             src={mediaUrl}
-            controls
-            preload="metadata"
-            className="my-3 max-h-[32rem] w-full max-w-full rounded-xl border border-border bg-surface-secondary shadow-sm"
             onContextMenu={(event) => handleMediaContextMenu(event, mediaUrl, rawSource)}
             title="右键复制或在文件夹中打开"
           />
@@ -1039,6 +1145,16 @@ export const MessageItem = memo(({
         || '',
     ).trim()
   ), []);
+
+  const resolveUploadedAttachmentPoster = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    const preferred = String(
+      attachment.thumbnailDataUrl
+        || attachment.thumbnailUrl
+        || '',
+    ).trim();
+    if (!preferred) return '';
+    return preferred.startsWith('data:') ? preferred : resolveAssetUrl(preferred);
+  }, []);
 
   const renderYoutubeCard = (card: { title: string; thumbnailUrl?: string }) => (
     <div className="bg-white/10 rounded-lg overflow-hidden">
@@ -1161,11 +1277,24 @@ export const MessageItem = memo(({
   };
 
   const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    if (isUploadedVideoAttachment(attachment)) {
+      const actionSource = resolveUploadedAttachmentActionSource(attachment);
+      const videoSource = actionSource ? resolveAssetUrl(actionSource) : '';
+      const posterSource = resolveUploadedAttachmentPoster(attachment);
+      if (videoSource) {
+        return (
+          <ChatVideoPlayer
+            src={videoSource}
+            poster={posterSource || undefined}
+            onContextMenu={(event) => handleMediaContextMenu(event, videoSource, actionSource)}
+            title={attachment.name}
+          />
+        );
+      }
+    }
     const imageSrc = isUploadedImageAttachment(attachment)
       ? resolveUploadedAttachmentSource(attachment)
-      : isUploadedVideoAttachment(attachment)
-        ? resolveUploadedAttachmentSource(attachment)
-        : '';
+      : '';
     const actionSource = resolveUploadedAttachmentActionSource(attachment);
     if (imageSrc) {
       return (
