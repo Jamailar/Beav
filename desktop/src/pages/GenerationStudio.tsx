@@ -29,7 +29,7 @@ import { APP_BRAND } from '../config/brand';
 import type { GenerationIntent, PendingChatMessage } from '../App';
 import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
-import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, normalizeMediaJobProjection, type MediaJobProjection } from '../features/media-jobs/types';
 import { Chat } from './Chat';
 import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources } from './settings/shared';
@@ -2654,7 +2654,10 @@ export function GenerationStudio({
     const [coverPromptSwitches, setCoverPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_COVER_PROMPT_SWITCHES);
     const [isReadingCoverRefs, setIsReadingCoverRefs] = useState(false);
     const [coverError, setCoverError] = useState('');
-    const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
+    const trackedJobs = useMediaJobsStore(
+        useCallback((state) => Object.values(state.jobsById), []),
+        shallowArrayEqual,
+    );
     const isAgentMode = generationSurface === 'agent';
     const activeGenerationProjectId = studioMode === 'image'
         ? imageProjectId
@@ -2848,34 +2851,33 @@ export function GenerationStudio({
         })();
     }, [ensureAgentFeedEntry, generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode]);
 
-	    useEffect(() => {
-	        updateFeedEntries((prev) => {
-	            const trackedJobs = Object.values(trackedJobsById);
-	            return mergeMediaJobsIntoFeedEntries(prev, trackedJobs, deletedFeedStateRef.current);
-	        });
-	    }, [trackedJobsById, updateFeedEntries]);
+    useEffect(() => {
+        updateFeedEntries((prev) => {
+            return mergeMediaJobsIntoFeedEntries(prev, trackedJobs, deletedFeedStateRef.current);
+        });
+    }, [trackedJobs, updateFeedEntries]);
 
-	    useEffect(() => {
-	        if (!isActive) return;
-	        let cancelled = false;
+    useEffect(() => {
+        if (!isActive) return;
+        let cancelled = false;
 
-	        void (async () => {
-	            try {
-	                const result = await window.ipcRenderer.generation.listJobs({ limit: 100 }) as { items?: unknown[] };
-	                if (cancelled || !Array.isArray(result?.items)) return;
-	                const jobs = result.items
-	                    .map(normalizeMediaJobProjection)
-	                    .filter((item): item is MediaJobProjection => Boolean(item));
-	                updateFeedEntries((prev) => mergeMediaJobsIntoFeedEntries(prev, jobs, deletedFeedStateRef.current));
-	            } catch (error) {
-	                console.error('Failed to bootstrap generation jobs:', error);
-	            }
-	        })();
+        void (async () => {
+            try {
+                const result = await window.ipcRenderer.generation.listJobs({ limit: 100 }) as { items?: unknown[] };
+                if (cancelled || !Array.isArray(result?.items)) return;
+                const jobs = result.items
+                    .map(normalizeMediaJobProjection)
+                    .filter((item): item is MediaJobProjection => Boolean(item));
+                updateFeedEntries((prev) => mergeMediaJobsIntoFeedEntries(prev, jobs, deletedFeedStateRef.current));
+            } catch (error) {
+                console.error('Failed to bootstrap generation jobs:', error);
+            }
+        })();
 
-	        return () => {
-	            cancelled = true;
-	        };
-	    }, [isActive, updateFeedEntries]);
+        return () => {
+            cancelled = true;
+        };
+    }, [isActive, updateFeedEntries]);
 
     useEffect(() => {
         if (!previewAsset) return;

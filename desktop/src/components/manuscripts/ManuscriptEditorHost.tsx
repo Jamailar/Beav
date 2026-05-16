@@ -27,7 +27,7 @@ import { EditorLayoutToggleButton } from './EditorLayoutToggleButton';
 import { appAlert, appConfirm } from '../../utils/appDialogs';
 import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from '../../App';
 import { useMediaJobSubscription } from '../../features/media-jobs/useMediaJobSubscription';
-import { useMediaJobsStore } from '../../features/media-jobs/useMediaJobsStore';
+import { shallowArrayEqual, useMediaJobsByIds, useMediaJobsStore } from '../../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../../features/media-jobs/types';
 import { usePageRefresh } from '../../hooks/usePageRefresh';
 import { composeMarkdownWithFrontmatter, parseMarkdownFrontmatter } from '../../utils/markdownFrontmatter';
@@ -843,7 +843,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const skipEditorTitleBlurCommitRef = useRef(false);
     const handledImageTerminalJobIdRef = useRef<string | null>(null);
     const handledVideoTerminalJobIdRef = useRef<string | null>(null);
-    const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
     const isMediaScope = filter === 'media' || filter === 'image' || filter === 'video' || filter === 'audio';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
@@ -871,14 +870,24 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, [editorDescriptor?.title, isEditorTitleEditing]);
 
-    const manuscriptMediaJobs = useMemo(
-        () => sortMediaJobsByRecency(
-            Object.values(trackedJobsById).filter((job) => (
+    const manuscriptMediaJobs = useMediaJobsStore(useCallback(
+        (state) => sortMediaJobsByRecency(
+            Object.values(state.jobsById).filter((job) => (
                 job.source === 'manuscripts' && isSameDraftRelativePath(job.manuscriptPath, editorFile)
             )),
         ),
-        [editorFile, trackedJobsById],
-    );
+        [editorFile],
+    ), shallowArrayEqual);
+    const activeMediaJobIds = useMemo(() => {
+        const ids: string[] = [];
+        if (activeImageJobId) ids.push(activeImageJobId);
+        if (activeVideoJobId && activeVideoJobId !== activeImageJobId) ids.push(activeVideoJobId);
+        return ids;
+    }, [activeImageJobId, activeVideoJobId]);
+    const activeMediaJobs = useMediaJobsByIds(activeMediaJobIds);
+    const activeMediaJobsById = useMemo(() => (
+        Object.fromEntries(activeMediaJobs.map((job) => [job.jobId, job])) as Record<string, MediaJobProjection>
+    ), [activeMediaJobs]);
     const trackedMediaJobIds = useMemo(() => {
         const ids = new Set<string>();
         if (activeImageJobId) ids.add(activeImageJobId);
@@ -890,22 +899,22 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [activeImageJobId, activeVideoJobId, manuscriptMediaJobs]);
     const currentImageJob = useMemo(() => {
         if (activeImageJobId) {
-            const activeJob = trackedJobsById[activeImageJobId];
+            const activeJob = activeMediaJobsById[activeImageJobId];
             if (activeJob && activeJob.kind === 'image' && isSameDraftRelativePath(activeJob.manuscriptPath, editorFile)) {
                 return activeJob;
             }
         }
         return manuscriptMediaJobs.find((job) => job.kind === 'image') || null;
-    }, [activeImageJobId, editorFile, manuscriptMediaJobs, trackedJobsById]);
+    }, [activeImageJobId, activeMediaJobsById, editorFile, manuscriptMediaJobs]);
     const currentVideoJob = useMemo(() => {
         if (activeVideoJobId) {
-            const activeJob = trackedJobsById[activeVideoJobId];
+            const activeJob = activeMediaJobsById[activeVideoJobId];
             if (activeJob && activeJob.kind === 'video' && isSameDraftRelativePath(activeJob.manuscriptPath, editorFile)) {
                 return activeJob;
             }
         }
         return manuscriptMediaJobs.find((job) => job.kind === 'video') || null;
-    }, [activeVideoJobId, editorFile, manuscriptMediaJobs, trackedJobsById]);
+    }, [activeMediaJobsById, activeVideoJobId, editorFile, manuscriptMediaJobs]);
 
     useMediaJobSubscription(trackedMediaJobIds, {
         enabled: isActive && Boolean(editorFile),

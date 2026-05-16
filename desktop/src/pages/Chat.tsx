@@ -1036,6 +1036,10 @@ export function Chat({
   // Throttle buffer for streaming updates
   const pendingUpdateRef = useRef<{ content: string } | null>(null);
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingThoughtUpdateRef = useRef<{ content: string } | null>(null);
+  const thoughtUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingCliLogUpdatesRef = useRef<Record<string, string>>({});
+  const cliLogUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStreamChunkRef = useRef<{ content: string; at: number }>({ content: '', at: 0 });
   const localMessageMutationRef = useRef(0);
   const skipNextFixedSessionLoadRef = useRef<string | null>(null);
@@ -1198,6 +1202,16 @@ export function Chat({
       updateTimerRef.current = null;
     }
     pendingUpdateRef.current = null;
+    if (thoughtUpdateTimerRef.current) {
+      clearTimeout(thoughtUpdateTimerRef.current);
+      thoughtUpdateTimerRef.current = null;
+    }
+    pendingThoughtUpdateRef.current = null;
+    if (cliLogUpdateTimerRef.current) {
+      clearTimeout(cliLogUpdateTimerRef.current);
+      cliLogUpdateTimerRef.current = null;
+    }
+    pendingCliLogUpdatesRef.current = {};
     setSelectionMenu((prev) => ({ ...prev, visible: false }));
     setComposerSuppressed(false);
   }, [blurComposer, debugUi, isActive, suppressComposerFocus]);
@@ -1961,7 +1975,7 @@ export function Chat({
       }
       await window.ipcRenderer.chat.clearMessages(currentSessionId);
       missedChunksRef.current = '';
-      flushPendingAssistantChunk();
+      flushPendingStreamingUpdates();
       setIsProcessing(false);
       setConfirmRequest(null);
       setCliEscalationRequest(null);
@@ -2040,6 +2054,79 @@ export function Chat({
     });
   }, []);
 
+  const appendThoughtChunk = useCallback((chunk: string) => {
+    if (!chunk) return;
+    setMessages(prev => {
+      const lastReplyIndex = findLastAssistantReplyIndex(prev);
+      if (lastReplyIndex === -1) return prev;
+      const next = [...prev];
+      const lastMsg = next[lastReplyIndex];
+      const now = Date.now();
+      const timeline = [...lastMsg.timeline];
+      const thoughtIndex = findLastRunningTimelineThoughtIndex(timeline);
+
+      if (thoughtIndex === -1) {
+        timeline.push({
+          id: `thought_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          type: 'thought',
+          content: chunk,
+          status: 'running',
+          timestamp: now,
+        });
+      } else {
+        const thoughtItem = timeline[thoughtIndex];
+        timeline[thoughtIndex] = {
+          ...thoughtItem,
+          content: mergeThoughtDelta(thoughtItem.content || '', chunk),
+        };
+      }
+
+      next[lastReplyIndex] = {
+        ...lastMsg,
+        messageType: 'reply',
+        suppressPendingIndicator: true,
+        timeline,
+      };
+      return next;
+    });
+  }, []);
+
+  const appendCliLogChunks = useCallback((chunksByExecutionId: Record<string, string>) => {
+    const entries = Object.entries(chunksByExecutionId)
+      .filter(([executionId, chunk]) => Boolean(executionId && chunk));
+    if (entries.length === 0) return;
+
+    setMessages((prev) => {
+      const lastReplyIndex = findLastAssistantReplyIndex(prev);
+      if (lastReplyIndex === -1) return prev;
+      const next = [...prev];
+      const lastMsg = next[lastReplyIndex];
+      const timeline = [...lastMsg.timeline];
+      let changed = false;
+
+      for (const [executionId, chunk] of entries) {
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-exec' && item.cliData?.executionId === executionId,
+        );
+        if (existingIndex === -1) continue;
+        const target = timeline[existingIndex];
+        timeline[existingIndex] = {
+          ...target,
+          cliData: {
+            ...target.cliData,
+            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', chunk),
+          },
+        };
+        changed = true;
+      }
+
+      if (!changed) return prev;
+      next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+      return next;
+    });
+  }, []);
+
   const flushPendingAssistantChunk = useCallback(() => {
     if (updateTimerRef.current) {
       clearTimeout(updateTimerRef.current);
@@ -2052,6 +2139,36 @@ export function Chat({
       appendAssistantChunk(chunk);
     }
   }, [appendAssistantChunk]);
+
+  const flushPendingThoughtChunk = useCallback(() => {
+    if (thoughtUpdateTimerRef.current) {
+      clearTimeout(thoughtUpdateTimerRef.current);
+      thoughtUpdateTimerRef.current = null;
+    }
+
+    const chunk = pendingThoughtUpdateRef.current?.content || '';
+    pendingThoughtUpdateRef.current = null;
+    if (chunk) {
+      appendThoughtChunk(chunk);
+    }
+  }, [appendThoughtChunk]);
+
+  const flushPendingCliLogChunks = useCallback(() => {
+    if (cliLogUpdateTimerRef.current) {
+      clearTimeout(cliLogUpdateTimerRef.current);
+      cliLogUpdateTimerRef.current = null;
+    }
+
+    const chunksByExecutionId = pendingCliLogUpdatesRef.current;
+    pendingCliLogUpdatesRef.current = {};
+    appendCliLogChunks(chunksByExecutionId);
+  }, [appendCliLogChunks]);
+
+  const flushPendingStreamingUpdates = useCallback(() => {
+    flushPendingThoughtChunk();
+    flushPendingCliLogChunks();
+    flushPendingAssistantChunk();
+  }, [flushPendingAssistantChunk, flushPendingCliLogChunks, flushPendingThoughtChunk]);
 
   useEffect(() => {
     if (!isActive || fixedSessionMode) return;
@@ -2174,44 +2291,25 @@ export function Chat({
         });
         return;
       }
-      setMessages(prev => {
-        const lastReplyIndex = findLastAssistantReplyIndex(prev);
-        if (lastReplyIndex === -1) return prev;
-        const next = [...prev];
-        const lastMsg = next[lastReplyIndex];
-        const now = Date.now();
-        const timeline = [...lastMsg.timeline];
-        const thoughtIndex = findLastRunningTimelineThoughtIndex(timeline);
-
-        if (thoughtIndex === -1) {
-          timeline.push({
-            id: `thought_${now}_${Math.random().toString(36).slice(2, 8)}`,
-            type: 'thought',
-            content,
-            status: 'running',
-            timestamp: now,
-          });
-        } else {
-          const thoughtItem = timeline[thoughtIndex];
-          timeline[thoughtIndex] = {
-            ...thoughtItem,
-            content: mergeThoughtDelta(thoughtItem.content || '', content),
-          };
-        }
-
-        next[lastReplyIndex] = {
-          ...lastMsg,
-          messageType: 'reply',
-          suppressPendingIndicator: true,
-          timeline,
-        };
-        return next;
-      });
+      if (!pendingThoughtUpdateRef.current) {
+        pendingThoughtUpdateRef.current = { content: '' };
+      }
+      pendingThoughtUpdateRef.current.content = mergeThoughtDelta(
+        pendingThoughtUpdateRef.current.content,
+        content,
+      );
+      if (!thoughtUpdateTimerRef.current) {
+        thoughtUpdateTimerRef.current = setTimeout(() => {
+          thoughtUpdateTimerRef.current = null;
+          flushPendingThoughtChunk();
+        }, STREAM_UPDATE_INTERVAL_MS);
+      }
     };
 
     // 4. Thought End
     const handleThoughtEnd = (_: unknown) => {
       if (!isActiveRef.current) return;
+      flushPendingThoughtChunk();
       setMessages(prev => {
         const lastReplyIndex = findLastAssistantReplyIndex(prev);
         if (lastReplyIndex === -1) return prev;
@@ -2236,7 +2334,7 @@ export function Chat({
       });
     };
 
-  const handleResponseChunk = (_: unknown, { content }: { content: string }) => {
+    const handleResponseChunk = (_: unknown, { content }: { content: string }) => {
       if (!isActiveRef.current) {
         if (import.meta.env.DEV) {
           console.warn('[ui][chat] inactive page received response chunk');
@@ -2251,6 +2349,7 @@ export function Chat({
         });
         return;
       }
+      flushPendingThoughtChunk();
       setMessages(prev => {
         const runningThinkingIndex = findLastRunningThinkingIndex(prev);
         if (runningThinkingIndex === -1) return prev;
@@ -2648,28 +2747,16 @@ export function Chat({
       chunk: string;
     }) => {
       if (!isActiveRef.current || !cliData.chunk) return;
-      setMessages((prev) => {
-        const lastReplyIndex = findLastAssistantReplyIndex(prev);
-        if (lastReplyIndex === -1) return prev;
-        const next = [...prev];
-        const lastMsg = next[lastReplyIndex];
-        const timeline = [...lastMsg.timeline];
-        const existingIndex = findLatestTimelineItemIndex(
-          timeline,
-          (item) => item.type === 'cli-exec' && item.cliData?.executionId === cliData.executionId,
-        );
-        if (existingIndex === -1) return prev;
-        const target = timeline[existingIndex];
-        timeline[existingIndex] = {
-          ...target,
-          cliData: {
-            ...target.cliData,
-            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', cliData.chunk),
-          },
-        };
-        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
-        return next;
-      });
+      pendingCliLogUpdatesRef.current[cliData.executionId] = appendCliLogPreview(
+        pendingCliLogUpdatesRef.current[cliData.executionId] || '',
+        cliData.chunk,
+      );
+      if (!cliLogUpdateTimerRef.current) {
+        cliLogUpdateTimerRef.current = setTimeout(() => {
+          cliLogUpdateTimerRef.current = null;
+          flushPendingCliLogChunks();
+        }, STREAM_UPDATE_INTERVAL_MS);
+      }
     };
 
     const handleCliExecutionStatus = (_: unknown, cliData: {
@@ -2873,7 +2960,7 @@ export function Chat({
       responseCompletedRef.current = true;
       suppressComposerFocus('response_end', 5000);
       blurComposer('response_end');
-      flushPendingAssistantChunk();
+      flushPendingStreamingUpdates();
       const finalContent = typeof payload?.content === 'string' ? payload.content : '';
       const streamStats = streamStatsRef.current;
       debugUi('chat:response_end:ui', {
@@ -2996,7 +3083,7 @@ export function Chat({
       if (!isActiveRef.current) return;
       suppressComposerFocus('cancelled', 3000);
       blurComposer('cancelled');
-      flushPendingAssistantChunk();
+      flushPendingStreamingUpdates();
       missedChunksRef.current = '';
       debugUi('response_cancelled', {
         sessionId: currentSessionIdRef.current,
@@ -3077,6 +3164,7 @@ export function Chat({
       }
       suppressComposerFocus('error', 3000);
       blurComposer('error');
+      flushPendingStreamingUpdates();
       const notice = normalizeChatErrorNotice(error);
       const errorTimelineItem = buildChatErrorTimelineItem(error, notice);
       debugUi('response_error', {
@@ -3296,10 +3384,29 @@ export function Chat({
 
       // Cleanup timer
       if (updateTimerRef.current) {
-          clearTimeout(updateTimerRef.current);
+        clearTimeout(updateTimerRef.current);
+        updateTimerRef.current = null;
       }
+      pendingUpdateRef.current = null;
+      if (thoughtUpdateTimerRef.current) {
+        clearTimeout(thoughtUpdateTimerRef.current);
+        thoughtUpdateTimerRef.current = null;
+      }
+      pendingThoughtUpdateRef.current = null;
+      if (cliLogUpdateTimerRef.current) {
+        clearTimeout(cliLogUpdateTimerRef.current);
+        cliLogUpdateTimerRef.current = null;
+      }
+      pendingCliLogUpdatesRef.current = {};
     };
-  }, [debugUi, flushPendingAssistantChunk, isActive]);
+  }, [
+    debugUi,
+    flushPendingAssistantChunk,
+    flushPendingCliLogChunks,
+    flushPendingStreamingUpdates,
+    flushPendingThoughtChunk,
+    isActive,
+  ]);
 
   const getChatModelConfig = useCallback(() => {
     if (!selectedChatModel) return undefined;

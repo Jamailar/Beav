@@ -4,7 +4,7 @@ import { appAlert, appConfirm } from '../utils/appDialogs';
 import { buildAudioDataUrl } from '../features/audio-input/audioInput';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
-import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { useMediaJobsByIds } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import {
@@ -489,8 +489,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         y: 0,
         asset: null,
     });
-    const voiceJobsById = useMediaJobsStore((state) => state.jobsById);
-
     const clearAssetModalAnimationHandles = useCallback(() => {
         if (assetModalAnimationTimerRef.current !== null) {
             window.clearTimeout(assetModalAnimationTimerRef.current);
@@ -628,6 +626,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             .filter(Boolean))),
         [subjects],
     );
+    const voiceJobs = useMediaJobsByIds(voiceJobIds);
+    const voiceJobsById = useMemo(() => (
+        Object.fromEntries(voiceJobs.map((job) => [job.jobId, job])) as Record<string, MediaJobProjection>
+    ), [voiceJobs]);
     const voiceJobBootstrapFilter = useMemo(() => ({ kind: 'voice_clone' as const, limit: 100 }), []);
 
     useMediaJobSubscription(voiceJobIds, {
@@ -637,8 +639,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     useEffect(() => {
         if (!isActive) return;
-        for (const jobId of voiceJobIds) {
-            const job = voiceJobsById[jobId];
+        for (const job of voiceJobs) {
+            const jobId = job.jobId;
             if (!job || !isMediaJobTerminal(job.status) || refreshedVoiceJobIdsRef.current.has(jobId)) {
                 continue;
             }
@@ -646,7 +648,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             void loadData();
             break;
         }
-    }, [isActive, loadData, voiceJobIds, voiceJobsById]);
+    }, [isActive, loadData, voiceJobs]);
 
     const categoryNameMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
     const activeDraftSubject = useMemo(
