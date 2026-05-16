@@ -695,6 +695,11 @@ select {
   padding-right: 0;
 }
 
+.app-auth-titlebar.app-titlebar--windows {
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: transparent;
+}
+
 .app-titlebar-button {
   position: relative;
   display: inline-flex;

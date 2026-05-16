@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
-import { ChevronDown, FileText, Link2, Loader2, MessageSquareWarning, ShieldCheck } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
+import { ChevronDown, FileText, Link2, Loader2, MessageSquareWarning, ShieldCheck, Minus, Square, X } from 'lucide-react';
 import QRCode from 'qrcode';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
@@ -1202,6 +1202,91 @@ type OfficialAuthGateMode = 'checking' | 'login' | 'expired';
 type LoginNoticeType = 'idle' | 'success' | 'error';
 type OfficialAuthRealm = 'cn' | 'global';
 type LlmSetupTab = 'official' | 'custom';
+type AppShellPlatform = 'mac' | 'windows' | null;
+
+function getAppShellPlatform(): AppShellPlatform {
+  if (typeof navigator === 'undefined') return null;
+  const platform = navigator.platform || '';
+  const userAgent = navigator.userAgent || '';
+  if (/\bMac\b/i.test(platform) || /\bMac OS X\b/i.test(userAgent)) return 'mac';
+  if (/\bWin/i.test(platform) || /\bWindows\b/i.test(userAgent)) return 'windows';
+  return null;
+}
+
+function TransparentWindowTitleBar() {
+  const platform = getAppShellPlatform();
+  if (platform !== 'windows') return null;
+
+  const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
+    event.preventDefault();
+    void window.ipcRenderer.windowControls.startDragging().catch((error) => {
+      console.warn(`[${APP_BRAND.displayName}] failed to start window drag:`, error);
+    });
+  };
+
+  const toggleWindowMaximize = () => {
+    void window.ipcRenderer.windowControls.toggleMaximize().catch((error) => {
+      console.warn(`[${APP_BRAND.displayName}] failed to toggle window maximize:`, error);
+    });
+  };
+
+  const handleTitleBarDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
+    toggleWindowMaximize();
+  };
+
+  return (
+    <header
+      data-tauri-drag-region
+      onMouseDown={startWindowDrag}
+      onDoubleClick={handleTitleBarDoubleClick}
+      className="app-titlebar app-auth-titlebar app-titlebar--windows shrink-0"
+    >
+      <div data-tauri-drag-region className="app-titlebar-title" />
+      <div className="app-titlebar-window-controls" data-no-window-drag>
+        <button
+          type="button"
+          onClick={() => {
+            void window.ipcRenderer.windowControls.minimize();
+          }}
+          className="app-titlebar-window-button"
+          title="最小化"
+          aria-label="最小化"
+          data-no-window-drag
+        >
+          <Minus className="h-[14px] w-[14px]" strokeWidth={1.8} />
+        </button>
+        <button
+          type="button"
+          onClick={toggleWindowMaximize}
+          className="app-titlebar-window-button"
+          title="最大化"
+          aria-label="最大化"
+          data-no-window-drag
+        >
+          <Square className="h-[11px] w-[11px]" strokeWidth={1.8} />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            void window.ipcRenderer.windowControls.close();
+          }}
+          className="app-titlebar-window-button app-titlebar-window-button--close"
+          title="关闭"
+          aria-label="关闭"
+          data-no-window-drag
+        >
+          <X className="h-[14px] w-[14px]" strokeWidth={1.8} />
+        </button>
+      </div>
+    </header>
+  );
+}
 
 function isLikelyImageUrl(value: string): boolean {
   const normalized = String(value || '').trim().toLowerCase();
@@ -1495,6 +1580,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
   return (
     <>
       <div className="min-h-screen overflow-hidden bg-[rgb(var(--color-background))] text-slate-950">
+        <TransparentWindowTitleBar />
         <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_85%,rgb(var(--color-accent-primary)/0.18),transparent_34%),radial-gradient(circle_at_32%_45%,rgb(var(--color-accent-muted)/0.5),transparent_28%),linear-gradient(135deg,rgb(var(--color-background))_0%,rgb(var(--color-surface-primary))_52%,rgb(var(--color-surface-secondary))_100%)]" />
         <div className="relative grid min-h-screen grid-cols-1 lg:grid-cols-[1fr_520px]">
           <section className="hidden lg:flex min-h-screen flex-col justify-center px-[11vw]">
