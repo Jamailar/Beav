@@ -103,6 +103,7 @@ export interface ChatComposerHandle {
   syncHeight: () => void;
   resetHeight: () => void;
   getTextarea: () => HTMLElement | null;
+  insertTextAtEnd: (text: string, options?: { separator?: string }) => void;
 }
 
 export interface ChatMemberMentionOption {
@@ -629,6 +630,17 @@ function placeEditorCaretAtStart(root: HTMLElement | null) {
     range.selectNodeContents(root);
   }
   range.collapse(true);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function placeEditorCaretAtEnd(root: HTMLElement | null) {
+  if (!root) return;
+  ensureEditorEmptySentinel(root);
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.collapse(false);
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
@@ -1313,6 +1325,30 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     syncHeight();
   }, [assetMentionOptions, memberMentionOptions, onSelectedAssetMentionsChange, onSelectedMemberMentionChange, onSelectedSkillMentionsChange, onValueChange, selectedAssetMentions, selectedMemberMention, selectedSkillMentions, skillMentionOptions, syncHeight]);
 
+  const insertTextAtEnd = useCallback((text: string, options?: { separator?: string }) => {
+    const editor = textareaRef.current;
+    const nextText = String(text || '');
+    if (!editor || !nextText) return;
+    const currentText = readEditorText(editor);
+    const separator = currentText.trim() ? (options?.separator ?? '\n') : '';
+    const fragment = document.createDocumentFragment();
+    if (separator) {
+      fragment.appendChild(document.createTextNode(separator));
+    }
+    fragment.appendChild(document.createTextNode(nextText));
+    const sentinel = editor.querySelector<HTMLElement>('[data-editor-sentinel="true"]');
+    sentinel?.remove();
+    editor.appendChild(fragment);
+    syncEditorState();
+    window.requestAnimationFrame(() => {
+      editor.focus({ preventScroll: true });
+      placeEditorCaretAtEnd(editor);
+      setMemberMentionTrigger(null);
+      setKnowledgeMentionTrigger(null);
+      syncHeight();
+    });
+  }, [syncEditorState, syncHeight]);
+
   useEffect(() => {
     syncHeight();
   }, [attachment, syncHeight, suppressed, value, variant]);
@@ -1429,7 +1465,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     syncHeight,
     resetHeight,
     getTextarea: () => textareaRef.current,
-  }), [resetHeight, syncHeight]);
+    insertTextAtEnd,
+  }), [insertTextAtEnd, resetHeight, syncHeight]);
 
   const handleFormSubmit = useCallback((event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1576,7 +1613,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       }
     }
     if (showMemberMentionPicker) {
-      const mentionOptionCount = filteredMemberMentionOptions.length + filteredSkillMentionOptions.length + filteredAssetMentionOptions.length;
+      const assetCount = filteredAssetMentionOptions.length;
+      const memberCount = filteredMemberMentionOptions.length;
+      const mentionOptionCount = assetCount + memberCount + filteredSkillMentionOptions.length;
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         setMemberMentionActiveIndex((current) => (
@@ -1600,14 +1639,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       }
       if ((event.key === 'Enter' || event.key === 'Tab') && mentionOptionCount > 0) {
         event.preventDefault();
-        if (memberMentionActiveIndex < filteredMemberMentionOptions.length) {
-          selectMemberMention(filteredMemberMentionOptions[memberMentionActiveIndex]);
-        } else if (memberMentionActiveIndex < filteredMemberMentionOptions.length + filteredSkillMentionOptions.length) {
-          const skillIndex = memberMentionActiveIndex - filteredMemberMentionOptions.length;
-          selectSkillMention(filteredSkillMentionOptions[skillIndex]);
-        } else {
-          const assetIndex = Math.min(memberMentionActiveIndex - filteredMemberMentionOptions.length - filteredSkillMentionOptions.length, filteredAssetMentionOptions.length - 1);
+        if (memberMentionActiveIndex < assetCount) {
+          const assetIndex = Math.min(memberMentionActiveIndex, assetCount - 1);
           selectAssetMention(filteredAssetMentionOptions[assetIndex]);
+        } else if (memberMentionActiveIndex < assetCount + memberCount) {
+          const memberIndex = memberMentionActiveIndex - assetCount;
+          selectMemberMention(filteredMemberMentionOptions[memberIndex]);
+        } else {
+          const skillIndex = memberMentionActiveIndex - assetCount - memberCount;
+          selectSkillMention(filteredSkillMentionOptions[skillIndex]);
         }
         return;
       }
@@ -1820,19 +1860,60 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             darkEmbedded ? 'border-white/10 bg-[rgb(var(--color-background))] text-white' : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-text-primary',
           )}
         >
-          {filteredMemberMentionOptions.length > 0 ? (
+          {filteredAssetMentionOptions.length > 0 ? (
             <div className={clsx('px-3 py-2 text-[11px] font-medium', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+              资产
+            </div>
+          ) : null}
+          {filteredAssetMentionOptions.length > 0 ? filteredAssetMentionOptions.map((asset, index) => {
+            const active = index === memberMentionActiveIndex;
+            const preview = String(asset.primaryPreviewUrl || asset.previewUrls?.[0] || asset.absoluteImagePaths?.[0] || asset.imagePaths?.[0] || '').trim();
+            return (
+              <button
+                key={asset.id}
+                type="button"
+                data-mention-option-index={index}
+                onMouseEnter={() => setMemberMentionActiveIndex(index)}
+                onClick={() => selectAssetMention(asset)}
+                className={clsx(
+                  'flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors',
+                  active
+                    ? darkEmbedded ? 'bg-white/10' : 'bg-[rgb(var(--color-surface-secondary))]'
+                    : darkEmbedded ? 'hover:bg-white/[0.06]' : 'hover:bg-[rgb(var(--color-surface-secondary))]',
+                )}
+              >
+                <span className={clsx('flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg', darkEmbedded ? 'bg-white/[0.08] text-white/72' : 'bg-[#edf6fb] text-[#4d8fb6]')}>
+                  {preview ? (
+                    <img src={resolveAssetUrl(preview)} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <Package className="h-4 w-4" />
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{asset.name}</span>
+                  {asset.description || asset.tags?.length ? (
+                    <span className={clsx('block truncate text-[11px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+                      {asset.description || asset.tags?.join('、')}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          }) : null}
+          {filteredMemberMentionOptions.length > 0 ? (
+            <div className={clsx('px-3 py-2 text-[11px] font-medium', filteredAssetMentionOptions.length > 0 ? 'border-t' : '', darkEmbedded ? 'border-white/10 text-white/45' : 'border-[rgb(var(--color-divider))] text-text-tertiary')}>
               成员
             </div>
           ) : null}
           {filteredMemberMentionOptions.length > 0 ? filteredMemberMentionOptions.map((member, index) => {
-            const active = index === memberMentionActiveIndex;
+            const optionIndex = filteredAssetMentionOptions.length + index;
+            const active = optionIndex === memberMentionActiveIndex;
             return (
               <button
                 key={member.id}
                 type="button"
-                data-mention-option-index={index}
-                onMouseEnter={() => setMemberMentionActiveIndex(index)}
+                data-mention-option-index={optionIndex}
+                onMouseEnter={() => setMemberMentionActiveIndex(optionIndex)}
                 onClick={() => selectMemberMention(member)}
                 className={clsx(
                   'flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors',
@@ -1854,12 +1935,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             );
           }) : null}
           {filteredSkillMentionOptions.length > 0 ? (
-            <div className={clsx('px-3 py-2 text-[11px] font-medium', filteredMemberMentionOptions.length > 0 ? 'border-t' : '', darkEmbedded ? 'border-white/10 text-white/45' : 'border-[rgb(var(--color-divider))] text-text-tertiary')}>
+            <div className={clsx('px-3 py-2 text-[11px] font-medium', (filteredAssetMentionOptions.length > 0 || filteredMemberMentionOptions.length > 0) ? 'border-t' : '', darkEmbedded ? 'border-white/10 text-white/45' : 'border-[rgb(var(--color-divider))] text-text-tertiary')}>
               Skills
             </div>
           ) : null}
           {filteredSkillMentionOptions.length > 0 ? filteredSkillMentionOptions.map((skill, index) => {
-            const optionIndex = filteredMemberMentionOptions.length + index;
+            const optionIndex = filteredAssetMentionOptions.length + filteredMemberMentionOptions.length + index;
             const active = optionIndex === memberMentionActiveIndex;
             return (
               <button
@@ -1883,47 +1964,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                   {skill.description ? (
                     <span className={clsx('block truncate text-[11px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
                       {skill.description}
-                    </span>
-                  ) : null}
-                </span>
-              </button>
-            );
-          }) : null}
-          {filteredAssetMentionOptions.length > 0 ? (
-            <div className={clsx('px-3 py-2 text-[11px] font-medium', (filteredMemberMentionOptions.length > 0 || filteredSkillMentionOptions.length > 0) ? 'border-t' : '', darkEmbedded ? 'border-white/10 text-white/45' : 'border-[rgb(var(--color-divider))] text-text-tertiary')}>
-              资产
-            </div>
-          ) : null}
-          {filteredAssetMentionOptions.length > 0 ? filteredAssetMentionOptions.map((asset, index) => {
-            const optionIndex = filteredMemberMentionOptions.length + filteredSkillMentionOptions.length + index;
-            const active = optionIndex === memberMentionActiveIndex;
-            const preview = String(asset.primaryPreviewUrl || asset.previewUrls?.[0] || asset.absoluteImagePaths?.[0] || asset.imagePaths?.[0] || '').trim();
-            return (
-              <button
-                key={asset.id}
-                type="button"
-                data-mention-option-index={optionIndex}
-                onMouseEnter={() => setMemberMentionActiveIndex(optionIndex)}
-                onClick={() => selectAssetMention(asset)}
-                className={clsx(
-                  'flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors',
-                  active
-                    ? darkEmbedded ? 'bg-white/10' : 'bg-[rgb(var(--color-surface-secondary))]'
-                    : darkEmbedded ? 'hover:bg-white/[0.06]' : 'hover:bg-[rgb(var(--color-surface-secondary))]',
-                )}
-              >
-                <span className={clsx('flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg', darkEmbedded ? 'bg-white/[0.08] text-white/72' : 'bg-[#edf6fb] text-[#4d8fb6]')}>
-                  {preview ? (
-                    <img src={resolveAssetUrl(preview)} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <Package className="h-4 w-4" />
-                  )}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{asset.name}</span>
-                  {asset.description || asset.tags?.length ? (
-                    <span className={clsx('block truncate text-[11px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
-                      {asset.description || asset.tags?.join('、')}
                     </span>
                   ) : null}
                 </span>

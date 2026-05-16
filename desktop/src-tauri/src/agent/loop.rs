@@ -5,7 +5,9 @@ use crate::agent::{
     update_post_exchange_maintenance, ChatExchangeRequest, PreparedSessionAgentTurn,
     SessionAgentTurnExecution,
 };
-use crate::commands::chat_state::{is_chat_runtime_cancel_requested, update_chat_runtime_state};
+use crate::commands::chat_state::{
+    begin_chat_runtime_state, is_chat_runtime_cancel_requested, update_chat_runtime_state,
+};
 use crate::{handle_redclaw_onboarding_turn, AppState};
 
 pub fn execute_prepared_session_agent_turn(
@@ -37,13 +39,7 @@ pub fn execute_session_agent_turn(
         session_title_override: _,
     } = request;
     let context = resolve_chat_exchange_context(state, session_id, turn_kind)?;
-    let _ = update_chat_runtime_state(
-        state,
-        &context.working_session_id,
-        true,
-        String::new(),
-        None,
-    );
+    let _ = begin_chat_runtime_state(state, &context.working_session_id);
 
     let onboarding_response = if context.allow_redclaw_onboarding {
         handle_redclaw_onboarding_turn(state, &message)?

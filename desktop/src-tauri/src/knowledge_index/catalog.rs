@@ -39,6 +39,8 @@ pub(crate) struct KnowledgeCatalogSummary {
     pub sample_files: Vec<String>,
     pub file_count: i64,
     pub item_hash: String,
+    pub ready_for_wander: bool,
+    pub wander_index_status: Option<String>,
     pub visual_search_summary: Option<String>,
     pub visual_search_path: Option<String>,
     pub visual_search_page: Option<i64>,
@@ -105,6 +107,8 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<KnowledgeCatalogSummary, ru
         sample_files: decode_json_list(row.get("sample_files_json")?),
         file_count: row.get("file_count")?,
         item_hash: row.get("item_hash")?,
+        ready_for_wander: false,
+        wander_index_status: None,
         visual_search_summary: None,
         visual_search_path: None,
         visual_search_page: None,
@@ -112,6 +116,53 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<KnowledgeCatalogSummary, ru
         visual_search_evidence_refs: Vec::new(),
         visual_search_thumbnail_path: None,
     })
+}
+
+fn attach_wander_readiness(
+    conn: &Connection,
+    items: &mut [KnowledgeCatalogSummary],
+) -> Result<(), String> {
+    let mut block_stmt = conn
+        .prepare("SELECT COUNT(*) FROM knowledge_document_blocks WHERE source_id = ?1 LIMIT 1")
+        .map_err(|error| error.to_string())?;
+    let mut visual_stmt = conn
+        .prepare(
+            r#"
+            SELECT DISTINCT lower(status)
+            FROM knowledge_visual_units
+            WHERE source_id = ?1
+              AND lower(status) <> 'indexed'
+            ORDER BY lower(status) ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    for item in items.iter_mut() {
+        let block_count = block_stmt
+            .query_row(params![item.item_id], |row| row.get::<_, i64>(0))
+            .map_err(|error| error.to_string())?;
+        if block_count <= 0 {
+            item.ready_for_wander = false;
+            item.wander_index_status = Some("not_indexed".to_string());
+            continue;
+        }
+        let incomplete_statuses = visual_stmt
+            .query_map(params![item.item_id], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        item.ready_for_wander = incomplete_statuses.is_empty();
+        item.wander_index_status = Some(if item.ready_for_wander {
+            "ready".to_string()
+        } else if incomplete_statuses
+            .iter()
+            .any(|status| matches!(status.as_str(), "failed" | "metadata_only"))
+        {
+            "failed".to_string()
+        } else {
+            "indexing".to_string()
+        });
+    }
+    Ok(())
 }
 
 pub(crate) fn count_items(state: &State<'_, AppState>) -> Result<i64, String> {
@@ -149,6 +200,7 @@ pub(crate) fn list_page(
     kind: Option<&str>,
     query: Option<&str>,
     sort: Option<&str>,
+    ready_for_wander_only: bool,
 ) -> Result<KnowledgeCatalogPage, String> {
     let conn = connection(state)?;
     let workspace_id = workspace_id(state)?;
@@ -173,6 +225,23 @@ pub(crate) fn list_page(
     let where_sql = r#"
         workspace_id = ?1
         AND (?2 IS NULL OR kind = ?2)
+        AND (
+            ?4 = 0 OR (
+                EXISTS (
+                    SELECT 1
+                    FROM knowledge_document_blocks wb
+                    WHERE wb.source_id = knowledge_items.item_id
+                    LIMIT 1
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM knowledge_visual_units wu
+                    WHERE wu.source_id = knowledge_items.item_id
+                      AND lower(wu.status) <> 'indexed'
+                    LIMIT 1
+                )
+            )
+        )
         AND (
             ?3 IS NULL OR
             lower(title) LIKE ?3 OR
@@ -211,14 +280,19 @@ pub(crate) fn list_page(
     let total = conn
         .query_row(
             &format!("SELECT COUNT(*) FROM knowledge_items WHERE {where_sql}"),
-            params![workspace_id, normalized_kind, normalized_query],
+            params![
+                workspace_id,
+                normalized_kind,
+                normalized_query,
+                ready_for_wander_only as i64
+            ],
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
 
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT * FROM knowledge_items WHERE {where_sql} ORDER BY {order_by} LIMIT ?4 OFFSET ?5"
+            "SELECT * FROM knowledge_items WHERE {where_sql} ORDER BY {order_by} LIMIT ?5 OFFSET ?6"
         ))
         .map_err(|error| error.to_string())?;
     let mut items = stmt
@@ -228,13 +302,15 @@ pub(crate) fn list_page(
                 normalized_kind,
                 normalized_query,
                 limit,
-                offset
+                offset,
+                ready_for_wander_only as i64
             ],
             row_to_summary,
         )
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    attach_wander_readiness(&conn, &mut items)?;
     attach_visual_search_matches(&conn, &mut items, normalized_query.as_deref())?;
 
     let mut kind_stmt = conn
@@ -577,4 +653,136 @@ pub(crate) fn replace_catalog(
     tx.commit().map_err(|error| error.to_string())?;
     drop(conn);
     upsert_summaries(state, items, files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_readiness_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute(
+            "CREATE TABLE knowledge_document_blocks (source_id TEXT NOT NULL)",
+            [],
+        )
+        .expect("create blocks");
+        conn.execute(
+            "CREATE TABLE knowledge_visual_units (source_id TEXT NOT NULL, status TEXT NOT NULL)",
+            [],
+        )
+        .expect("create visual units");
+        conn
+    }
+
+    fn summary(item_id: &str) -> KnowledgeCatalogSummary {
+        KnowledgeCatalogSummary {
+            item_id: item_id.to_string(),
+            kind: "redbook-note".to_string(),
+            note_type: None,
+            capture_kind: None,
+            title: item_id.to_string(),
+            author: String::new(),
+            author_id: None,
+            author_url: None,
+            site_name: None,
+            source_url: None,
+            folder_path: None,
+            root_path: None,
+            cover_url: None,
+            thumbnail_url: None,
+            preview_text: String::new(),
+            scope: "workspace-shared".to_string(),
+            owner_type: None,
+            owner_id: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            language: None,
+            has_video: false,
+            has_transcript: false,
+            tags: Vec::new(),
+            status: None,
+            sample_files: Vec::new(),
+            file_count: 0,
+            item_hash: String::new(),
+            ready_for_wander: false,
+            wander_index_status: None,
+            visual_search_summary: None,
+            visual_search_path: None,
+            visual_search_page: None,
+            visual_search_unit_id: None,
+            visual_search_evidence_refs: Vec::new(),
+            visual_search_thumbnail_path: None,
+        }
+    }
+
+    #[test]
+    fn wander_readiness_requires_indexed_blocks() {
+        let conn = setup_readiness_conn();
+        let mut items = vec![summary("note-a")];
+
+        attach_wander_readiness(&conn, &mut items).expect("attach readiness");
+
+        assert!(!items[0].ready_for_wander);
+        assert_eq!(items[0].wander_index_status.as_deref(), Some("not_indexed"));
+    }
+
+    #[test]
+    fn wander_readiness_allows_text_blocks_without_visual_units() {
+        let conn = setup_readiness_conn();
+        conn.execute(
+            "INSERT INTO knowledge_document_blocks (source_id) VALUES ('note-a')",
+            [],
+        )
+        .expect("insert block");
+        let mut items = vec![summary("note-a")];
+
+        attach_wander_readiness(&conn, &mut items).expect("attach readiness");
+
+        assert!(items[0].ready_for_wander);
+        assert_eq!(items[0].wander_index_status.as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn wander_readiness_blocks_failed_or_metadata_only_visual_units() {
+        let conn = setup_readiness_conn();
+        conn.execute(
+            "INSERT INTO knowledge_document_blocks (source_id) VALUES ('note-a'), ('note-b')",
+            [],
+        )
+        .expect("insert blocks");
+        conn.execute(
+            "INSERT INTO knowledge_visual_units (source_id, status) VALUES ('note-a', 'failed'), ('note-b', 'metadata_only')",
+            [],
+        )
+        .expect("insert visual units");
+        let mut items = vec![summary("note-a"), summary("note-b")];
+
+        attach_wander_readiness(&conn, &mut items).expect("attach readiness");
+
+        assert!(!items[0].ready_for_wander);
+        assert!(!items[1].ready_for_wander);
+        assert_eq!(items[0].wander_index_status.as_deref(), Some("failed"));
+        assert_eq!(items[1].wander_index_status.as_deref(), Some("failed"));
+    }
+
+    #[test]
+    fn wander_readiness_allows_indexed_visual_units() {
+        let conn = setup_readiness_conn();
+        conn.execute(
+            "INSERT INTO knowledge_document_blocks (source_id) VALUES ('note-a')",
+            [],
+        )
+        .expect("insert block");
+        conn.execute(
+            "INSERT INTO knowledge_visual_units (source_id, status) VALUES ('note-a', 'indexed')",
+            [],
+        )
+        .expect("insert visual unit");
+        let mut items = vec![summary("note-a")];
+
+        attach_wander_readiness(&conn, &mut items).expect("attach readiness");
+
+        assert!(items[0].ready_for_wander);
+        assert_eq!(items[0].wander_index_status.as_deref(), Some("ready"));
+    }
 }

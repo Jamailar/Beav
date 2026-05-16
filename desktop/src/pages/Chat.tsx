@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { Trash2, Sparkles } from 'lucide-react';
+import { Sparkles, Trash2, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { supportsAttachmentKindDirectInput } from '../../shared/modelCapabilities';
 import {
@@ -384,6 +384,8 @@ interface StructuredChatErrorNotice {
     target: 'settings-login';
   };
 }
+
+const CHAT_ERROR_NOTICE_AUTO_DISMISS_MS = 6500;
 
 function stripTransientAttachmentPreview(
   attachment?: UploadedFileAttachment,
@@ -978,6 +980,14 @@ export function Chat({
   useEffect(() => {
     onExecutionStateChange?.(isProcessing);
   }, [isProcessing, onExecutionStateChange]);
+
+  useEffect(() => {
+    if (!errorNotice) return undefined;
+    const timer = window.setTimeout(() => {
+      setErrorNotice(null);
+    }, CHAT_ERROR_NOTICE_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [errorNotice]);
 
   useEffect(() => {
     debugUi('processing_state', {
@@ -3318,11 +3328,16 @@ export function Chat({
       if (!resolved.text) {
         return;
       }
-      setInput((prev) => {
-        const current = String(prev || '').trim();
-        const next = resolved.text || '';
-        return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
-      });
+      const next = resolved.text || '';
+      const composer = composerRef.current;
+      if (composer) {
+        composer.insertTextAtEnd(next, { separator: '\n' });
+      } else {
+        setInput((prev) => {
+          const current = String(prev || '').trim();
+          return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
+        });
+      }
       requestAnimationFrame(() => {
         composerRef.current?.focus();
         composerRef.current?.syncHeight();
@@ -3540,8 +3555,17 @@ export function Chat({
     const action = shortcut.action || 'send';
     if (action === 'inject') {
       setErrorNotice(null);
-      setInput(shortcut.text);
-      activateComposerInput('composer');
+      const text = String(shortcut.text || '');
+      const composer = composerRef.current;
+      if (composer) {
+        composer.insertTextAtEnd(text, { separator: '\n' });
+      } else {
+        setInput((prev) => {
+          const current = String(prev || '');
+          return current.trim() ? `${current}${current.endsWith('\n') ? '' : '\n'}${text}` : text;
+        });
+        activateComposerInput('composer');
+      }
       return;
     }
     void sendMessage(shortcut.text);
@@ -3998,74 +4022,70 @@ export function Chat({
                       emptyComposerForm
                     ) : (
                       <>
-                    {errorNotice && (
-                      <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
-                        {typeof errorNotice === 'string' ? (
-                          <>
-                            <div className="font-medium">请求失败</div>
-                            <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
-                            <button
-                              type="button"
-                              onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
-                                detail: {
-                                  title: '请求失败',
-                                  content: errorNotice,
-                                  sourcePage: 'chat',
-                                  operation: 'chat_request',
-                                },
-                              }))}
-                              className="mt-3 inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
-                            >
-                              反馈问题
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <div className="font-medium">{errorNotice.title}</div>
-                            {errorNotice.hint && (
-                              <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice.hint}</div>
-                            )}
-                            {errorNotice.metaParts && errorNotice.metaParts.length > 0 && (
-                              <div className="mt-2 text-[11px] leading-5 text-red-700/70 dark:text-red-300/75">
-                                {errorNotice.metaParts.join(' · ')}
+                    {errorNotice && (() => {
+                      const structuredNotice = typeof errorNotice === 'string' ? null : errorNotice;
+                      const noticeTitle = structuredNotice?.title || '请求失败';
+                      const noticeBody = String(structuredNotice
+                        ? structuredNotice.hint
+                          || structuredNotice.detail
+                          || structuredNotice.metaParts?.join(' · ')
+                          || ''
+                        : errorNotice);
+                      const reportContent = structuredNotice
+                        ? [structuredNotice.hint, structuredNotice.detail, structuredNotice.metaParts?.join(' · ')]
+                          .filter(Boolean)
+                          .join('\n\n') || noticeTitle
+                        : errorNotice;
+                      return (
+                        <div className="flex max-h-24 items-start gap-2 overflow-hidden rounded-xl border border-red-500/25 bg-red-500/[0.08] px-3 py-2 text-sm text-red-700 shadow-sm dark:text-red-300">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">{noticeTitle}</div>
+                            {noticeBody && (
+                              <div className="mt-0.5 line-clamp-2 text-xs leading-5 text-red-700/80 dark:text-red-300/85">
+                                {truncateErrorDetail(noticeBody, 180)}
                               </div>
                             )}
-                            {errorNotice.detail && (
-                              <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
-                                {errorNotice.detail}
-                              </pre>
-                            )}
-                            {errorNotice.action?.target === 'settings-login' && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                              {structuredNotice?.action?.target === 'settings-login' && (
+                                <button
+                                  type="button"
+                                  onClick={handleOpenSettingsLogin}
+                                  className="inline-flex items-center rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
+                                >
+                                  {structuredNotice.action.label}
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={handleOpenSettingsLogin}
-                                className="mt-3 inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
+                                onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+                                  detail: {
+                                    title: noticeTitle,
+                                    content: reportContent,
+                                    sourcePage: 'chat',
+                                    operation: 'chat_request',
+                                  },
+                                }))}
+                                className="inline-flex items-center rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
                               >
-                                {errorNotice.action.label}
+                                反馈问题
                               </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
-                                detail: {
-                                  title: errorNotice.title,
-                                  content: [errorNotice.hint, errorNotice.detail].filter(Boolean).join('\n\n') || errorNotice.title,
-                                  sourcePage: 'chat',
-                                  operation: 'chat_request',
-                                },
-                              }))}
-                              className="mt-3 ml-2 inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
-                            >
-                              反馈问题
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setErrorNotice(null)}
+                            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-red-700/70 transition-colors hover:bg-red-500/10 hover:text-red-800 dark:text-red-200/75 dark:hover:text-red-100"
+                            aria-label="关闭错误提示"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })()}
                     {showComposerShortcuts && shortcuts.length > 0 && (
                       <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
                         {shortcuts.map((shortcut) => (
-                          <button key={shortcut.label} onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
+                          <button key={shortcut.label} type="button" onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
                             {shortcut.label}
                           </button>
                         ))}

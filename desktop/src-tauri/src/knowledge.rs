@@ -972,6 +972,22 @@ fn note_transcript_file_from_meta(meta: &Value) -> Option<String> {
         })
 }
 
+fn should_auto_transcribe_knowledge_video(
+    transcript: Option<&String>,
+    media_source: Option<&String>,
+    existing_transcript_file: Option<&String>,
+    existing_transcription_status: Option<&String>,
+    can_spawn_worker: bool,
+) -> bool {
+    can_spawn_worker
+        && transcript.is_none()
+        && media_source
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+        && existing_transcript_file.is_none()
+        && existing_transcription_status.map(|value| value.as_str()) != Some("processing")
+}
+
 fn write_youtube_meta_status(
     entry_dir: &Path,
     status: &str,
@@ -1081,7 +1097,7 @@ fn emit_note_transcription_event(
     )
 }
 
-fn transcribe_note_media_source(
+pub(crate) fn transcribe_note_media_source(
     state: &State<'_, AppState>,
     note_id: &str,
     media_source: &str,
@@ -1615,7 +1631,9 @@ fn ingest_youtube_entry(
         "entryId": entry_id,
         "requestedActions": {
             "summarize": request.options.summarize,
-            "transcribe": request.options.transcribe,
+            "requestedTranscribe": request.options.transcribe,
+            "transcribe": should_process,
+            "autoTranscribe": should_process,
         },
     }))
 }
@@ -1714,17 +1732,20 @@ fn ingest_note_entry(
             .filter(|value| !value.is_empty())
             .map(ToString::to_string)
     });
-    let has_existing_transcript = existing_transcript_file.is_some();
     let transcription_media_source = video_asset
         .as_ref()
         .map(|relative| entry_dir.join(relative).to_string_lossy().to_string())
         .or_else(|| video_source.clone());
-    let should_process_transcription = request.options.transcribe
-        && transcript.is_none()
-        && transcription_media_source.is_some()
-        && !has_existing_transcript
-        && existing_transcription_status.as_deref() != Some("processing");
+    let should_process_transcription = should_auto_transcribe_knowledge_video(
+        transcript.as_ref(),
+        transcription_media_source.as_ref(),
+        existing_transcript_file.as_ref(),
+        existing_transcription_status.as_ref(),
+        app.is_some(),
+    );
     let transcription_status = if transcript.is_some() {
+        Some("completed".to_string())
+    } else if existing_transcript_file.is_some() {
         Some("completed".to_string())
     } else if should_process_transcription {
         Some("processing".to_string())
@@ -1814,7 +1835,9 @@ fn ingest_note_entry(
         "authorId": author_profile.as_ref().map(|item| item.id.clone()),
         "requestedActions": {
             "summarize": request.options.summarize,
-            "transcribe": request.options.transcribe,
+            "requestedTranscribe": request.options.transcribe,
+            "transcribe": should_process_transcription,
+            "autoTranscribe": should_process_transcription,
         },
     }))
 }
@@ -2113,7 +2136,7 @@ pub(crate) fn knowledge_http_health(
     batch_limit: usize,
 ) -> Result<Value, String> {
     let _ = ensure_store_hydrated_for_media(state);
-    let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None)?;
+    let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None, false)?;
     let snapshot = with_store(state, |store| {
         let active_space_id = store.active_space_id.clone();
         let active_space_name = store
@@ -2712,7 +2735,7 @@ mod tests {
         extract_css_url_near, extract_html_attribute_near, extract_json_string_values,
         is_supported_social_entry_kind, materialize_note_asset_source,
         maybe_backfill_xiaohongshu_assets, note_entry_id, note_transcript_file_from_meta,
-        youtube_entry_id, KnowledgeEntryAssetsInput,
+        should_auto_transcribe_knowledge_video, youtube_entry_id, KnowledgeEntryAssetsInput,
     };
     use serde_json::json;
     use std::fs;
@@ -2782,6 +2805,55 @@ mod tests {
             note_transcript_file_from_meta(&json!({ "transcript": "hello" })),
             Some("transcript.md".to_string())
         );
+    }
+
+    #[test]
+    fn auto_transcribes_any_ingested_video_with_no_existing_transcript() {
+        let media_source = "video.mp4".to_string();
+        assert!(should_auto_transcribe_knowledge_video(
+            None,
+            Some(&media_source),
+            None,
+            None,
+            true,
+        ));
+    }
+
+    #[test]
+    fn auto_transcription_skips_existing_transcript_processing_and_headless_ingest() {
+        let transcript = "already done".to_string();
+        let media_source = "video.mp4".to_string();
+        let transcript_file = "transcript.md".to_string();
+        let processing = "processing".to_string();
+
+        assert!(!should_auto_transcribe_knowledge_video(
+            Some(&transcript),
+            Some(&media_source),
+            None,
+            None,
+            true,
+        ));
+        assert!(!should_auto_transcribe_knowledge_video(
+            None,
+            Some(&media_source),
+            Some(&transcript_file),
+            None,
+            true,
+        ));
+        assert!(!should_auto_transcribe_knowledge_video(
+            None,
+            Some(&media_source),
+            None,
+            Some(&processing),
+            true,
+        ));
+        assert!(!should_auto_transcribe_knowledge_video(
+            None,
+            Some(&media_source),
+            None,
+            None,
+            false,
+        ));
     }
 
     #[test]

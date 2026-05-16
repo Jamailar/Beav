@@ -619,6 +619,7 @@ export function RedClaw({
     const hasSessionSnapshotRef = useRef(false);
     const hasRunnerSnapshotRef = useRef(false);
     const hasSkillsSnapshotRef = useRef(false);
+    const manualDraftActiveRef = useRef(false);
     const routedPendingMessageRef = useRef<PendingChatMessage | null>(null);
     const consumedNavigationActionNonceRef = useRef<number | null>(null);
     const pendingRoomSelectionRef = useRef<string | null>(null);
@@ -915,6 +916,7 @@ export function RedClaw({
                 activeSessionIdRef.current = session.id;
                 setActiveSessionId(session.id);
                 hasSessionSnapshotRef.current = true;
+                manualDraftActiveRef.current = false;
                 routedPendingMessageRef.current = pendingMessage;
                 setResolvedPendingMessage(pendingMessage);
                 debugUi('sessions:create_for_pending_message_done', {
@@ -989,14 +991,18 @@ export function RedClaw({
             let items = sortContextSessionItems(listResult);
             const rememberedSessionId = readRedClawLastSessionId(nextActiveSpaceId);
 
-            let nextActiveSessionId =
-                options?.preferredSessionId && items.some((item) => item.id === options.preferredSessionId)
+            const preserveManualDraft = manualDraftActiveRef.current
+                && !options?.preferredSessionId
+                && !activeSessionIdRef.current;
+            let nextActiveSessionId = preserveManualDraft
+                ? null
+                : options?.preferredSessionId && items.some((item) => item.id === options.preferredSessionId)
                     ? options.preferredSessionId
                     : activeSessionIdRef.current && items.some((item) => item.id === activeSessionIdRef.current)
                         ? activeSessionIdRef.current
                         : rememberedSessionId && items.some((item) => item.id === rememberedSessionId)
                             ? rememberedSessionId
-                        : items[0]?.id || null;
+                            : items[0]?.id || null;
 
             if (items.length === 0 && shouldCreateIfEmpty) {
                 const created = await uiMeasure('redclaw', 'sessions:create_context', async () => (
@@ -1339,6 +1345,7 @@ export function RedClaw({
                 hasSessionSnapshotRef.current = true;
             });
             activeSessionIdRef.current = session.id;
+            manualDraftActiveRef.current = false;
             debugUi('sessions:create_done', { sessionId: session.id, activeSpaceId: nextActiveSpaceId });
             return session.id;
         } catch (error) {
@@ -1354,6 +1361,7 @@ export function RedClaw({
         onOpenChatSurface?.();
         sessionRequestIdRef.current += 1;
         setActiveAiSurface('redclaw');
+        manualDraftActiveRef.current = true;
         activeSessionIdRef.current = null;
         setActiveSessionId(null);
         setIsSessionLoading(false);
@@ -1366,6 +1374,7 @@ export function RedClaw({
     const switchSession = useCallback((nextSessionId: string) => {
         if (!nextSessionId) return;
         setActiveAiSurface('redclaw');
+        manualDraftActiveRef.current = false;
         activeSessionIdRef.current = nextSessionId;
         setActiveSessionId(nextSessionId);
         debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });

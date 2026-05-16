@@ -1748,8 +1748,9 @@ fn plugin_data_source_value(
 
     match source {
         "knowledge.count" => {
-            let page =
-                crate::knowledge_index::catalog::list_page(state, None, 1, kind, query, None)?;
+            let page = crate::knowledge_index::catalog::list_page(
+                state, None, 1, kind, query, None, false,
+            )?;
             Ok(
                 json!({ "success": true, "source": source, "total": page.total, "kindCounts": page.kind_counts }),
             )
@@ -1762,6 +1763,7 @@ fn plugin_data_source_value(
                 kind,
                 query,
                 Some("updated"),
+                false,
             )?;
             serde_json::to_value(page).map_err(|error| error.to_string())
         }

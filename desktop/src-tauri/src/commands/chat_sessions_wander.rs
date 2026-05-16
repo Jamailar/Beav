@@ -29,6 +29,10 @@ const XHS_TITLE_SKILL: &str = "xhs-title";
 const CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CHAT_ATTACHMENT_PENDING_TTL_MS: u128 = 72 * 60 * 60 * 1000;
+const WANDER_READY_MIN_ITEMS: usize = 3;
+const WANDER_VISUAL_EXCERPT_LIMIT: usize = 6;
+const WANDER_VISUAL_EXCERPT_MAX_CHARS: usize = 420;
+const WANDER_INDEXING_MESSAGE: &str = "部分笔记仍在索引中，索引完成后会进入漫步。";
 
 fn hydrate_session_file_if_needed(
     state: &State<'_, AppState>,
@@ -661,6 +665,150 @@ fn collect_wander_candidate_items(store: &AppStore) -> Vec<Value> {
     items
 }
 
+fn wander_item_source_id(item: &Value) -> String {
+    item.get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn classify_wander_incomplete_visual_status(statuses: &[String]) -> String {
+    if statuses
+        .iter()
+        .any(|status| matches!(status.as_str(), "failed" | "metadata_only"))
+    {
+        "failed".to_string()
+    } else {
+        "indexing".to_string()
+    }
+}
+
+fn load_wander_index_payload(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> Result<(bool, String, Vec<Value>), String> {
+    let source_id = source_id.trim();
+    if source_id.is_empty() {
+        return Ok((false, "not_indexed".to_string(), Vec::new()));
+    }
+    crate::knowledge_index::schema::ensure_catalog_ready(state)?;
+    let conn = crate::knowledge_index::open_catalog_connection(state)?;
+    let block_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_document_blocks WHERE source_id = ?1",
+            rusqlite::params![source_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if block_count <= 0 {
+        return Ok((false, "not_indexed".to_string(), Vec::new()));
+    }
+
+    let mut status_stmt = conn
+        .prepare(
+            r#"
+            SELECT DISTINCT lower(status)
+            FROM knowledge_visual_units
+            WHERE source_id = ?1
+              AND lower(status) <> 'indexed'
+            ORDER BY lower(status) ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let incomplete_statuses = status_stmt
+        .query_map(rusqlite::params![source_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    if !incomplete_statuses.is_empty() {
+        return Ok((
+            false,
+            classify_wander_incomplete_visual_status(&incomplete_statuses),
+            Vec::new(),
+        ));
+    }
+
+    let mut block_stmt = conn
+        .prepare(
+            r#"
+            SELECT block_id, relative_path, page, text, visual_unit_id
+            FROM knowledge_document_blocks
+            WHERE source_id = ?1
+              AND (content_origin = 'visual_llm' OR block_type LIKE 'image.%' OR visual_unit_id IS NOT NULL)
+            ORDER BY relative_path ASC, page ASC, block_index ASC
+            LIMIT ?2
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let blocks = block_stmt
+        .query_map(
+            rusqlite::params![source_id, WANDER_VISUAL_EXCERPT_LIMIT as i64],
+            |row| {
+                let text: String = row.get(3)?;
+                Ok(json!({
+                    "blockId": row.get::<_, String>(0)?,
+                    "path": row.get::<_, String>(1)?,
+                    "page": row.get::<_, Option<i64>>(2)?,
+                    "text": truncate_chars(&normalize_wander_bundle_text(&text, WANDER_VISUAL_EXCERPT_MAX_CHARS), WANDER_VISUAL_EXCERPT_MAX_CHARS),
+                    "visualUnitId": row.get::<_, Option<String>>(4)?,
+                }))
+            },
+        )
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    Ok((true, "ready".to_string(), blocks))
+}
+
+fn enrich_wander_item_for_index(
+    state: &State<'_, AppState>,
+    mut item: Value,
+) -> Result<Value, String> {
+    let source_id = wander_item_source_id(&item);
+    let (ready, status, visual_blocks) = load_wander_index_payload(state, &source_id)?;
+    if let Some(object) = item.as_object_mut() {
+        object.insert("readyForWander".to_string(), json!(ready));
+        object.insert("wanderIndexStatus".to_string(), json!(status.clone()));
+        let meta_entry = object.entry("meta").or_insert_with(|| json!({}));
+        if !meta_entry.is_object() {
+            *meta_entry = json!({});
+        }
+        if let Some(meta) = meta_entry.as_object_mut() {
+            meta.insert("readyForWander".to_string(), json!(ready));
+            meta.insert("wanderIndexStatus".to_string(), json!(status));
+            meta.insert("wanderVisualBlocks".to_string(), json!(visual_blocks));
+        }
+    }
+    Ok(item)
+}
+
+fn enrich_wander_items_for_index(
+    state: &State<'_, AppState>,
+    items: Vec<Value>,
+) -> Result<Vec<Value>, String> {
+    items
+        .into_iter()
+        .map(|item| enrich_wander_item_for_index(state, item))
+        .collect()
+}
+
+fn filter_ready_wander_items(
+    state: &State<'_, AppState>,
+    items: Vec<Value>,
+) -> Result<Vec<Value>, String> {
+    Ok(enrich_wander_items_for_index(state, items)?
+        .into_iter()
+        .filter(|item| {
+            item.get("readyForWander")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .collect())
+}
+
 fn recent_wander_excluded_ids(store: &AppStore, recent_limit: usize) -> HashSet<String> {
     let mut history = if store.wander_history.is_empty() {
         rebuild_wander_history_from_sessions(store)
@@ -868,7 +1016,12 @@ fn pick_weighted_guided_items(scored: &mut [(Value, f64)], count: usize, seed: u
     picked
 }
 
-fn compose_guided_wander_items(store: &AppStore, payload: &Value) -> Value {
+fn compose_guided_wander_items_with_candidates(
+    store: &AppStore,
+    payload: &Value,
+    candidate_items: Vec<Value>,
+    readiness_warning: Option<String>,
+) -> Value {
     let topic = payload_string(payload, "topic").unwrap_or_default();
     let seed_text = payload_string(payload, "seedText").unwrap_or_default();
     let target_count = payload_field(payload, "targetCount")
@@ -916,7 +1069,6 @@ fn compose_guided_wander_items(store: &AppStore, payload: &Value) -> Value {
         selected.push(anchor);
     }
     let needed = target_count.saturating_sub(selected.len());
-    let candidate_items = collect_wander_candidate_items(store);
     let scored = candidate_items
         .into_iter()
         .filter(|item| {
@@ -964,20 +1116,64 @@ fn compose_guided_wander_items(store: &AppStore, payload: &Value) -> Value {
         picked.append(&mut relaxed);
     }
     selected.append(&mut picked);
-    let warning = if selected.len() < target_count {
-        Some(format!(
-            "只找到 {} 条方向相关素材，请换一个主题或选择信息更完整的锚点笔记。",
-            selected.len()
-        ))
-    } else {
-        None
-    };
+    let warning = readiness_warning.or_else(|| {
+        if selected.len() < target_count {
+            Some(format!(
+                "只找到 {} 条方向相关素材，请换一个主题或选择信息更完整的锚点笔记。",
+                selected.len()
+            ))
+        } else {
+            None
+        }
+    });
     json!({
         "items": selected,
         "warning": warning,
         "query": full_query,
         "candidateCount": scored.len(),
     })
+}
+
+#[cfg(test)]
+fn compose_guided_wander_items(store: &AppStore, payload: &Value) -> Value {
+    compose_guided_wander_items_with_candidates(
+        store,
+        payload,
+        collect_wander_candidate_items(store),
+        None,
+    )
+}
+
+fn compose_guided_wander_items_for_state(
+    state: &State<'_, AppState>,
+    store: &AppStore,
+    payload: &Value,
+) -> Result<Value, String> {
+    let mut payload = payload.clone();
+    let mut warning = None::<String>;
+    if let Some(anchor_item) = payload
+        .get("anchorItem")
+        .filter(|value| value.is_object())
+        .cloned()
+    {
+        let enriched_anchor = enrich_wander_item_for_index(state, anchor_item)?;
+        if enriched_anchor
+            .get("readyForWander")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("anchorItem".to_string(), enriched_anchor);
+            }
+        } else if let Some(object) = payload.as_object_mut() {
+            object.remove("anchorItem");
+            warning = Some(WANDER_INDEXING_MESSAGE.to_string());
+        }
+    }
+    let candidates = filter_ready_wander_items(state, collect_wander_candidate_items(store))?;
+    Ok(compose_guided_wander_items_with_candidates(
+        store, &payload, candidates, warning,
+    ))
 }
 
 fn parse_wander_json_payload(payload: &str) -> Option<Value> {
@@ -1377,6 +1573,69 @@ fn resolve_wander_item_root(item: &Value) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn wander_visual_blocks(item: &Value) -> Vec<Value> {
+    item.get("meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get("wanderVisualBlocks"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn format_wander_visual_blocks_for_prompt(item: &Value) -> Option<String> {
+    let blocks = wander_visual_blocks(item);
+    if blocks.is_empty() {
+        return None;
+    }
+    let lines = blocks
+        .iter()
+        .take(WANDER_VISUAL_EXCERPT_LIMIT)
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let text = block
+                .get("text")
+                .and_then(Value::as_str)
+                .map(|value| normalize_wander_bundle_text(value, WANDER_VISUAL_EXCERPT_MAX_CHARS))
+                .filter(|value| !value.trim().is_empty())?;
+            let path = block
+                .get("path")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("image");
+            let page = block
+                .get("page")
+                .and_then(Value::as_i64)
+                .map(|value| format!(" page={value}"))
+                .unwrap_or_default();
+            let block_id = block
+                .get("blockId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("");
+            let block_ref = if block_id.is_empty() {
+                String::new()
+            } else {
+                format!(" blockId={block_id}")
+            };
+            Some(format!(
+                "  [{}] {}{}{}: {}",
+                index + 1,
+                path,
+                page,
+                block_ref,
+                text
+            ))
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(format!("- 图片文字摘录:\n{}", lines.join("\n")))
+    }
+}
+
 fn build_wander_material_bundle(items: &[Value]) -> String {
     items
         .iter()
@@ -1417,6 +1676,9 @@ fn build_wander_material_bundle(items: &[Value]) -> String {
             ];
             if !summary.is_empty() {
                 sections.push(format!("- 现有摘要: {}", summary));
+            }
+            if let Some(visual_text) = format_wander_visual_blocks_for_prompt(item) {
+                sections.push(visual_text);
             }
             let Some(root) = resolve_wander_item_root(item) else {
                 sections.push("- 宿主预读: 未定位到素材根路径。".to_string());
@@ -2874,17 +3136,18 @@ pub fn handle_chat_sessions_wander_channel(
                     &audio_path,
                     &mime_type,
                 )
-                .or_else(|_| {
-                    let fallback = String::from_utf8_lossy(
-                        &std::process::Command::new("file")
-                            .arg("-b")
-                            .arg(&audio_path)
-                            .output()
-                            .map(|output| output.stdout)
-                            .unwrap_or_default(),
-                    )
-                    .trim()
-                    .to_string();
+                .or_else(|error| {
+                    let fallback = fs::metadata(&audio_path)
+                        .ok()
+                        .map(|metadata| {
+                            format!(
+                                "mime={}, bytes={}, source_error={}",
+                                mime_type,
+                                metadata.len(),
+                                error
+                            )
+                        })
+                        .unwrap_or_else(|| format!("mime={}, source_error={}", mime_type, error));
                     if fallback.is_empty() {
                         Err("语音转写失败".to_string())
                     } else {
@@ -2942,16 +3205,26 @@ pub fn handle_chat_sessions_wander_channel(
                     Ok(json!({ "success": true }))
                 })
             }
-            "wander:get-random" => with_store(state, |store| {
-                let excluded_ids = recent_wander_excluded_ids(&store, 5);
-                Ok(json!(pick_random_wander_items(
-                    collect_wander_candidate_items(&store),
-                    3,
-                    &excluded_ids,
-                )))
-            }),
+            "wander:get-random" => {
+                let (excluded_ids, candidates) = with_store(state, |store| {
+                    Ok((
+                        recent_wander_excluded_ids(&store, 5),
+                        collect_wander_candidate_items(&store),
+                    ))
+                })?;
+                let ready_candidates = filter_ready_wander_items(state, candidates)?;
+                if ready_candidates.len() < WANDER_READY_MIN_ITEMS {
+                    Ok(json!([]))
+                } else {
+                    Ok(json!(pick_random_wander_items(
+                        ready_candidates,
+                        WANDER_READY_MIN_ITEMS,
+                        &excluded_ids,
+                    )))
+                }
+            }
             "wander:get-guided-items" => with_store(state, |store| {
-                Ok(compose_guided_wander_items(&store, &payload))
+                compose_guided_wander_items_for_state(state, &store, &payload)
             }),
             "wander:brainstorm" => {
                 let request_started_at = now_ms();
@@ -2967,18 +3240,24 @@ pub fn handle_chat_sessions_wander_channel(
                     Some(format!("inputItems={}", items.len())),
                 );
                 if items.is_empty() {
-                    items = with_store(state, |store| {
-                        let excluded_ids = recent_wander_excluded_ids(&store, 5);
-                        Ok(pick_random_wander_items(
+                    let (excluded_ids, candidates) = with_store(state, |store| {
+                        Ok((
+                            recent_wander_excluded_ids(&store, 5),
                             collect_wander_candidate_items(&store),
-                            3,
-                            &excluded_ids,
                         ))
                     })?;
+                    let ready_candidates = filter_ready_wander_items(state, candidates)?;
+                    items = pick_random_wander_items(
+                        ready_candidates,
+                        WANDER_READY_MIN_ITEMS,
+                        &excluded_ids,
+                    );
+                } else {
+                    items = filter_ready_wander_items(state, items)?;
                 }
-                if items.is_empty() {
+                if items.len() < WANDER_READY_MIN_ITEMS {
                     return Ok(json!({
-                        "error": "暂无足够内容，请先收集一些笔记、视频或文档。",
+                        "error": WANDER_INDEXING_MESSAGE,
                         "result": Value::Null,
                         "historyId": Value::Null,
                         "items": []

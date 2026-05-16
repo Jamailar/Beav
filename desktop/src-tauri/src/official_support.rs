@@ -1273,6 +1273,24 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
             .chain(std::iter::once(chat_model.clone()))
             .collect::<Vec<_>>(),
     );
+    let existing_models_meta = existing_source
+        .as_ref()
+        .and_then(|value| value.get("modelsMeta"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut seen_meta_ids = std::collections::HashSet::new();
+    let merged_models_meta = models
+        .iter()
+        .cloned()
+        .chain(existing_models_meta)
+        .filter(|item| {
+            let Some(id) = item.get("id").and_then(Value::as_str).map(str::trim) else {
+                return false;
+            };
+            !id.is_empty() && seen_meta_ids.insert(id.to_string())
+        })
+        .collect::<Vec<_>>();
     let source = json!({
         "id": "redbox_official_auto",
         "name": format!("{} Official", app_brand_display_name()),
@@ -1280,7 +1298,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
         "baseURL": official_base_url,
         "apiKey": api_key,
         "models": merged_models,
-        "modelsMeta": models,
+        "modelsMeta": merged_models_meta,
         "model": chat_model,
         "protocol": "openai"
     });
@@ -1351,6 +1369,15 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
             json!(serde_json::to_string(models).unwrap_or_else(|_| "[]".to_string())),
         );
     }
+}
+
+pub(crate) fn sync_official_cached_models_into_settings(settings: &mut Value) -> bool {
+    let models = official_settings_models(settings);
+    if models.is_empty() {
+        return false;
+    }
+    official_sync_source_into_settings(settings, &models);
+    true
 }
 
 pub(crate) fn fetch_official_models_for_settings(settings: &Value) -> Vec<Value> {

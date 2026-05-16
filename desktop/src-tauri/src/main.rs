@@ -56,8 +56,8 @@ mod workspace_loaders;
 use agent::{execute_prepared_wander_turn, PreparedWanderTurn};
 use base64::Engine;
 use commands::chat_state::{
-    ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
-    resolve_runtime_mode_for_session, update_chat_runtime_state,
+    begin_chat_runtime_state, ensure_chat_session, is_chat_runtime_cancel_requested,
+    latest_session_id, resolve_runtime_mode_for_session, update_chat_runtime_state,
 };
 use events::{
     emit_runtime_done, emit_runtime_stream_start, emit_runtime_task_checkpoint_saved,
@@ -5682,6 +5682,20 @@ fn finalize_interactive_runtime_state(
     );
 }
 
+fn ensure_interactive_runtime_not_cancelled(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) -> Result<(), String> {
+    if session_id
+        .map(|value| is_chat_runtime_cancel_requested(state, value))
+        .unwrap_or(false)
+    {
+        finalize_interactive_runtime_state(state, session_id, "", Some("cancelled"));
+        return Err("chat generation cancelled".to_string());
+    }
+    Ok(())
+}
+
 fn append_prompt_and_canonical_message(
     prompt_messages: &mut Vec<Value>,
     canonical_messages: &mut Vec<Value>,
@@ -7154,6 +7168,9 @@ fn run_anthropic_interactive_chat_runtime(
 ) -> Result<String, String> {
     use std::process::Stdio;
 
+    if let Some(current_session_id) = session_id {
+        let _ = begin_chat_runtime_state(state, current_session_id);
+    }
     let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
         state,
         session_id,
@@ -7600,6 +7617,7 @@ fn run_anthropic_interactive_chat_runtime(
         let mut skill_activations = Vec::<InteractiveSkillActivation>::new();
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         for call in tool_calls {
+            ensure_interactive_runtime_not_cancelled(state, session_id)?;
             let description = interactive_tool_call_description(&call.name, &call.arguments);
             in_flight_tool_calls.start(&call.id, &call.name);
             emit_runtime_tool_request(
@@ -7742,7 +7760,9 @@ fn run_anthropic_interactive_chat_runtime(
                     now_ms().saturating_sub(tool_started_at)
                 ),
             );
+            ensure_interactive_runtime_not_cancelled(state, session_id)?;
         }
+        ensure_interactive_runtime_not_cancelled(state, session_id)?;
         if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
@@ -7782,6 +7802,9 @@ fn run_gemini_interactive_chat_runtime(
 ) -> Result<String, String> {
     use std::process::Stdio;
 
+    if let Some(current_session_id) = session_id {
+        let _ = begin_chat_runtime_state(state, current_session_id);
+    }
     let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
         state,
         session_id,
@@ -8212,6 +8235,7 @@ fn run_gemini_interactive_chat_runtime(
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         let mut skill_activations = Vec::<InteractiveSkillActivation>::new();
         for call in tool_calls {
+            ensure_interactive_runtime_not_cancelled(state, session_id)?;
             let description = interactive_tool_call_description(&call.name, &call.arguments);
             in_flight_tool_calls.start(&call.id, &call.name);
             emit_runtime_tool_request(
@@ -8353,7 +8377,9 @@ fn run_gemini_interactive_chat_runtime(
                     now_ms().saturating_sub(tool_started_at)
                 ),
             );
+            ensure_interactive_runtime_not_cancelled(state, session_id)?;
         }
+        ensure_interactive_runtime_not_cancelled(state, session_id)?;
         if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
@@ -8391,6 +8417,9 @@ fn run_openai_interactive_chat_runtime(
     attachment: Option<&Value>,
     runtime_mode: &str,
 ) -> Result<String, String> {
+    if let Some(current_session_id) = session_id {
+        let _ = begin_chat_runtime_state(state, current_session_id);
+    }
     let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
         state,
         session_id,
@@ -8789,6 +8818,7 @@ fn run_openai_interactive_chat_runtime(
         let mut authoring_continuation_instruction = None::<String>;
         let mut authoring_error_correction_instruction = None::<String>;
         for call in tool_calls {
+            ensure_interactive_runtime_not_cancelled(state, session_id)?;
             let tool_started_at = now_ms();
             let normalized_tool_call =
                 tools::compat::normalize_tool_call(&call.name, &call.arguments);
@@ -9073,7 +9103,9 @@ fn run_openai_interactive_chat_runtime(
                     ));
                 }
             }
+            ensure_interactive_runtime_not_cancelled(state, session_id)?;
         }
+        ensure_interactive_runtime_not_cancelled(state, session_id)?;
         if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
@@ -10166,6 +10198,8 @@ fn main() {
             None,
         );
     }
+    let synced_cached_official_models =
+        official_support::sync_official_cached_models_into_settings(&mut store.settings);
     let startup_migration_status = probe_startup_migration(&store, &store_path);
     sync_redclaw_job_definitions(&mut store);
     if let Err(error) = persist_store(&store_path, &store) {
@@ -10178,6 +10212,19 @@ fn main() {
             json!({ "error": error }),
             None,
         );
+    }
+    if synced_cached_official_models {
+        if let Err(error) = model_config::sync_model_config_file(&store_path, &store.settings) {
+            logging::emit_legacy_line(
+                logging::event::LogSource::Host,
+                logging::event::LogLevel::Warn,
+                "model_config",
+                "startup.model_config_cached_models_sync_failed",
+                format!("[{} model config] {error}", app_brand_display_name()),
+                json!({ "error": error }),
+                None,
+            );
+        }
     }
     let initial_workspace_root =
         workspace_root_from_snapshot(&store.settings, &store.active_space_id, &store_path)
@@ -10281,16 +10328,25 @@ fn main() {
                     None,
                 );
             }
-            if let Err(error) = auth::initialize_auth_runtime(app.handle(), &state) {
-                logging::emit_legacy_line(
-                    logging::event::LogSource::Host,
-                    logging::event::LogLevel::Warn,
-                    "auth",
-                    "startup.auth_init_failed",
-                    format!("[{} auth init] {error}", app_brand_display_name()),
-                    json!({ "error": error }),
-                    None,
-                );
+            match auth::initialize_auth_runtime(app.handle(), &state) {
+                Ok(snapshot) => {
+                    if snapshot.logged_in {
+                        let _ = commands::official::trigger_official_cached_data_refresh(
+                            app.handle().clone(),
+                        );
+                    }
+                }
+                Err(error) => {
+                    logging::emit_legacy_line(
+                        logging::event::LogSource::Host,
+                        logging::event::LogLevel::Warn,
+                        "auth",
+                        "startup.auth_init_failed",
+                        format!("[{} auth init] {error}", app_brand_display_name()),
+                        json!({ "error": error }),
+                        None,
+                    );
+                }
             }
             if let Err(error) = ensure_redclaw_profile_files(&state) {
                 logging::emit_legacy_line(

@@ -22,6 +22,14 @@ interface WanderItem {
   meta?: Record<string, unknown>;
 }
 
+interface WanderVisualBlock {
+  blockId: string;
+  text: string;
+  path?: string;
+  page?: number;
+  visualUnitId?: string;
+}
+
 interface KnowledgeCatalogSummary {
   itemId: string;
   kind: 'redbook-note' | 'youtube-video' | 'document-source';
@@ -42,6 +50,9 @@ interface KnowledgeCatalogSummary {
   status?: string;
   sampleFiles?: string[];
   fileCount?: number;
+  readyForWander?: boolean;
+  wanderIndexStatus?: 'ready' | 'indexing' | 'failed' | 'not_indexed';
+  wanderVisualBlocks?: WanderVisualBlock[];
 }
 
 interface KnowledgeListPageResponse {
@@ -188,6 +199,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         sourceUrl: item.sourceUrl,
         tags: item.tags || [],
         status: item.status,
+        readyForWander: item.readyForWander,
+        wanderIndexStatus: item.wanderIndexStatus,
+        wanderVisualBlocks: item.wanderVisualBlocks || [],
         hasTranscript: Boolean(item.hasTranscript),
       },
     };
@@ -613,6 +627,43 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     };
   };
 
+  const getWanderVisualBlocks = (item: WanderItem): WanderVisualBlock[] => {
+    const raw = item.meta?.wanderVisualBlocks;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((block): WanderVisualBlock | null => {
+        if (!block || typeof block !== 'object') return null;
+        const payload = block as Record<string, unknown>;
+        const blockId = typeof payload.blockId === 'string' ? payload.blockId.trim() : '';
+        const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+        if (!blockId || !text) return null;
+        return {
+          blockId,
+          text,
+          path: typeof payload.path === 'string' ? payload.path : undefined,
+          page: typeof payload.page === 'number' ? payload.page : undefined,
+          visualUnitId: typeof payload.visualUnitId === 'string' ? payload.visualUnitId : undefined,
+        };
+      })
+      .filter((block): block is WanderVisualBlock => Boolean(block));
+  };
+
+  const formatWanderVisualBlocksForRedClaw = (item: WanderItem): string => {
+    const blocks = getWanderVisualBlocks(item).slice(0, 6);
+    if (blocks.length === 0) return '';
+    return [
+      '图片文字摘录：',
+      ...blocks.map((block, index) => {
+        const source = [
+          block.path || 'image',
+          typeof block.page === 'number' ? `page=${block.page}` : '',
+          `blockId=${block.blockId}`,
+        ].filter(Boolean).join(' ');
+        return `${index + 1}. ${source}：${block.text.replace(/\s+/g, ' ').slice(0, 420)}`;
+      }),
+    ].join('\n');
+  };
+
   const canStartCreate = Boolean(parsedResult && onNavigateToRedClaw && validationIssues.length === 0 && !parseError);
 
   const startCreateInRedClaw = () => {
@@ -634,6 +685,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     const materialText = items.map((item, index) => {
       const order = index + 1;
       const folderRef = buildKnowledgeFolderReference(item);
+      const visualText = formatWanderVisualBlocksForRedClaw(item);
       return [
         `素材${order}`,
         `类型：${item.type === 'video' ? '视频笔记' : ((item.meta as Record<string, unknown> | undefined)?.sourceType === 'document' ? '文档' : '图文笔记')}`,
@@ -642,8 +694,25 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         folderRef.suggestedReadPaths.length > 0
           ? `建议读取：${folderRef.suggestedReadPaths.slice(0, 3).join('、')}`
           : `读取方式：先 List 素材目录，再 Read 具体文件`,
-      ].join('\n');
+        visualText,
+      ].filter(Boolean).join('\n');
     }).join('\n\n');
+    const knowledgeReferences = items.map((item) => {
+      const folderRef = buildKnowledgeFolderReference(item);
+      const meta = (item.meta || {}) as Record<string, unknown>;
+      return {
+        id: item.id,
+        title: item.title || '未命名内容',
+        sourceKind: typeof meta.sourceKind === 'string' ? meta.sourceKind : (item.type === 'video' ? 'youtube-video' : 'redbook-note'),
+        summary: String(item.content || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+        cover: resolveAssetUrl(item.cover),
+        sourceUrl: typeof meta.sourceUrl === 'string' ? meta.sourceUrl : undefined,
+        folderPath: folderRef.folderPath,
+        rootPath: typeof meta.filePath === 'string' ? meta.filePath : folderRef.folderPath,
+        tags: Array.isArray(meta.tags) ? meta.tags.filter((tag): tag is string => typeof tag === 'string') : undefined,
+        hasTranscript: Boolean(meta.hasTranscript),
+      };
+    });
 
     const content = [
       '请基于以下“漫步选题”创作一篇完整的小红书文案。',
@@ -702,6 +771,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         title: '漫步参考素材',
         items: referenceCards,
       },
+      knowledgeReferences,
     });
   };
 
@@ -888,6 +958,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         kind: 'redbook-note',
         limit: 24,
         sort: 'updated',
+        readyForWanderOnly: true,
       };
       if (query) {
         request.query = query;
@@ -1061,7 +1132,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       if (nextItems.length === 0) {
         setParseError(selectionMode === 'manual'
           ? '没有找到和当前方向相关的素材，请换一个主题或选择一篇锚点笔记。'
-          : '暂无足够内容，请先收集一些笔记、视频或文档。');
+          : '部分笔记仍在索引中，索引完成后会进入漫步。');
         setPhase('done');
         setShowFinal(true);
         setLoading(false);
