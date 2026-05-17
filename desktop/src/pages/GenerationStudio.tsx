@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
     ArrowLeft,
     ArrowUp,
@@ -143,6 +143,8 @@ type AudioGenerationRequest = {
     model: string;
     voiceId: string;
     languageBoost: string;
+    speed: string;
+    emotion: string;
     responseFormat: string;
 };
 
@@ -288,16 +290,50 @@ const VIDEO_AUDIO_OPTIONS = [
     { value: 'on', label: '音频开' },
 ] as const;
 
-const AUDIO_LANGUAGE_OPTIONS = [
+const DEFAULT_AUDIO_LANGUAGE_OPTIONS = [
     { value: '', label: '自动' },
     { value: 'Chinese', label: '中文' },
     { value: 'English', label: '英文' },
 ] as const;
 
-const AUDIO_FORMAT_OPTIONS = [
-    { value: 'mp3', label: 'MP3' },
-    { value: 'wav', label: 'WAV' },
+const AUDIO_SPEED_OPTIONS = [
+    { value: '0.5', label: '0.5' },
+    { value: '0.75', label: '0.75' },
+    { value: '1', label: '1' },
+    { value: '1.25', label: '1.25' },
+    { value: '1.5', label: '1.5' },
+    { value: '1.75', label: '1.75' },
+    { value: '2', label: '2' },
 ] as const;
+
+const AUDIO_EMOTION_OPTIONS = [
+    { value: '', label: '自然' },
+    { value: 'calm', label: '平静' },
+    { value: 'happy', label: '开心' },
+    { value: 'sad', label: '悲伤' },
+    { value: 'angry', label: '愤怒' },
+    { value: 'surprised', label: '惊讶' },
+    { value: 'whisper', label: '低语' },
+    { value: 'fluent', label: '流畅' },
+] as const;
+
+const AUDIO_PAUSE_OPTIONS = [
+    { value: '0.3', label: '0.3s' },
+    { value: '0.6', label: '0.6s' },
+    { value: '1.0', label: '1.0s' },
+    { value: '1.5', label: '1.5s' },
+    { value: '2.0', label: '2.0s' },
+] as const;
+
+const AUDIO_PAUSE_TOKEN_PATTERN = /〔停顿\s*([0-9.]+)\s*秒〕/g;
+
+function audioPauseToken(seconds: string): string {
+    return `〔停顿${seconds}秒〕`;
+}
+
+type AudioRichTextInputHandle = {
+    insertPause: (seconds?: string) => void;
+};
 
 const COVER_STYLE_OPTIONS: Array<{ key: keyof CoverPromptSwitches; label: string }> = [
     { key: 'learnTypography', label: '字体' },
@@ -695,7 +731,6 @@ function buildRequestSummary(request: GenerationRequest): string[] {
         return [
             request.model || '默认模型',
             request.voiceId ? shortVoiceId(request.voiceId) : '未选音色',
-            request.responseFormat || 'mp3',
         ];
     }
     return [
@@ -823,6 +858,8 @@ function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
             model: String(record.model || '').trim(),
             voiceId: String(record.voiceId || record.voice_id || record.voice || '').trim(),
             languageBoost: String(record.languageBoost || record.language_boost || '').trim(),
+            speed: String(record.speed || record.speed_rate || '1').trim() || '1',
+            emotion: String(record.emotion || '').trim(),
             responseFormat: String(record.responseFormat || record.response_format || 'mp3').trim() || 'mp3',
         } satisfies AudioGenerationRequest;
     }
@@ -1235,6 +1272,8 @@ function requestFromJobProjection(job: MediaJobProjection): GenerationRequest | 
             model: model || '',
             voiceId: stringField(request, ['voiceId', 'voice_id', 'voice']),
             languageBoost: stringField(request, ['languageBoost', 'language_boost']),
+            speed: stringField(request, ['speed', 'speed_rate']) || '1',
+            emotion: stringField(request, ['emotion']),
             responseFormat: stringField(request, ['responseFormat', 'response_format']) || 'mp3',
         } satisfies AudioGenerationRequest;
     }
@@ -1601,9 +1640,14 @@ type VoiceListItem = {
     id: string;
     name: string;
     language: string;
+    languageBoost: string;
+    languageZh: string;
+    languageEn: string;
     status: string;
     source: string;
     ownerAssetId: string;
+    genderHint: string;
+    systemVoice: boolean;
 };
 
 function getAiSourceTypeLabel(source: AiSourceConfig): string {
@@ -1723,9 +1767,14 @@ function normalizeVoiceList(value: unknown): VoiceListItem[] {
                 id,
                 name: String(voice.name || voice.title || id).trim() || id,
                 language: String(voice.language || voice.lang || '').trim(),
+                languageBoost: String(voice.languageBoost || voice.language_boost || voice.language || '').trim(),
+                languageZh: String(voice.languageZh || voice.language_zh || '').trim(),
+                languageEn: String(voice.languageEn || voice.language_en || '').trim(),
                 status: String(voice.status || '').trim(),
                 source: String(voice.source || '').trim(),
                 ownerAssetId: String(voice.ownerAssetId || voice.assetId || voice.subjectId || '').trim(),
+                genderHint: String(voice.genderHint || voice.gender_hint || '').trim(),
+                systemVoice: Boolean(voice.systemVoice || voice.system_voice || voice.source === 'system'),
             } satisfies VoiceListItem;
         })
         .filter((item): item is VoiceListItem => {
@@ -1733,6 +1782,232 @@ function normalizeVoiceList(value: unknown): VoiceListItem[] {
             const status = item.status.trim().toLowerCase();
             return !['failed', 'error', 'dead_lettered', 'deleted', 'cancelled', 'canceled'].includes(status);
         })
+}
+
+function audioPromptForSpeech(input: string): string {
+    return input
+        .replace(/〔停顿\s*([0-9.]+)\s*秒〕/g, (_match, seconds) => `<#${seconds}#>`)
+        .replace(/【停顿\s*([0-9.]+)\s*秒】/g, (_match, seconds) => `<#${seconds}#>`);
+}
+
+function readAudioRichText(root: HTMLElement | null): string {
+    if (!root) return '';
+    let text = '';
+    const visit = (node: Node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            text += node.textContent || '';
+            return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const element = node as HTMLElement;
+        if (element.dataset.audioPause) {
+            text += audioPauseToken(element.dataset.audioPause || '0.6');
+            return;
+        }
+        if (element.tagName === 'BR') {
+            if (element.dataset.editorSentinel) return;
+            text += '\n';
+            return;
+        }
+        if (element.tagName === 'DIV' && text && !text.endsWith('\n')) {
+            text += '\n';
+        }
+        node.childNodes.forEach(visit);
+    };
+    root.childNodes.forEach(visit);
+    return text.replace(/\u00a0/g, ' ');
+}
+
+function createAudioPauseElement(seconds = '0.6'): HTMLElement {
+    const token = document.createElement('span');
+    token.contentEditable = 'false';
+    token.dataset.audioPause = seconds;
+    token.className = 'mx-1 inline-flex items-center rounded-md bg-[#E8F3FF] px-1.5 py-0.5 align-baseline text-[0.92em] font-medium text-[#3F7FB5]';
+    token.textContent = `停顿 ${seconds}s`;
+    return token;
+}
+
+function ensureAudioEditorSentinel(root: HTMLElement | null) {
+    if (!root) return;
+    if (readAudioRichText(root).trim() || root.querySelector('[data-audio-pause]')) return;
+    let sentinel = root.querySelector<HTMLBRElement>('[data-editor-sentinel="true"]');
+    if (!sentinel) {
+        root.replaceChildren();
+        sentinel = document.createElement('br');
+        sentinel.dataset.editorSentinel = 'true';
+        root.appendChild(sentinel);
+    }
+}
+
+function placeCaretAfterAudioNode(root: HTMLElement, node: Node | null) {
+    if (!node || !root.contains(node)) return;
+    const range = document.createRange();
+    range.setStartAfter(node);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
+function insertAudioNodeAtSelection(root: HTMLElement, node: Node): Node | null {
+    const selection = window.getSelection();
+    const insertAtEnd = () => {
+        const sentinel = root.querySelector<HTMLElement>('[data-editor-sentinel="true"]');
+        sentinel?.remove();
+        root.appendChild(node);
+        const spacer = document.createTextNode(' ');
+        root.appendChild(spacer);
+        placeCaretAfterAudioNode(root, spacer);
+        return spacer;
+    };
+    if (!selection || selection.rangeCount === 0) return insertAtEnd();
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.startContainer)) return insertAtEnd();
+    range.deleteContents();
+    const spacer = document.createTextNode(' ');
+    range.insertNode(spacer);
+    range.insertNode(node);
+    placeCaretAfterAudioNode(root, spacer);
+    return spacer;
+}
+
+function renderAudioRichTextValue(root: HTMLElement, value: string) {
+    root.replaceChildren();
+    const text = String(value || '');
+    if (!text) {
+        ensureAudioEditorSentinel(root);
+        return;
+    }
+    const parts = text.split(AUDIO_PAUSE_TOKEN_PATTERN);
+    for (let index = 0; index < parts.length; index += 2) {
+        const part = parts[index] || '';
+        if (part) {
+            const lines = part.split('\n');
+            lines.forEach((line, lineIndex) => {
+                if (lineIndex > 0) root.appendChild(document.createElement('br'));
+                if (line) root.appendChild(document.createTextNode(line));
+            });
+        }
+        const seconds = parts[index + 1];
+        if (seconds) {
+            root.appendChild(createAudioPauseElement(seconds));
+            root.appendChild(document.createTextNode(' '));
+        }
+    }
+}
+
+const AudioRichTextInput = forwardRef<AudioRichTextInputHandle, {
+    value: string;
+    onChange: (value: string) => void;
+    placeholder: string;
+}>(function AudioRichTextInput({ value, onChange, placeholder }, ref) {
+    const editorRef = useRef<HTMLDivElement | null>(null);
+    const [isEmpty, setIsEmpty] = useState(true);
+
+    const syncFromDom = useCallback(() => {
+        const editor = editorRef.current;
+        const nextValue = readAudioRichText(editor);
+        setIsEmpty(!nextValue.trim() && !editor?.querySelector('[data-audio-pause]'));
+        onChange(nextValue);
+    }, [onChange]);
+
+    useEffect(() => {
+        const editor = editorRef.current;
+        if (!editor) return;
+        const currentValue = readAudioRichText(editor);
+        if (document.activeElement === editor || currentValue === value) return;
+        renderAudioRichTextValue(editor, value);
+        setIsEmpty(!value.trim());
+    }, [value]);
+
+    useImperativeHandle(ref, () => ({
+        insertPause: (seconds = '0.6') => {
+            const editor = editorRef.current;
+            if (!editor) return;
+            editor.focus({ preventScroll: true });
+            const caretNode = insertAudioNodeAtSelection(editor, createAudioPauseElement(seconds));
+            syncFromDom();
+            window.requestAnimationFrame(() => {
+                editor.focus({ preventScroll: true });
+                placeCaretAfterAudioNode(editor, caretNode);
+            });
+        },
+    }), [syncFromDom]);
+
+    return (
+        <div
+            className="relative min-h-[112px] max-h-[240px] overflow-y-auto text-left"
+            onMouseDown={(event) => {
+                if (!isEmpty) return;
+                event.preventDefault();
+                const editor = editorRef.current;
+                ensureAudioEditorSentinel(editor);
+                editor?.focus();
+            }}
+        >
+            {isEmpty ? (
+                <div className="pointer-events-none absolute left-0 top-0 select-none text-[14px] leading-6 text-text-tertiary">
+                    {placeholder}
+                </div>
+            ) : null}
+            <div
+                ref={editorRef}
+                contentEditable
+                suppressContentEditableWarning
+                onInput={syncFromDom}
+                onFocus={(event) => ensureAudioEditorSentinel(event.currentTarget)}
+                onPaste={(event) => {
+                    event.preventDefault();
+                    document.execCommand('insertText', false, event.clipboardData.getData('text/plain'));
+                }}
+                className="min-h-[112px] w-full whitespace-pre-wrap break-words bg-transparent text-[14px] leading-6 text-text-primary outline-none"
+            />
+        </div>
+    );
+});
+
+function voiceLanguageValue(voice: VoiceListItem): string {
+    return (voice.languageBoost || voice.language).trim();
+}
+
+function voiceLanguageMatches(voice: VoiceListItem, languageBoost: string): boolean {
+    const selected = languageBoost.trim();
+    if (!selected) return true;
+    const value = voiceLanguageValue(voice);
+    if (!value) return !voice.systemVoice;
+    return value.split(',').map((item) => item.trim()).includes(selected);
+}
+
+function buildAudioLanguageOptions(voices: VoiceListItem[]): PickerOption[] {
+    const options = new Map<string, PickerOption>();
+    for (const option of DEFAULT_AUDIO_LANGUAGE_OPTIONS) {
+        options.set(option.value, { ...option });
+    }
+    for (const voice of voices) {
+        const value = voiceLanguageValue(voice);
+        if (!value || options.has(value)) continue;
+        options.set(value, {
+            value,
+            label: voice.languageZh || voice.languageEn || value,
+        });
+    }
+    return Array.from(options.values());
+}
+
+function buildAudioVoiceOptions(voices: VoiceListItem[], languageBoost: string): PickerOption[] {
+    return voices
+        .filter((voice) => voiceLanguageMatches(voice, languageBoost))
+        .map((voice) => ({
+            value: voice.id,
+            label: voice.name,
+            description: [
+                shortVoiceId(voice.id),
+                voice.source === 'subject' ? '角色音色' : voice.systemVoice ? '系统音色' : '',
+                voice.languageZh || voice.languageEn || voiceLanguageValue(voice),
+                voice.genderHint,
+                voice.status && voice.status !== 'ready' ? voice.status : '',
+            ].filter(Boolean).join(' · '),
+        }));
 }
 
 function useDismissiblePopover(open: boolean, onClose: () => void) {
@@ -1772,6 +2047,7 @@ function PopoverSelect({
     layout = 'wrap',
     disabled = false,
     emptyText = '未选择',
+    optionAlign = 'left',
 }: {
     value: string;
     onChange: (value: string) => void;
@@ -1782,6 +2058,7 @@ function PopoverSelect({
     layout?: 'wrap' | 'column';
     disabled?: boolean;
     emptyText?: string;
+    optionAlign?: 'left' | 'center';
 }) {
     const [open, setOpen] = useState(false);
     const rootRef = useDismissiblePopover(open, () => setOpen(false));
@@ -1812,7 +2089,7 @@ function PopoverSelect({
             {open && (
                 <div
                     className={clsx(
-                        'absolute bottom-[calc(100%+10px)] left-0 z-20 min-w-[220px] max-w-[340px] rounded-[20px] border border-border bg-surface-secondary p-3 shadow-[var(--ui-shadow-2)]',
+                        'absolute bottom-[calc(100%+10px)] left-0 z-20 min-w-[96px] max-w-[340px] rounded-[20px] border border-border bg-surface-secondary p-3 shadow-[var(--ui-shadow-2)]',
                         panelClassName,
                     )}
                 >
@@ -1833,7 +2110,8 @@ function PopoverSelect({
                                     }}
                                     className={clsx(
                                         'rounded-[14px] border px-3 py-2.5 text-[12px] font-semibold transition-colors',
-                                        layout === 'column' ? 'w-full text-left' : 'min-w-[92px] flex-1',
+                                        layout === 'column' ? 'w-full' : 'min-w-[92px] flex-1',
+                                        optionAlign === 'center' ? 'text-center' : 'text-left',
                                         selected
                                             ? 'border-brand-red/50 bg-brand-red text-white'
                                             : 'border-transparent bg-surface-tertiary text-text-secondary hover:bg-accent-muted',
@@ -2639,10 +2917,16 @@ export function GenerationStudio({
     const [audioModel, setAudioModel] = useState('');
     const [audioVoiceId, setAudioVoiceId] = useState('');
     const [audioLanguageBoost, setAudioLanguageBoost] = useState('Chinese');
-    const [audioResponseFormat, setAudioResponseFormat] = useState('mp3');
-    const [audioVoiceOptions, setAudioVoiceOptions] = useState<PickerOption[]>([]);
+    const [audioSpeed, setAudioSpeed] = useState('1');
+    const [audioEmotion, setAudioEmotion] = useState('');
+    const [audioSpeedTouched, setAudioSpeedTouched] = useState(false);
+    const [audioEmotionTouched, setAudioEmotionTouched] = useState(false);
+    const [audioVoices, setAudioVoices] = useState<VoiceListItem[]>([]);
     const [isLoadingAudioVoices, setIsLoadingAudioVoices] = useState(false);
     const [audioError, setAudioError] = useState('');
+    const audioRichTextInputRef = useRef<AudioRichTextInputHandle | null>(null);
+    const [audioPauseMenuOpen, setAudioPauseMenuOpen] = useState(false);
+    const audioPauseMenuRef = useDismissiblePopover(audioPauseMenuOpen, () => setAudioPauseMenuOpen(false));
     const [coverPrompt, setCoverPrompt] = useState('');
     const [coverTitle, setCoverTitle] = useState('');
     const [coverProjectId, setCoverProjectId] = useState('');
@@ -2942,6 +3226,14 @@ export function GenerationStudio({
         () => imageModelOptions.find((option) => option.value === imageModel.trim()) || null,
         [imageModel, imageModelOptions],
     );
+    const audioLanguageOptions = useMemo<PickerOption[]>(
+        () => buildAudioLanguageOptions(audioVoices),
+        [audioVoices],
+    );
+    const audioVoiceOptions = useMemo<PickerOption[]>(
+        () => buildAudioVoiceOptions(audioVoices, audioLanguageBoost),
+        [audioLanguageBoost, audioVoices],
+    );
     const mergedAudioVoiceOptions = useMemo<PickerOption[]>(() => {
         const normalizedVoiceId = audioVoiceId.trim();
         if (!normalizedVoiceId || audioVoiceOptions.some((option) => option.value === normalizedVoiceId)) {
@@ -2959,7 +3251,7 @@ export function GenerationStudio({
         : studioMode === 'cover'
             ? `${coverModel || imageModelLabel} · 3:4 · ${coverQuality || '默认'}`
         : studioMode === 'audio'
-            ? `${effectiveAudioModel} · ${audioVoiceId ? shortVoiceId(audioVoiceId) : '未选音色'} · ${audioResponseFormat}`
+            ? `${effectiveAudioModel} · ${audioVoiceId ? shortVoiceId(audioVoiceId) : '未选音色'}`
             : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
     const activeError = studioMode === 'image' ? imageError : studioMode === 'cover' ? coverError : studioMode === 'audio' ? audioError : videoError;
     const visibleError = isAgentMode ? (agentSessionError || activeError) : activeError;
@@ -2993,7 +3285,7 @@ export function GenerationStudio({
 
     useEffect(() => {
         if (!isActive || !hasVoiceConfig) {
-            setAudioVoiceOptions([]);
+            setAudioVoices([]);
             return;
         }
 
@@ -3004,16 +3296,7 @@ export function GenerationStudio({
                 const result = await window.ipcRenderer.voice.list({}) as unknown;
                 if (cancelled) return;
                 const voices = normalizeVoiceList(result);
-                setAudioVoiceOptions(voices.map((voice) => ({
-                    value: voice.id,
-                    label: voice.name,
-                    description: [
-                        shortVoiceId(voice.id),
-                        voice.source === 'subject' ? '角色音色' : '',
-                        voice.language,
-                        voice.status && voice.status !== 'ready' ? voice.status : '',
-                    ].filter(Boolean).join(' · '),
-                })));
+                setAudioVoices(voices);
                 setAudioVoiceId((prev) => {
                     if (prev.trim()) return prev;
                     return voices[0]?.id || '';
@@ -3021,7 +3304,7 @@ export function GenerationStudio({
             } catch (error) {
                 if (cancelled) return;
                 console.error('Failed to load audio voices:', error);
-                setAudioVoiceOptions([]);
+                setAudioVoices([]);
             } finally {
                 if (!cancelled) setIsLoadingAudioVoices(false);
             }
@@ -3031,6 +3314,16 @@ export function GenerationStudio({
             cancelled = true;
         };
     }, [hasVoiceConfig, isActive]);
+
+    useEffect(() => {
+        setAudioVoiceId((prev) => {
+            const current = prev.trim();
+            if (current && audioVoices.some((voice) => voice.id === current && voiceLanguageMatches(voice, audioLanguageBoost))) {
+                return prev;
+            }
+            return audioVoices.find((voice) => voiceLanguageMatches(voice, audioLanguageBoost))?.id || '';
+        });
+    }, [audioLanguageBoost, audioVoices]);
 
     const createFeedEntry = useCallback((request: GenerationRequest): GenerationFeedEntry => ({
         kind: 'generation',
@@ -3200,23 +3493,27 @@ export function GenerationStudio({
             return false;
         }
 
+        const speechInput = audioPromptForSpeech(request.prompt.trim());
         const entry = createFeedEntry(request);
         updateFeedEntries((prev) => [...prev, entry]);
         setAudioError('');
 
         void (async () => {
             try {
+                const speed = Number(request.speed || '1');
                 const result = await window.ipcRenderer.generation.submitAudio({
                     clientRequestId: entry.id,
                     source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
-                    input: request.prompt.trim(),
+                    input: speechInput,
                     title: request.title.trim() || undefined,
                     projectId: request.projectId.trim() || undefined,
                     voiceId: request.voiceId.trim(),
                     voice_id: request.voiceId.trim(),
                     model: request.model.trim() || undefined,
                     languageBoost: request.languageBoost.trim() || undefined,
-                    responseFormat: request.responseFormat || 'mp3',
+                    speed: Number.isFinite(speed) ? speed : undefined,
+                    emotion: request.emotion.trim() || undefined,
+                    responseFormat: 'mp3',
                     returnAudioBinary: true,
                 }) as { success?: boolean; error?: string; jobId?: string };
 
@@ -3400,7 +3697,9 @@ export function GenerationStudio({
             model: effectiveAudioModel,
             voiceId: audioVoiceId,
             languageBoost: audioLanguageBoost,
-            responseFormat: audioResponseFormat,
+            speed: audioSpeed,
+            emotion: audioEmotion,
+            responseFormat: 'mp3',
         });
         if (!accepted) return;
         setAudioPrompt('');
@@ -3408,7 +3707,8 @@ export function GenerationStudio({
         audioLanguageBoost,
         audioProjectId,
         audioPrompt,
-        audioResponseFormat,
+        audioSpeed,
+        audioEmotion,
         audioTitle,
         audioVoiceId,
         effectiveAudioModel,
@@ -3494,7 +3794,10 @@ export function GenerationStudio({
             setAudioModel(entry.request.model);
             setAudioVoiceId(entry.request.voiceId);
             setAudioLanguageBoost(entry.request.languageBoost || 'Chinese');
-            setAudioResponseFormat(entry.request.responseFormat || 'mp3');
+            setAudioSpeed(entry.request.speed || '1');
+            setAudioEmotion(entry.request.emotion || '');
+            setAudioSpeedTouched(Boolean(entry.request.speed));
+            setAudioEmotionTouched(Boolean(entry.request.emotion));
             return;
         }
         setVideoPrompt(entry.request.prompt);
@@ -3791,7 +4094,9 @@ export function GenerationStudio({
                 model: effectiveAudioModel,
                 voiceId: audioVoiceId,
                 languageBoost: audioLanguageBoost,
-                responseFormat: audioResponseFormat,
+                speed: audioSpeed,
+                emotion: audioEmotion,
+                responseFormat: 'mp3',
             };
         }
         if (studioMode === 'cover') {
@@ -3829,7 +4134,8 @@ export function GenerationStudio({
         audioLanguageBoost,
         audioProjectId,
         audioPrompt,
-        audioResponseFormat,
+        audioSpeed,
+        audioEmotion,
         audioTitle,
         audioVoiceId,
         coverBaseImage,
@@ -4287,21 +4593,28 @@ export function GenerationStudio({
                                     )}
 
                                     <div className="space-y-3">
-                                        <textarea
-                                            value={studioMode === 'image' ? imagePrompt : studioMode === 'cover' ? coverPrompt : studioMode === 'audio' ? audioPrompt : videoPrompt}
-                                            onChange={(event) => (
-                                                studioMode === 'image'
-                                                    ? setImagePrompt(event.target.value)
-                                                    : studioMode === 'cover'
-                                                        ? setCoverPrompt(event.target.value)
-                                                    : studioMode === 'audio'
-                                                        ? setAudioPrompt(event.target.value)
-                                                        : setVideoPrompt(event.target.value)
-                                            )}
-                                            rows={4}
-                                            placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'cover' ? '输入封面标题，或直接描述想要的点击感...' : studioMode === 'audio' ? '输入要合成的旁白、台词或口播文本...' : '描述您想生成的视频场景、镜头、动作...'}
-                                            className="min-h-[112px] max-h-[240px] w-full resize-y overflow-y-auto bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
-                                        />
+                                        {studioMode === 'audio' ? (
+                                            <AudioRichTextInput
+                                                ref={audioRichTextInputRef}
+                                                value={audioPrompt}
+                                                onChange={setAudioPrompt}
+                                                placeholder="输入要合成的旁白、台词或口播文本..."
+                                            />
+                                        ) : (
+                                            <textarea
+                                                value={studioMode === 'image' ? imagePrompt : studioMode === 'cover' ? coverPrompt : videoPrompt}
+                                                onChange={(event) => (
+                                                    studioMode === 'image'
+                                                        ? setImagePrompt(event.target.value)
+                                                        : studioMode === 'cover'
+                                                            ? setCoverPrompt(event.target.value)
+                                                            : setVideoPrompt(event.target.value)
+                                                )}
+                                                rows={4}
+                                                placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'cover' ? '输入封面标题，或直接描述想要的点击感...' : '描述您想生成的视频场景、镜头、动作...'}
+                                                className="min-h-[112px] max-h-[240px] w-full resize-y overflow-y-auto bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
+                                            />
+                                        )}
 
                                         {(studioMode === 'image' || studioMode === 'cover') && isAgentMode && agentAttachment && (
                                             <AgentAttachmentCard
@@ -4463,6 +4776,15 @@ export function GenerationStudio({
                                             ) : studioMode === 'audio' ? (
                                                 <>
                                                     <PopoverSelect
+                                                        value={audioLanguageBoost}
+                                                        onChange={setAudioLanguageBoost}
+                                                        options={audioLanguageOptions}
+                                                        className="min-w-[92px]"
+                                                        title="语言"
+                                                        panelClassName="w-[220px]"
+                                                        layout="column"
+                                                    />
+                                                    <PopoverSelect
                                                         value={audioVoiceId}
                                                         onChange={setAudioVoiceId}
                                                         options={mergedAudioVoiceOptions}
@@ -4485,21 +4807,61 @@ export function GenerationStudio({
                                                         emptyText="未添加音频模型"
                                                     />
                                                     <PopoverSelect
-                                                        value={audioLanguageBoost}
-                                                        onChange={setAudioLanguageBoost}
-                                                        options={AUDIO_LANGUAGE_OPTIONS}
-                                                        className="min-w-[92px]"
-                                                        title="语言"
-                                                        panelClassName="w-[180px]"
+                                                        value={audioSpeedTouched ? audioSpeed : ''}
+                                                        onChange={(value) => {
+                                                            setAudioSpeed(value || '1');
+                                                            setAudioSpeedTouched(true);
+                                                        }}
+                                                        options={AUDIO_SPEED_OPTIONS}
+                                                        className="min-w-[76px]"
+                                                        title="语速"
+                                                        panelClassName="w-[112px]"
+                                                        layout="column"
+                                                        emptyText="语速"
+                                                        optionAlign="center"
                                                     />
                                                     <PopoverSelect
-                                                        value={audioResponseFormat}
-                                                        onChange={setAudioResponseFormat}
-                                                        options={AUDIO_FORMAT_OPTIONS}
+                                                        value={audioEmotionTouched ? audioEmotion : ''}
+                                                        onChange={(value) => {
+                                                            setAudioEmotion(value);
+                                                            setAudioEmotionTouched(true);
+                                                        }}
+                                                        options={AUDIO_EMOTION_OPTIONS}
                                                         className="min-w-[92px]"
-                                                        title="格式"
-                                                        panelClassName="w-[180px]"
+                                                        title="情绪"
+                                                        panelClassName="w-[200px]"
+                                                        layout="column"
+                                                        emptyText="情绪"
                                                     />
+                                                    <div ref={audioPauseMenuRef} className="relative">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setAudioPauseMenuOpen((open) => !open)}
+                                                            className="inline-flex h-9 items-center rounded-full border border-border bg-surface-primary px-3 text-[12px] font-medium text-text-secondary shadow-[var(--ui-shadow-1)] transition-colors hover:border-border/70 hover:bg-surface-tertiary"
+                                                        >
+                                                            插入停顿
+                                                        </button>
+                                                        {audioPauseMenuOpen && (
+                                                            <div className="absolute bottom-[calc(100%+10px)] left-0 z-20 w-[112px] rounded-[20px] border border-border bg-surface-secondary p-3 shadow-[var(--ui-shadow-2)]">
+                                                                <div className="mb-3 text-center text-[13px] font-semibold text-text-secondary">停顿</div>
+                                                                <div className="flex max-h-[260px] flex-col gap-2 overflow-y-auto">
+                                                                    {AUDIO_PAUSE_OPTIONS.map((option) => (
+                                                                        <button
+                                                                            key={option.value}
+                                                                            type="button"
+                                                                            onClick={() => {
+                                                                                audioRichTextInputRef.current?.insertPause(option.value);
+                                                                                setAudioPauseMenuOpen(false);
+                                                                            }}
+                                                                            className="w-full rounded-[14px] border border-transparent bg-surface-tertiary px-3 py-2.5 text-center text-[12px] font-semibold text-text-secondary transition-colors hover:bg-accent-muted"
+                                                                        >
+                                                                            {option.label}
+                                                                        </button>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                     <button
                                                         type="button"
                                                         onClick={isAgentMode ? handleSendAgentMessage : handleGenerateAudio}
