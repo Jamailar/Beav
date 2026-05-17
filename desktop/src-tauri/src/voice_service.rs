@@ -21,6 +21,7 @@ use crate::{
 
 const DEFAULT_CLONE_MODEL: &str = "minimax-voice-clone";
 const DEFAULT_TTS_MODEL: &str = "speech-2.8-turbo";
+const MINIMAX_SYSTEM_VOICES_JSON: &str = include_str!("../resources/minimax-system-voices.json");
 
 #[derive(Debug, Clone)]
 struct VoiceGatewayConfig {
@@ -206,6 +207,57 @@ fn voice_list_items_from_value(value: &Value) -> Vec<Value> {
         }
     }
     Vec::new()
+}
+
+fn minimax_system_voice_list_items() -> Vec<Value> {
+    let Ok(catalog) = serde_json::from_str::<Value>(MINIMAX_SYSTEM_VOICES_JSON) else {
+        return Vec::new();
+    };
+    let Some(items) = catalog.get("voices").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let voice_id = payload_string(item, "voice_id")?;
+            let voice_name = payload_string(item, "voice_name").unwrap_or_else(|| voice_id.clone());
+            let language_boost = payload_string(item, "language_boost").unwrap_or_default();
+            let language_zh = payload_string(item, "language_zh").unwrap_or_default();
+            let language_en = payload_string(item, "language_en").unwrap_or_default();
+            let gender_hint = payload_string(item, "gender_hint").unwrap_or_default();
+            Some(json!({
+                "id": voice_id,
+                "value": voice_id,
+                "voiceId": voice_id,
+                "voice_id": voice_id,
+                "name": voice_name,
+                "title": voice_name,
+                "status": "ready",
+                "source": "system",
+                "provider": "minimax",
+                "systemVoice": true,
+                "language": language_boost,
+                "languageBoost": language_boost,
+                "language_boost": language_boost,
+                "languageZh": language_zh,
+                "language_zh": language_zh,
+                "languageEn": language_en,
+                "language_en": language_en,
+                "genderHint": gender_hint,
+                "gender_hint": gender_hint,
+            }))
+        })
+        .collect()
+}
+
+fn append_minimax_system_voices(voices: &mut Vec<Value>, seen: &mut HashSet<String>) {
+    for item in minimax_system_voice_list_items() {
+        if let Some(id) = voice_list_item_id(&item) {
+            if seen.insert(id) {
+                voices.push(item);
+            }
+        }
+    }
 }
 
 fn subject_voice_list_items(state: &State<'_, AppState>) -> Result<Vec<Value>, String> {
@@ -606,6 +658,7 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     let config = match resolve_voice_config(state, Some(payload)) {
         Ok(config) => config,
         Err(error) => {
+            append_minimax_system_voices(&mut voices, &mut seen);
             return Ok(json!({ "success": true, "voices": voices, "configError": error }));
         }
     };
@@ -623,6 +676,7 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     {
         Ok(response) => response,
         Err(error) => {
+            append_minimax_system_voices(&mut voices, &mut seen);
             return Ok(json!({
                 "success": true,
                 "voices": voices,
@@ -633,6 +687,7 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     let status = response.status();
     let body = response.text().map_err(|error| error.to_string())?;
     if !status.is_success() {
+        append_minimax_system_voices(&mut voices, &mut seen);
         return Ok(json!({
             "success": true,
             "voices": voices,
@@ -649,6 +704,7 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
             item,
         );
     }
+    append_minimax_system_voices(&mut voices, &mut seen);
     Ok(json!({ "success": true, "voices": voices, "raw": parsed }))
 }
 
@@ -1531,5 +1587,26 @@ mod tests {
                 { "input": "二段" }
             ]
         })));
+    }
+
+    #[test]
+    fn minimax_system_voice_catalog_exposes_language_metadata() {
+        let voices = minimax_system_voice_list_items();
+
+        assert_eq!(voices.len(), 327);
+        let first = voices.first().expect("system voice");
+        assert_eq!(
+            first.get("voiceId").and_then(Value::as_str),
+            Some("male-qn-qingse")
+        );
+        assert_eq!(
+            first.get("languageBoost").and_then(Value::as_str),
+            Some("Chinese")
+        );
+        assert_eq!(
+            first.get("languageZh").and_then(Value::as_str),
+            Some("中文 (普通话)")
+        );
+        assert_eq!(first.get("source").and_then(Value::as_str), Some("system"));
     }
 }
