@@ -260,7 +260,17 @@ export function DigitalHumanChat({ isActive = true, onReturnHome, onOpenAssets }
     setBusy(true);
 
     try {
-      const videoUrl = await uploadMedia(currentReadiness.videoPath || '', 'video/mp4', 'ai/digital-human/video');
+      const preparedVideo = await window.ipcRenderer.generation.prepareVideoRetalkSource({
+        path: currentReadiness.videoPath,
+      });
+      if (preparedVideo?.success === false || !preparedVideo?.path) {
+        throw new Error(preparedVideo?.error || '参考视频不符合数字人生成要求');
+      }
+      const preparedVideoPath = String(preparedVideo.path);
+      if (preparedVideo.normalized) {
+        updateMessage(assistantId, { text: '已调整参考视频尺寸，正在上传' });
+      }
+      const videoUrl = await uploadMedia(preparedVideoPath, 'video/mp4', 'ai/digital-human/video');
       updateMessage(assistantId, { stage: 'tts', text: '正在生成角色声音' });
       const voiceResult = await window.ipcRenderer.voice.speech({
         input: text,
