@@ -33,7 +33,6 @@ import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubsc
 import { shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, normalizeMediaJobProjection, type MediaJobProjection } from '../features/media-jobs/types';
 import { Chat } from './Chat';
-import { DigitalHumanPanel } from '../features/digital-human/DigitalHumanPanel';
 import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources } from './settings/shared';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert } from '../utils/appDialogs';
@@ -170,7 +169,20 @@ type CoverGenerationRequest = {
     promptSwitches: CoverPromptSwitches;
 };
 
-type GenerationRequest = ImageGenerationRequest | VideoGenerationRequest | AudioGenerationRequest | CoverGenerationRequest;
+type DigitalHumanGenerationRequest = {
+    type: 'digital-human';
+    prompt: string;
+    title: string;
+    projectId: string;
+    roleId: string;
+    roleName: string;
+    voiceId: string;
+    videoPath: string;
+    resolution: '720p' | '1080p';
+    durationSeconds: number;
+};
+
+type GenerationRequest = ImageGenerationRequest | VideoGenerationRequest | AudioGenerationRequest | CoverGenerationRequest | DigitalHumanGenerationRequest;
 
 type GenerationFeedEntry = {
     kind: 'generation';
@@ -200,6 +212,11 @@ type AgentSessionFeedEntry = {
 };
 
 type FeedEntry = GenerationFeedEntry | AgentSessionFeedEntry;
+
+type SubjectCategoryRecord = {
+    id: string;
+    name: string;
+};
 
 type GenerationAgentAssetSummary = {
     kind: StudioMode;
@@ -402,6 +419,62 @@ function numberField(record: Record<string, unknown>, keys: string[], fallback: 
         if (Number.isFinite(value) && value > 0) return value;
     }
     return fallback;
+}
+
+function valueRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+}
+
+function firstString(...values: unknown[]): string {
+    for (const value of values) {
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+}
+
+function isRemoteUrl(value: string): boolean {
+    return /^https?:\/\//i.test(value.trim());
+}
+
+function fileUrlToPath(value: string): string {
+    if (!value.startsWith('file://')) return value;
+    try {
+        return decodeURIComponent(new URL(value).pathname);
+    } catch {
+        return value.replace(/^file:\/\//, '');
+    }
+}
+
+function extractSubjectVoiceId(subject: SubjectRecord | null): string {
+    if (!subject) return '';
+    const voice = valueRecord(subject.voice);
+    const attributes = Array.isArray(subject.attributes) ? subject.attributes : [];
+    const attributeVoice = attributes.find((item) => {
+        const key = String(item?.key || '').trim().toLowerCase();
+        return key === 'voice_id' || key === 'voiceid' || key === '声音id';
+    });
+    return firstString(voice.voiceId, voice.voice_id, voice.id, attributeVoice?.value);
+}
+
+function extractSubjectVideoPath(subject: SubjectRecord | null): string {
+    if (!subject) return '';
+    return firstString(subject.absoluteVideoPath, subject.videoPath, fileUrlToPath(firstString(subject.videoPreviewUrl)));
+}
+
+function digitalHumanReadiness(subject: SubjectRecord | null): { ok: boolean; voiceId: string; videoPath: string; issue: string } {
+    if (!subject) return { ok: false, voiceId: '', videoPath: '', issue: '请选择角色' };
+    const voiceId = extractSubjectVoiceId(subject);
+    const videoPath = extractSubjectVideoPath(subject);
+    const issues: string[] = [];
+    if (!voiceId) issues.push('角色缺少声音 ID');
+    if (!videoPath) issues.push('角色缺少参考视频');
+    return { ok: issues.length === 0, voiceId, videoPath, issue: issues.join('，') };
+}
+
+function extractFinalAudio(value: Record<string, unknown>): Record<string, unknown> {
+    return valueRecord(value.finalAudio);
 }
 
 function referenceNameFromSource(source: string, index: number): string {
@@ -734,6 +807,13 @@ function buildRequestSummary(request: GenerationRequest): string[] {
         return [
             request.model || '默认模型',
             request.voiceId ? shortVoiceId(request.voiceId) : '未选音色',
+        ];
+    }
+    if (request.type === 'digital-human') {
+        return [
+            'videoretalk',
+            request.resolution,
+            request.durationSeconds ? `${request.durationSeconds} 秒` : '自动时长',
         ];
     }
     return [
@@ -1127,11 +1207,12 @@ function requestModeLabel(request: GenerationRequest): string {
     if (request.type === 'cover') return '封面创作';
     if (request.type === 'image') return '图片创作';
     if (request.type === 'audio') return '音频创作';
+    if (request.type === 'digital-human') return '数字人';
     return '视频创作';
 }
 
 function requestLeadingReference(request: GenerationRequest): ReferenceItem | null {
-    if (request.type === 'audio') return null;
+    if (request.type === 'audio' || request.type === 'digital-human') return null;
     if (request.type === 'cover') return request.baseImage || request.templateImage || null;
     if (request.referenceItems.length > 0) return request.referenceItems[0];
     if (request.type === 'video' && request.firstClip) return request.firstClip;
@@ -1150,6 +1231,7 @@ function requestSupportText(request: GenerationRequest): string {
     if (request.type === 'audio') {
         return request.languageBoost || '自动语言';
     }
+    if (request.type === 'digital-human') return request.roleName || '角色';
     if (request.generationMode === 'first-last-frame') return '首尾帧';
     if (request.generationMode === 'continuation') return '续写';
     if (request.generationMode === 'reference-guided') return '参考图';
@@ -1188,6 +1270,8 @@ function estimateGenerationProgress(request: GenerationRequest, elapsedMs: numbe
         ? 28_000
         : request.type === 'audio'
             ? 45_000
+        : request.type === 'digital-human'
+            ? 210_000
             : request.generationMode === 'reference-guided'
                 ? 180_000
                 : 150_000;
@@ -1501,7 +1585,7 @@ function buildRecentGenerationAssetSummaries(
             relativePath: asset.relativePath,
             previewUrl: asset.previewUrl,
             prompt: asset.prompt || entry.request.prompt,
-            model: asset.model || entry.request.model,
+            model: asset.model || (entry.request.type === 'digital-human' ? 'videoretalk' : entry.request.model),
             projectId: asset.projectId || entry.request.projectId || undefined,
             createdAt: asset.updatedAt || entry.completedAt || entry.createdAt,
         } satisfies GenerationAgentAssetSummary)))
@@ -1604,6 +1688,7 @@ function placeholderCountForRequest(request: GenerationRequest): number {
 
 function placeholderAspectRatioForRequest(request: GenerationRequest): string {
     if (request.type === 'audio') return '16 / 5';
+    if (request.type === 'digital-human') return '16 / 9';
     if (request.type === 'cover') return '3 / 4';
     return request.type === 'image'
         ? normalizeAspectRatio(request.aspectRatio, '4 / 3')
@@ -1611,7 +1696,7 @@ function placeholderAspectRatioForRequest(request: GenerationRequest): string {
 }
 
 function isPortraitRequest(request: GenerationRequest): boolean {
-    if (request.type === 'audio') return false;
+    if (request.type === 'audio' || request.type === 'digital-human') return false;
     if (request.type === 'cover') return true;
     const ratio = request.type === 'image'
         ? parseAspectRatio(request.aspectRatio, '4:3')
@@ -2560,7 +2645,7 @@ function ReferenceStack({
 }
 
 function requestReferenceItems(request: GenerationRequest): ReferenceItem[] {
-    if (request.type === 'audio') return [];
+    if (request.type === 'audio' || request.type === 'digital-human') return [];
     if (request.type === 'cover') {
         return [request.templateImage, request.baseImage].filter(Boolean) as ReferenceItem[];
     }
@@ -2967,6 +3052,15 @@ export function GenerationStudio({
     const [audioSpeed, setAudioSpeed] = useState('1');
     const [audioEmotion, setAudioEmotion] = useState('');
     const [audioSpeedTouched, setAudioSpeedTouched] = useState(false);
+    const [digitalHumanPrompt, setDigitalHumanPrompt] = useState('');
+    const [digitalHumanTitle, setDigitalHumanTitle] = useState('');
+    const [digitalHumanProjectId, setDigitalHumanProjectId] = useState('');
+    const [digitalHumanRoleId, setDigitalHumanRoleId] = useState('');
+    const [digitalHumanSubjects, setDigitalHumanSubjects] = useState<SubjectRecord[]>([]);
+    const [digitalHumanCategories, setDigitalHumanCategories] = useState<SubjectCategoryRecord[]>([]);
+    const [isLoadingDigitalHumanRoles, setIsLoadingDigitalHumanRoles] = useState(false);
+    const [digitalHumanError, setDigitalHumanError] = useState('');
+    const digitalHumanUploadCacheRef = useRef(new Map<string, string>());
     const [audioEmotionTouched, setAudioEmotionTouched] = useState(false);
     const [audioVoices, setAudioVoices] = useState<VoiceListItem[]>([]);
     const [isLoadingAudioVoices, setIsLoadingAudioVoices] = useState(false);
@@ -2996,6 +3090,8 @@ export function GenerationStudio({
             ? videoProjectId
             : studioMode === 'cover'
                 ? coverProjectId
+            : studioMode === 'digital-human'
+                ? digitalHumanProjectId
                 : audioProjectId;
     const generationAgentTitle = useMemo(
         () => contextIntent?.sourceTitle ? `Agent 模式 · ${contextIntent.sourceTitle}` : 'Agent 模式',
@@ -3308,9 +3404,17 @@ export function GenerationStudio({
         : studioMode === 'audio'
             ? `${effectiveAudioModel} · ${audioVoiceId ? shortVoiceId(audioVoiceId) : '未选音色'}`
         : studioMode === 'digital-human'
-            ? '角色声音 · 口型视频'
+            ? 'videoretalk · 角色声音 · 口型视频'
             : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
-    const activeError = studioMode === 'image' ? imageError : studioMode === 'cover' ? coverError : studioMode === 'audio' ? audioError : videoError;
+    const activeError = studioMode === 'image'
+        ? imageError
+        : studioMode === 'cover'
+            ? coverError
+        : studioMode === 'audio'
+            ? audioError
+        : studioMode === 'digital-human'
+            ? digitalHumanError
+            : videoError;
     const visibleError = isAgentMode ? (agentSessionError || activeError) : activeError;
 
     useEffect(() => {
@@ -3383,6 +3487,59 @@ export function GenerationStudio({
             return audioVoicesForModel.find((voice) => voiceLanguageMatches(voice, audioLanguageBoost))?.id || '';
         });
     }, [audioLanguageBoost, audioVoicesForModel]);
+
+    const loadDigitalHumanRoles = useCallback(async () => {
+        setIsLoadingDigitalHumanRoles(true);
+        setDigitalHumanError('');
+        try {
+            const [subjectResult, categoryResult] = await Promise.all([
+                window.ipcRenderer.subjects.list({ limit: 500 }),
+                window.ipcRenderer.subjects.categories.list(),
+            ]);
+            if (subjectResult?.success === false) throw new Error(subjectResult.error || '加载角色失败');
+            if (categoryResult?.success === false) throw new Error(categoryResult.error || '加载角色分类失败');
+            const nextSubjects = Array.isArray(subjectResult?.subjects) ? subjectResult.subjects : [];
+            const nextCategories = Array.isArray(categoryResult?.categories) ? categoryResult.categories as SubjectCategoryRecord[] : [];
+            setDigitalHumanSubjects(nextSubjects);
+            setDigitalHumanCategories(nextCategories);
+            setDigitalHumanRoleId((current) => current || nextSubjects[0]?.id || '');
+        } catch (error) {
+            setDigitalHumanError(error instanceof Error ? error.message : '加载角色失败');
+        } finally {
+            setIsLoadingDigitalHumanRoles(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!isActive || studioMode !== 'digital-human') return;
+        void loadDigitalHumanRoles();
+    }, [isActive, loadDigitalHumanRoles, studioMode]);
+
+    const digitalHumanRoleCategoryIds = useMemo(() => new Set(digitalHumanCategories
+        .filter((category) => /角色|人物|数字人|role|character|avatar/i.test(category.name || ''))
+        .map((category) => category.id)), [digitalHumanCategories]);
+    const digitalHumanRoles = useMemo(() => {
+        const categorized = digitalHumanRoleCategoryIds.size > 0
+            ? digitalHumanSubjects.filter((subject) => subject.categoryId && digitalHumanRoleCategoryIds.has(subject.categoryId))
+            : digitalHumanSubjects;
+        return categorized.filter((subject) => {
+            const readiness = digitalHumanReadiness(subject);
+            return readiness.voiceId || readiness.videoPath || digitalHumanRoleCategoryIds.size > 0;
+        });
+    }, [digitalHumanRoleCategoryIds, digitalHumanSubjects]);
+    const selectedDigitalHumanRole = useMemo(
+        () => digitalHumanRoles.find((role) => role.id === digitalHumanRoleId) || digitalHumanRoles[0] || null,
+        [digitalHumanRoleId, digitalHumanRoles],
+    );
+    const selectedDigitalHumanReadiness = useMemo(() => digitalHumanReadiness(selectedDigitalHumanRole), [selectedDigitalHumanRole]);
+    const digitalHumanRoleOptions = useMemo<PickerOption[]>(() => digitalHumanRoles.map((role) => {
+        const readiness = digitalHumanReadiness(role);
+        return {
+            value: role.id,
+            label: readiness.ok ? role.name : `${role.name} · 不可用`,
+            description: readiness.ok ? shortVoiceId(readiness.voiceId) : readiness.issue,
+        };
+    }), [digitalHumanRoles]);
 
     const createFeedEntry = useCallback((request: GenerationRequest): GenerationFeedEntry => ({
         kind: 'generation',
@@ -3598,6 +3755,110 @@ export function GenerationStudio({
         return true;
     }, [contextIntent?.source, createFeedEntry, hasVoiceConfig, updateFeedEntries]);
 
+    const uploadDigitalHumanMedia = useCallback(async (path: string, contentType: string, keyPrefix: string) => {
+        if (isRemoteUrl(path)) return path;
+        const normalizedPath = fileUrlToPath(path);
+        const cacheKey = `${keyPrefix}:${normalizedPath}`;
+        const cached = digitalHumanUploadCacheRef.current.get(cacheKey);
+        if (cached) return cached;
+        const result = await window.ipcRenderer.generation.uploadTempFile({
+            path: normalizedPath,
+            contentType,
+            keyPrefix,
+        });
+        if (result?.success === false || !result?.fileUrl) {
+            throw new Error(result?.error || '上传媒体失败');
+        }
+        digitalHumanUploadCacheRef.current.set(cacheKey, result.fileUrl);
+        return result.fileUrl;
+    }, []);
+
+    const runDigitalHumanRequest = useCallback((request: DigitalHumanGenerationRequest): boolean => {
+        if (!request.prompt.trim()) {
+            setDigitalHumanError('请先输入文案');
+            return false;
+        }
+        if (!request.roleId || !request.voiceId || !request.videoPath) {
+            setDigitalHumanError('角色必须同时具备声音 ID 和参考视频');
+            return false;
+        }
+
+        const entry = createFeedEntry(request);
+        updateFeedEntries((prev) => [...prev, entry]);
+        setDigitalHumanError('');
+
+        void (async () => {
+            try {
+                updateFeedEntries((prev) => prev.map((item) => item.id === entry.id ? { ...item, jobStatus: 'preparing' } : item));
+                const preparedVideo = await window.ipcRenderer.generation.prepareVideoRetalkSource({
+                    path: request.videoPath,
+                    resolution: request.resolution,
+                });
+                if (preparedVideo?.success === false || !preparedVideo?.path) {
+                    throw new Error(preparedVideo?.error || '参考视频不符合数字人生成要求');
+                }
+                const videoUrl = await uploadDigitalHumanMedia(String(preparedVideo.path), 'video/mp4', 'ai/digital-human/video');
+                const voiceResult = await window.ipcRenderer.voice.speech({
+                    input: request.prompt.trim(),
+                    text: request.prompt.trim(),
+                    voiceId: request.voiceId,
+                    waitForCompletion: true,
+                    title: request.title.trim() || `${request.roleName} 数字人口播声音`,
+                    metadata: {
+                        surface: 'digital-human',
+                        subjectId: request.roleId,
+                    },
+                });
+                if (voiceResult?.success === false) {
+                    throw new Error(firstString(voiceResult.error) || '声音生成失败');
+                }
+                const finalAudio = extractFinalAudio(valueRecord(voiceResult));
+                const finalAsset = valueRecord(finalAudio.asset);
+                const audioPath = firstString(finalAudio.path, finalAsset.absolutePath, finalAudio.previewUrl);
+                if (!audioPath) throw new Error('声音生成完成，但没有返回可上传的音频文件');
+                const audioUrl = await uploadDigitalHumanMedia(audioPath, firstString(finalAudio.mimeType) || 'audio/wav', 'ai/digital-human/audio');
+                const result = await window.ipcRenderer.generation.submitVideo({
+                    clientRequestId: entry.id,
+                    model: 'videoretalk',
+                    generationMode: 'video-retalk',
+                    title: request.title.trim() || `${request.roleName} 数字人口播`,
+                    prompt: request.prompt.trim(),
+                    projectId: request.projectId.trim() || undefined,
+                    input: {
+                        video_url: videoUrl,
+                        audio_url: audioUrl,
+                    },
+                    parameters: {
+                        video_extension: false,
+                    },
+                    durationSeconds: request.durationSeconds,
+                    resolution: request.resolution,
+                    metadata: {
+                        surface: 'digital-human',
+                        subjectId: request.roleId,
+                    },
+                }) as { success?: boolean; error?: string; jobId?: string };
+                if (!result?.success || !result?.jobId) {
+                    throw new Error(result?.error || '数字人视频提交失败');
+                }
+                updateFeedEntries((prev) => prev.map((item) => (
+                    item.id === entry.id
+                        ? { ...item, jobId: result.jobId, jobStatus: 'queued', status: 'running', error: undefined }
+                        : item
+                )));
+            } catch (error) {
+                const message = error instanceof Error ? error.message : '数字人生成失败';
+                setDigitalHumanError(message);
+                updateFeedEntries((prev) => prev.map((item) => (
+                    item.id === entry.id
+                        ? { ...item, status: 'error', error: message }
+                        : item
+                )));
+            }
+        })();
+        return true;
+    }, [createFeedEntry, updateFeedEntries, uploadDigitalHumanMedia]);
+
     const runCoverRequest = useCallback((request: CoverGenerationRequest): boolean => {
         if (!request.prompt.trim()) {
             setCoverError('请先输入封面标题或要求');
@@ -3774,6 +4035,32 @@ export function GenerationStudio({
         runAudioRequest,
     ]);
 
+    const handleGenerateDigitalHuman = useCallback(() => {
+        const role = selectedDigitalHumanRole;
+        const readiness = selectedDigitalHumanReadiness;
+        const accepted = runDigitalHumanRequest({
+            type: 'digital-human',
+            prompt: digitalHumanPrompt,
+            title: digitalHumanTitle,
+            projectId: digitalHumanProjectId,
+            roleId: role?.id || '',
+            roleName: role?.name || '数字人',
+            voiceId: readiness.voiceId,
+            videoPath: readiness.videoPath,
+            resolution: '1080p',
+            durationSeconds: 8,
+        });
+        if (!accepted) return;
+        setDigitalHumanPrompt('');
+    }, [
+        digitalHumanProjectId,
+        digitalHumanPrompt,
+        digitalHumanTitle,
+        runDigitalHumanRequest,
+        selectedDigitalHumanReadiness,
+        selectedDigitalHumanRole,
+    ]);
+
     const handleGenerateCover = useCallback(() => {
         const accepted = runCoverRequest({
             type: 'cover',
@@ -3815,8 +4102,12 @@ export function GenerationStudio({
             runAudioRequest(entry.request);
             return;
         }
+        if (entry.request.type === 'digital-human') {
+            runDigitalHumanRequest(entry.request);
+            return;
+        }
         runVideoRequest(entry.request);
-    }, [runAudioRequest, runCoverRequest, runImageRequest, runVideoRequest]);
+    }, [runAudioRequest, runCoverRequest, runDigitalHumanRequest, runImageRequest, runVideoRequest]);
 
     const handleEditEntry = useCallback((entry: GenerationFeedEntry) => {
         setStudioMode(entry.request.type);
@@ -3857,6 +4148,13 @@ export function GenerationStudio({
             setAudioEmotion(entry.request.emotion || '');
             setAudioSpeedTouched(Boolean(entry.request.speed));
             setAudioEmotionTouched(Boolean(entry.request.emotion));
+            return;
+        }
+        if (entry.request.type === 'digital-human') {
+            setDigitalHumanPrompt(entry.request.prompt);
+            setDigitalHumanTitle(entry.request.title);
+            setDigitalHumanProjectId(entry.request.projectId);
+            setDigitalHumanRoleId(entry.request.roleId);
             return;
         }
         setVideoPrompt(entry.request.prompt);
@@ -4526,21 +4824,7 @@ export function GenerationStudio({
                         </button>
                     </div>
                 )}
-                {isDigitalHumanMode && (
-                    <div className={clsx('shrink-0', onReturnHome ? 'pb-3' : 'py-3')}>
-                        {studioToolbar}
-                    </div>
-                )}
                 <main ref={feedScrollRef} className={clsx('flex-1 min-h-0 overflow-y-auto', onReturnHome ? 'pt-0' : 'pt-6')}>
-                    {isDigitalHumanMode ? (
-                        <div className="h-full min-h-[520px] overflow-hidden rounded-[20px] border border-border bg-surface-secondary shadow-[var(--ui-shadow-1)]">
-                            <DigitalHumanPanel
-                                isActive={isActive}
-                                onOpenAssets={onOpenAssets}
-                            />
-                        </div>
-                    ) : (
-                    <>
                     {feedEntries.length === 0 ? (
                         <div className="min-h-[280px]" />
                     ) : (
@@ -4606,11 +4890,8 @@ export function GenerationStudio({
                             <div ref={feedBottomRef} />
                         </div>
                     )}
-                    </>
-                    )}
                 </main>
 
-                {!isDigitalHumanMode && (
                 <footer className="bg-background pb-5 pt-4">
                     <div className={composerWidthClass}>
                         <div className="rounded-[24px] border border-border bg-surface-secondary px-5 py-3 shadow-[var(--ui-shadow-1)]">
@@ -4618,7 +4899,7 @@ export function GenerationStudio({
 
                             <div className="mt-3 rounded-[20px] border border-border bg-surface-primary p-4">
                                 <div className={composerGridClass}>
-                                    {studioMode !== 'audio' && (
+                                    {(studioMode === 'image' || studioMode === 'cover' || studioMode === 'video') && (
                                         <div className="space-y-3">
                                             {studioMode === 'image' ? (
                                                 <UploadPreviewCard
@@ -4694,16 +4975,18 @@ export function GenerationStudio({
                                             />
                                         ) : (
                                             <textarea
-                                                value={studioMode === 'image' ? imagePrompt : studioMode === 'cover' ? coverPrompt : videoPrompt}
+                                                value={studioMode === 'image' ? imagePrompt : studioMode === 'cover' ? coverPrompt : studioMode === 'digital-human' ? digitalHumanPrompt : videoPrompt}
                                                 onChange={(event) => (
                                                     studioMode === 'image'
                                                         ? setImagePrompt(event.target.value)
                                                         : studioMode === 'cover'
                                                             ? setCoverPrompt(event.target.value)
+                                                        : studioMode === 'digital-human'
+                                                            ? setDigitalHumanPrompt(event.target.value)
                                                             : setVideoPrompt(event.target.value)
                                                 )}
                                                 rows={4}
-                                                placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'cover' ? '输入封面标题，或直接描述想要的点击感...' : '描述您想生成的视频场景、镜头、动作...'}
+                                                placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'cover' ? '输入封面标题，或直接描述想要的点击感...' : studioMode === 'digital-human' ? '输入角色要说的口播文案...' : '描述您想生成的视频场景、镜头、动作...'}
                                                 className="min-h-[112px] max-h-[240px] w-full resize-y overflow-y-auto bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
                                             />
                                         )}
@@ -4973,6 +5256,48 @@ export function GenerationStudio({
                                                         )}
                                                     </button>
                                                 </>
+                                            ) : studioMode === 'digital-human' ? (
+                                                <>
+                                                    <PopoverSelect
+                                                        value={selectedDigitalHumanRole?.id || ''}
+                                                        onChange={setDigitalHumanRoleId}
+                                                        options={digitalHumanRoleOptions}
+                                                        className="min-w-[180px]"
+                                                        title="角色"
+                                                        panelClassName="w-[300px]"
+                                                        layout="column"
+                                                        disabled={isLoadingDigitalHumanRoles || digitalHumanRoleOptions.length === 0}
+                                                        emptyText={isLoadingDigitalHumanRoles ? '加载角色' : '暂无角色'}
+                                                    />
+                                                    {onOpenAssets && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={onOpenAssets}
+                                                            className="inline-flex h-9 items-center gap-2 rounded-full border border-border bg-surface-primary px-3 text-[12px] font-medium text-text-secondary shadow-[var(--ui-shadow-1)] transition-colors hover:border-border/70 hover:bg-surface-tertiary"
+                                                        >
+                                                            <UserRound className="h-3.5 w-3.5" />
+                                                            资产库
+                                                        </button>
+                                                    )}
+                                                    <PopoverSelect
+                                                        value="1080p"
+                                                        onChange={() => undefined}
+                                                        options={VIDEO_RESOLUTION_OPTIONS.filter((option) => option.value === '1080p')}
+                                                        className="min-w-[96px]"
+                                                        title="视频清晰度"
+                                                        panelClassName="w-[180px]"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleGenerateDigitalHuman}
+                                                        disabled={!digitalHumanPrompt.trim() || !selectedDigitalHumanReadiness.ok}
+                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
+                                                        title="生成数字人"
+                                                        aria-label="生成数字人"
+                                                    >
+                                                        <Sparkles className="h-5 w-5" />
+                                                    </button>
+                                                </>
                                             ) : (
                                                 <>
                                                     <PopoverSelect
@@ -5055,6 +5380,12 @@ export function GenerationStudio({
                                             </div>
                                         )}
 
+                                        {studioMode === 'digital-human' && selectedDigitalHumanRole && !selectedDigitalHumanReadiness.ok && (
+                                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-brand-red">
+                                                <span>{selectedDigitalHumanReadiness.issue}</span>
+                                            </div>
+                                        )}
+
                                         {visibleError && (
                                             <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 {visibleError}
@@ -5090,7 +5421,6 @@ export function GenerationStudio({
                         </div>
                     </div>
                 </footer>
-                )}
             </div>
 
             {previewAsset && (
