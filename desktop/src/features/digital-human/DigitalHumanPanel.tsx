@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, Send, UserRound, Video, Volume2, Wand2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, Send, UserRound, Video, Volume2, Wand2 } from 'lucide-react';
 
 type DigitalHumanStage = 'idle' | 'uploading-video' | 'tts' | 'uploading-audio' | 'retalk' | 'completed' | 'failed';
 const DIGITAL_HUMAN_VIDEO_RESOLUTION = '1080p';
 
-interface DigitalHumanChatProps {
+interface DigitalHumanPanelProps {
   isActive?: boolean;
-  onReturnHome?: () => void;
   onOpenAssets?: () => void;
 }
 
@@ -150,7 +149,7 @@ function stageLabel(stage?: DigitalHumanStage): string {
   }
 }
 
-export function DigitalHumanChat({ isActive = true, onReturnHome, onOpenAssets }: DigitalHumanChatProps) {
+export function DigitalHumanPanel({ isActive = true, onOpenAssets }: DigitalHumanPanelProps) {
   const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
   const [categories, setCategories] = useState<SubjectCategoryRecord[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState('');
@@ -355,37 +354,23 @@ export function DigitalHumanChat({ isActive = true, onReturnHome, onOpenAssets }
 
   return (
     <main className="flex h-full min-h-0 flex-col bg-surface-secondary">
-      <header className="flex shrink-0 items-center justify-between border-b border-border bg-surface-primary px-5 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <button
-            type="button"
-            onClick={onReturnHome}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-text-secondary hover:bg-surface-secondary hover:text-text-primary"
-            title="返回首页"
-            aria-label="返回首页"
-          >
-            <ArrowLeft className="h-4 w-4" strokeWidth={1.8} />
-          </button>
-          <div className="min-w-0">
-            <h1 className="truncate text-[16px] font-semibold text-text-primary">数字人</h1>
-            <p className="mt-0.5 truncate text-[12px] text-text-tertiary">选择角色后输入文案</p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onOpenAssets}
-          className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-[13px] text-text-secondary hover:bg-surface-secondary hover:text-text-primary"
-        >
-          <UserRound className="h-4 w-4" strokeWidth={1.8} />
-          资产库
-        </button>
-      </header>
-
       <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)]">
         <aside className="min-h-0 border-r border-border bg-surface-primary p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-[13px] font-semibold text-text-primary">角色</h2>
-            {loadingRoles && <Loader2 className="h-4 w-4 animate-spin text-text-tertiary" />}
+            <div className="flex items-center gap-2">
+              {onOpenAssets && (
+                <button
+                  type="button"
+                  onClick={onOpenAssets}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border px-2 text-[12px] text-text-secondary hover:bg-surface-secondary hover:text-text-primary"
+                >
+                  <UserRound className="h-3.5 w-3.5" strokeWidth={1.8} />
+                  资产库
+                </button>
+              )}
+              {loadingRoles && <Loader2 className="h-4 w-4 animate-spin text-text-tertiary" />}
+            </div>
           </div>
           {roleError && (
             <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-700">
