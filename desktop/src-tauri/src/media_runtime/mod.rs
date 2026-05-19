@@ -1503,6 +1503,7 @@ fn resolve_provider_metadata(
             .or_else(|| payload_string(&settings, "tts_model")),
         "voice_clone" => normalize_optional_string(payload_string(payload, "model"))
             .or_else(|| payload_string(&settings, "voice_clone_model")),
+        "video" if is_video_retalk_request(payload, None) => Some("videoretalk".to_string()),
         _ => {
             if provider == "redbox-official" {
                 Some("seedance-2.0".to_string())
@@ -1514,6 +1515,22 @@ fn resolve_provider_metadata(
         }
     };
     Ok((provider, model))
+}
+
+fn is_video_retalk_request(payload: &Value, provider_model: Option<&str>) -> bool {
+    let model = provider_model
+        .map(ToString::to_string)
+        .or_else(|| payload_string(payload, "model"))
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let mode = payload_string(payload, "generationMode")
+        .or_else(|| payload_string(payload, "generation_mode"))
+        .or_else(|| payload_string(payload, "mediaMode"))
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    model == "videoretalk" || mode == "video-retalk" || mode == "videoretalk"
 }
 
 pub(crate) fn submit_media_job(
@@ -2640,6 +2657,98 @@ fn audio_sequence_codec_args(extension: &str) -> Vec<String> {
     }
 }
 
+fn payload_f64_any(payload: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        payload_field(payload, key).and_then(|value| {
+            value.as_f64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<f64>().ok())
+            })
+        })
+    })
+}
+
+fn audio_sequence_boundary_pause_seconds(
+    segment: &Value,
+    before: bool,
+) -> Result<Option<f64>, String> {
+    let keys: &[&str] = if before {
+        &[
+            "pauseBeforeSeconds",
+            "pause_before_seconds",
+            "pauseBefore",
+            "pause_before",
+            "silenceBeforeSeconds",
+            "silence_before_seconds",
+        ]
+    } else {
+        &[
+            "pauseAfterSeconds",
+            "pause_after_seconds",
+            "pauseAfter",
+            "pause_after",
+            "silenceAfterSeconds",
+            "silence_after_seconds",
+        ]
+    };
+    let Some(seconds) = payload_f64_any(segment, keys) else {
+        return Ok(None);
+    };
+    if seconds <= 0.0 {
+        return Ok(None);
+    }
+    if seconds > 10.0 {
+        return Err("audio sequence boundary pause must be <= 10 seconds".to_string());
+    }
+    Ok(Some((seconds * 1000.0).round() / 1000.0))
+}
+
+fn create_audio_sequence_silence_file(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    job_id: &str,
+    extension: &str,
+    label: &str,
+    seconds: f64,
+) -> Result<PathBuf, String> {
+    let work_dir = media_runtime_root(state)?
+        .join("audio-sequences")
+        .join(job_id);
+    fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
+    let path = work_dir.join(format!("{label}-silence.{extension}"));
+    let mut command = Command::new(ffmpeg_program(Some(app))?);
+    command
+        .arg("-y")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-f")
+        .arg("lavfi")
+        .arg("-i")
+        .arg("anullsrc=r=44100:cl=mono")
+        .arg("-t")
+        .arg(format!("{seconds:.3}"))
+        .arg("-vn");
+    for arg in audio_sequence_codec_args(extension) {
+        command.arg(arg);
+    }
+    command.arg(&path);
+    let output = command.output().map_err(|error| {
+        format!("audio sequence silence generation could not start ffmpeg: {error}")
+    })?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let _ = fs::remove_file(&path);
+        return Err(if detail.is_empty() {
+            "audio sequence silence generation failed".to_string()
+        } else {
+            format!("audio sequence silence generation failed: {detail}")
+        });
+    }
+    Ok(path)
+}
+
 fn concat_list_line(path: &PathBuf) -> String {
     let escaped = path
         .display()
@@ -2988,6 +3097,198 @@ async fn run_video_generation_request_async(
         }
     }
     Err(last_error.unwrap_or_else(|| "video generation request failed".to_string()))
+}
+
+fn resolve_video_retalk_settings(settings: &Value) -> (String, Option<String>) {
+    let endpoint = payload_string(settings, "video_endpoint")
+        .map(|value| normalize_base_url(&value))
+        .unwrap_or_else(|| crate::official_base_url_from_settings(settings));
+    let api_key = payload_string(settings, "video_api_key")
+        .or_else(|| crate::official_ai_api_key_from_settings(settings))
+        .or_else(|| payload_string(settings, "api_key"));
+    (endpoint, api_key)
+}
+
+fn video_retalk_route_url(endpoint: &str, suffix: &str) -> String {
+    let base = normalize_base_url(endpoint);
+    let normalized_base = if let Some((prefix, _)) = base.split_once("/ai/video-retalk/") {
+        prefix
+    } else if let Some((prefix, _)) = base.split_once("/videos/") {
+        prefix
+    } else {
+        base.as_str()
+    }
+    .trim_end_matches('/');
+    format!("{normalized_base}{suffix}")
+}
+
+fn video_retalk_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        payload_string(payload, key).or_else(|| {
+            payload
+                .pointer(&format!("/input/{key}"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+    })
+}
+
+fn validate_video_retalk_remote_url(field: &str, value: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        Ok(())
+    } else {
+        Err(format!(
+            "media.videoRetalk requires a remote {field}; upload local files before submitting VideoRetalk"
+        ))
+    }
+}
+
+fn build_video_retalk_request_body(payload: &Value) -> Result<Value, String> {
+    let video_url = video_retalk_payload_string(payload, &["video_url", "videoUrl"])
+        .ok_or_else(|| "media.videoRetalk requires input.video_url or videoUrl".to_string())?;
+    let audio_url = video_retalk_payload_string(payload, &["audio_url", "audioUrl"])
+        .ok_or_else(|| "media.videoRetalk requires input.audio_url or audioUrl".to_string())?;
+    validate_video_retalk_remote_url("video_url", &video_url)?;
+    validate_video_retalk_remote_url("audio_url", &audio_url)?;
+    let duration_seconds = payload_field(payload, "duration_seconds")
+        .or_else(|| payload_field(payload, "durationSeconds"))
+        .and_then(|value| {
+            value.as_i64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<i64>().ok())
+            })
+        })
+        .ok_or_else(|| "media.videoRetalk requires durationSeconds for billing".to_string())?;
+    if duration_seconds <= 0 {
+        return Err("media.videoRetalk durationSeconds must be positive".to_string());
+    }
+    let resolution = payload_string(payload, "resolution")
+        .ok_or_else(|| "media.videoRetalk requires resolution for billing".to_string())?;
+    let mut parameters = payload
+        .get("parameters")
+        .and_then(Value::as_object)
+        .map(|object| Value::Object(object.clone()))
+        .unwrap_or_else(|| json!({}));
+    if let Some(video_extension) = payload_field(payload, "video_extension")
+        .or_else(|| payload_field(payload, "videoExtension"))
+        .and_then(Value::as_bool)
+    {
+        if let Some(object) = parameters.as_object_mut() {
+            object.insert("video_extension".to_string(), json!(video_extension));
+        }
+    }
+    Ok(json!({
+        "input": {
+            "video_url": video_url.trim(),
+            "audio_url": audio_url.trim(),
+        },
+        "parameters": parameters,
+        "duration_seconds": duration_seconds,
+        "resolution": resolution.trim(),
+    }))
+}
+
+async fn run_video_retalk_request_async(
+    endpoint: &str,
+    api_key: Option<&str>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let url = video_retalk_route_url(endpoint, "/ai/video-retalk/jobs");
+    let body = build_video_retalk_request_body(payload)?;
+    let response = media_runtime_json_request(
+        "POST",
+        &url,
+        api_key,
+        &[],
+        Some(body),
+        Some(Duration::from_secs(45)),
+    )
+    .await?;
+    if (200..300).contains(&response.status) {
+        return Ok(response.body);
+    }
+    Err(format!(
+        "[{url}] HTTP {} {}",
+        response.status,
+        summarize_json_body(&response.body)
+    ))
+}
+
+fn extract_video_retalk_output_url(value: &Value) -> Option<String> {
+    for pointer in [
+        "/output/video_url",
+        "/output/videoUrl",
+        "/output/output_url",
+        "/output/outputUrl",
+        "/output/url",
+        "/result/video_url",
+        "/result/videoUrl",
+        "/result/output_url",
+        "/result/outputUrl",
+        "/result/url",
+        "/data/output/video_url",
+        "/data/output/videoUrl",
+        "/data/output/url",
+        "/data/result/video_url",
+        "/data/result/videoUrl",
+        "/data/result/url",
+        "/data/output_url",
+        "/data/outputUrl",
+    ] {
+        if let Some(url) = value.pointer(pointer).and_then(Value::as_str) {
+            let trimmed = url.trim();
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn poll_video_retalk_once(
+    endpoint: &str,
+    api_key: Option<&str>,
+    provider_task_id: &str,
+) -> Result<VideoPollState, String> {
+    let url = video_retalk_route_url(endpoint, "/ai/video-retalk/jobs/query");
+    let response = media_runtime_json_request(
+        "POST",
+        &url,
+        api_key,
+        &[],
+        Some(json!({ "task_id": provider_task_id })),
+        Some(Duration::from_secs(45)),
+    )
+    .await?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!(
+            "[{url}] HTTP {} {}",
+            response.status,
+            summarize_json_body(&response.body)
+        ));
+    }
+    if let Some(url) = extract_video_retalk_output_url(&response.body) {
+        return Ok(VideoPollState::Ready {
+            response: response.body,
+            inline_base64: None,
+            download_url: Some(url),
+        });
+    }
+    let status = extract_video_generation_status(&response.body);
+    if status.contains("failed") || status.contains("error") || status.contains("cancel") {
+        let message = extract_video_generation_failure_message(&response.body)
+            .unwrap_or_else(|| format!("VideoRetalk failed with status {status}"));
+        return Ok(VideoPollState::Failed {
+            response: response.body,
+            message,
+        });
+    }
+    Ok(VideoPollState::Pending {
+        response: response.body,
+        next_poll_at: now_i64() + DEFAULT_POLL_INTERVAL_MS,
+    })
 }
 
 async fn poll_video_generation_once(
@@ -3492,6 +3793,8 @@ fn run_audio_sequence_submit_worker(
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .ok_or_else(|| "voice.speech segment did not return path".to_string())?;
+            let pause_before = audio_sequence_boundary_pause_seconds(segment, true)?.unwrap_or(0.0);
+            let pause_after = audio_sequence_boundary_pause_seconds(segment, false)?.unwrap_or(0.0);
             let asset = segment_result.get("asset").cloned().unwrap_or(Value::Null);
             let metadata = json!({
                 "segmentIndex": index,
@@ -3504,6 +3807,8 @@ fn run_audio_sequence_submit_worker(
                 "speed": payload_field(&payload, "speed").cloned().unwrap_or(Value::Null),
                 "pitch": payload_field(&payload, "pitch").cloned().unwrap_or(Value::Null),
                 "emotion": payload_field(&payload, "emotion").cloned().unwrap_or(Value::Null),
+                "pauseBeforeSeconds": pause_before,
+                "pauseAfterSeconds": pause_after,
                 "asset": asset,
             });
             let conn = open_media_runtime_connection(&state)?;
@@ -3523,7 +3828,27 @@ fn run_audio_sequence_submit_worker(
                 asset.get("previewUrl").and_then(Value::as_str),
                 Some(&metadata),
             )?;
+            if pause_before > 0.0 {
+                segment_paths.push(create_audio_sequence_silence_file(
+                    &app,
+                    &state,
+                    &loaded.job.job_id,
+                    &extension,
+                    &format!("segment-{}-before", index + 1),
+                    pause_before,
+                )?);
+            }
             segment_paths.push(segment_path);
+            if pause_after > 0.0 {
+                segment_paths.push(create_audio_sequence_silence_file(
+                    &app,
+                    &state,
+                    &loaded.job.job_id,
+                    &extension,
+                    &format!("segment-{}-after", index + 1),
+                    pause_after,
+                )?);
+            }
             segment_results.push(json!({
                 "index": index,
                 "path": segment_result.get("path").cloned().unwrap_or(Value::Null),
@@ -3531,6 +3856,8 @@ fn run_audio_sequence_submit_worker(
                 "speed": payload_field(&payload, "speed").cloned().unwrap_or(Value::Null),
                 "pitch": payload_field(&payload, "pitch").cloned().unwrap_or(Value::Null),
                 "emotion": payload_field(&payload, "emotion").cloned().unwrap_or(Value::Null),
+                "pauseBeforeSeconds": pause_before,
+                "pauseAfterSeconds": pause_after,
             }));
             let progress = json!({
                 "progress": {
@@ -3680,6 +4007,35 @@ async fn run_video_submit_worker(
             return complete_job_cancelled(&app, &loaded.job.job_id, "User requested cancellation");
         }
         let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+        if is_video_retalk_request(
+            &loaded.job.request_json,
+            loaded.job.provider_model.as_deref(),
+        ) {
+            let (endpoint, api_key) = resolve_video_retalk_settings(&settings);
+            let response = run_video_retalk_request_async(
+                &endpoint,
+                api_key.as_deref(),
+                &loaded.job.request_json,
+            )
+            .await?;
+            let Some((provider_task_id, _)) = extract_task_id_details(&response) else {
+                let message = "VideoRetalk task creation failed: provider did not return task_id."
+                    .to_string();
+                let failure = json!({
+                    "error": message,
+                    "reason": "missing_provider_task_id",
+                    "providerResponse": response,
+                });
+                return fail_job(&app, &loaded.job.job_id, &message, Some(&failure));
+            };
+            return transition_video_job_to_polling(
+                &app,
+                &loaded,
+                &provider_task_id,
+                None,
+                &response,
+            );
+        }
         let (endpoint, api_key, default_model) = resolve_video_generation_settings(&settings)
             .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
         let effective_model = if crate::media_generation::is_redbox_compatible_endpoint(&endpoint) {
@@ -3759,6 +4115,81 @@ async fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mut
             return complete_job_cancelled(&app, &loaded.job.job_id, "User requested cancellation");
         }
         let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+        if is_video_retalk_request(
+            &loaded.job.request_json,
+            loaded.job.provider_model.as_deref(),
+        ) {
+            let (endpoint, api_key) = resolve_video_retalk_settings(&settings);
+            let Some(provider_task_id) = loaded.attempt.provider_task_id.clone() else {
+                let message =
+                    "VideoRetalk task state is corrupted: missing provider task_id.".to_string();
+                let failure = json!({
+                    "error": message,
+                    "reason": "missing_provider_task_id",
+                    "attemptNo": loaded.attempt.attempt_no,
+                });
+                return fail_job(&app, &loaded.job.job_id, &message, Some(&failure));
+            };
+            match poll_video_retalk_once(&endpoint, api_key.as_deref(), &provider_task_id).await? {
+                VideoPollState::Pending {
+                    response,
+                    next_poll_at,
+                } => {
+                    let conn = open_media_runtime_connection(&state)?;
+                    let Some(current) = load_job_with_current_attempt(&conn, &loaded.job.job_id)?
+                    else {
+                        return Ok(());
+                    };
+                    set_attempt_details(
+                        &conn,
+                        &current,
+                        "polling",
+                        current.attempt.provider_task_id.as_deref(),
+                        current.attempt.provider_status_url.as_deref(),
+                        Some(next_poll_at),
+                        Some(&response),
+                        None,
+                        true,
+                    )?;
+                    update_job_result_json(
+                        &conn,
+                        &current.job.job_id,
+                        &json!({
+                            "providerTaskId": provider_task_id,
+                            "lastResponse": response,
+                            "nextPollAt": next_poll_at,
+                        }),
+                        false,
+                    )?;
+                    append_event_with_connection(
+                        &conn,
+                        &current.job.job_id,
+                        Some(&current.attempt.attempt_id),
+                        "poll_pending",
+                        "VideoRetalk is still pending",
+                        Some(&response),
+                    )?;
+                    emit_job_updated(&app, &state, &current.job.job_id);
+                    return Ok(());
+                }
+                VideoPollState::Ready {
+                    response,
+                    inline_base64,
+                    download_url,
+                } => {
+                    return transition_video_job_to_downloading(
+                        &app,
+                        &loaded,
+                        &response,
+                        inline_base64,
+                        download_url,
+                    );
+                }
+                VideoPollState::Failed { response, message } => {
+                    return fail_job(&app, &loaded.job.job_id, &message, Some(&response));
+                }
+            }
+        }
         let (endpoint, api_key, default_model) = resolve_video_generation_settings(&settings)
             .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
         let model = loaded.job.provider_model.clone().unwrap_or(default_model);
@@ -4249,5 +4680,89 @@ mod tests {
             &loaded,
             1_700_000_000_000_i64 + VIDEO_JOB_TIMEOUT_MS,
         ));
+    }
+
+    #[test]
+    fn video_retalk_body_matches_fixed_api_contract() {
+        let body = build_video_retalk_request_body(&json!({
+            "input": {
+                "video_url": "https://example.com/input.mp4",
+                "audio_url": "https://example.com/audio.wav"
+            },
+            "parameters": {
+                "video_extension": false
+            },
+            "durationSeconds": 8,
+            "resolution": "720p"
+        }))
+        .expect("valid VideoRetalk payload");
+
+        assert_eq!(
+            body,
+            json!({
+                "input": {
+                    "video_url": "https://example.com/input.mp4",
+                    "audio_url": "https://example.com/audio.wav"
+                },
+                "parameters": {
+                    "video_extension": false
+                },
+                "duration_seconds": 8,
+                "resolution": "720p"
+            })
+        );
+    }
+
+    #[test]
+    fn video_retalk_rejects_local_urls_before_submit() {
+        let error = build_video_retalk_request_body(&json!({
+            "input": {
+                "video_url": "media/generated/input.mp4",
+                "audio_url": "https://example.com/audio.wav"
+            },
+            "durationSeconds": 8,
+            "resolution": "720p"
+        }))
+        .expect_err("local files must not be sent to the remote API directly");
+
+        assert!(error.contains("remote video_url"));
+    }
+
+    #[test]
+    fn video_retalk_route_keeps_gateway_base() {
+        assert_eq!(
+            video_retalk_route_url(
+                "https://api.ziz.hk/redbox/v1/videos/generations/async",
+                "/ai/video-retalk/jobs"
+            ),
+            "https://api.ziz.hk/redbox/v1/ai/video-retalk/jobs"
+        );
+        assert_eq!(
+            video_retalk_route_url(
+                "https://api.ziz.hk/redbox/v1/ai/video-retalk/jobs/query",
+                "/ai/video-retalk/jobs"
+            ),
+            "https://api.ziz.hk/redbox/v1/ai/video-retalk/jobs"
+        );
+    }
+
+    #[test]
+    fn video_retalk_extracts_output_url_only_from_result_fields() {
+        let pending_echo = json!({
+            "status": "running",
+            "input": { "video_url": "https://example.com/input.mp4" }
+        });
+        assert_eq!(extract_video_retalk_output_url(&pending_echo), None);
+
+        let completed = json!({
+            "status": "succeeded",
+            "data": {
+                "output_url": "https://example.com/output.mp4"
+            }
+        });
+        assert_eq!(
+            extract_video_retalk_output_url(&completed).as_deref(),
+            Some("https://example.com/output.mp4")
+        );
     }
 }

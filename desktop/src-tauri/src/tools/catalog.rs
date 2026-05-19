@@ -1022,7 +1022,7 @@ fn voice_speech_input_schema() -> Value {
     });
     let speech_segment_schema = json!({
         "type": "object",
-        "description": "One ordered TTS segment. Segment controls override the parent voice.speech controls. For expressive long-form speech, invoke the tts-director skill before constructing segments.",
+            "description": "One ordered TTS segment. Segment controls override the parent voice.speech controls, including voiceId. For dialogue, assign each speaker turn its role voiceId here. For expressive long-form speech, invoke the tts-director skill before constructing segments.",
         "properties": {
             "input": { "type": "string", "description": "Exact spoken text for this segment. MiniMax pause markers and tone tags are allowed." },
             "text": { "type": "string", "description": "Alias for input." },
@@ -1033,6 +1033,8 @@ fn voice_speech_input_schema() -> Value {
             "pitch": { "type": "integer", "minimum": -12, "maximum": 12 },
             "emotion": { "type": "string", "enum": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whipser", "whisper"] },
             "add_silence": { "type": "number" },
+            "pauseBeforeSeconds": { "type": "number", "minimum": 0, "maximum": 10, "description": "Structured silent gap inserted by the media runtime before this generated segment during final audio_sequence merge. Use for inter-speaker or inter-scene silence, not spoken text." },
+            "pauseAfterSeconds": { "type": "number", "minimum": 0, "maximum": 10, "description": "Structured silent gap inserted by the media runtime after this generated segment during final audio_sequence merge. Use for inter-speaker or inter-scene silence, not spoken text." },
             "voice_setting": voice_setting_schema.clone()
         },
         "required": ["input"],
@@ -1050,7 +1052,7 @@ fn voice_speech_input_schema() -> Value {
                 "segments",
                 json!({
                     "type": "array",
-                    "description": "Ordered TTS segments for long narration with different emotions, speed, pitch, or pause strategy. For expressive TTS, invoke `tts-director` first. Submit once; the media runtime generates each segment and merges the final audio.",
+                    "description": "Ordered TTS segments for long narration or dialogue with different voices, emotions, speed, pitch, or pause strategy. For multi-speaker dialogue, put the chosen role voiceId on every segment. For expressive TTS, invoke `tts-director` first. Submit once; the media runtime generates each segment and merges the final audio.",
                     "items": speech_segment_schema,
                     "minItems": 1,
                     "maxItems": 50
@@ -1133,7 +1135,7 @@ fn voice_speech_input_schema() -> Value {
         ],
         &["voiceId"],
         Some(
-            "Generate narration audio from `input` or ordered `segments` using a specific voice id. For expressive, poetic, ad, character, or multi-tone long narration, invoke `tts-director` first, then send one `segments` request and let the media runtime merge the final audio; do not call voice.speech repeatedly and merge manually.",
+            "Generate narration audio from `input` or ordered `segments` using a platform voice id. For expressive, poetic, ad, character, dialogue, or multi-speaker narration, invoke `tts-director` first, choose role voices, then send one `segments` request with per-segment voiceId overrides and let the media runtime merge the final audio; do not call voice.speech repeatedly and merge manually.",
         ),
     )
 }
@@ -2348,6 +2350,56 @@ fn video_generate_input_schema() -> Value {
     )
 }
 
+fn media_video_retalk_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "input",
+                json!({
+                    "type": "object",
+                    "description": "Remote source URLs for the VideoRetalk lip-sync job. Local files must be uploaded before calling this action.",
+                    "properties": {
+                        "video_url": { "type": "string", "description": "HTTPS URL of the source talking-head video." },
+                        "audio_url": { "type": "string", "description": "HTTPS URL of the driving audio file." }
+                    },
+                    "required": ["video_url", "audio_url"],
+                    "additionalProperties": false
+                }),
+            ),
+            (
+                "parameters",
+                json!({
+                    "type": "object",
+                    "description": "VideoRetalk provider parameters.",
+                    "properties": {
+                        "video_extension": { "type": "boolean", "description": "Whether the provider should extend the video when audio is longer." }
+                    },
+                    "additionalProperties": true
+                }),
+            ),
+            (
+                "durationSeconds",
+                integer_schema("Source video duration in seconds. Required for billing.", 1, 3600),
+            ),
+            (
+                "resolution",
+                string_schema("Billing resolution tier, for example 720p or 1080p."),
+            ),
+            ("title", string_schema("Optional media asset title.")),
+            (
+                "waitForCompletion",
+                bool_schema(
+                    "Whether to block until the VideoRetalk job completes. In chat sessions this defaults to true; set false only for explicit background execution.",
+                ),
+            ),
+        ],
+        &["input", "durationSeconds", "resolution"],
+        Some(
+            "Submit a VideoRetalk lip-sync job using a remote character video URL and driving audio URL. The media runtime stores task_id, polls the fixed query endpoint, downloads the completed video, and registers it in the media library.",
+        ),
+    )
+}
+
 fn video_analyze_input_schema() -> Value {
     object_schema(
         &[
@@ -3029,6 +3081,8 @@ fn redbox_input_schema() -> Value {
                         "pitch": { "type": "integer", "minimum": -12, "maximum": 12 },
                         "emotion": { "type": "string", "enum": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whipser", "whisper"] },
                         "add_silence": { "type": "number" },
+                        "pauseBeforeSeconds": { "type": "number", "minimum": 0, "maximum": 10, "description": "Silent gap inserted before this segment during final merge." },
+                        "pauseAfterSeconds": { "type": "number", "minimum": 0, "maximum": 10, "description": "Silent gap inserted after this segment during final merge." },
                         "voice_setting": { "type": "object", "additionalProperties": true }
                     }
                 }
@@ -3536,7 +3590,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "voice.speech",
         namespace: "voice",
-        description: "Queue speech synthesis from text with a platform voice_id; completion saves the audio result into the media library.",
+        description: "Queue speech synthesis from text or ordered segments with platform voice ids; completion saves the audio result into the media library. For multi-speaker dialogue, use one segments request and put each role's voiceId on its speaker turns.",
         input_schema: voice_speech_input_schema,
         output_schema: voice_output_schema,
         mutating: true,
@@ -3547,7 +3601,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "voice.list",
         namespace: "voice",
-        description: "List platform voices available through the configured voice gateway.",
+        description: "List platform voices available through the configured voice gateway. Use before multi-speaker TTS when the current context does not already provide enough role voice ids.",
         input_schema: no_payload_schema,
         output_schema: voice_output_schema,
         mutating: false,
@@ -4275,6 +4329,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "video",
         description: "Generate videos with the configured provider.",
         input_schema: video_generate_input_schema,
+        output_schema: media_output_schema,
+        mutating: true,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "media.videoRetalk",
+        namespace: "media",
+        description: "Create a digital-human lip-sync video through the fixed VideoRetalk API. Requires remote video_url and audio_url plus billing fields durationSeconds and resolution; completion saves the output video into the media library.",
+        input_schema: media_video_retalk_input_schema,
         output_schema: media_output_schema,
         mutating: true,
         concurrency_safe: true,
@@ -5291,6 +5356,7 @@ mod tests {
 
         assert!(actions.contains(&"image.generate"));
         assert!(actions.contains(&"video.generate"));
+        assert!(actions.contains(&"media.videoRetalk"));
         assert!(actions.contains(&"video.analyze"));
         assert!(actions.contains(&"media.edit"));
         assert!(actions.contains(&"media.transcribe"));

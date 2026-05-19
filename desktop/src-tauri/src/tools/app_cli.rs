@@ -817,6 +817,10 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["transcribe".to_string()];
                 self.handle_media(&tokens, payload)
             }
+            "mediavideoretalk" => {
+                let tokens = vec!["video-retalk".to_string()];
+                self.handle_media(&tokens, payload)
+            }
             "voiceclone" => {
                 let tokens = vec!["clone".to_string()];
                 self.handle_voice(&tokens, payload)
@@ -1717,6 +1721,88 @@ impl<'a> AppCliExecutor<'a> {
                     self.session_id,
                     &request,
                 )
+            }
+            "video-retalk" | "videoretalk" | "retalk" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(object) = request.as_object_mut() {
+                    object.insert("model".to_string(), json!("videoretalk"));
+                    object.insert("generationMode".to_string(), json!("video-retalk"));
+                    object.entry("source".to_string()).or_insert(json!("tool"));
+                    if let Some(video_url) = args.string(&["video-url", "videoUrl", "video_url"]) {
+                        let input = object.entry("input".to_string()).or_insert(json!({}));
+                        if let Some(input_object) = input.as_object_mut() {
+                            input_object.insert("video_url".to_string(), json!(video_url));
+                        }
+                    }
+                    if let Some(audio_url) = args.string(&["audio-url", "audioUrl", "audio_url"]) {
+                        let input = object.entry("input".to_string()).or_insert(json!({}));
+                        if let Some(input_object) = input.as_object_mut() {
+                            input_object.insert("audio_url".to_string(), json!(audio_url));
+                        }
+                    }
+                    if let Some(duration_seconds) =
+                        args.string(&["duration-seconds", "durationSeconds", "duration_seconds"])
+                    {
+                        object.insert("durationSeconds".to_string(), json!(duration_seconds));
+                    }
+                    if let Some(resolution) = args.string(&["resolution"]) {
+                        object.insert("resolution".to_string(), json!(resolution));
+                    }
+                    if let Some(video_extension) =
+                        args.bool(&["video-extension", "videoExtension", "video_extension"])
+                    {
+                        object.insert("videoExtension".to_string(), json!(video_extension));
+                    }
+                    if let Some(session_id) = self.session_id {
+                        object.insert("sessionId".to_string(), json!(session_id));
+                    }
+                    if let Some(tool_call_id) = self.tool_call_id {
+                        object.insert("toolCallId".to_string(), json!(tool_call_id));
+                        object.insert("toolName".to_string(), json!("workflow"));
+                    }
+                }
+                let wait_for_completion = video_generation_should_wait(self.session_id, &request);
+                if !wait_for_completion {
+                    self.emit_tool_partial("VideoRetalk 任务已提交，后台会持续等待结果。");
+                    let submitted = self.call_channel("generation:submit-video", request)?;
+                    let follow_up = submitted
+                        .get("jobId")
+                        .and_then(Value::as_str)
+                        .and_then(|job_id| {
+                            self.session_id.map(|session_id| {
+                                crate::media_runtime::spawn_media_job_followup_for_kind(
+                                    self.app,
+                                    self.runtime_mode,
+                                    session_id,
+                                    job_id,
+                                    "video",
+                                    1,
+                                )
+                            })
+                        })
+                        .transpose();
+                    let mut result = submitted;
+                    if let Some(object) = result.as_object_mut() {
+                        match follow_up {
+                            Ok(Some(follow_up)) => {
+                                object.insert("followUp".to_string(), follow_up);
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                object.insert(
+                                    "followUp".to_string(),
+                                    json!({
+                                        "success": false,
+                                        "error": error,
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                    return Ok(result);
+                }
+                self.emit_tool_partial("VideoRetalk 任务已提交，正在等待生成视频完成。");
+                self.call_channel("video-gen:generate", request)
             }
             "delete" => self.call_channel(
                 "media:delete",
