@@ -29,7 +29,7 @@ Status: Current
 
 ### Model Capabilities
 
-- capability：`chat`、`image`、`video`、`audio`、`transcription`、`embedding`
+- capability：`chat`、`image`、`video`、`audio`、`tts`、`voice_clone`、`transcription`、`embedding`
 - input capability：`image`、`audio`、`video`、`file`
 - 该层负责“模型能力发现”，而不是实际供应商请求执行
 

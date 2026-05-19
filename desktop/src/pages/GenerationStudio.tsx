@@ -1648,7 +1648,37 @@ type VoiceListItem = {
     ownerAssetId: string;
     genderHint: string;
     systemVoice: boolean;
+    targetTtsModel: string;
+    cloneModel: string;
+    provider: string;
 };
+
+const KNOWN_AUDIO_TTS_MODELS: PickerOption[] = [
+    { value: 'speech-2.8-turbo', label: 'speech-2.8-turbo', description: 'MiniMax' },
+    { value: 'cosyvoice-v3.5-plus', label: 'cosyvoice-v3.5-plus', description: 'CosyVoice' },
+];
+
+function normalizedModelKey(value: string): string {
+    return value.trim().toLowerCase();
+}
+
+function isCosyVoiceModel(model: string): boolean {
+    return normalizedModelKey(model).includes('cosyvoice');
+}
+
+function isMinimaxTtsModel(model: string): boolean {
+    const key = normalizedModelKey(model);
+    return key.includes('minimax') || key.startsWith('speech-') || key.startsWith('speech_');
+}
+
+function voiceMatchesAudioModel(voice: VoiceListItem, model: string): boolean {
+    const selected = normalizedModelKey(model);
+    if (!selected) return true;
+    if (voice.systemVoice) return isMinimaxTtsModel(model);
+    const target = normalizedModelKey(voice.targetTtsModel);
+    if (target) return target === selected;
+    return !isCosyVoiceModel(model);
+}
 
 function getAiSourceTypeLabel(source: AiSourceConfig): string {
     const presetId = String(source.presetId || inferPresetIdByEndpoint(source.baseURL || '') || '').trim();
@@ -1707,9 +1737,23 @@ function buildAudioModelOptions(settings: SettingsShape): PickerOption[] {
     const sources = parseAiSources(settings.ai_sources_json);
     const optionsByModel = new Map<string, { label: string; sourceLabels: string[] }>();
     const fallbackModel = String(settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo').trim();
+    const addModelOption = (modelId: string, sourceLabel: string) => {
+        const id = String(modelId || '').trim();
+        if (!id) return;
+        const existing = optionsByModel.get(id);
+        if (!existing) {
+            optionsByModel.set(id, { label: id, sourceLabels: [sourceLabel] });
+            return;
+        }
+        if (!existing.sourceLabels.includes(sourceLabel)) {
+            existing.sourceLabels.push(sourceLabel);
+        }
+    };
 
     for (const source of sources) {
-        const audioModels = filterAiModelsByCapability(getAiSourceModelDescriptors(source), 'audio');
+        const descriptors = getAiSourceModelDescriptors(source);
+        const ttsModels = filterAiModelsByCapability(descriptors, 'tts');
+        const audioModels = ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(descriptors, 'audio');
         if (audioModels.length === 0) continue;
 
         const sourceType = getAiSourceTypeLabel(source);
@@ -1719,19 +1763,15 @@ function buildAudioModelOptions(settings: SettingsShape): PickerOption[] {
             : sourceType;
 
         for (const model of audioModels) {
-            const existing = optionsByModel.get(model.id);
-            if (!existing) {
-                optionsByModel.set(model.id, { label: model.id, sourceLabels: [sourceLabel] });
-                continue;
-            }
-            if (!existing.sourceLabels.includes(sourceLabel)) {
-                existing.sourceLabels.push(sourceLabel);
-            }
+            addModelOption(model.id, sourceLabel);
         }
     }
 
     if (fallbackModel && !optionsByModel.has(fallbackModel)) {
         optionsByModel.set(fallbackModel, { label: fallbackModel, sourceLabels: ['当前设置'] });
+    }
+    for (const option of KNOWN_AUDIO_TTS_MODELS) {
+        addModelOption(option.value, option.description || '内置模型');
     }
 
     return Array.from(optionsByModel.entries()).map(([value, option]) => ({
@@ -1775,6 +1815,9 @@ function normalizeVoiceList(value: unknown): VoiceListItem[] {
                 ownerAssetId: String(voice.ownerAssetId || voice.assetId || voice.subjectId || '').trim(),
                 genderHint: String(voice.genderHint || voice.gender_hint || '').trim(),
                 systemVoice: Boolean(voice.systemVoice || voice.system_voice || voice.source === 'system'),
+                targetTtsModel: String(voice.targetTtsModel || voice.target_tts_model || voice.ttsModel || voice.tts_model || '').trim(),
+                cloneModel: String(voice.cloneModel || voice.clone_model || '').trim(),
+                provider: String(voice.provider || '').trim(),
             } satisfies VoiceListItem;
         })
         .filter((item): item is VoiceListItem => {
@@ -3220,6 +3263,10 @@ export function GenerationStudio({
     const hasVoiceConfig = Boolean(resolvedVoiceEndpoint) && Boolean(resolvedVoiceApiKey);
     const audioModelOptions = useMemo<PickerOption[]>(() => buildAudioModelOptions(settings), [settings]);
     const effectiveAudioModel = (audioModel || settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo').trim();
+    const audioVoicesForModel = useMemo(
+        () => audioVoices.filter((voice) => voiceMatchesAudioModel(voice, effectiveAudioModel)),
+        [audioVoices, effectiveAudioModel],
+    );
 
     const imageModelOptions = useMemo<PickerOption[]>(() => buildImageModelOptions(settings), [settings]);
     const activeImageModelOption = useMemo(
@@ -3227,23 +3274,26 @@ export function GenerationStudio({
         [imageModel, imageModelOptions],
     );
     const audioLanguageOptions = useMemo<PickerOption[]>(
-        () => buildAudioLanguageOptions(audioVoices),
-        [audioVoices],
+        () => buildAudioLanguageOptions(audioVoicesForModel),
+        [audioVoicesForModel],
     );
     const audioVoiceOptions = useMemo<PickerOption[]>(
-        () => buildAudioVoiceOptions(audioVoices, audioLanguageBoost),
-        [audioLanguageBoost, audioVoices],
+        () => buildAudioVoiceOptions(audioVoicesForModel, audioLanguageBoost),
+        [audioLanguageBoost, audioVoicesForModel],
     );
     const mergedAudioVoiceOptions = useMemo<PickerOption[]>(() => {
         const normalizedVoiceId = audioVoiceId.trim();
         if (!normalizedVoiceId || audioVoiceOptions.some((option) => option.value === normalizedVoiceId)) {
             return audioVoiceOptions;
         }
+        if (!audioVoicesForModel.some((voice) => voice.id === normalizedVoiceId)) {
+            return audioVoiceOptions;
+        }
         return [
             { value: normalizedVoiceId, label: shortVoiceId(normalizedVoiceId), description: '当前音色' },
             ...audioVoiceOptions,
         ];
-    }, [audioVoiceId, audioVoiceOptions]);
+    }, [audioVoiceId, audioVoiceOptions, audioVoicesForModel]);
     const imageModelLabel = activeImageModelOption?.label || imageModel.trim() || '未选择模型';
     const videoModelLabel = effectiveVideoModel;
     const currentConfigHint = studioMode === 'image'
@@ -3293,13 +3343,15 @@ export function GenerationStudio({
         setIsLoadingAudioVoices(true);
         void (async () => {
             try {
-                const result = await window.ipcRenderer.voice.list({}) as unknown;
+                const result = await window.ipcRenderer.voice.list({ model: effectiveAudioModel }) as unknown;
                 if (cancelled) return;
                 const voices = normalizeVoiceList(result);
                 setAudioVoices(voices);
                 setAudioVoiceId((prev) => {
-                    if (prev.trim()) return prev;
-                    return voices[0]?.id || '';
+                    if (prev.trim() && voices.some((voice) => voice.id === prev.trim() && voiceMatchesAudioModel(voice, effectiveAudioModel))) {
+                        return prev;
+                    }
+                    return voices.find((voice) => voiceMatchesAudioModel(voice, effectiveAudioModel))?.id || '';
                 });
             } catch (error) {
                 if (cancelled) return;
@@ -3313,17 +3365,17 @@ export function GenerationStudio({
         return () => {
             cancelled = true;
         };
-    }, [hasVoiceConfig, isActive]);
+    }, [effectiveAudioModel, hasVoiceConfig, isActive]);
 
     useEffect(() => {
         setAudioVoiceId((prev) => {
             const current = prev.trim();
-            if (current && audioVoices.some((voice) => voice.id === current && voiceLanguageMatches(voice, audioLanguageBoost))) {
+            if (current && audioVoicesForModel.some((voice) => voice.id === current && voiceLanguageMatches(voice, audioLanguageBoost))) {
                 return prev;
             }
-            return audioVoices.find((voice) => voiceLanguageMatches(voice, audioLanguageBoost))?.id || '';
+            return audioVoicesForModel.find((voice) => voiceLanguageMatches(voice, audioLanguageBoost))?.id || '';
         });
-    }, [audioLanguageBoost, audioVoices]);
+    }, [audioLanguageBoost, audioVoicesForModel]);
 
     const createFeedEntry = useCallback((request: GenerationRequest): GenerationFeedEntry => ({
         kind: 'generation',
@@ -4776,6 +4828,17 @@ export function GenerationStudio({
                                             ) : studioMode === 'audio' ? (
                                                 <>
                                                     <PopoverSelect
+                                                        value={effectiveAudioModel}
+                                                        onChange={setAudioModel}
+                                                        options={audioModelOptions}
+                                                        className="min-w-[170px]"
+                                                        title="TTS 模型"
+                                                        panelClassName="w-[280px]"
+                                                        layout="column"
+                                                        disabled={audioModelOptions.length === 0}
+                                                        emptyText="未添加音频模型"
+                                                    />
+                                                    <PopoverSelect
                                                         value={audioLanguageBoost}
                                                         onChange={setAudioLanguageBoost}
                                                         options={audioLanguageOptions}
@@ -4794,17 +4857,6 @@ export function GenerationStudio({
                                                         layout="column"
                                                         disabled={!hasVoiceConfig || isLoadingAudioVoices || mergedAudioVoiceOptions.length === 0}
                                                         emptyText={isLoadingAudioVoices ? '加载音色' : '暂无音色'}
-                                                    />
-                                                    <PopoverSelect
-                                                        value={effectiveAudioModel}
-                                                        onChange={setAudioModel}
-                                                        options={audioModelOptions}
-                                                        className="min-w-[150px]"
-                                                        title="TTS 模型"
-                                                        panelClassName="w-[260px]"
-                                                        layout="column"
-                                                        disabled={audioModelOptions.length === 0}
-                                                        emptyText="未添加音频模型"
                                                     />
                                                     <PopoverSelect
                                                         value={audioSpeedTouched ? audioSpeed : ''}

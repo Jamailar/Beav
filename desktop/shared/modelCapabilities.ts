@@ -5,6 +5,8 @@ export type ModelCapability =
     | 'image'
     | 'video'
     | 'audio'
+    | 'tts'
+    | 'voice_clone'
     | 'transcription'
     | 'embedding';
 
@@ -31,6 +33,8 @@ export const MODEL_CAPABILITY_ORDER: ModelCapability[] = [
     'image',
     'video',
     'audio',
+    'tts',
+    'voice_clone',
     'transcription',
     'embedding',
 ];
@@ -40,6 +44,8 @@ export const MODEL_CAPABILITY_META: Record<ModelCapability, { label: string; sho
     image: { label: '图片生成', shortLabel: '图片' },
     video: { label: '视频生成', shortLabel: '视频' },
     audio: { label: '音频生成', shortLabel: '音频' },
+    tts: { label: '语音合成', shortLabel: 'TTS' },
+    voice_clone: { label: '音色克隆', shortLabel: '克隆' },
     transcription: { label: '转录', shortLabel: '转录' },
     embedding: { label: '向量', shortLabel: '向量' },
 };
@@ -57,10 +63,19 @@ export interface ModelProfileRule {
 const CAPABILITY_RULES: Array<{ capability: ModelCapability; patterns: RegExp[] }> = [
     { capability: 'embedding', patterns: [/\bembedding\b/i, /\bembed\b/i] },
     { capability: 'transcription', patterns: [/\basr\b/i, /\bwhisper\b/i] },
-    { capability: 'audio', patterns: [/\btts\b/i, /\bspeech\b/i] },
+    { capability: 'voice_clone', patterns: [/clone/i] },
+    { capability: 'tts', patterns: [/voice/i, /\btts\b/i, /\bspeech\b/i] },
     { capability: 'video', patterns: [/video/i, /\bveo\b/i, /\bseedance\b/i, /\bkling\b/i, /\bvidu\b/i, /\bluma\b/i, /\bsora\b/i] },
     { capability: 'image', patterns: [/image/i, /\bdall-?e\b/i, /\bimagen\b/i, /\bseedream\b/i, /nanobanana/i, /banana/i] },
 ];
+
+const inferForcedNameCapabilities = (modelId: string): ModelCapability[] => {
+    const normalized = String(modelId || '').trim().toLowerCase();
+    if (!normalized) return [];
+    if (normalized.includes('clone')) return ['voice_clone'];
+    if (normalized.includes('voice')) return ['tts'];
+    return [];
+};
 
 const normalizeModelInputCapabilities = (values: unknown): ModelInputCapability[] => {
     const allowed = new Set<ModelInputCapability>(MODEL_INPUT_CAPABILITY_ORDER);
@@ -132,6 +147,8 @@ export const findMatchedModelProfiles = (modelId: string): Array<Omit<ModelProfi
 export const getForcedModelCapabilities = (modelId: string): ModelCapability[] => {
     const normalized = String(modelId || '').trim().toLowerCase();
     if (!normalized) return [];
+    const forcedByName = inferForcedNameCapabilities(normalized);
+    if (forcedByName.length > 0) return forcedByName;
     const detected = new Set<ModelCapability>();
     for (const rule of MODEL_PROFILE_RULES) {
         if (rule.patterns.some((pattern) => pattern.test(normalized))) {

@@ -379,6 +379,8 @@ const MODEL_CAPABILITY_BADGE_META: Record<ModelCapability, string> = {
   image: 'text-emerald-700',
   video: 'text-violet-700',
   audio: 'text-amber-700',
+  tts: 'text-amber-700',
+  voice_clone: 'text-fuchsia-700',
   transcription: 'text-cyan-700',
   embedding: 'text-rose-700',
 };
@@ -1495,7 +1497,7 @@ export const extractAlipayPayQrContent = (order: Record<string, unknown>): strin
 
 export const filterOfficialModelsByCapability = (
   models: OfficialModelInfo[],
-  capability: 'chat' | 'stt' | 'image' | 'embedding' | 'video' | 'audio',
+  capability: 'chat' | 'stt' | 'image' | 'embedding' | 'video' | 'audio' | 'tts' | 'voice_clone',
 ): OfficialModelInfo[] => {
   const normalizedCapability = capability === 'stt' ? 'transcription' : capability;
   return models.filter((item) => {
