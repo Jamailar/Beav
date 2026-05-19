@@ -3395,17 +3395,6 @@ export function GenerationStudio({
             ...audioVoiceOptions,
         ];
     }, [audioVoiceId, audioVoiceOptions, audioVoicesForModel]);
-    const imageModelLabel = activeImageModelOption?.label || imageModel.trim() || '未选择模型';
-    const videoModelLabel = effectiveVideoModel;
-    const currentConfigHint = studioMode === 'image'
-        ? `${imageModelLabel} · ${imageAspectRatio || 'Auto'} · ${imageSize || '自动'}`
-        : studioMode === 'cover'
-            ? `${coverModel || imageModelLabel} · 3:4 · ${coverQuality || '默认'}`
-        : studioMode === 'audio'
-            ? `${effectiveAudioModel} · ${audioVoiceId ? shortVoiceId(audioVoiceId) : '未选音色'}`
-        : studioMode === 'digital-human'
-            ? 'videoretalk · 角色声音 · 口型视频'
-            : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
     const activeError = studioMode === 'image'
         ? imageError
         : studioMode === 'cover'
@@ -4543,7 +4532,6 @@ export function GenerationStudio({
         ? 'grid items-start gap-4 md:grid-cols-[196px_minmax(0,1fr)]'
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
-    const currentHeaderHint = isAgentMode && !isDigitalHumanMode ? 'Agent 模式 · 对话驱动' : currentConfigHint;
     const canSendAgentMessage = isAgentMode
         && !isDigitalHumanMode
         && Boolean(agentSessionId)
@@ -4708,12 +4696,12 @@ export function GenerationStudio({
         studioMode,
     ]);
     const studioToolbar = (
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 overflow-x-auto">
             <button
                 type="button"
                 onClick={() => setStudioMode('image')}
                 className={clsx(
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-4 py-1.5 text-[14px] font-medium',
                     studioMode === 'image'
                         ? 'border-brand-red/50 bg-brand-red text-white'
                         : 'border-border bg-surface-primary text-text-secondary',
@@ -4726,7 +4714,7 @@ export function GenerationStudio({
                 type="button"
                 onClick={() => setStudioMode('cover')}
                 className={clsx(
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-4 py-1.5 text-[14px] font-medium',
                     studioMode === 'cover'
                         ? 'border-brand-red/50 bg-brand-red text-white'
                         : 'border-border bg-surface-primary text-text-secondary',
@@ -4739,7 +4727,7 @@ export function GenerationStudio({
                 type="button"
                 onClick={() => setStudioMode('video')}
                 className={clsx(
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-4 py-1.5 text-[14px] font-medium',
                     studioMode === 'video'
                         ? 'border-brand-red/50 bg-brand-red text-white'
                         : 'border-border bg-surface-primary text-text-secondary',
@@ -4752,7 +4740,7 @@ export function GenerationStudio({
                 type="button"
                 onClick={() => setStudioMode('audio')}
                 className={clsx(
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-4 py-1.5 text-[14px] font-medium',
                     studioMode === 'audio'
                         ? 'border-brand-red/50 bg-brand-red text-white'
                         : 'border-border bg-surface-primary text-text-secondary',
@@ -4765,7 +4753,7 @@ export function GenerationStudio({
                 type="button"
                 onClick={() => setStudioMode('digital-human')}
                 className={clsx(
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-4 py-1.5 text-[14px] font-medium',
                     studioMode === 'digital-human'
                         ? 'border-brand-red/50 bg-brand-red text-white'
                         : 'border-border bg-surface-primary text-text-secondary',
@@ -4781,7 +4769,7 @@ export function GenerationStudio({
                 aria-checked={isAgentMode}
                 aria-label="Agent 模式"
                 onClick={() => setGenerationSurface((prev) => prev === 'agent' ? 'manual' : 'agent')}
-                className="inline-flex items-center gap-3 rounded-full px-1 py-1 text-[14px] font-medium text-text-secondary transition-colors"
+                className="inline-flex shrink-0 items-center gap-3 whitespace-nowrap rounded-full px-1 py-1 text-[14px] font-medium text-text-secondary transition-colors"
             >
                 <span className="inline-flex items-center gap-2">
                     <Sparkles className={clsx('h-4 w-4 transition-colors', isAgentMode ? 'text-brand-red' : 'text-text-tertiary')} />
@@ -4804,7 +4792,6 @@ export function GenerationStudio({
                 </span>
             </button>
             )}
-            <div className="ml-auto hidden text-[12px] text-text-tertiary md:block">{currentHeaderHint}</div>
         </div>
     );
 
