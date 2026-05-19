@@ -3225,6 +3225,11 @@ async fn run_video_retalk_request_async(
 
 fn extract_video_retalk_output_url(value: &Value) -> Option<String> {
     for pointer in [
+        "/video_url",
+        "/videoUrl",
+        "/output_url",
+        "/outputUrl",
+        "/url",
         "/output/video_url",
         "/output/videoUrl",
         "/output/output_url",
@@ -3248,6 +3253,21 @@ fn extract_video_retalk_output_url(value: &Value) -> Option<String> {
             let trimmed = url.trim();
             if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
                 return Some(trimmed.to_string());
+            }
+        }
+    }
+    for item in value
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for key in ["video_url", "videoUrl", "output_url", "outputUrl", "url"] {
+            if let Some(url) = item.get(key).and_then(Value::as_str) {
+                let trimmed = url.trim();
+                if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                    return Some(trimmed.to_string());
+                }
             }
         }
     }
@@ -4775,6 +4795,30 @@ mod tests {
             "input": { "video_url": "https://example.com/input.mp4" }
         });
         assert_eq!(extract_video_retalk_output_url(&pending_echo), None);
+
+        let fixed_api_completed = json!({
+            "task_status": "SUCCEEDED",
+            "data": [{
+                "mime_type": "video/mp4",
+                "url": "https://example.com/result-from-data.mp4"
+            }],
+            "video_url": "https://example.com/result-from-root.mp4"
+        });
+        assert_eq!(
+            extract_video_retalk_output_url(&fixed_api_completed).as_deref(),
+            Some("https://example.com/result-from-root.mp4")
+        );
+        let fixed_api_data_only = json!({
+            "task_status": "SUCCEEDED",
+            "data": [{
+                "mime_type": "video/mp4",
+                "url": "https://example.com/result-from-data.mp4"
+            }]
+        });
+        assert_eq!(
+            extract_video_retalk_output_url(&fixed_api_data_only).as_deref(),
+            Some("https://example.com/result-from-data.mp4")
+        );
 
         let completed = json!({
             "status": "succeeded",
