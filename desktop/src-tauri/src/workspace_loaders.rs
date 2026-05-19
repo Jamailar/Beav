@@ -249,6 +249,15 @@ pub(crate) fn load_subjects_from_fs(subjects_root: &Path) -> Vec<SubjectRecord> 
                     .display()
                     .to_string()
             });
+            let video_path = item
+                .get("videoPath")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+            let absolute_video_path = video_path.as_ref().map(|rel| {
+                normalize_legacy_workspace_path(&subject_dir.join(rel))
+                    .display()
+                    .to_string()
+            });
             Some(SubjectRecord {
                 id,
                 name: item
@@ -294,6 +303,7 @@ pub(crate) fn load_subjects_from_fs(subjects_root: &Path) -> Vec<SubjectRecord> 
                     .unwrap_or_default(),
                 image_paths,
                 voice_path,
+                video_path,
                 voice_script: item
                     .get("voiceScript")
                     .or_else(|| item.get("voice_script"))
@@ -317,6 +327,10 @@ pub(crate) fn load_subjects_from_fs(subjects_root: &Path) -> Vec<SubjectRecord> 
                 primary_preview_url: preview_urls.first().cloned(),
                 absolute_voice_path: absolute_voice_path.clone(),
                 voice_preview_url: absolute_voice_path
+                    .as_ref()
+                    .map(|abs| file_url_for_path(Path::new(abs))),
+                absolute_video_path: absolute_video_path.clone(),
+                video_preview_url: absolute_video_path
                     .as_ref()
                     .map(|abs| file_url_for_path(Path::new(abs))),
             })

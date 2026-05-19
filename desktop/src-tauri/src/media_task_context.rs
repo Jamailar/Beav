@@ -418,6 +418,7 @@ mod tests {
             attributes: Vec::new(),
             image_paths: Vec::new(),
             voice_path: None,
+            video_path: None,
             voice_script: None,
             voice: Some(json!({ "voiceId": "voice_2eee156a6468427bb185a831" })),
             created_at: "2026-05-14T00:00:00Z".to_string(),
@@ -427,6 +428,8 @@ mod tests {
             primary_preview_url: None,
             absolute_voice_path: None,
             voice_preview_url: None,
+            absolute_video_path: None,
+            video_preview_url: None,
         });
         store.chat_messages.push(message(
             "s1",

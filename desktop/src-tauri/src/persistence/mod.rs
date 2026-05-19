@@ -1768,6 +1768,7 @@ mod tests {
             attributes: Vec::new(),
             image_paths: Vec::new(),
             voice_path: None,
+            video_path: None,
             voice_script: None,
             voice: None,
             created_at: "1".to_string(),
@@ -1777,6 +1778,8 @@ mod tests {
             primary_preview_url: None,
             absolute_voice_path: None,
             voice_preview_url: None,
+            absolute_video_path: None,
+            video_preview_url: None,
         });
         assert!(
             !should_hydrate_subjects(&store),
