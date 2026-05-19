@@ -802,6 +802,12 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("media.transcribe"),
         ),
+        ("media", "videoretalk" | "video-retalk" | "retalk") => app_cli_action_call(
+            "media.videoRetalk",
+            payload,
+            Some("Operate"),
+            Some("media.videoRetalk"),
+        ),
         ("runtime", "get" | "list") => app_cli_action_call(
             "runtime.query",
             payload,
@@ -2480,6 +2486,37 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("prompt")),
             Some(&json!("cover"))
+        );
+    }
+
+    #[test]
+    fn normalizes_media_video_retalk_to_app_cli_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "media",
+                "operation": "videoRetalk",
+                "input": {
+                    "input": {
+                        "video_url": "https://example.com/input.mp4",
+                        "audio_url": "https://example.com/audio.wav"
+                    },
+                    "durationSeconds": 8,
+                    "resolution": "720p"
+                }
+            }),
+        );
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("media.videoRetalk"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("durationSeconds")),
+            Some(&json!(8))
         );
     }
 
