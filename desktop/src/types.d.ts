@@ -944,6 +944,7 @@ declare global {
     attributes: SubjectAttribute[];
     imagePaths: string[];
     voicePath?: string;
+    videoPath?: string;
     voiceScript?: string;
     createdAt: string;
     updatedAt: string;
@@ -952,6 +953,10 @@ declare global {
     primaryPreviewUrl?: string;
     absoluteVoicePath?: string;
     voicePreviewUrl?: string;
+    absoluteVideoPath?: string;
+    videoPreviewUrl?: string;
+    voice?: Record<string, unknown>;
+    video?: Record<string, unknown>;
   }
 
   interface Window {
@@ -1899,6 +1904,7 @@ declare global {
         submitVideo: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
         submitAudio: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
         submitVoiceClone: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        uploadTempFile: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; fileUrl?: string; url?: string; upload?: Record<string, unknown> }>;
         listJobSummaries: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         listJobs: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         getJob: (jobId: string) => Promise<Record<string, unknown> | null>;

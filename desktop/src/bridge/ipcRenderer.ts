@@ -1358,6 +1358,7 @@ function createIpcRenderer() {
         invokeChannel('generation:submit-video', await preflightGenerationMediaPayload(payload)),
       submitAudio: (payload: Record<string, unknown>) => invokeChannel('generation:submit-audio', payload),
       submitVoiceClone: (payload: Record<string, unknown>) => invokeChannel('generation:submit-voice-clone', payload),
+      uploadTempFile: (payload: Record<string, unknown>) => invokeChannel('generation:upload-temp-file', payload),
       listJobSummaries: (payload?: Record<string, unknown>) => invokeChannel('generation:list-job-summaries', payload || {}),
       listJobs: (payload?: Record<string, unknown>) => invokeChannel('generation:list-jobs', payload || {}),
       getJob: (jobId: string) => invokeChannel('generation:get-job', { jobId }),
