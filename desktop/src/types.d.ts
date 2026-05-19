@@ -1904,7 +1904,7 @@ declare global {
         submitVideo: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
         submitAudio: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
         submitVoiceClone: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
-        prepareVideoRetalkSource: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; path?: string; normalized?: boolean; width?: number; height?: number; sourceWidth?: number; sourceHeight?: number }>;
+        prepareVideoRetalkSource: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; path?: string; normalized?: boolean; width?: number; height?: number; sourceWidth?: number; sourceHeight?: number; targetShortEdge?: number }>;
         uploadTempFile: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; fileUrl?: string; url?: string; upload?: Record<string, unknown> }>;
         listJobSummaries: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         listJobs: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;

@@ -13,6 +13,8 @@ const TEMP_UPLOAD_MAX_BYTES: u64 = 100 * 1024 * 1024;
 const TEMP_UPLOAD_MAX_ATTEMPTS: usize = 2;
 const VIDEO_RETALK_MIN_EDGE: u32 = 640;
 const VIDEO_RETALK_MAX_EDGE: u32 = 2048;
+const VIDEO_RETALK_DEFAULT_SHORT_EDGE: u32 = 720;
+const VIDEO_RETALK_HIGH_SHORT_EDGE: u32 = 1080;
 
 pub fn handle_media_jobs_channel(
     app: &AppHandle,
@@ -187,25 +189,51 @@ fn even_floor(value: f64) -> u32 {
     }
 }
 
+fn video_retalk_target_short_edge(resolution: Option<&str>) -> u32 {
+    match resolution
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "1080p" | "1080" | "fullhd" | "full_hd" | "fhd" => VIDEO_RETALK_HIGH_SHORT_EDGE,
+        "720p" | "720" | "hd" => VIDEO_RETALK_DEFAULT_SHORT_EDGE,
+        _ => VIDEO_RETALK_DEFAULT_SHORT_EDGE,
+    }
+}
+
 fn target_video_retalk_dimensions(
     dimensions: VideoDimensions,
+    target_short_edge: u32,
 ) -> Result<Option<VideoDimensions>, String> {
     let min_edge = dimensions.width.min(dimensions.height);
     let max_edge = dimensions.width.max(dimensions.height);
-    if min_edge >= VIDEO_RETALK_MIN_EDGE && max_edge <= VIDEO_RETALK_MAX_EDGE {
+    let target_short_edge = target_short_edge.clamp(VIDEO_RETALK_MIN_EDGE, VIDEO_RETALK_MAX_EDGE);
+    if min_edge >= target_short_edge && max_edge <= VIDEO_RETALK_MAX_EDGE {
         return Ok(None);
     }
-    let target = if min_edge < VIDEO_RETALK_MIN_EDGE {
-        let scale = VIDEO_RETALK_MIN_EDGE as f64 / min_edge as f64;
-        VideoDimensions {
-            width: even_ceil(dimensions.width as f64 * scale),
-            height: even_ceil(dimensions.height as f64 * scale),
-        }
-    } else {
+    let target = if max_edge > VIDEO_RETALK_MAX_EDGE {
         let scale = VIDEO_RETALK_MAX_EDGE as f64 / max_edge as f64;
         VideoDimensions {
             width: even_floor(dimensions.width as f64 * scale),
             height: even_floor(dimensions.height as f64 * scale),
+        }
+    } else {
+        let scale = target_short_edge as f64 / min_edge as f64;
+        let scaled_width = dimensions.width as f64 * scale;
+        let scaled_height = dimensions.height as f64 * scale;
+        let scaled_max = scaled_width.max(scaled_height);
+        if scaled_max > VIDEO_RETALK_MAX_EDGE as f64 {
+            let fallback_scale = VIDEO_RETALK_MAX_EDGE as f64 / max_edge as f64;
+            VideoDimensions {
+                width: even_floor(dimensions.width as f64 * fallback_scale),
+                height: even_floor(dimensions.height as f64 * fallback_scale),
+            }
+        } else {
+            VideoDimensions {
+                width: even_ceil(scaled_width),
+                height: even_ceil(scaled_height),
+            }
         }
     };
     let target_min = target.width.min(target.height);
@@ -239,7 +267,11 @@ fn prepare_video_retalk_source(
     }
     let source_path = resolve_local_video_path(state, &path)?;
     let source_dimensions = probe_video_dimensions(app, &source_path)?;
-    let Some(target_dimensions) = target_video_retalk_dimensions(source_dimensions)? else {
+    let target_short_edge =
+        video_retalk_target_short_edge(payload_string_any(payload, &["resolution"]).as_deref());
+    let Some(target_dimensions) =
+        target_video_retalk_dimensions(source_dimensions, target_short_edge)?
+    else {
         return Ok(json!({
             "success": true,
             "path": source_path.to_string_lossy(),
@@ -302,6 +334,7 @@ fn prepare_video_retalk_source(
         "height": prepared_dimensions.height,
         "sourceWidth": source_dimensions.width,
         "sourceHeight": source_dimensions.height,
+        "targetShortEdge": target_short_edge,
     }))
 }
 
@@ -511,4 +544,39 @@ fn guess_upload_content_type(path: &Path) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn video_retalk_1080p_preparation_upscales_short_edge() {
+        let target = target_video_retalk_dimensions(
+            VideoDimensions {
+                width: 544,
+                height: 960,
+            },
+            video_retalk_target_short_edge(Some("1080p")),
+        )
+        .expect("target dimensions")
+        .expect("resize target");
+
+        assert_eq!(target.width, 1080);
+        assert_eq!(target.height, 1906);
+    }
+
+    #[test]
+    fn video_retalk_1080p_keeps_existing_high_resolution_source() {
+        let target = target_video_retalk_dimensions(
+            VideoDimensions {
+                width: 1080,
+                height: 1920,
+            },
+            video_retalk_target_short_edge(Some("1080p")),
+        )
+        .expect("target dimensions");
+
+        assert!(target.is_none());
+    }
 }
