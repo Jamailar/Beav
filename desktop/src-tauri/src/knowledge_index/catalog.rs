@@ -140,19 +140,18 @@ fn attach_wander_readiness(
         let block_count = block_stmt
             .query_row(params![item.item_id], |row| row.get::<_, i64>(0))
             .map_err(|error| error.to_string())?;
-        if block_count <= 0 {
-            item.ready_for_wander = false;
-            item.wander_index_status = Some("not_indexed".to_string());
-            continue;
-        }
         let incomplete_statuses = visual_stmt
             .query_map(params![item.item_id], |row| row.get::<_, String>(0))
             .map_err(|error| error.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
-        item.ready_for_wander = incomplete_statuses.is_empty();
-        item.wander_index_status = Some(if item.ready_for_wander {
-            "ready".to_string()
+        item.ready_for_wander = true;
+        item.wander_index_status = Some(if incomplete_statuses.is_empty() {
+            if block_count <= 0 {
+                "not_indexed".to_string()
+            } else {
+                "ready".to_string()
+            }
         } else if incomplete_statuses
             .iter()
             .any(|status| matches!(status.as_str(), "failed" | "metadata_only"))
@@ -200,7 +199,7 @@ pub(crate) fn list_page(
     kind: Option<&str>,
     query: Option<&str>,
     sort: Option<&str>,
-    ready_for_wander_only: bool,
+    _ready_for_wander_only: bool,
 ) -> Result<KnowledgeCatalogPage, String> {
     let conn = connection(state)?;
     let workspace_id = workspace_id(state)?;
@@ -212,7 +211,7 @@ pub(crate) fn list_page(
         kind,
         query,
         sort,
-        ready_for_wander_only,
+        _ready_for_wander_only,
     )
 }
 
@@ -224,7 +223,7 @@ fn list_page_from_connection(
     kind: Option<&str>,
     query: Option<&str>,
     sort: Option<&str>,
-    ready_for_wander_only: bool,
+    _ready_for_wander_only: bool,
 ) -> Result<KnowledgeCatalogPage, String> {
     let limit = limit.clamp(1, 200) as i64;
     let offset = cursor
@@ -247,23 +246,6 @@ fn list_page_from_connection(
     let where_sql = r#"
         workspace_id = ?1
         AND (?2 IS NULL OR kind = ?2)
-        AND (
-            ?4 = 0 OR (
-                EXISTS (
-                    SELECT 1
-                    FROM knowledge_document_blocks wb
-                    WHERE wb.source_id = knowledge_items.item_id
-                    LIMIT 1
-                )
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM knowledge_visual_units wu
-                    WHERE wu.source_id = knowledge_items.item_id
-                      AND lower(wu.status) <> 'indexed'
-                    LIMIT 1
-                )
-            )
-        )
         AND (
             ?3 IS NULL OR
             lower(title) LIKE ?3 OR
@@ -302,19 +284,14 @@ fn list_page_from_connection(
     let total = conn
         .query_row(
             &format!("SELECT COUNT(*) FROM knowledge_items WHERE {where_sql}"),
-            params![
-                workspace_id,
-                normalized_kind,
-                normalized_query,
-                ready_for_wander_only as i64
-            ],
+            params![workspace_id, normalized_kind, normalized_query],
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
 
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT * FROM knowledge_items WHERE {where_sql} ORDER BY {order_by} LIMIT ?5 OFFSET ?6"
+            "SELECT * FROM knowledge_items WHERE {where_sql} ORDER BY {order_by} LIMIT ?4 OFFSET ?5"
         ))
         .map_err(|error| error.to_string())?;
     let mut items = stmt
@@ -323,7 +300,6 @@ fn list_page_from_connection(
                 workspace_id,
                 normalized_kind,
                 normalized_query,
-                ready_for_wander_only as i64,
                 limit,
                 offset
             ],
@@ -833,13 +809,13 @@ mod tests {
     }
 
     #[test]
-    fn wander_readiness_requires_indexed_blocks() {
+    fn wander_readiness_allows_items_without_indexed_blocks() {
         let conn = setup_readiness_conn();
         let mut items = vec![summary("note-a")];
 
         attach_wander_readiness(&conn, &mut items).expect("attach readiness");
 
-        assert!(!items[0].ready_for_wander);
+        assert!(items[0].ready_for_wander);
         assert_eq!(items[0].wander_index_status.as_deref(), Some("not_indexed"));
     }
 
@@ -860,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn wander_readiness_blocks_failed_or_metadata_only_visual_units() {
+    fn wander_readiness_reports_failed_or_metadata_only_visual_units_without_blocking() {
         let conn = setup_readiness_conn();
         conn.execute(
             "INSERT INTO knowledge_document_blocks (source_id) VALUES ('note-a'), ('note-b')",
@@ -876,8 +852,8 @@ mod tests {
 
         attach_wander_readiness(&conn, &mut items).expect("attach readiness");
 
-        assert!(!items[0].ready_for_wander);
-        assert!(!items[1].ready_for_wander);
+        assert!(items[0].ready_for_wander);
+        assert!(items[1].ready_for_wander);
         assert_eq!(items[0].wander_index_status.as_deref(), Some("failed"));
         assert_eq!(items[1].wander_index_status.as_deref(), Some("failed"));
     }

@@ -32,7 +32,7 @@ const CHAT_ATTACHMENT_PENDING_TTL_MS: u128 = 72 * 60 * 60 * 1000;
 const WANDER_READY_MIN_ITEMS: usize = 3;
 const WANDER_VISUAL_EXCERPT_LIMIT: usize = 6;
 const WANDER_VISUAL_EXCERPT_MAX_CHARS: usize = 420;
-const WANDER_INDEXING_MESSAGE: &str = "部分笔记仍在索引中，索引完成后会进入漫步。";
+const WANDER_NOT_ENOUGH_ITEMS_MESSAGE: &str = "可用于漫步的素材不足 3 条，请先采集更多内容。";
 
 fn hydrate_session_file_if_needed(
     state: &State<'_, AppState>,
@@ -693,8 +693,19 @@ fn load_wander_index_payload(
     if source_id.is_empty() {
         return Ok((false, "not_indexed".to_string(), Vec::new()));
     }
-    crate::knowledge_index::schema::ensure_catalog_ready(state)?;
-    let conn = crate::knowledge_index::open_catalog_connection(state)?;
+    if let Err(error) = crate::knowledge_index::schema::ensure_catalog_ready(state) {
+        eprintln!(
+            "[wander] knowledge index unavailable, continuing without visual excerpts: {error}"
+        );
+        return Ok((true, "not_indexed".to_string(), Vec::new()));
+    }
+    let conn = match crate::knowledge_index::open_catalog_connection(state) {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("[wander] failed to open knowledge index, continuing without visual excerpts: {error}");
+            return Ok((true, "not_indexed".to_string(), Vec::new()));
+        }
+    };
     let block_count = conn
         .query_row(
             "SELECT COUNT(*) FROM knowledge_document_blocks WHERE source_id = ?1",
@@ -702,9 +713,6 @@ fn load_wander_index_payload(
             |row| row.get::<_, i64>(0),
         )
         .map_err(|error| error.to_string())?;
-    if block_count <= 0 {
-        return Ok((false, "not_indexed".to_string(), Vec::new()));
-    }
 
     let mut status_stmt = conn
         .prepare(
@@ -722,13 +730,13 @@ fn load_wander_index_payload(
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    if !incomplete_statuses.is_empty() {
-        return Ok((
-            false,
-            classify_wander_incomplete_visual_status(&incomplete_statuses),
-            Vec::new(),
-        ));
-    }
+    let status = if !incomplete_statuses.is_empty() {
+        classify_wander_incomplete_visual_status(&incomplete_statuses)
+    } else if block_count <= 0 {
+        "not_indexed".to_string()
+    } else {
+        "ready".to_string()
+    };
 
     let mut block_stmt = conn
         .prepare(
@@ -736,7 +744,12 @@ fn load_wander_index_payload(
             SELECT block_id, relative_path, page, text, visual_unit_id
             FROM knowledge_document_blocks
             WHERE source_id = ?1
-              AND (content_origin = 'visual_llm' OR block_type LIKE 'image.%' OR visual_unit_id IS NOT NULL)
+              AND (
+                content_origin IN ('visual_llm', 'ocr')
+                OR block_type LIKE 'image.%'
+                OR visual_unit_id IS NOT NULL
+              )
+              AND trim(text) <> ''
             ORDER BY relative_path ASC, page ASC, block_index ASC
             LIMIT ?2
             "#,
@@ -760,7 +773,7 @@ fn load_wander_index_payload(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
 
-    Ok((true, "ready".to_string(), blocks))
+    Ok((true, status, blocks))
 }
 
 fn enrich_wander_item_for_index(
@@ -795,18 +808,11 @@ fn enrich_wander_items_for_index(
         .collect()
 }
 
-fn filter_ready_wander_items(
+fn enrich_wander_items_with_optional_index(
     state: &State<'_, AppState>,
     items: Vec<Value>,
 ) -> Result<Vec<Value>, String> {
-    Ok(enrich_wander_items_for_index(state, items)?
-        .into_iter()
-        .filter(|item| {
-            item.get("readyForWander")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        })
-        .collect())
+    enrich_wander_items_for_index(state, items)
 }
 
 fn recent_wander_excluded_ids(store: &AppStore, recent_limit: usize) -> HashSet<String> {
@@ -1150,27 +1156,19 @@ fn compose_guided_wander_items_for_state(
     payload: &Value,
 ) -> Result<Value, String> {
     let mut payload = payload.clone();
-    let mut warning = None::<String>;
+    let warning = None::<String>;
     if let Some(anchor_item) = payload
         .get("anchorItem")
         .filter(|value| value.is_object())
         .cloned()
     {
         let enriched_anchor = enrich_wander_item_for_index(state, anchor_item)?;
-        if enriched_anchor
-            .get("readyForWander")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            if let Some(object) = payload.as_object_mut() {
-                object.insert("anchorItem".to_string(), enriched_anchor);
-            }
-        } else if let Some(object) = payload.as_object_mut() {
-            object.remove("anchorItem");
-            warning = Some(WANDER_INDEXING_MESSAGE.to_string());
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("anchorItem".to_string(), enriched_anchor);
         }
     }
-    let candidates = filter_ready_wander_items(state, collect_wander_candidate_items(store))?;
+    let candidates =
+        enrich_wander_items_with_optional_index(state, collect_wander_candidate_items(store))?;
     Ok(compose_guided_wander_items_with_candidates(
         store, &payload, candidates, warning,
     ))
@@ -3212,7 +3210,7 @@ pub fn handle_chat_sessions_wander_channel(
                         collect_wander_candidate_items(&store),
                     ))
                 })?;
-                let ready_candidates = filter_ready_wander_items(state, candidates)?;
+                let ready_candidates = enrich_wander_items_with_optional_index(state, candidates)?;
                 if ready_candidates.len() < WANDER_READY_MIN_ITEMS {
                     Ok(json!([]))
                 } else {
@@ -3246,18 +3244,19 @@ pub fn handle_chat_sessions_wander_channel(
                             collect_wander_candidate_items(&store),
                         ))
                     })?;
-                    let ready_candidates = filter_ready_wander_items(state, candidates)?;
+                    let ready_candidates =
+                        enrich_wander_items_with_optional_index(state, candidates)?;
                     items = pick_random_wander_items(
                         ready_candidates,
                         WANDER_READY_MIN_ITEMS,
                         &excluded_ids,
                     );
                 } else {
-                    items = filter_ready_wander_items(state, items)?;
+                    items = enrich_wander_items_with_optional_index(state, items)?;
                 }
                 if items.len() < WANDER_READY_MIN_ITEMS {
                     return Ok(json!({
-                        "error": WANDER_INDEXING_MESSAGE,
+                        "error": WANDER_NOT_ENOUGH_ITEMS_MESSAGE,
                         "result": Value::Null,
                         "historyId": Value::Null,
                         "items": []

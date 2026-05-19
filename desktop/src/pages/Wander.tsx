@@ -958,7 +958,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         kind: 'redbook-note',
         limit: 24,
         sort: 'updated',
-        readyForWanderOnly: true,
+        readyForWanderOnly: false,
       };
       if (query) {
         request.query = query;
@@ -1132,7 +1132,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       if (nextItems.length === 0) {
         setParseError(selectionMode === 'manual'
           ? '没有找到和当前方向相关的素材，请换一个主题或选择一篇锚点笔记。'
-          : '部分笔记仍在索引中，索引完成后会进入漫步。');
+          : '可用于漫步的素材不足 3 条，请先采集更多内容。');
         setPhase('done');
         setShowFinal(true);
         setLoading(false);
