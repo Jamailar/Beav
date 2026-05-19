@@ -8,6 +8,7 @@ use std::time::Duration;
 use tauri::{AppHandle, State};
 
 const TEMP_UPLOAD_MAX_BYTES: u64 = 100 * 1024 * 1024;
+const TEMP_UPLOAD_MAX_ATTEMPTS: usize = 2;
 
 pub fn handle_media_jobs_channel(
     app: &AppHandle,
@@ -126,36 +127,62 @@ fn upload_official_temp_file(
         .unwrap_or_else(|| guess_upload_content_type(file_path));
     let key_prefix = payload_string_any(payload, &["keyPrefix", "key_prefix"])
         .unwrap_or_else(|| "ai/digital-human".to_string());
-
-    let fallback_bytes = bytes.clone();
-    let part = multipart::Part::bytes(bytes)
-        .file_name(file_name.clone())
-        .mime_str(&content_type)
-        .unwrap_or_else(|_| multipart::Part::bytes(fallback_bytes).file_name(file_name.clone()));
-    let form = multipart::Form::new()
-        .part("file", part)
-        .text("key_prefix", key_prefix.clone())
-        .text("content_type", content_type.clone());
+    append_debug_trace_state(
+        state,
+        format!(
+            "[media-upload] start path={} bytes={} contentType={} keyPrefix={}",
+            file_path.display(),
+            metadata.len(),
+            content_type,
+            key_prefix
+        ),
+    );
 
     let client = Client::builder()
         .timeout(Duration::from_secs(180))
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|error| error.to_string())?;
-    let response = client
-        .post(&endpoint)
-        .bearer_auth(access_token)
-        .multipart(form)
-        .send()
-        .map_err(|error| format!("official media upload failed: {error}"))?;
-    let status = response.status();
-    let text = response
-        .text()
-        .map_err(|error| format!("failed to read upload response: {error}"))?;
-    let body: Value = serde_json::from_str(&text)
-        .map_err(|error| format!("invalid upload response JSON ({status}): {error}: {text}"))?;
-    if !status.is_success() {
-        return Err(format!("official media upload failed ({status}): {body}"));
+    let mut body = Value::Null;
+    for attempt in 1..=TEMP_UPLOAD_MAX_ATTEMPTS {
+        match upload_official_temp_file_once(
+            &client,
+            &endpoint,
+            &access_token,
+            &bytes,
+            &file_name,
+            &content_type,
+            &key_prefix,
+        ) {
+            Ok(value) => {
+                body = value;
+                append_debug_trace_state(
+                    state,
+                    format!(
+                        "[media-upload] done attempt={} bytes={} keyPrefix={}",
+                        attempt,
+                        metadata.len(),
+                        key_prefix
+                    ),
+                );
+                break;
+            }
+            Err(error) => {
+                append_debug_trace_state(
+                    state,
+                    format!(
+                        "[media-upload] failed attempt={} bytes={} keyPrefix={} error={}",
+                        attempt,
+                        metadata.len(),
+                        key_prefix,
+                        error
+                    ),
+                );
+                if attempt >= TEMP_UPLOAD_MAX_ATTEMPTS {
+                    return Err(error);
+                }
+            }
+        }
     }
 
     let unwrapped = official_unwrap_response_payload(&body);
@@ -171,6 +198,65 @@ fn upload_official_temp_file(
         "keyPrefix": key_prefix,
         "upload": unwrapped,
     }))
+}
+
+fn upload_official_temp_file_once(
+    client: &Client,
+    endpoint: &str,
+    access_token: &str,
+    bytes: &[u8],
+    file_name: &str,
+    content_type: &str,
+    key_prefix: &str,
+) -> Result<Value, String> {
+    let fallback_bytes = bytes.to_vec();
+    let part = multipart::Part::bytes(bytes.to_vec())
+        .file_name(file_name.to_string())
+        .mime_str(content_type)
+        .unwrap_or_else(|_| {
+            multipart::Part::bytes(fallback_bytes).file_name(file_name.to_string())
+        });
+    let form = multipart::Form::new()
+        .part("file", part)
+        .text("key_prefix", key_prefix.to_string())
+        .text("content_type", content_type.to_string());
+
+    let response = client
+        .post(endpoint)
+        .bearer_auth(access_token)
+        .multipart(form)
+        .send()
+        .map_err(|error| format!("official media upload failed: {error}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .map_err(|error| format!("failed to read upload response: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "official media upload failed ({}): {}",
+            status.as_u16(),
+            truncate_upload_response(&text)
+        ));
+    }
+    serde_json::from_str::<Value>(&text).map_err(|error| {
+        format!(
+            "official media upload returned invalid JSON ({}): {}: {}",
+            status.as_u16(),
+            error,
+            truncate_upload_response(&text)
+        )
+    })
+}
+
+fn truncate_upload_response(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() > 500 {
+        format!("{}...", trimmed.chars().take(500).collect::<String>())
+    } else if trimmed.is_empty() {
+        "<empty response>".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn payload_string_any(payload: &Value, keys: &[&str]) -> Option<String> {
