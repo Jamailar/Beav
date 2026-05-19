@@ -20,6 +20,7 @@ import {
     RotateCcw,
     Sparkles,
     Trash2,
+    UserRound,
     X,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -32,11 +33,12 @@ import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubsc
 import { shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, normalizeMediaJobProjection, type MediaJobProjection } from '../features/media-jobs/types';
 import { Chat } from './Chat';
+import { DigitalHumanPanel } from '../features/digital-human/DigitalHumanPanel';
 import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources } from './settings/shared';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert } from '../utils/appDialogs';
 
-type StudioMode = 'image' | 'video' | 'audio' | 'cover';
+type StudioMode = 'image' | 'video' | 'audio' | 'cover' | 'digital-human';
 type ImageGenerationMode = 'text-to-image' | 'reference-guided' | 'image-to-image';
 type VideoGenerationMode = 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation';
 type GenerationSurface = 'manual' | 'agent';
@@ -217,6 +219,7 @@ interface GenerationStudioProps {
     onIntentConsumed?: () => void;
     onExecutionStateChange?: (active: boolean) => void;
     onReturnHome?: () => void;
+    onOpenAssets?: () => void;
 }
 
 const FEED_STORAGE_KEY = 'redbox:generation-studio:feed:v1';
@@ -2904,6 +2907,7 @@ export function GenerationStudio({
     onIntentConsumed,
     onExecutionStateChange,
     onReturnHome,
+    onOpenAssets,
 }: GenerationStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [contextIntent, setContextIntent] = useState<GenerationIntent | null>(null);
@@ -3016,6 +3020,7 @@ export function GenerationStudio({
             .filter((jobId): jobId is string => Boolean(jobId)),
         [feedEntries],
     );
+    const isDigitalHumanMode = studioMode === 'digital-human';
     const generationJobBootstrapFilter = useMemo(() => ({ limit: 100 }), []);
     const updateFeedEntries = useCallback(
         (updater: FeedEntry[] | ((prev: FeedEntry[]) => FeedEntry[])) => {
@@ -3117,7 +3122,7 @@ export function GenerationStudio({
     }, [agentExecutionActive, feedEntries, onExecutionStateChange]);
 
     useEffect(() => {
-        if (!isAgentMode) {
+        if (!isAgentMode || isDigitalHumanMode) {
             agentSessionRequestIdRef.current += 1;
             setAgentExecutionActive(false);
             setAgentSessionError('');
@@ -3176,7 +3181,7 @@ export function GenerationStudio({
                 }
             }
         })();
-    }, [ensureAgentFeedEntry, generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode]);
+    }, [ensureAgentFeedEntry, generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode, isDigitalHumanMode]);
 
     useEffect(() => {
         updateFeedEntries((prev) => {
@@ -3302,6 +3307,8 @@ export function GenerationStudio({
             ? `${coverModel || imageModelLabel} · 3:4 · ${coverQuality || '默认'}`
         : studioMode === 'audio'
             ? `${effectiveAudioModel} · ${audioVoiceId ? shortVoiceId(audioVoiceId) : '未选音色'}`
+        : studioMode === 'digital-human'
+            ? '角色声音 · 口型视频'
             : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
     const activeError = studioMode === 'image' ? imageError : studioMode === 'cover' ? coverError : studioMode === 'audio' ? audioError : videoError;
     const visibleError = isAgentMode ? (agentSessionError || activeError) : activeError;
@@ -4238,8 +4245,9 @@ export function GenerationStudio({
         ? 'grid items-start gap-4 md:grid-cols-[196px_minmax(0,1fr)]'
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
-    const currentHeaderHint = isAgentMode ? 'Agent 模式 · 对话驱动' : currentConfigHint;
+    const currentHeaderHint = isAgentMode && !isDigitalHumanMode ? 'Agent 模式 · 对话驱动' : currentConfigHint;
     const canSendAgentMessage = isAgentMode
+        && !isDigitalHumanMode
         && Boolean(agentSessionId)
         && !isAgentSessionLoading
         && !agentExecutionActive
@@ -4457,6 +4465,20 @@ export function GenerationStudio({
             </button>
             <button
                 type="button"
+                onClick={() => setStudioMode('digital-human')}
+                className={clsx(
+                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    studioMode === 'digital-human'
+                        ? 'border-brand-red/50 bg-brand-red text-white'
+                        : 'border-border bg-surface-primary text-text-secondary',
+                )}
+            >
+                <UserRound className="h-4 w-4" />
+                数字人
+            </button>
+            {!isDigitalHumanMode && (
+            <button
+                type="button"
                 role="switch"
                 aria-checked={isAgentMode}
                 aria-label="Agent 模式"
@@ -4483,6 +4505,7 @@ export function GenerationStudio({
                     />
                 </span>
             </button>
+            )}
             <div className="ml-auto hidden text-[12px] text-text-tertiary md:block">{currentHeaderHint}</div>
         </div>
     );
@@ -4503,7 +4526,21 @@ export function GenerationStudio({
                         </button>
                     </div>
                 )}
+                {isDigitalHumanMode && (
+                    <div className={clsx('shrink-0', onReturnHome ? 'pb-3' : 'py-3')}>
+                        {studioToolbar}
+                    </div>
+                )}
                 <main ref={feedScrollRef} className={clsx('flex-1 min-h-0 overflow-y-auto', onReturnHome ? 'pt-0' : 'pt-6')}>
+                    {isDigitalHumanMode ? (
+                        <div className="h-full min-h-[520px] overflow-hidden rounded-[20px] border border-border bg-surface-secondary shadow-[var(--ui-shadow-1)]">
+                            <DigitalHumanPanel
+                                isActive={isActive}
+                                onOpenAssets={onOpenAssets}
+                            />
+                        </div>
+                    ) : (
+                    <>
                     {feedEntries.length === 0 ? (
                         <div className="min-h-[280px]" />
                     ) : (
@@ -4569,8 +4606,11 @@ export function GenerationStudio({
                             <div ref={feedBottomRef} />
                         </div>
                     )}
+                    </>
+                    )}
                 </main>
 
+                {!isDigitalHumanMode && (
                 <footer className="bg-background pb-5 pt-4">
                     <div className={composerWidthClass}>
                         <div className="rounded-[24px] border border-border bg-surface-secondary px-5 py-3 shadow-[var(--ui-shadow-1)]">
@@ -5050,6 +5090,7 @@ export function GenerationStudio({
                         </div>
                     </div>
                 </footer>
+                )}
             </div>
 
             {previewAsset && (
