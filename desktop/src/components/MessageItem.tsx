@@ -6,9 +6,11 @@ import {
   Check,
   ChevronDown,
   Copy,
+  Download,
   ExternalLink,
   File,
   FileText,
+  FolderOpen,
   Globe,
   Image as ImageIcon,
   Music,
@@ -1009,15 +1011,19 @@ export const MessageItem = memo(({
     openImageMenu(event.clientX, event.clientY, source, actionSource);
   }, [openImageMenu]);
 
-  const handleCopyImage = async () => {
+  const handleSaveAs = async () => {
     if (!imageMenu.actionSource) return;
     try {
-      const result = await window.ipcRenderer.invoke('file:copy-image', { source: imageMenu.actionSource }) as { success?: boolean };
-      if (!result?.success && /^https?:\/\//i.test(imageMenu.actionSource) && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(imageMenu.actionSource);
+      const defaultName = getUrlFilename(imageMenu.actionSource) || getUrlFilename(imageMenu.src) || `generated-media-${Date.now()}`;
+      const result = await window.ipcRenderer.files.saveAs({
+        source: imageMenu.actionSource,
+        defaultName,
+      }) as { success?: boolean; error?: string; canceled?: boolean };
+      if (!result?.success && !result?.canceled) {
+        throw new Error(result?.error || '保存失败');
       }
     } catch (error) {
-      console.error('Failed to copy image:', error);
+      console.error('Failed to save media:', error);
     } finally {
       setImageMenu((prev) => ({ ...prev, visible: false }));
     }
@@ -1025,20 +1031,20 @@ export const MessageItem = memo(({
 
   const handleShowInFolder = async () => {
     if (!imageMenu.actionSource) return;
-    if (!isLocalAssetUrl(imageMenu.actionSource)) {
-      setImageMenu((prev) => ({ ...prev, visible: false }));
-      return;
-    }
     try {
-      await window.ipcRenderer.invoke('file:show-in-folder', { source: imageMenu.actionSource });
+      const result = await window.ipcRenderer.files.showInFolder({ source: imageMenu.actionSource }) as {
+        success?: boolean;
+        error?: string;
+      };
+      if (!result?.success) {
+        throw new Error(result?.error || '打开文件夹失败');
+      }
     } catch (error) {
-      console.error('Failed to show image in folder:', error);
+      console.error('Failed to show media in folder:', error);
     } finally {
       setImageMenu((prev) => ({ ...prev, visible: false }));
     }
   };
-
-  const menuSupportsReveal = isLocalAssetUrl(imageMenu.actionSource);
 
   const markdownComponents = useMemo<Components>(() => ({
     ...MARKDOWN_COMPONENTS,
@@ -1601,22 +1607,20 @@ export const MessageItem = memo(({
           <button
             type="button"
             className={getLiquidGlassMenuItemClassName()}
-            onClick={() => void handleCopyImage()}
+            onClick={() => void handleShowInFolder()}
           >
-            复制图片
+            <FolderOpen className="h-3.5 w-3.5" />
+            在文件夹中打开
           </button>
-          {menuSupportsReveal && (
-            <>
-              <LiquidGlassMenuSeparator />
-              <button
-                type="button"
-                className={getLiquidGlassMenuItemClassName()}
-                onClick={() => void handleShowInFolder()}
-              >
-                在文件夹中打开
-              </button>
-            </>
-          )}
+          <LiquidGlassMenuSeparator />
+          <button
+            type="button"
+            className={getLiquidGlassMenuItemClassName()}
+            onClick={() => void handleSaveAs()}
+          >
+            <Download className="h-3.5 w-3.5" />
+            另存为
+          </button>
         </LiquidGlassMenuPanel>
       )}
 

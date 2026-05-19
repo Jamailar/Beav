@@ -4,7 +4,6 @@ import {
     ArrowUp,
     ChevronDown,
     Clapperboard,
-    Copy,
     Download,
     FileText,
     FolderOpen,
@@ -731,6 +730,19 @@ function inferAssetExtension(asset: GeneratedAsset, source: string): string {
     if (isVideoAsset(asset)) return 'mp4';
     if (isAudioAsset(asset)) return 'mp3';
     return 'png';
+}
+
+function generatedAssetDefaultName(asset: GeneratedAsset, source: string): string {
+    const extension = inferAssetExtension(asset, source);
+    const rawName = String(source || '').split(/[\\/]/).pop()?.replace(/[?#].*$/, '').trim();
+    if (rawName) {
+        try {
+            return decodeURIComponent(rawName);
+        } catch {
+            return rawName;
+        }
+    }
+    return `${asset.title || 'generated-asset'}.${extension}`;
 }
 
 function formatRelativeTime(timestampMs: number): string {
@@ -4185,31 +4197,13 @@ export function GenerationStudio({
         asset.previewUrl || asset.relativePath || ''
     ), []);
 
-    const handleCopyAsset = useCallback(async (asset: GeneratedAsset) => {
-        const source = resolveAssetSource(asset);
-        if (!source) return;
-        try {
-            const result = await window.ipcRenderer.files.copyImage({ source }) as {
-                success?: boolean;
-                error?: string;
-            };
-            if (!result?.success) {
-                throw new Error(result?.error || '复制失败');
-            }
-        } catch (error) {
-            console.error('Failed to copy generated asset:', error);
-            void appAlert(error instanceof Error ? error.message : '复制失败');
-        }
-    }, [resolveAssetSource]);
-
     const handleSaveAsset = useCallback(async (asset: GeneratedAsset) => {
         const source = resolveAssetSource(asset);
         if (!source) return;
         try {
-            const extension = inferAssetExtension(asset, source);
             const result = await window.ipcRenderer.files.saveAs({
                 source,
-                defaultName: `${Date.now()}.${extension}`,
+                defaultName: generatedAssetDefaultName(asset, source),
             }) as {
                 success?: boolean;
                 error?: string;
@@ -4241,41 +4235,8 @@ export function GenerationStudio({
         }
     }, [resolveAssetSource]);
 
-    const handleEditAsset = useCallback(async (asset: GeneratedAsset) => {
-        if (isVideoAsset(asset) || isAudioAsset(asset)) {
-            void appAlert('当前仅支持把图片加入参考图');
-            return;
-        }
-        const source = resolveAssetSource(asset);
-        if (!source) return;
-        try {
-            const assetUrl = resolveAssetUrl(source);
-            if (!assetUrl) {
-                throw new Error('素材地址无效');
-            }
-            const response = await fetch(assetUrl);
-            if (!response.ok) {
-                throw new Error(`读取素材失败 (${response.status})`);
-            }
-            const blob = await response.blob();
-            const dataUrl = await readBlobAsDataUrl(blob);
-            const extension = inferAssetExtension(asset, source);
-            const name = `${asset.title || `reference-${Date.now()}`}.${extension}`;
-            setStudioMode('image');
-            setImageMode((prev) => (prev === 'text-to-image' ? 'reference-guided' : prev));
-            setImageReferences((prev) => [
-                { name, dataUrl },
-                ...prev,
-            ].slice(0, 4));
-            setImageError('');
-        } catch (error) {
-            console.error('Failed to reuse generated asset as reference:', error);
-            void appAlert(error instanceof Error ? error.message : '添加参考图失败');
-        }
-    }, [resolveAssetSource]);
-
     const handleOpenAssetMenu = useCallback((
-        event: React.MouseEvent<HTMLButtonElement>,
+        event: React.MouseEvent<HTMLElement>,
         asset: GeneratedAsset,
         entryId: string,
     ) => {
@@ -5470,13 +5431,13 @@ export function GenerationStudio({
                     <button
                         type="button"
                         onClick={() => {
-                            void handleCopyAsset(assetContextMenu.asset);
+                            void handleShowAssetInFolder(assetContextMenu.asset);
                             setAssetContextMenu(null);
                         }}
                         className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
                     >
-                        <Copy className="h-3.5 w-3.5" />
-                        复制
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        在文件夹中打开
                     </button>
                     <button
                         type="button"
@@ -5487,37 +5448,7 @@ export function GenerationStudio({
                         className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
                     >
                         <Download className="h-3.5 w-3.5" />
-                        保存
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            void handleShowAssetInFolder(assetContextMenu.asset);
-                            setAssetContextMenu(null);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
-                    >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        打开文件夹
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            void handleEditAsset(assetContextMenu.asset);
-                            setAssetContextMenu(null);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
-                    >
-                        <PencilLine className="h-3.5 w-3.5" />
-                        编辑
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => assetContextMenu.entryId && handleDeleteEntry(assetContextMenu.entryId)}
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-brand-red transition-colors hover:bg-brand-red/10"
-                    >
-                        <X className="h-3.5 w-3.5" />
-                        删除
+                        另存为
                     </button>
                 </div>
             )}
