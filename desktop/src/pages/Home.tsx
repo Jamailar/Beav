@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, Mic2, PenLine, RefreshCw, Send, Sparkles, X } from 'lucide-react';
+import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, Mic2, PenLine, RefreshCw, Send, Sparkles, UserRound, X } from 'lucide-react';
 import { ApprovalPanel } from './Approval';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import type { ThrivePluginHomeAction, ThrivePluginHomeResponse, ThrivePluginHomeWidget } from '../types';
@@ -8,6 +8,7 @@ interface HomeProps {
     isActive?: boolean;
     onNavigateToCoverStudio?: () => void;
     onNavigateToGenerationStudio?: (mode: 'image' | 'video' | 'audio' | 'cover') => void;
+    onNavigateToDigitalHuman?: () => void;
     onOpenManuscript?: (filePath: string) => void;
     onNavigateToRedClaw?: (message: {
         content: string;
@@ -323,7 +324,7 @@ function PluginHomeWidgetCard({
     );
 }
 
-export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onOpenManuscript, onNavigateToRedClaw }: HomeProps) {
+export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToDigitalHuman, onOpenManuscript, onNavigateToRedClaw }: HomeProps) {
     const [stats, setStats] = useState<HomeStats>(EMPTY_STATS);
     const [recentManuscripts, setRecentManuscripts] = useState<RecentManuscript[]>([]);
     const [pluginHomeWidgets, setPluginHomeWidgets] = useState<ThrivePluginHomeWidget[]>([]);
@@ -524,7 +525,7 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                         </div>
                     )}
 
-                    <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                         <QuickAppButton
                             label="制作封面"
                             description="生成适合发布的视觉封面"
@@ -552,6 +553,13 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                             icon={Mic2}
                             tintClassName="bg-amber-500/10 text-amber-700"
                             onClick={() => onNavigateToGenerationStudio?.('audio')}
+                        />
+                        <QuickAppButton
+                            label="数字人"
+                            description="用角色生成口播视频"
+                            icon={UserRound}
+                            tintClassName="bg-rose-500/10 text-rose-700"
+                            onClick={() => onNavigateToDigitalHuman?.()}
                         />
                     </section>
 
