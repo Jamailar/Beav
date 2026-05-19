@@ -166,8 +166,21 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     const root = document.documentElement;
     root.setAttribute('data-theme', effectiveTheme);
     root.classList.toggle('dark', effectiveTheme === 'dark');
-    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   }, [immersiveMode, themeMode]);
+
+  // Sync with system theme changes when user has not explicitly chosen a theme
+  useEffect(() => {
+    if (immersiveMode === 'dark') return;
+    const saved = String(window.localStorage.getItem(THEME_STORAGE_KEY) || '').trim().toLowerCase();
+    if (saved === 'light' || saved === 'dark') return; // user has explicit preference
+
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = (e: MediaQueryListEvent) => {
+      setThemeMode(e.matches ? 'dark' : 'light');
+    };
+    mql.addEventListener('change', handleChange);
+    return () => mql.removeEventListener('change', handleChange);
+  }, [immersiveMode]);
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
@@ -576,7 +589,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
               </button>
               <button
                 type="button"
-                onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+                onClick={() => {
+                  const next = themeMode === 'dark' ? 'light' : 'dark';
+                  setThemeMode(next);
+                  window.localStorage.setItem(THEME_STORAGE_KEY, next);
+                }}
                 className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
                 title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
                 aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}

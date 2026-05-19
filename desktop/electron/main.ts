@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, nativeImage, shell, clipboard, dialog, net } from 'electron'
+import { app, BrowserWindow, ipcMain, protocol, nativeImage, shell, clipboard, dialog, net, nativeTheme } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
@@ -1065,6 +1065,27 @@ async function checkForAppUpdate(force = false, forceNotify = false): Promise<Ap
   }
 }
 
+function getNativeThemeMode(): 'light' | 'dark' {
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+function getNativeThemeBackgroundColor(): string {
+  return nativeTheme.shouldUseDarkColors ? '#141414' : '#FBFAF7';
+}
+
+function broadcastNativeThemeChange(): void {
+  const mode = getNativeThemeMode();
+  for (const browserWindow of BrowserWindow.getAllWindows()) {
+    try {
+      browserWindow.webContents.send('native-theme-changed', mode);
+    } catch {
+      // ignore disposed windows
+    }
+  }
+}
+
+nativeTheme.on('updated', broadcastNativeThemeChange);
+
 function createWindow() {
   attachWorkItemStoreListeners();
   const iconPath = path.join(app.getAppPath(), 'redbox.png');
@@ -1079,7 +1100,7 @@ function createWindow() {
     },
     width: 1200,
     height: 800,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: getNativeThemeBackgroundColor(),
 
   })
 
@@ -2000,6 +2021,10 @@ ipcMain.handle('settings:pick-workspace-dir', async () => {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+});
+
+ipcMain.handle('theme:get', () => {
+  return getNativeThemeMode();
 });
 
 ipcMain.handle('debug:get-status', () => {
