@@ -21,6 +21,8 @@ use crate::{
 
 const DEFAULT_CLONE_MODEL: &str = "minimax-voice-clone";
 const DEFAULT_TTS_MODEL: &str = "speech-2.8-turbo";
+const COSYVOICE_TTS_MODEL: &str = "cosyvoice-v3.5-plus";
+const COSYVOICE_CLONE_MODEL: &str = "cosyvoice-v3.5-plus-voice-clone";
 const MINIMAX_SYSTEM_VOICES_JSON: &str = include_str!("../resources/minimax-system-voices.json");
 
 #[derive(Debug, Clone)]
@@ -33,6 +35,77 @@ struct VoiceGatewayConfig {
 
 fn payload_string_alias(payload: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| payload_string(payload, key))
+}
+
+fn normalized_model_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn is_cosyvoice_model(model: &str) -> bool {
+    normalized_model_key(model).contains("cosyvoice")
+}
+
+fn is_minimax_tts_model(model: &str) -> bool {
+    let key = normalized_model_key(model);
+    key.contains("minimax") || key.starts_with("speech-") || key.starts_with("speech_")
+}
+
+fn clone_model_target_tts_model(clone_model: &str, fallback_tts_model: &str) -> String {
+    let clone_key = normalized_model_key(clone_model);
+    if clone_key == COSYVOICE_CLONE_MODEL {
+        return COSYVOICE_TTS_MODEL.to_string();
+    }
+    if clone_key.ends_with("-voice-clone") {
+        return clone_key.trim_end_matches("-voice-clone").to_string();
+    }
+    if clone_key.contains("cosyvoice") {
+        return COSYVOICE_TTS_MODEL.to_string();
+    }
+    fallback_tts_model.trim().to_string()
+}
+
+fn clone_target_tts_model_from_payload(
+    payload: &Value,
+    clone_model: &str,
+    fallback_tts_model: &str,
+) -> String {
+    payload_string_alias(
+        payload,
+        &["targetTtsModel", "target_tts_model", "ttsModel", "tts_model"],
+    )
+    .unwrap_or_else(|| {
+        let fallback = if normalized_model_key(fallback_tts_model) == normalized_model_key(clone_model)
+            && normalized_model_key(clone_model).contains("clone")
+        {
+            DEFAULT_TTS_MODEL
+        } else {
+            fallback_tts_model
+        };
+        clone_model_target_tts_model(clone_model, fallback)
+    })
+}
+
+fn voice_target_tts_model(value: &Value) -> Option<String> {
+    payload_string_alias(
+        value,
+        &[
+            "targetTtsModel",
+            "target_tts_model",
+            "ttsModel",
+            "tts_model",
+            "model",
+        ],
+    )
+}
+
+fn voice_mapping_matches_model(value: &Value, tts_model: &str) -> bool {
+    let selected = normalized_model_key(tts_model);
+    if selected.is_empty() {
+        return true;
+    }
+    voice_target_tts_model(value)
+        .map(|model| normalized_model_key(&model) == selected)
+        .unwrap_or(false)
 }
 
 fn payload_bool_alias(payload: &Value, keys: &[&str]) -> Option<bool> {
@@ -138,6 +211,32 @@ fn normalize_voice_response(value: Value, fallback_name: Option<String>) -> Resu
     }))
 }
 
+fn enrich_cloned_voice_metadata(
+    voice: &mut Value,
+    clone_model: &str,
+    target_tts_model: &str,
+    payload: &Value,
+) {
+    let Some(object) = voice.as_object_mut() else {
+        return;
+    };
+    if !clone_model.trim().is_empty() {
+        object.insert("cloneModel".to_string(), json!(clone_model.trim()));
+    }
+    if !target_tts_model.trim().is_empty() {
+        object.insert("targetTtsModel".to_string(), json!(target_tts_model.trim()));
+        object.insert("target_tts_model".to_string(), json!(target_tts_model.trim()));
+        object.insert("ttsModel".to_string(), json!(target_tts_model.trim()));
+    }
+    if let Some(provider) = payload_string(payload, "provider").filter(|value| !value.trim().is_empty()) {
+        object.insert("provider".to_string(), json!(provider));
+    } else if is_cosyvoice_model(clone_model) || is_cosyvoice_model(target_tts_model) {
+        object.insert("provider".to_string(), json!("cosyvoice"));
+    } else if is_minimax_tts_model(target_tts_model) {
+        object.insert("provider".to_string(), json!("minimax"));
+    }
+}
+
 fn voice_list_item_id(value: &Value) -> Option<String> {
     payload_string_alias(value, &["voice_id", "voiceId", "id", "value"]).or_else(|| {
         value
@@ -168,6 +267,31 @@ fn voice_list_item_is_usable(value: &Value) -> bool {
         status.as_str(),
         "failed" | "error" | "dead_lettered" | "deleted" | "cancelled" | "canceled"
     )
+}
+
+fn voice_matches_selected_tts_model(value: &Value, selected_tts_model: &str) -> bool {
+    let model = selected_tts_model.trim();
+    if model.is_empty() {
+        return true;
+    }
+    if payload_bool_alias(value, &["systemVoice", "system_voice"]).unwrap_or(false)
+        || payload_string(value, "source").as_deref() == Some("system")
+    {
+        return is_minimax_tts_model(model);
+    }
+    if voice_target_tts_model(value).is_some() {
+        return voice_mapping_matches_model(value, model);
+    }
+    for key in ["supportedModels", "supported_models", "ttsModels", "tts_models"] {
+        if let Some(items) = value.get(key).and_then(Value::as_array) {
+            return items.iter().any(|item| {
+                item.as_str()
+                    .map(|candidate| normalized_model_key(candidate) == normalized_model_key(model))
+                    .unwrap_or(false)
+            });
+        }
+    }
+    !is_cosyvoice_model(model)
 }
 
 fn delete_platform_voice(config: &VoiceGatewayConfig, voice_id: &str) -> Result<(), String> {
@@ -250,6 +374,18 @@ fn minimax_system_voice_list_items() -> Vec<Value> {
         .collect()
 }
 
+fn is_minimax_system_voice_id(voice_id: &str) -> bool {
+    let normalized = voice_id.trim();
+    if normalized.is_empty() {
+        return false;
+    }
+    minimax_system_voice_list_items().iter().any(|item| {
+        voice_list_item_id(item)
+            .map(|id| id == normalized)
+            .unwrap_or(false)
+    })
+}
+
 fn append_minimax_system_voices(voices: &mut Vec<Value>, seen: &mut HashSet<String>) {
     for item in minimax_system_voice_list_items() {
         if let Some(id) = voice_list_item_id(&item) {
@@ -260,37 +396,78 @@ fn append_minimax_system_voices(voices: &mut Vec<Value>, seen: &mut HashSet<Stri
     }
 }
 
-fn subject_voice_list_items(state: &State<'_, AppState>) -> Result<Vec<Value>, String> {
+fn subject_voice_list_items(
+    state: &State<'_, AppState>,
+    selected_tts_model: Option<&str>,
+) -> Result<Vec<Value>, String> {
     ensure_store_hydrated_for_subjects(state)?;
     with_store(state, |store| {
-        Ok(store
-            .subjects
-            .iter()
-            .filter_map(|subject| {
-                let voice = subject.voice.as_ref()?;
-                let voice_id = payload_string_alias(voice, &["voiceId", "voice_id"])?;
-                let status = payload_string(voice, "status").unwrap_or_else(|| "ready".to_string());
-                if !voice_list_item_is_usable(voice) {
-                    return None;
+        let selected = selected_tts_model
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let mut items = Vec::new();
+        for subject in &store.subjects {
+            let Some(voice) = subject.voice.as_ref() else {
+                continue;
+            };
+            if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
+                for mapping in mappings.values() {
+                    if selected
+                        .map(|model| !voice_mapping_matches_model(mapping, model))
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    if let Some(item) = subject_voice_list_item(subject, mapping) {
+                        items.push(item);
+                    }
                 }
-                Some(json!({
-                    "id": voice_id,
-                    "value": voice_id,
-                    "voiceId": voice_id,
-                    "voice_id": voice_id,
-                    "name": subject.name,
-                    "title": subject.name,
-                    "status": status,
-                    "source": "subject",
-                    "ownerAssetId": subject.id,
-                    "assetId": subject.id,
-                    "subjectId": subject.id,
-                    "sampleFilePath": subject.voice_path,
-                    "language": payload_string(voice, "language"),
-                }))
-            })
-            .collect())
+            }
+
+            let include_legacy = selected
+                .map(|model| {
+                    voice_mapping_matches_model(voice, model)
+                        || (voice_target_tts_model(voice).is_none() && is_minimax_tts_model(model))
+                })
+                .unwrap_or(true);
+            if include_legacy {
+                if let Some(item) = subject_voice_list_item(subject, voice) {
+                    if items.iter().all(|existing| voice_list_item_id(existing) != voice_list_item_id(&item)) {
+                        items.push(item);
+                    }
+                }
+            }
+        }
+        Ok(items)
     })
+}
+
+fn subject_voice_list_item(subject: &SubjectRecord, voice: &Value) -> Option<Value> {
+    let voice_id = payload_string_alias(voice, &["voiceId", "voice_id"])?;
+    let status = payload_string(voice, "status").unwrap_or_else(|| "ready".to_string());
+    if !voice_list_item_is_usable(voice) {
+        return None;
+    }
+    Some(json!({
+        "id": voice_id,
+        "value": voice_id,
+        "voiceId": voice_id,
+        "voice_id": voice_id,
+        "name": subject.name,
+        "title": subject.name,
+        "status": status,
+        "source": "subject",
+        "ownerAssetId": subject.id,
+        "assetId": subject.id,
+        "subjectId": subject.id,
+        "sampleFilePath": subject.voice_path,
+        "language": payload_string(voice, "language"),
+        "targetTtsModel": voice_target_tts_model(voice),
+        "target_tts_model": voice_target_tts_model(voice),
+        "ttsModel": voice_target_tts_model(voice),
+        "cloneModel": payload_string(voice, "cloneModel"),
+        "provider": payload_string(voice, "provider"),
+    }))
 }
 
 fn subject_voice_id(
@@ -306,6 +483,23 @@ fn subject_voice_id(
             .and_then(|subject| subject.voice.as_ref())
             .and_then(|voice| payload_string_alias(voice, &["voiceId", "voice_id"])))
     })
+}
+
+fn subject_voice_id_for_tts_model(record: &SubjectRecord, tts_model: &str) -> Option<String> {
+    let voice = record.voice.as_ref()?;
+    if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
+        for mapping in mappings.values() {
+            if voice_mapping_matches_model(mapping, tts_model) {
+                return payload_string_alias(mapping, &["voiceId", "voice_id"]);
+            }
+        }
+    }
+    if voice_mapping_matches_model(voice, tts_model)
+        || (voice_target_tts_model(voice).is_none() && is_minimax_tts_model(tts_model))
+    {
+        return payload_string_alias(voice, &["voiceId", "voice_id"]);
+    }
+    None
 }
 
 fn resolve_sample_path(
@@ -495,8 +689,12 @@ pub(crate) fn clone_voice(
         form = form.text("language", value);
     }
     let model = payload_string(payload, "model").unwrap_or_else(|| config.clone_model.clone());
+    let target_tts_model = clone_target_tts_model_from_payload(payload, &model, &config.tts_model);
     if !model.trim().is_empty() {
-        form = form.text("model", model);
+        form = form.text("model", model.clone());
+    }
+    if !target_tts_model.trim().is_empty() {
+        form = form.text("target_tts_model", target_tts_model.clone());
     }
 
     let client = Client::builder()
@@ -514,21 +712,15 @@ pub(crate) fn clone_voice(
         return Err(format!("voice clone failed with HTTP {status}: {body}"));
     }
     let raw = serde_json::from_str::<Value>(&body).map_err(|error| error.to_string())?;
-    let voice = normalize_voice_response(raw.clone(), name)?;
+    let mut voice = normalize_voice_response(raw.clone(), name)?;
+    enrich_cloned_voice_metadata(&mut voice, &model, &target_tts_model, payload);
     if owner_asset_id.is_some()
         && payload_bool_alias(payload, &["writeBack", "write_back"]).unwrap_or(true)
     {
         if let Some(subject_id) = owner_asset_id.as_deref() {
             let previous_voice_id = subject_voice_id(state, subject_id)?;
             patch_subject_voice_state(state, subject_id, voice.clone())?;
-            if let (Some(previous), Some(next)) = (
-                previous_voice_id,
-                payload_string_alias(&voice, &["voiceId", "voice_id"]),
-            ) {
-                if previous != next {
-                    let _ = delete_platform_voice(&config, &previous);
-                }
-            }
+            let _ = previous_voice_id;
         }
     }
     Ok(json!({
@@ -549,6 +741,7 @@ fn clone_voice_from_managed_key(
     sample_file_key: String,
 ) -> Result<Value, String> {
     let model = payload_string(payload, "model").unwrap_or_else(|| config.clone_model.clone());
+    let target_tts_model = clone_target_tts_model_from_payload(payload, &model, &config.tts_model);
     let name = payload_string(payload, "name");
     let mut body = Map::new();
     body.insert(
@@ -564,7 +757,10 @@ fn clone_voice_from_managed_key(
         body.insert("language".to_string(), json!(value));
     }
     if !model.trim().is_empty() {
-        body.insert("model".to_string(), json!(model));
+        body.insert("model".to_string(), json!(model.clone()));
+    }
+    if !target_tts_model.trim().is_empty() {
+        body.insert("target_tts_model".to_string(), json!(target_tts_model.clone()));
     }
 
     let client = Client::builder()
@@ -587,6 +783,7 @@ fn clone_voice_from_managed_key(
     }
     let raw = serde_json::from_str::<Value>(&body).map_err(|error| error.to_string())?;
     let mut voice = normalize_voice_response(raw.clone(), name)?;
+    enrich_cloned_voice_metadata(&mut voice, &model, &target_tts_model, payload);
     if let Some(object) = voice.as_object_mut() {
         object.insert("sampleFileKey".to_string(), json!(sample_file_key.clone()));
     }
@@ -596,14 +793,7 @@ fn clone_voice_from_managed_key(
         if let Some(subject_id) = owner_asset_id.as_deref() {
             let previous_voice_id = subject_voice_id(state, subject_id)?;
             patch_subject_voice_state(state, subject_id, voice.clone())?;
-            if let (Some(previous), Some(next)) = (
-                previous_voice_id,
-                payload_string_alias(&voice, &["voiceId", "voice_id"]),
-            ) {
-                if previous != next {
-                    let _ = delete_platform_voice(config, &previous);
-                }
-            }
+            let _ = previous_voice_id;
         }
     }
     Ok(json!({
@@ -619,7 +809,8 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     let mut voices = Vec::new();
     let mut seen = HashSet::new();
     let mut local_subject_voice_names = HashSet::new();
-    for item in subject_voice_list_items(state)? {
+    let requested_model = payload_string_alias(payload, &["model", "ttsModel", "tts_model"]);
+    for item in subject_voice_list_items(state, requested_model.as_deref())? {
         if voice_list_item_is_usable(&item) {
             if let Some(name) = voice_list_item_name(&item) {
                 local_subject_voice_names.insert(name.trim().to_ascii_lowercase());
@@ -658,10 +849,20 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     let config = match resolve_voice_config(state, Some(payload)) {
         Ok(config) => config,
         Err(error) => {
-            append_minimax_system_voices(&mut voices, &mut seen);
+            if requested_model
+                .as_deref()
+                .map(is_minimax_tts_model)
+                .unwrap_or(true)
+            {
+                append_minimax_system_voices(&mut voices, &mut seen);
+            }
             return Ok(json!({ "success": true, "voices": voices, "configError": error }));
         }
     };
+    let selected_tts_model = requested_model
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| config.tts_model.clone());
     let client = Client::builder()
         .timeout(Duration::from_secs(45))
         .build()
@@ -672,11 +873,14 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
         &gateway_url(&config, "/audio/voices"),
         config.api_key.as_deref(),
     )
+    .query(&[("model", selected_tts_model.as_str())])
     .send()
     {
         Ok(response) => response,
         Err(error) => {
-            append_minimax_system_voices(&mut voices, &mut seen);
+            if is_minimax_tts_model(&selected_tts_model) {
+                append_minimax_system_voices(&mut voices, &mut seen);
+            }
             return Ok(json!({
                 "success": true,
                 "voices": voices,
@@ -687,7 +891,9 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     let status = response.status();
     let body = response.text().map_err(|error| error.to_string())?;
     if !status.is_success() {
-        append_minimax_system_voices(&mut voices, &mut seen);
+        if is_minimax_tts_model(&selected_tts_model) {
+            append_minimax_system_voices(&mut voices, &mut seen);
+        }
         return Ok(json!({
             "success": true,
             "voices": voices,
@@ -696,6 +902,9 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     }
     let parsed = serde_json::from_str::<Value>(&body).unwrap_or_else(|_| json!({ "raw": body }));
     for item in voice_list_items_from_value(&parsed) {
+        if !voice_matches_selected_tts_model(&item, &selected_tts_model) {
+            continue;
+        }
         push_remote_voice(
             &mut voices,
             &mut seen,
@@ -704,7 +913,9 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
             item,
         );
     }
-    append_minimax_system_voices(&mut voices, &mut seen);
+    if is_minimax_tts_model(&selected_tts_model) {
+        append_minimax_system_voices(&mut voices, &mut seen);
+    }
     Ok(json!({ "success": true, "voices": voices, "raw": parsed }))
 }
 
@@ -1084,6 +1295,7 @@ fn synthesize_speech_inner(
         .ok_or_else(|| "voice.speech requires voiceId".to_string())?;
     let config = resolve_voice_config(state, Some(payload))?;
     let model = payload_string(payload, "model").unwrap_or_else(|| config.tts_model.clone());
+    validate_speech_voice_for_model(state, &voice_id, &model)?;
     let response_format =
         payload_string_alias(payload, &["responseFormat", "response_format", "format"])
             .or_else(|| nested_payload_string_alias(payload, "audio_setting", &["format"]))
@@ -1187,6 +1399,48 @@ fn synthesize_speech_inner(
     }))
 }
 
+fn validate_speech_voice_for_model(
+    state: &State<'_, AppState>,
+    voice_id: &str,
+    model: &str,
+) -> Result<(), String> {
+    if is_cosyvoice_model(model) && is_minimax_system_voice_id(voice_id) {
+        return Err("cosyvoice-v3.5-plus 不支持系统音色，请选择已复刻到 CosyVoice 的音色".to_string());
+    }
+    ensure_store_hydrated_for_subjects(state)?;
+    let subjects = with_store(state, |store| Ok(store.subjects.clone()))?;
+    for subject in subjects {
+        let Some(voice) = subject.voice.as_ref() else {
+            continue;
+        };
+        let legacy_matches = payload_string_alias(voice, &["voiceId", "voice_id"])
+            .map(|id| id == voice_id)
+            .unwrap_or(false);
+        if legacy_matches && voice_target_tts_model(voice).is_none() && is_cosyvoice_model(model) {
+            return Err("当前角色音色没有 CosyVoice 映射，请先用 cosyvoice-v3.5-plus-voice-clone 复刻".to_string());
+        }
+        if legacy_matches && voice_mapping_matches_model(voice, model) {
+            return Ok(());
+        }
+        if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
+            for mapping in mappings.values() {
+                let mapping_matches_voice = payload_string_alias(mapping, &["voiceId", "voice_id"])
+                    .map(|id| id == voice_id)
+                    .unwrap_or(false);
+                if mapping_matches_voice {
+                    if voice_mapping_matches_model(mapping, model) {
+                        return Ok(());
+                    }
+                    return Err(format!(
+                        "音色 {voice_id} 不属于当前 TTS 模型 {model}，请切换模型或重新选择音色"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn synthesize_speech(
     state: &State<'_, AppState>,
     payload: &Value,
@@ -1208,19 +1462,18 @@ fn voice_status(record: &SubjectRecord) -> Option<String> {
         .and_then(|value| payload_string(value, "status"))
 }
 
-fn subject_voice_has_id(record: &SubjectRecord) -> bool {
-    record
-        .voice
-        .as_ref()
-        .and_then(|value| payload_string_alias(value, &["voiceId", "voice_id"]))
-        .is_some()
+fn subject_voice_has_id_for_tts_model(record: &SubjectRecord, tts_model: &str) -> bool {
+    subject_voice_id_for_tts_model(record, tts_model).is_some()
 }
 
 pub(crate) fn spawn_subject_voice_clone_if_needed(
     app: &AppHandle,
     record: &SubjectRecord,
 ) -> Result<(), String> {
-    if record.voice_path.is_none() || subject_voice_has_id(record) {
+    let state = app.state::<AppState>();
+    let config = resolve_voice_config(&state, None)?;
+    let target_tts_model = clone_model_target_tts_model(&config.clone_model, &config.tts_model);
+    if record.voice_path.is_none() || subject_voice_has_id_for_tts_model(record, &target_tts_model) {
         return Ok(());
     }
     if !matches!(
@@ -1229,8 +1482,7 @@ pub(crate) fn spawn_subject_voice_clone_if_needed(
     ) {
         return Ok(());
     }
-    let state = app.state::<AppState>();
-    let payload = voice_clone_payload_for_subject(record)?;
+    let payload = voice_clone_payload_for_subject(record, &config.clone_model, &target_tts_model)?;
     let submitted =
         match crate::media_runtime::submit_media_job(app, &state, "voice_clone", &payload) {
             Ok(value) => value,
@@ -1256,7 +1508,11 @@ pub(crate) fn spawn_subject_voice_clone_if_needed(
     Ok(())
 }
 
-fn voice_clone_payload_for_subject(subject: &SubjectRecord) -> Result<Value, String> {
+fn voice_clone_payload_for_subject(
+    subject: &SubjectRecord,
+    clone_model: &str,
+    target_tts_model: &str,
+) -> Result<Value, String> {
     let relative_path = subject
         .voice_path
         .clone()
@@ -1266,6 +1522,9 @@ fn voice_clone_payload_for_subject(subject: &SubjectRecord) -> Result<Value, Str
         "samplePath": relative_path,
         "name": subject.name,
         "writeBack": true,
+        "model": clone_model,
+        "targetTtsModel": target_tts_model,
+        "target_tts_model": target_tts_model,
     });
     if let Some(language) = subject
         .voice
@@ -1297,6 +1556,28 @@ fn patch_subject_voice_state(
     if let (Some(target), Some(source)) = (merged.as_object_mut(), voice.as_object()) {
         for (key, value) in source {
             target.insert(key.clone(), value.clone());
+        }
+        if let (Some(voice_id), Some(target_tts_model)) = (
+            payload_string_alias(&voice, &["voiceId", "voice_id"]),
+            voice_target_tts_model(&voice),
+        ) {
+            let mapping_key = normalized_model_key(&target_tts_model);
+            let mut mapping = source.clone();
+            mapping.insert("voiceId".to_string(), json!(voice_id.clone()));
+            mapping.insert("voice_id".to_string(), json!(voice_id));
+            mapping.insert("targetTtsModel".to_string(), json!(target_tts_model.clone()));
+            mapping.insert("target_tts_model".to_string(), json!(target_tts_model.clone()));
+            mapping.insert("ttsModel".to_string(), json!(target_tts_model));
+            mapping.insert("updatedAt".to_string(), json!(now_iso()));
+            let voice_mappings = target
+                .entry("voiceMappings".to_string())
+                .or_insert_with(|| json!({}));
+            if !voice_mappings.is_object() {
+                *voice_mappings = json!({});
+            }
+            if let Some(object) = voice_mappings.as_object_mut() {
+                object.insert(mapping_key, Value::Object(mapping));
+            }
         }
         target.insert("updatedAt".to_string(), json!(now_iso()));
         target.remove("lastError");
@@ -1339,6 +1620,10 @@ pub(crate) fn bind_subject_voice(
         "name",
         "language",
         "cloneModel",
+        "targetTtsModel",
+        "target_tts_model",
+        "ttsModel",
+        "tts_model",
         "provider",
         "sampleFileKey",
         "sampleFilePath",
@@ -1370,6 +1655,17 @@ pub(crate) fn patch_subject_voice_queued(
     }
     if let Some(language) = payload_string(payload, "language") {
         voice["language"] = json!(language);
+    }
+    for key in [
+        "model",
+        "targetTtsModel",
+        "target_tts_model",
+        "ttsModel",
+        "tts_model",
+    ] {
+        if let Some(value) = payload_field(payload, key).cloned() {
+            voice[key] = value;
+        }
     }
     patch_subject_voice_state(state, subject_id, voice)
 }

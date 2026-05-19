@@ -1723,7 +1723,8 @@ export function Settings({
         return prev;
       }
       if (feature === 'voice') {
-        const ttsModel = pickBestModelForSource(source, prev.voice_tts_model || prev.tts_model, 'audio');
+        const ttsModel = pickBestModelForSource(source, prev.voice_tts_model || prev.tts_model, 'tts')
+          || pickBestModelForSource(source, prev.voice_tts_model || prev.tts_model, 'audio');
         return {
           ...prev,
           voice_endpoint: String(source.baseURL || '').trim(),
@@ -6115,13 +6116,13 @@ export function Settings({
         'voiceTts',
         resolvedVoiceTtsModel,
         resolvedVoiceSource,
-        (source) => pickBestModelForSource(source, '', 'audio') || 'speech-2.8-turbo',
+        (source) => pickBestModelForSource(source, '', 'tts') || pickBestModelForSource(source, '', 'audio') || 'speech-2.8-turbo',
       ) || 'speech-2.8-turbo';
       const routeVoiceCloneModel = routeModel(
         'voiceClone',
         resolvedVoiceCloneModel,
         resolvedVoiceSource,
-        (source) => pickBestModelForSource(source, '', 'audio') || 'minimax-voice-clone',
+        (source) => pickBestModelForSource(source, '', 'voice_clone') || pickBestModelForSource(source, '', 'audio') || 'minimax-voice-clone',
       ) || 'minimax-voice-clone';
       const normalizedModelRoutes: AiModelRoutes = {
         ...aiModelRoutes,
@@ -6307,7 +6308,14 @@ export function Settings({
     if (scope === 'image') return filterAiModelsByCapability(models, 'image');
     if (scope === 'visualIndex') return filterVisualIndexModels(models);
     if (scope === 'videoAnalysis') return filterVideoAnalysisModels(models);
-    if (scope === 'voiceTts' || scope === 'voiceClone') return filterAiModelsByCapability(models, 'audio');
+    if (scope === 'voiceTts') {
+      const ttsModels = filterAiModelsByCapability(models, 'tts');
+      return ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(models, 'audio');
+    }
+    if (scope === 'voiceClone') {
+      const cloneModels = filterAiModelsByCapability(models, 'voice_clone');
+      return cloneModels.length > 0 ? cloneModels : filterAiModelsByCapability(models, 'audio');
+    }
     return filterAiModelsByCapability(models, 'chat');
   }, [filterVideoAnalysisModels, filterVisualIndexModels, getSourceModelList]);
 
@@ -8666,6 +8674,8 @@ export function Settings({
                       <option value="chat">语言模型</option>
                       <option value="transcription">转录模型</option>
                       <option value="audio">音频生成</option>
+                      <option value="tts">语音合成</option>
+                      <option value="voice_clone">音色克隆</option>
                       <option value="image">图片生成</option>
                       <option value="video">视频生成</option>
                       <option value="embedding">向量模型</option>

@@ -943,7 +943,11 @@ fn voice_clone_input_schema() -> Value {
             ),
             (
                 "model",
-                string_schema("Optional clone model key; omit to use backend default."),
+                string_schema("Optional clone model key; use cosyvoice-v3.5-plus-voice-clone for CosyVoice V3.5 cloning."),
+            ),
+            (
+                "targetTtsModel",
+                string_schema("Optional target TTS model for this cloned voice, such as cosyvoice-v3.5-plus. The host stores the resulting voiceId under this model."),
             ),
             (
                 "writeBack",
@@ -1074,7 +1078,7 @@ fn voice_speech_input_schema() -> Value {
             ),
             (
                 "model",
-                string_schema("Optional TTS model key; omit to use backend default."),
+                string_schema("Optional TTS model key. Voice ids are model-bound; cosyvoice-v3.5-plus only accepts cloned/designed CosyVoice voices, not MiniMax system voices."),
             ),
             (
                 "languageBoost",
