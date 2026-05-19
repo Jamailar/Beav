@@ -3103,9 +3103,16 @@ fn resolve_video_retalk_settings(settings: &Value) -> (String, Option<String>) {
     let endpoint = payload_string(settings, "video_endpoint")
         .map(|value| normalize_base_url(&value))
         .unwrap_or_else(|| crate::official_base_url_from_settings(settings));
-    let api_key = payload_string(settings, "video_api_key")
-        .or_else(|| crate::official_ai_api_key_from_settings(settings))
-        .or_else(|| payload_string(settings, "api_key"));
+    let api_key = if crate::media_generation::is_redbox_official_endpoint(&endpoint) {
+        crate::official_access_token_from_settings(settings)
+            .or_else(|| payload_string(settings, "video_api_key"))
+            .or_else(|| crate::official_ai_api_key_from_settings(settings))
+            .or_else(|| payload_string(settings, "api_key"))
+    } else {
+        payload_string(settings, "video_api_key")
+            .or_else(|| crate::official_ai_api_key_from_settings(settings))
+            .or_else(|| payload_string(settings, "api_key"))
+    };
     (endpoint, api_key)
 }
 
@@ -4744,6 +4751,21 @@ mod tests {
             ),
             "https://api.ziz.hk/redbox/v1/ai/video-retalk/jobs"
         );
+    }
+
+    #[test]
+    fn video_retalk_official_endpoint_uses_access_token() {
+        let settings = json!({
+            "video_endpoint": "https://api.ziz.hk/redbox/v1",
+            "video_api_key": "rbx-api-key",
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "accessToken": "jwt-access-token",
+                "apiKey": "rbx-session-key"
+            })).expect("session json")
+        });
+
+        let (_endpoint, token) = resolve_video_retalk_settings(&settings);
+        assert_eq!(token.as_deref(), Some("jwt-access-token"));
     }
 
     #[test]

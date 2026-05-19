@@ -7,8 +7,8 @@ use crate::{
     app_brand_display_name, app_brand_slug, append_debug_trace_state, auth,
     create_official_payment_form, emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
     fetch_official_models_for_settings, make_id, normalize_base_url,
-    normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
-    official_ai_api_key_from_settings, official_base_url_for_realm,
+    normalize_official_auth_session, now_iso, now_ms, official_access_token_from_settings,
+    official_account_summary_local, official_ai_api_key_from_settings, official_base_url_for_realm,
     official_base_url_from_settings, official_fallback_products, official_points_snapshot,
     official_realm_from_settings, official_realms_payload, official_response_items,
     official_settings_api_keys, official_settings_call_records_list, official_settings_models,
@@ -376,11 +376,14 @@ fn is_official_ai_request(settings: &Value, request_url: &str, api_key: Option<&
         return false;
     }
     let official_token = official_ai_api_key_from_settings(settings).unwrap_or_default();
+    let official_access_token = official_access_token_from_settings(settings).unwrap_or_default();
     let provided_token = api_key.unwrap_or_default().trim();
     if official_token.trim().is_empty() {
         return session_access_token(settings).is_some();
     }
-    provided_token.is_empty() || provided_token == official_token
+    provided_token.is_empty()
+        || provided_token == official_token
+        || provided_token == official_access_token
 }
 
 fn value_as_f64(value: &Value) -> Option<f64> {
@@ -898,8 +901,13 @@ pub(crate) fn refresh_official_auth_for_ai_request(
     ) {
         Ok(_) => {
             let latest_settings = with_store(state, |store| Ok(store.settings.clone()))?;
-            let refreshed_token = official_ai_api_key_from_settings(&latest_settings)
-                .filter(|value| !value.trim().is_empty());
+            let refreshed_token = if request_url.contains("/ai/video-retalk/") {
+                official_access_token_from_settings(&latest_settings)
+                    .or_else(|| official_ai_api_key_from_settings(&latest_settings))
+            } else {
+                official_ai_api_key_from_settings(&latest_settings)
+            }
+            .filter(|value| !value.trim().is_empty());
             if refreshed_token.is_some() {
                 log_official_auth(
                     state,
