@@ -61,6 +61,7 @@ interface SubjectRecord {
     attributes: SubjectAttribute[];
     imagePaths: string[];
     voicePath?: string;
+    videoPath?: string;
     voiceScript?: string;
     voice?: Record<string, unknown>;
     createdAt: string;
@@ -70,6 +71,8 @@ interface SubjectRecord {
     primaryPreviewUrl?: string;
     absoluteVoicePath?: string;
     voicePreviewUrl?: string;
+    absoluteVideoPath?: string;
+    videoPreviewUrl?: string;
 }
 
 interface SubjectImageDraft {
@@ -93,6 +96,12 @@ interface SubjectDraft {
         relativePath?: string;
         dataUrl?: string;
         scriptText: string;
+    };
+    video?: {
+        name: string;
+        previewUrl: string;
+        relativePath?: string;
+        dataUrl?: string;
     };
 }
 
@@ -218,6 +227,11 @@ function toDraft(subject?: SubjectRecord | null): SubjectDraft {
             relativePath: subject.voicePath,
             scriptText: subject.voiceScript || '',
         } : undefined,
+        video: subject.videoPreviewUrl ? {
+            name: subject.videoPath?.split('/').pop() || 'role-video',
+            previewUrl: subject.videoPreviewUrl,
+            relativePath: subject.videoPath,
+        } : undefined,
     };
 }
 
@@ -239,7 +253,27 @@ function subjectDraftVoicePayload(draft: SubjectDraft, categories: SubjectCatego
     return initialVoicePresent ? {} : undefined;
 }
 
-function subjectDraftPayload(draft: SubjectDraft, voicePayload?: Record<string, unknown>) {
+function subjectDraftVideoPayload(draft: SubjectDraft, categories: SubjectCategory[], initialVideoPresent: boolean): Record<string, unknown> | undefined {
+    const shouldSaveVideo = categories.find((item) => item.id === draft.categoryId)?.name.trim() === '角色';
+    if (shouldSaveVideo && draft.video) {
+        return draft.video.relativePath
+            ? {
+                relativePath: draft.video.relativePath,
+                name: draft.video.name,
+            }
+            : {
+                dataUrl: draft.video.dataUrl,
+                name: draft.video.name,
+            };
+    }
+    return initialVideoPresent ? {} : undefined;
+}
+
+function subjectDraftPayload(
+    draft: SubjectDraft,
+    voicePayload?: Record<string, unknown>,
+    videoPayload?: Record<string, unknown>,
+) {
     return {
         id: draft.id,
         name: draft.name.trim(),
@@ -251,13 +285,20 @@ function subjectDraftPayload(draft: SubjectDraft, voicePayload?: Record<string, 
             ? { relativePath: image.relativePath, name: image.name }
             : { dataUrl: image.dataUrl, name: image.name }),
         voice: voicePayload,
+        video: videoPayload,
     };
 }
 
-function subjectDraftPayloadSnapshot(draft: SubjectDraft, categories: SubjectCategory[], initialVoicePresent: boolean): string {
+function subjectDraftPayloadSnapshot(
+    draft: SubjectDraft,
+    categories: SubjectCategory[],
+    initialVoicePresent: boolean,
+    initialVideoPresent: boolean,
+): string {
     return JSON.stringify(subjectDraftPayload(
         draft,
         subjectDraftVoicePayload(draft, categories, initialVoicePresent),
+        subjectDraftVideoPayload(draft, categories, initialVideoPresent),
     ));
 }
 
@@ -466,6 +507,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [isCategoryDialogSubmitting, setIsCategoryDialogSubmitting] = useState(false);
     const [draft, setDraft] = useState<SubjectDraft>(createEmptyDraft);
     const [initialVoicePresent, setInitialVoicePresent] = useState(false);
+    const [initialVideoPresent, setInitialVideoPresent] = useState(false);
     const [recordingError, setRecordingError] = useState('');
     const [recordingHint, setRecordingHint] = useState('');
     const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
@@ -517,6 +559,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setPreviewImage(null);
         setDraft(createEmptyDraft());
         setInitialVoicePresent(false);
+        setInitialVideoPresent(false);
         setError('');
         setRecordingError('');
         setRecordingHint('');
@@ -720,6 +763,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         autosaveLastPayloadRef.current = null;
         setDraft(nextDraft);
         setInitialVoicePresent(false);
+        setInitialVideoPresent(false);
         setError('');
         setIsDraftCategoryMenuOpen(false);
         openAssetModalSurface();
@@ -729,6 +773,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         autosaveLastPayloadRef.current = null;
         setDraft(toDraft(subject));
         setInitialVoicePresent(Boolean(subject.voicePreviewUrl));
+        setInitialVideoPresent(Boolean(subject.videoPreviewUrl));
         setError('');
         setIsDraftCategoryMenuOpen(false);
         openAssetModalSurface();
@@ -834,9 +879,39 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }));
     }, []);
 
-    const buildSubjectPayload = useCallback((voicePayload?: Record<string, unknown>) => ({
-        ...subjectDraftPayload(draft, voicePayload),
-    }), [draft]);
+    const handleVideoFileInput = useCallback(async (files: FileList | null) => {
+        const file = files?.[0];
+        if (!file) return;
+        if (!/\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name) && !file.type.startsWith('video/')) {
+            setError('角色视频仅支持常见视频文件');
+            return;
+        }
+        if (file.size > 200 * 1024 * 1024) {
+            setError('角色视频不能超过 200MB');
+            return;
+        }
+        const dataUrl = await readFileAsDataUrl(file);
+        setDraft((current) => ({
+            ...current,
+            video: {
+                name: file.name,
+                previewUrl: dataUrl,
+                dataUrl,
+            },
+        }));
+        setError('');
+    }, []);
+
+    const handleRemoveVideo = useCallback(() => {
+        setDraft((current) => ({
+            ...current,
+            video: undefined,
+        }));
+    }, []);
+
+    const buildSubjectPayload = useCallback((voicePayload?: Record<string, unknown>, videoPayload?: Record<string, unknown>) => ({
+        ...subjectDraftPayload(draft, voicePayload, videoPayload ?? subjectDraftVideoPayload(draft, categories, initialVideoPresent)),
+    }), [categories, draft, initialVideoPresent]);
 
     const persistVoiceChange = useCallback(async (voicePayload: Record<string, unknown>, successHint: string) => {
         if (!draft.id) return false;
@@ -980,6 +1055,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             ...current,
             categoryId,
             voice: nextCategoryName === '角色' ? current.voice : undefined,
+            video: nextCategoryName === '角色' ? current.video : undefined,
         }));
     }, [categories, stopRecordingSession]);
 
@@ -1138,10 +1214,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 nextDraft,
                 categories,
                 Boolean(savedSubject.voicePreviewUrl),
+                Boolean(savedSubject.videoPreviewUrl),
             );
             return nextDraft;
         });
         setInitialVoicePresent(Boolean(savedSubject.voicePreviewUrl));
+        setInitialVideoPresent(Boolean(savedSubject.videoPreviewUrl));
     }, [categories]);
 
     const persistDraft = useCallback(async (): Promise<SubjectRecord> => {
@@ -1154,7 +1232,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             autosaveTimerRef.current = null;
         }
         const nextVoicePayload = subjectDraftVoicePayload(draft, categories, initialVoicePresent);
-        const payload = buildSubjectPayload(nextVoicePayload);
+        const nextVideoPayload = subjectDraftVideoPayload(draft, categories, initialVideoPresent);
+        const payload = buildSubjectPayload(nextVoicePayload, nextVideoPayload);
         const result = draft.id
             ? await window.ipcRenderer.subjects.update(payload)
             : await window.ipcRenderer.subjects.create(payload);
@@ -1162,11 +1241,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             throw new Error(result?.error || '保存资产失败');
         }
         return result.subject as SubjectRecord;
-    }, [buildSubjectPayload, categories, draft.categoryId, draft.id, draft.name, draft.voice, initialVoicePresent]);
+    }, [buildSubjectPayload, categories, draft.categoryId, draft.id, draft.name, draft.video, draft.voice, initialVideoPresent, initialVoicePresent]);
 
     useEffect(() => {
         if (!isModalOpen || !draft.id) return;
-        const snapshot = subjectDraftPayloadSnapshot(draft, categories, initialVoicePresent);
+        const snapshot = subjectDraftPayloadSnapshot(draft, categories, initialVoicePresent, initialVideoPresent);
         if (!autosaveLastPayloadRef.current) {
             autosaveLastPayloadRef.current = snapshot;
             return;
@@ -1179,8 +1258,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         const payload = subjectDraftPayload(
             draft,
             subjectDraftVoicePayload(draft, categories, initialVoicePresent),
+            subjectDraftVideoPayload(draft, categories, initialVideoPresent),
         );
-        const syncDraftMedia = draft.images.some((image) => image.dataUrl) || Boolean(draft.voice?.dataUrl);
+        const syncDraftMedia = draft.images.some((image) => image.dataUrl) || Boolean(draft.voice?.dataUrl) || Boolean(draft.video?.dataUrl);
         const runAutosave = async () => {
             if (version !== autosaveVersionRef.current) return;
             if (autosaveSavingRef.current) {
@@ -1217,7 +1297,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 autosaveTimerRef.current = null;
             }
         };
-    }, [categories, draft, initialVoicePresent, isModalOpen, mergeSavedSubject]);
+    }, [categories, draft, initialVideoPresent, initialVoicePresent, isModalOpen, mergeSavedSubject]);
 
     const handleSave = useCallback(async () => {
         setWorking(true);
@@ -2117,6 +2197,46 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     </div>
 
                                     {isRoleDraft && (
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">角色视频</div>
+                                            {draft.video?.previewUrl ? (
+                                                <div className="group relative overflow-hidden rounded-lg bg-black">
+                                                    <video
+                                                        src={resolveAssetUrl(draft.video.previewUrl)}
+                                                        className="aspect-video w-full object-cover"
+                                                        muted
+                                                        playsInline
+                                                        controls
+                                                        preload="metadata"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleRemoveVideo}
+                                                        className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                        aria-label="删除角色视频"
+                                                    >
+                                                        <X className="h-3.5 w-3.5" />
+                                                    </button>
+                                                    <div className="truncate bg-black/75 px-3 py-2 text-xs font-medium text-white">{draft.video.name}</div>
+                                                </div>
+                                            ) : (
+                                                <label className="flex h-10 cursor-pointer items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]">
+                                                    上传视频
+                                                    <input
+                                                        type="file"
+                                                        accept="video/*,.mp4,.webm,.mov,.m4v,.mkv"
+                                                        className="hidden"
+                                                        onChange={(event) => {
+                                                            void handleVideoFileInput(event.target.files);
+                                                            event.currentTarget.value = '';
+                                                        }}
+                                                    />
+                                                </label>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {isRoleDraft && (
                                         <div className="space-y-2 rounded-xl bg-[rgb(var(--color-surface-primary))] p-4">
                                             <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">声音参考</div>
                                             <div className="rounded-xl bg-white px-4 py-3">
@@ -2239,6 +2359,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             <span className="rounded-full bg-white px-2 py-0.5">{draftCategoryName || '未分类'}</span>
                                             <span>{draft.images.length}/5 张图片</span>
                                             {isRoleDraft && <span>{draft.voice?.previewUrl ? '有声音' : '未录音'}</span>}
+                                            {isRoleDraft && <span>{draft.video?.previewUrl ? '有视频' : '无视频'}</span>}
                                         </div>
                                         <div className="text-base font-semibold text-[rgb(var(--color-text-primary))]">{draft.name || `${draftEntityLabel}名称`}</div>
                                         <div className="min-h-[36px] text-xs leading-5 text-[rgb(var(--color-text-secondary))]">

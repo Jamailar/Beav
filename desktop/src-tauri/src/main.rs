@@ -153,6 +153,7 @@ struct SubjectRecord {
     attributes: Vec<SubjectAttribute>,
     image_paths: Vec<String>,
     voice_path: Option<String>,
+    video_path: Option<String>,
     voice_script: Option<String>,
     voice: Option<Value>,
     created_at: String,
@@ -162,6 +163,8 @@ struct SubjectRecord {
     primary_preview_url: Option<String>,
     absolute_voice_path: Option<String>,
     voice_preview_url: Option<String>,
+    absolute_video_path: Option<String>,
+    video_preview_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -856,6 +859,7 @@ struct SubjectMutationInput {
     attributes: Option<Vec<SubjectAttribute>>,
     images: Option<Vec<SubjectMediaInput>>,
     voice: Option<SubjectVoiceInput>,
+    video: Option<SubjectMediaInput>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1928,6 +1932,11 @@ mod tests {
                 script_text: Some("声音脚本".to_string()),
                 voice: None,
             }),
+            video: Some(SubjectMediaInput {
+                relative_path: None,
+                data_url: Some("data:video/mp4;base64,aGVsbG8=".to_string()),
+                name: Some("talking-head.mp4".to_string()),
+            }),
         };
         let subject =
             build_subject_record_for_workspace(&subjects_root, input, None).expect("build subject");
@@ -1948,8 +1957,10 @@ mod tests {
             .join(&subjects[0].image_paths[0])
             .exists());
         assert!(subjects[0].voice_path.is_some());
+        assert!(subjects[0].video_path.is_some());
         assert!(subjects[0].primary_preview_url.is_some());
         assert!(subjects[0].voice_preview_url.is_some());
+        assert!(subjects[0].video_preview_url.is_some());
 
         let updated = SubjectRecord {
             name: "更新资产".to_string(),
@@ -1958,8 +1969,11 @@ mod tests {
             preview_urls: Vec::new(),
             primary_preview_url: None,
             voice_path: None,
+            video_path: None,
             absolute_voice_path: None,
             voice_preview_url: None,
+            absolute_video_path: None,
+            video_preview_url: None,
             voice: None,
             ..subject
         };
@@ -2006,6 +2020,7 @@ mod tests {
                     }],
                     image_paths: Vec::new(),
                     voice_path: None,
+                    video_path: None,
                     voice_script: None,
                     voice: None,
                     created_at: "2026-04-28T00:00:00Z".to_string(),
@@ -2015,6 +2030,8 @@ mod tests {
                     primary_preview_url: None,
                     absolute_voice_path: None,
                     voice_preview_url: None,
+                    absolute_video_path: None,
+                    video_preview_url: None,
                 };
                 super::hydrated_subject_record(&subjects_root, record)
             })
@@ -9371,6 +9388,10 @@ fn subject_data_url_extension(meta: &str, fallback: &str) -> String {
         "audio/mp4" | "audio/m4a" => "m4a",
         "audio/webm" => "webm",
         "audio/ogg" => "ogg",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/quicktime" => "mov",
+        "video/x-matroska" => "mkv",
         _ => fallback,
     }
     .to_string()
@@ -9511,6 +9532,38 @@ fn materialize_subject_voice_path(
     materialize_subject_data_url(subject_dir, data_url, &file_name).map(Some)
 }
 
+fn materialize_subject_video_path(
+    subject_dir: &Path,
+    video: Option<&SubjectMediaInput>,
+) -> Result<Option<String>, String> {
+    let Some(video) = video else {
+        return Ok(None);
+    };
+    if let Some(relative_path) = video
+        .relative_path
+        .as_deref()
+        .and_then(safe_subject_relative_path)
+    {
+        return Ok(Some(relative_path));
+    }
+    let Some(data_url) = video
+        .data_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let meta = data_url
+        .trim()
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(',').map(|(meta, _)| meta))
+        .unwrap_or("");
+    let fallback_extension = subject_input_file_extension(video.name.as_deref(), "mp4");
+    let extension = subject_data_url_extension(meta, &fallback_extension);
+    let file_name = subject_asset_file_name("video", 0, video.name.as_deref(), &extension);
+    materialize_subject_data_url(subject_dir, data_url, &file_name).map(Some)
+}
+
 fn hydrated_subject_record(subjects_root: &Path, mut record: SubjectRecord) -> SubjectRecord {
     let subject_dir = subjects_root.join(&record.id);
     record.absolute_image_paths = record
@@ -9537,6 +9590,15 @@ fn hydrated_subject_record(subjects_root: &Path, mut record: SubjectRecord) -> S
         .absolute_voice_path
         .as_ref()
         .map(|absolute| file_url_for_path(Path::new(absolute)));
+    record.absolute_video_path = record.video_path.as_ref().map(|relative| {
+        normalize_legacy_workspace_path(&subject_dir.join(relative))
+            .display()
+            .to_string()
+    });
+    record.video_preview_url = record
+        .absolute_video_path
+        .as_ref()
+        .map(|absolute| file_url_for_path(Path::new(absolute)));
     record
 }
 
@@ -9550,6 +9612,7 @@ fn subject_catalog_item(record: &SubjectRecord) -> Value {
         "attributes": record.attributes,
         "imagePaths": record.image_paths,
         "voicePath": record.voice_path,
+        "videoPath": record.video_path,
         "voiceScript": record.voice_script,
         "voice": record.voice,
         "createdAt": record.created_at,
@@ -9590,6 +9653,7 @@ fn build_subject_record_for_workspace(
     let images = input.images.as_deref().unwrap_or(&[]);
     let image_paths = materialize_subject_image_paths(&subject_dir, images)?;
     let voice_path = materialize_subject_voice_path(&subject_dir, input.voice.as_ref())?;
+    let video_path = materialize_subject_video_path(&subject_dir, input.video.as_ref())?;
     let voice_script = input
         .voice
         .as_ref()
@@ -9648,6 +9712,7 @@ fn build_subject_record_for_workspace(
             .collect(),
         image_paths,
         voice_path,
+        video_path,
         voice_script,
         voice,
         created_at,
@@ -9657,6 +9722,8 @@ fn build_subject_record_for_workspace(
         primary_preview_url: None,
         absolute_voice_path: None,
         voice_preview_url: None,
+        absolute_video_path: None,
+        video_preview_url: None,
     };
     Ok(hydrated_subject_record(subjects_root, record))
 }
