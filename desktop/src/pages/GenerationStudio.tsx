@@ -4537,7 +4537,7 @@ export function GenerationStudio({
         [activeGenerationProjectId, contextIntent?.source, feedEntries],
     );
 
-    const composerGridClass = studioMode === 'audio'
+    const composerGridClass = studioMode === 'audio' || studioMode === 'digital-human'
         ? 'grid gap-4'
         : studioMode === 'cover' || (studioMode === 'video' && videoMode === 'first-last-frame')
         ? 'grid items-start gap-4 md:grid-cols-[196px_minmax(0,1fr)]'
