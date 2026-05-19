@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, Send, UserRound, Video, Volume2, Wand2 } from 'lucide-react';
 
 type DigitalHumanStage = 'idle' | 'uploading-video' | 'tts' | 'uploading-audio' | 'retalk' | 'completed' | 'failed';
+const DIGITAL_HUMAN_VIDEO_RESOLUTION = '1080p';
 
 interface DigitalHumanChatProps {
   isActive?: boolean;
@@ -262,6 +263,7 @@ export function DigitalHumanChat({ isActive = true, onReturnHome, onOpenAssets }
     try {
       const preparedVideo = await window.ipcRenderer.generation.prepareVideoRetalkSource({
         path: currentReadiness.videoPath,
+        resolution: DIGITAL_HUMAN_VIDEO_RESOLUTION,
       });
       if (preparedVideo?.success === false || !preparedVideo?.path) {
         throw new Error(preparedVideo?.error || '参考视频不符合数字人生成要求');
@@ -313,7 +315,7 @@ export function DigitalHumanChat({ isActive = true, onReturnHome, onOpenAssets }
           video_extension: false,
         },
         durationSeconds: 8,
-        resolution: '720p',
+        resolution: DIGITAL_HUMAN_VIDEO_RESOLUTION,
         metadata: {
           surface: 'digital-human',
           subjectId: selectedRole.id,
