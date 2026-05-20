@@ -469,8 +469,10 @@ function digitalHumanReadiness(subject: SubjectRecord | null): { ok: boolean; vo
     const voiceId = extractSubjectVoiceId(subject);
     const videoPath = extractSubjectVideoPath(subject);
     const issues: string[] = [];
-    if (!voiceId) issues.push('角色缺少声音 ID');
     if (!videoPath) issues.push('角色缺少参考视频');
+    if (!voiceId) {
+        issues.push(videoPath ? '音色克隆未完成' : '角色缺少声音 ID');
+    }
     return { ok: issues.length === 0, voiceId, videoPath, issue: issues.join('，') };
 }
 
@@ -3717,12 +3719,16 @@ export function GenerationStudio({
             label: readiness.ok ? role.name : `${role.name} · 不可用`,
             description: readiness.ok ? shortVoiceId(readiness.voiceId) : readiness.issue,
             disabled: !readiness.ok,
-            disabledReason: readiness.ok ? undefined : `请先在资产库为「${role.name}」上传参考视频，并录制或绑定可用的音色克隆。缺少：${readiness.issue}`,
+            disabledReason: readiness.ok ? undefined : (
+                readiness.videoPath
+                    ? `「${role.name}」已具备参考视频，系统会从视频音轨自动复刻音色。请等待音色克隆完成后再生成数字人。`
+                    : `请先在资产库为「${role.name}」上传带音轨的参考视频。上传后系统会自动抽取音轨复刻音色。缺少：${readiness.issue}`
+            ),
             tone: readiness.ok ? undefined : 'danger',
         };
     }), [digitalHumanRoles]);
     const handleDisabledDigitalHumanRoleClick = useCallback((option: PickerOption) => {
-        void appAlert(option.disabledReason || '请先在资产库补齐角色的参考视频和音色克隆。', {
+        void appAlert(option.disabledReason || '请先在资产库上传带音轨的角色参考视频。', {
             title: '角色还不能用于数字人',
         });
     }, []);
@@ -3965,7 +3971,7 @@ export function GenerationStudio({
             return false;
         }
         if (!request.roleId || !request.voiceId || !request.videoPath) {
-            setDigitalHumanError('角色必须同时具备声音 ID 和参考视频');
+            setDigitalHumanError('角色需要参考视频；音色会从视频音轨自动克隆，完成后即可生成');
             return false;
         }
 

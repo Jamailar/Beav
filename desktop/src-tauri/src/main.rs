@@ -9676,6 +9676,47 @@ fn materialize_subject_video_path(
     materialize_subject_data_url(subject_dir, data_url, &file_name).map(Some)
 }
 
+fn subject_voice_value_has_id(value: &Value) -> bool {
+    for key in ["voiceId", "voice_id", "id"] {
+        if value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(|item| !item.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    value
+        .get("voiceMappings")
+        .and_then(Value::as_object)
+        .map(|mappings| {
+            mappings.values().any(|mapping| {
+                ["voiceId", "voice_id", "id"].iter().any(|key| {
+                    mapping
+                        .get(*key)
+                        .and_then(Value::as_str)
+                        .map(|item| !item.trim().is_empty())
+                        .unwrap_or(false)
+                })
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn subject_voice_sample_file_path(value: &Value) -> Option<String> {
+    ["sampleFilePath", "samplePath", "voicePath"]
+        .iter()
+        .find_map(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
 fn hydrated_subject_record(subjects_root: &Path, mut record: SubjectRecord) -> SubjectRecord {
     let subject_dir = subjects_root.join(&record.id);
     record.absolute_image_paths = record
@@ -9773,11 +9814,24 @@ fn build_subject_record_for_workspace(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let incoming_voice = input.voice.as_ref().and_then(|voice| voice.voice.clone());
-    let voice = match voice_path.as_deref() {
+    let voice_sample_path = voice_path.as_deref().or(video_path.as_deref());
+    let voice_sample_source = if voice_path.is_some() {
+        "voice"
+    } else {
+        "video"
+    };
+    let voice = match voice_sample_path {
         Some(sample_path) => incoming_voice
             .or_else(|| {
                 existing.as_ref().and_then(|record| {
-                    if record.voice_path.as_deref() == Some(sample_path) {
+                    let existing_voice = record.voice.as_ref()?;
+                    let existing_sample_path = subject_voice_sample_file_path(existing_voice);
+                    let same_sample = existing_sample_path.as_deref() == Some(sample_path)
+                        || (voice_path.is_none()
+                            && record.voice_path.is_none()
+                            && record.video_path.as_deref() == video_path.as_deref()
+                            && subject_voice_value_has_id(existing_voice));
+                    if same_sample {
                         record.voice.clone()
                     } else {
                         None
@@ -9788,6 +9842,7 @@ fn build_subject_record_for_workspace(
                 Some(json!({
                     "status": "queued",
                     "sampleFilePath": sample_path,
+                    "sampleSource": voice_sample_source,
                     "updatedAt": now_iso(),
                 }))
             }),

@@ -931,7 +931,7 @@ fn is_direct_voice_clone_sample(path: &Path) -> bool {
 fn is_transcodable_voice_clone_sample(path: &Path) -> bool {
     matches!(
         voice_clone_sample_extension(path).as_str(),
-        "aac" | "flac" | "ogg" | "opus" | "webm"
+        "aac" | "flac" | "ogg" | "opus" | "webm" | "mp4" | "m4v" | "mov" | "mkv" | "avi"
     )
 }
 
@@ -957,15 +957,15 @@ fn transcode_voice_clone_sample_to_wav(
         .arg(&output_path)
         .output()
         .map_err(|error| {
-            format!("声音复刻样本需要转成 wav，但无法启动 ffmpeg：{error}。请改用 mp3、wav 或 m4a 文件。")
+            format!("声音复刻样本需要抽取为 wav，但无法启动 ffmpeg：{error}。请改用带音轨的视频或 mp3、wav、m4a 文件。")
         })?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let _ = fs::remove_file(&output_path);
         return Err(if detail.is_empty() {
-            "声音复刻样本转码失败，请改用 mp3、wav 或 m4a 文件。".to_string()
+            "声音复刻样本抽取失败，请确认视频包含音轨，或改用 mp3、wav、m4a 文件。".to_string()
         } else {
-            format!("声音复刻样本转码失败：{detail}")
+            format!("声音复刻样本抽取失败：{detail}")
         });
     }
     Ok(output_path)
@@ -987,7 +987,7 @@ fn prepare_voice_clone_sample_upload(
         .and_then(|value| value.to_str())
         .unwrap_or("unknown");
     Err(format!(
-        "声音复刻样本格式不支持：{}。请使用 mp3、wav 或 m4a 文件。",
+        "声音复刻样本格式不支持：{}。请使用带音轨的视频或 mp3、wav、m4a 文件。",
         path.file_name()
             .and_then(|value| value.to_str())
             .unwrap_or(extension)
@@ -2033,6 +2033,13 @@ fn subject_voice_has_id_for_tts_model(record: &SubjectRecord, tts_model: &str) -
     subject_voice_id_for_tts_model(record, tts_model).is_some()
 }
 
+fn subject_voice_sample_relative_path(record: &SubjectRecord) -> Option<String> {
+    record
+        .voice_path
+        .clone()
+        .or_else(|| record.video_path.clone())
+}
+
 pub(crate) fn spawn_subject_voice_clone_if_needed(
     app: &AppHandle,
     record: &SubjectRecord,
@@ -2040,7 +2047,8 @@ pub(crate) fn spawn_subject_voice_clone_if_needed(
     let state = app.state::<AppState>();
     let config = resolve_voice_config(&state, None)?;
     let target_tts_model = clone_model_target_tts_model(&config.clone_model, &config.tts_model);
-    if record.voice_path.is_none() || subject_voice_has_id_for_tts_model(record, &target_tts_model)
+    if subject_voice_sample_relative_path(record).is_none()
+        || subject_voice_has_id_for_tts_model(record, &target_tts_model)
     {
         return Ok(());
     }
@@ -2081,13 +2089,17 @@ fn voice_clone_payload_for_subject(
     clone_model: &str,
     target_tts_model: &str,
 ) -> Result<Value, String> {
-    let relative_path = subject
-        .voice_path
-        .clone()
+    let relative_path = subject_voice_sample_relative_path(subject)
         .ok_or_else(|| "subject has no voice sample".to_string())?;
+    let sample_source = if subject.voice_path.is_some() {
+        "voice"
+    } else {
+        "video"
+    };
     let mut payload = json!({
         "ownerAssetId": subject.id,
         "samplePath": relative_path,
+        "sampleSource": sample_source,
         "name": subject.name,
         "writeBack": true,
         "model": clone_model,
