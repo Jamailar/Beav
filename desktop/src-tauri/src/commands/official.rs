@@ -1198,13 +1198,13 @@ fn apply_official_settings_update(
             }
         }
     }
-    with_store_mut(state, |store| {
+    let merged_settings = with_store_mut(state, |store| {
         merge_official_settings(&mut store.settings, &next_settings);
-        Ok(())
+        Ok(store.settings.clone())
     })?;
     if should_sync_model_config {
         if let Err(error) =
-            crate::model_config::sync_model_config_file(&state.store_path, &next_settings)
+            crate::model_config::sync_model_config_file(&state.store_path, &merged_settings)
         {
             log_official_auth(
                 state,
@@ -1213,7 +1213,7 @@ fn apply_official_settings_update(
             );
         }
     }
-    let _ = auth::sync_auth_runtime_from_settings(Some(app), state, &next_settings);
+    let _ = auth::sync_auth_runtime_from_settings(Some(app), state, &merged_settings);
     let _ = app.emit(
         "settings:updated",
         json!({
@@ -1221,7 +1221,7 @@ fn apply_official_settings_update(
             "source": source,
         }),
     );
-    emit_redbox_auth_session_updated(app, official_settings_session(&next_settings));
+    emit_redbox_auth_session_updated(app, official_settings_session(&merged_settings));
     if let Some(payload) = data_payload {
         emit_redbox_auth_data_updated(app, payload);
     }
