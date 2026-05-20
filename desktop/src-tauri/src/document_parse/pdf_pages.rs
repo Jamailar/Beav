@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::background_command;
 
 const DEFAULT_MAX_PDF_PAGES: usize = 12;
 const DEFAULT_RENDER_DPI: u32 = 144;
@@ -22,7 +23,7 @@ pub(super) fn render_pdf_pages(
     let dpi = render_dpi
         .clamp(72, 300)
         .max(DEFAULT_RENDER_DPI.min(render_dpi.max(72)));
-    let status = Command::new(pdftoppm)
+    let status = background_command(pdftoppm)
         .args([
             "-png",
             "-r",
@@ -68,7 +69,7 @@ fn unique_suffix() -> u128 {
 }
 
 fn command_path(name: &str) -> Option<PathBuf> {
-    Command::new("sh")
+    background_command("sh")
         .arg("-c")
         .arg(format!("command -v {name}"))
         .output()

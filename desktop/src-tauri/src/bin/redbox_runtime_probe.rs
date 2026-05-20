@@ -14,10 +14,28 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 type ProbeResult<T> = Result<T, String>;
 
 const DEFAULT_PROVIDER: &str = "mock";
 const DEFAULT_REPEAT: usize = 1;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(target_os = "windows")]
+fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(not(target_os = "windows"))]
+fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    Command::new(program)
+}
 
 #[derive(Debug, Clone)]
 struct Cli {
@@ -1702,7 +1720,7 @@ fn run_stdio_fixture(scenario: &str) -> ProbeResult<String> {
         "mcp-resource-read" => r#"{"contents":[{"uri":"probe://resource","text":"resource ok"}]}"#,
         _ => r#"{"ok":true}"#,
     };
-    let output = Command::new("/bin/sh")
+    let output = background_command("/bin/sh")
         .args([
             "-lc",
             &format!("printf '%s' '{}'", shell_escape_single_quotes(body)),
@@ -1719,7 +1737,7 @@ fn run_stdio_fixture(scenario: &str) -> ProbeResult<String> {
 }
 
 fn run_command(program: &str, args: &[&str]) -> ProbeResult<(i32, String, String)> {
-    let output = Command::new(program)
+    let output = background_command(program)
         .args(args)
         .stdin(Stdio::null())
         .output()
@@ -2171,7 +2189,7 @@ fn start_real_app_process(
     let stderr = log_file
         .try_clone()
         .map_err(|e| format!("failed to clone {}: {e}", log_path.display()))?;
-    let child = Command::new("/bin/sh")
+    let child = background_command("/bin/sh")
         .arg("-lc")
         .arg(command)
         .stdout(Stdio::from(stdout))

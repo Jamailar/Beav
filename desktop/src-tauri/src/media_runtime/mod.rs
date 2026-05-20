@@ -4,7 +4,6 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
@@ -2726,7 +2725,7 @@ fn create_audio_sequence_silence_file(
         .join(job_id);
     fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
     let path = work_dir.join(format!("{label}-silence.{extension}"));
-    let mut command = Command::new(ffmpeg_program(Some(app))?);
+    let mut command = background_command(ffmpeg_program(Some(app))?);
     command
         .arg("-y")
         .arg("-hide_banner")
@@ -2855,7 +2854,7 @@ fn merge_audio_sequence_with_ffmpeg(
 
     let (relative_path, absolute_path) = audio_sequence_output_paths(state, job_id, extension)?;
     let temp_path = absolute_path.with_file_name(format!("{job_id}-sequence.tmp.{extension}"));
-    let mut command = Command::new(ffmpeg_program(Some(app))?);
+    let mut command = background_command(ffmpeg_program(Some(app))?);
     command
         .arg("-y")
         .arg("-hide_banner")

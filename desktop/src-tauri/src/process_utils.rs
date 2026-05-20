@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::process::Command;
 
 #[cfg(target_os = "windows")]
@@ -11,5 +12,11 @@ pub(crate) fn configure_background_command(command: &mut Command) -> &mut Comman
     {
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    command
+}
+
+pub(crate) fn background_command<S: AsRef<OsStr>>(program: S) -> Command {
+    let mut command = Command::new(program);
+    configure_background_command(&mut command);
     command
 }

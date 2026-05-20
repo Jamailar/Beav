@@ -4,7 +4,6 @@ use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
@@ -940,7 +939,7 @@ fn transcode_voice_clone_sample_to_wav(
     path: &Path,
 ) -> Result<PathBuf, String> {
     let output_path = std::env::temp_dir().join(format!("{}-voice-clone.wav", make_id("redbox")));
-    let output = Command::new(ffmpeg_executable(app)?)
+    let output = crate::background_command(ffmpeg_executable(app)?)
         .arg("-y")
         .arg("-hide_banner")
         .arg("-loglevel")

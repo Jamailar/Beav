@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -22,7 +22,7 @@ use crate::cli_runtime::{
     CliExecutionRecord, CliExecutionSnapshot, CliExecutionStatus, CliVerificationStatus,
     CliVerifyRule,
 };
-use crate::process_utils::configure_background_command;
+use crate::process_utils::background_command;
 use crate::{make_id, now_i64, with_store, AppState};
 
 fn normalize_cwd(request: &CliExecuteRequest, environment_root: &str) -> String {
@@ -147,11 +147,10 @@ fn run_local_command_capture(
     sandbox: &crate::cli_runtime::CliSandboxSpec,
 ) -> Result<LocalCliCommandOutput, String> {
     let launch = prepare_cli_launch(sandbox, argv, env)?;
-    let mut command = Command::new(launch.program);
+    let mut command = background_command(launch.program);
     command.args(&launch.args);
     command.current_dir(cwd);
     command.envs(&launch.env);
-    configure_background_command(&mut command);
     let output = command.output().map_err(|error| error.to_string())?;
     Ok(LocalCliCommandOutput {
         exit_code: output.status.code(),

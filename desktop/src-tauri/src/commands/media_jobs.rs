@@ -5,7 +5,6 @@ use reqwest::blocking::{multipart, Client};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 use tauri::{AppHandle, State};
 
@@ -122,7 +121,7 @@ fn resolve_local_video_path(
 }
 
 fn probe_video_dimensions(app: &AppHandle, path: &Path) -> Result<VideoDimensions, String> {
-    let output = Command::new(crate::ffmpeg_runtime::ffprobe_executable(Some(app))?)
+    let output = crate::background_command(crate::ffmpeg_runtime::ffprobe_executable(Some(app))?)
         .args([
             "-v",
             "error",
@@ -293,7 +292,7 @@ fn prepare_video_retalk_source(
         "scale={}:{}:flags=lanczos",
         target_dimensions.width, target_dimensions.height
     );
-    let output = Command::new(crate::ffmpeg_runtime::ffmpeg_executable(Some(app))?)
+    let output = crate::background_command(crate::ffmpeg_runtime::ffmpeg_executable(Some(app))?)
         .args(["-y", "-i"])
         .arg(&source_path)
         .args([

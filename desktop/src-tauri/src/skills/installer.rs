@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::background_command;
 use crate::skills::{normalize_skill_text, split_skill_body};
 use crate::slug_from_relative_path;
 
@@ -652,7 +652,7 @@ fn unique_staging_path(root: &Path, prefix: &str) -> PathBuf {
 }
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
-    let mut command = Command::new("git");
+    let mut command = background_command("git");
     command.args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
     command.env("GIT_OPTIONAL_LOCKS", "0");

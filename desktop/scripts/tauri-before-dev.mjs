@@ -4,7 +4,8 @@ import { promisify } from 'node:util';
 import { runCommand } from './release-utils.mjs';
 import { syncVersion } from './sync-version.mjs';
 
-const execFile = promisify(execFileCallback);
+const execFileRaw = promisify(execFileCallback);
+const execFile = (file, args = [], options = {}) => execFileRaw(file, args, { windowsHide: true, ...options });
 
 const PORT = Number(process.env.REDBOX_DEV_PORT || process.env.LEXBOX_DEV_PORT || 1420);
 const DEV_URL = process.env.REDBOX_DEV_URL || process.env.LEXBOX_DEV_URL || `http://localhost:${PORT}`;
@@ -136,6 +137,7 @@ async function startDevServer() {
     cwd,
     stdio: 'inherit',
     env: process.env,
+    windowsHide: true,
   });
 
   const forwardSignal = (signal) => {

@@ -11,7 +11,7 @@ const hostSrc = path.join(repoRoot, 'desktop', 'src-tauri', 'src');
 const outputPath = path.resolve(__dirname, '..', 'docs', 'ipc-inventory.md');
 
 function run(command) {
-  return execSync(command, { cwd: repoRoot, encoding: 'utf8' }).trim();
+  return execSync(command, { cwd: repoRoot, encoding: 'utf8', windowsHide: true }).trim();
 }
 
 const frontendChannels = run(

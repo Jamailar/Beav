@@ -4,7 +4,6 @@ pub(crate) mod redclaw_task_control;
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -1772,7 +1771,7 @@ fn run_ffmpeg_concat(
     concat_path: &Path,
     output_path: &Path,
 ) -> Result<Value, String> {
-    let output = Command::new(ffmpeg_path)
+    let output = crate::background_command(ffmpeg_path)
         .current_dir(package_dir)
         .arg("-y")
         .arg("-safe")

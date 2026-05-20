@@ -3,9 +3,9 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use tauri::State;
 
+use crate::background_command;
 use crate::interactive_runtime_shared::resolve_workspace_tool_path_for_session;
 use crate::AppState;
 
@@ -132,7 +132,7 @@ fn is_builtin_program(program: &str) -> bool {
 }
 
 fn execute_external(program: &str, args: &[String], cwd: &Path) -> Result<BashOutput, String> {
-    let output = Command::new(program)
+    let output = background_command(program)
         .args(args)
         .current_dir(cwd)
         .output()

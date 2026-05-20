@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::configure_background_command;
+use crate::background_command;
 
 pub(crate) const HTTP_STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
 
@@ -90,8 +90,7 @@ fn build_curl_json_command(
     no_buffer: bool,
     force_http1_1: bool,
 ) -> Result<std::process::Command, String> {
-    let mut command = std::process::Command::new("curl");
-    configure_background_command(&mut command);
+    let mut command = background_command("curl");
     command.arg("-sS").arg("-X").arg(method).arg(url);
     if no_buffer {
         command.arg("-N");
@@ -827,8 +826,7 @@ pub(crate) fn run_curl_text(
     extra_headers: &[(&str, String)],
     body: Option<String>,
 ) -> Result<String, String> {
-    let mut command = std::process::Command::new("curl");
-    configure_background_command(&mut command);
+    let mut command = background_command("curl");
     command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
     for (header, value) in extra_headers {
         command.arg("-H").arg(format!("{header}: {value}"));
@@ -872,8 +870,7 @@ pub(crate) fn run_curl_bytes(
     body: Option<Value>,
 ) -> Result<Vec<u8>, String> {
     let serialized_body = serialized_json_body(body.as_ref())?;
-    let mut command = std::process::Command::new("curl");
-    configure_background_command(&mut command);
+    let mut command = background_command("curl");
     command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
     if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
         command

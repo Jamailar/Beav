@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 
 use crate::cli_runtime::{prepare_cli_launch, CliSandboxSpec};
-use crate::process_utils::configure_background_command;
+use crate::process_utils::background_command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliTerminalTransport {
@@ -22,14 +22,13 @@ pub fn spawn_cli_terminal(
     sandbox: &CliSandboxSpec,
 ) -> Result<CliTerminalHandle, String> {
     let launch = prepare_cli_launch(sandbox, argv, env)?;
-    let mut command = Command::new(launch.program);
+    let mut command = background_command(launch.program);
     command.args(&launch.args);
     command.current_dir(cwd);
     command.envs(&launch.env);
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    configure_background_command(&mut command);
     let child = command.spawn().map_err(|error| error.to_string())?;
     Ok(CliTerminalHandle {
         child,

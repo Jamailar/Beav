@@ -7,7 +7,25 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 const HTTP_STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(target_os = "windows")]
+fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(not(target_os = "windows"))]
+fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    Command::new(program)
+}
 
 #[derive(Debug, Clone)]
 struct ProbeConfig {
@@ -401,7 +419,7 @@ fn run_curl_attempt(
     request_body: &Value,
     force_http1_1: bool,
 ) -> Result<AttemptResult, String> {
-    let mut command = Command::new("curl");
+    let mut command = background_command("curl");
     command.arg("-sS").arg("-X").arg("POST").arg(request_url);
     if force_http1_1 {
         command.arg("--http1.1");
@@ -546,7 +564,7 @@ fn decode_base64(raw: &str) -> Result<Vec<u8>, String> {
 }
 
 fn download_url(url: &str) -> Result<Vec<u8>, String> {
-    let output = Command::new("curl")
+    let output = background_command("curl")
         .arg("-sS")
         .arg("-L")
         .arg(url)

@@ -16,8 +16,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{
-    now_iso, payload_string, run_curl_json, url_encode_component, with_store, AppState,
-    AssistantSidecarRuntime, AssistantStateRecord,
+    background_command, now_iso, payload_string, run_curl_json, url_encode_component, with_store,
+    AppState, AssistantSidecarRuntime, AssistantStateRecord,
 };
 
 pub(crate) fn value_to_i64_string(value: Option<&Value>) -> Option<String> {
@@ -1122,7 +1122,7 @@ pub(crate) fn spawn_weixin_sidecar(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let mut child_command = std::process::Command::new(command);
+    let mut child_command = background_command(command);
     child_command
         .args(args)
         .stdin(Stdio::null())
