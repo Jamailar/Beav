@@ -1259,10 +1259,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     }
 
     const isDocItem = (item.meta as Record<string, unknown> | undefined)?.sourceType === 'document';
-    const icon = item.type === 'video' 
-      ? <Play className="w-3.5 h-3.5 text-red-500" /> 
-      : isDocItem 
-        ? <FileText className="w-3.5 h-3.5 text-violet-500" /> 
+    const icon = item.type === 'video'
+      ? <Play className="w-3.5 h-3.5 text-red-500" />
+      : isDocItem
+        ? <FileText className="w-3.5 h-3.5 text-violet-500" />
         : <FileText className="w-3.5 h-3.5 text-blue-500" />;
 
     return (
@@ -1302,7 +1302,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                         {selectionMode === 'manual' ? <Shuffle className="w-10 h-10 text-accent-primary" /> : <Dices className="w-10 h-10 text-accent-primary" />}
                     </div>
                 </div>
-                
+
                 <h2 className="text-2xl font-extrabold tracking-tight text-text-primary mb-4">
                   {selectionMode === 'manual' ? '按方向漫步' : '开启一次随机漫步'}
                 </h2>
@@ -1445,12 +1445,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
             <div className="max-w-4xl mx-auto space-y-10">
               {loading && (
                 <div className="flex flex-col items-center justify-center min-h-[60vh] py-4 animate-in fade-in zoom-in-[0.98] duration-1000">
-                  
+
                   {/* The Quantum Synaptic Network Map (Expanded & Transparent) */}
                   <div className="relative w-full max-w-3xl aspect-[1.8] flex items-center justify-center mb-8 select-none">
                     {/* Background Grid Accent */}
                     <div className="absolute inset-0 opacity-[0.015] dark:opacity-[0.03] bg-[linear-gradient(rgba(0,0,0,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.1)_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
-                    
+
                     {/* SVG Connections with Animated Particles */}
                     <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 720 400">
                       <defs>
@@ -1459,7 +1459,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                           <feComposite in="SourceGraphic" in2="blur" operator="over" />
                         </filter>
                       </defs>
-                      
+
                       {/* Concentric Rotating Quantum Orbits */}
                       <circle cx="360" cy="200" r="75" fill="none" stroke="rgb(var(--color-accent-primary) / 0.15)" strokeWidth="1" strokeDasharray="4, 12" style={{ transformOrigin: '360px 200px', animation: 'spin 35s linear infinite' }} />
                       <circle cx="360" cy="200" r="135" fill="none" stroke="rgb(var(--color-accent-primary) / 0.1)" strokeWidth="1.2" strokeDasharray="6, 18" style={{ transformOrigin: '360px 200px', animation: 'spin 25s linear infinite reverse' }} />
@@ -1477,11 +1477,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                       {/* Node 1: Top Center */}
                       <line x1="360" y1="64" x2="360" y2="150" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
                       <line x1="360" y1="64" x2="360" y2="150" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
-                      
+
                       {/* Node 2: Bottom Left */}
                       <line x1="110" y1="310" x2="310" y2="230" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
                       <line x1="110" y1="310" x2="310" y2="230" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
-                      
+
                       {/* Node 3: Bottom Right */}
                       <line x1="610" y1="310" x2="410" y2="230" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
                       <line x1="610" y1="310" x2="410" y2="230" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
@@ -1531,7 +1531,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                     {/* High-tech Live Status Console (Smaller & Sleeker) */}
                     <div className="relative rounded-2xl border border-white/30 dark:border-white/5 bg-white/30 dark:bg-black/10 p-0.5 shadow-sm backdrop-blur-lg overflow-hidden">
                       <div className="absolute inset-0 opacity-[0.015] dark:opacity-[0.03] bg-[linear-gradient(rgba(0,0,0,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.1)_1px,transparent_1px)] bg-[size:12px_12px]" />
-                      
+
                       <div className="relative bg-white/50 dark:bg-surface-primary/50 rounded-[14px] px-4 py-2.5 border border-black/[0.01]">
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="text-[9px] font-black text-accent-primary uppercase tracking-[0.12em]">
@@ -1567,26 +1567,26 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                           const isRunning = card.status === 'running';
                           const isCompleted = card.status === 'completed';
                           return (
-                            <div 
-                              key={card.phase} 
+                            <div
+                              key={card.phase}
                               className={clsx(
                                 "relative overflow-hidden rounded-xl border px-3.5 py-2.5 transition-all duration-500 flex items-center justify-between gap-3",
-                                isRunning 
-                                  ? "bg-white dark:bg-surface-primary border-accent-primary/20 dark:border-accent-primary/30 shadow-[0_4px_20px_rgb(var(--color-accent-primary)/0.06)] ring-1 ring-accent-primary/5" 
+                                isRunning
+                                  ? "bg-white dark:bg-surface-primary border-accent-primary/20 dark:border-accent-primary/30 shadow-[0_4px_20px_rgb(var(--color-accent-primary)/0.06)] ring-1 ring-accent-primary/5"
                                   : "bg-black/[0.01] dark:bg-white/[0.005] border-black/[0.02] dark:border-white/[0.02]"
                               )}
                             >
                               {isRunning && (
                                 <div className="absolute inset-0 pointer-events-none animate-step-shimmer opacity-30" />
                               )}
-                              
+
                               <div className="relative z-10 min-w-0 flex items-center gap-3">
                                 <div className={clsx(
                                     "w-6 h-6 rounded-lg flex items-center justify-center shrink-0 transition-all duration-300 shadow-sm",
-                                    isCompleted 
-                                      ? "bg-emerald-500 dark:bg-emerald-600 text-white shadow-emerald-500/10" 
-                                      : isRunning 
-                                        ? "bg-accent-primary text-white shadow-accent-primary/15 scale-102" 
+                                    isCompleted
+                                      ? "bg-emerald-500 dark:bg-emerald-600 text-white shadow-emerald-500/10"
+                                      : isRunning
+                                        ? "bg-accent-primary text-white shadow-accent-primary/15 scale-102"
                                         : "bg-black/[0.03] dark:bg-white/[0.03] text-text-tertiary"
                                 )}>
                                     {isCompleted ? (
@@ -1597,7 +1597,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                                 </div>
                                 <div className="min-w-0">
                                     <div className={clsx(
-                                      "text-[11.5px] font-extrabold tracking-tight transition-colors", 
+                                      "text-[11.5px] font-extrabold tracking-tight transition-colors",
                                       isRunning ? "text-text-primary" : "text-text-tertiary/60"
                                     )}>
                                         {card.title}
@@ -1751,14 +1751,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                         <div className="text-[12px] font-black text-text-tertiary uppercase tracking-widest">灵感来源素材 (Wander Sources)</div>
                         <div className="h-[1px] flex-1 bg-black/[0.04] ml-6" />
                     </div>
-                    
+
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                       {items.map((item, index) => {
                         const activeConnections = parsedResult.options?.[selectedOptionIndex]?.topic.connections || parsedResult.topic.connections || [];
                         const isConnected = activeConnections.includes(index + 1);
                         const isDocItem = (item.meta as Record<string, unknown> | undefined)?.sourceType === 'document';
                         const itemBadge = item.type === 'video' ? 'VIDEO' : (isDocItem ? 'DOCUMENT' : 'NOTE');
-                        
+
                         return (
                           <div
                             key={item.id}
@@ -1797,7 +1797,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                                   CORE REF
                                 </div>
                               )}
-                              
+
                               <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                             </div>
 
@@ -1874,8 +1874,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                       onClick={() => loadHistory(record)}
                       className={clsx(
                         "px-5 py-4 cursor-pointer rounded-2xl transition-all flex items-center justify-between group relative overflow-hidden",
-                        isActive 
-                            ? "bg-accent-primary/5 ring-1 ring-accent-primary/10" 
+                        isActive
+                            ? "bg-accent-primary/5 ring-1 ring-accent-primary/10"
                             : "hover:bg-black/[0.02] border border-transparent"
                       )}
                     >
