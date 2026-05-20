@@ -619,6 +619,46 @@ function detectPageInfo() {
         };
     }
 
+    if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) {
+        const isAnswerPage = /^\/question\/\d+\/answer\/\d+/.test(pathname);
+        if (isAnswerPage) {
+            return {
+                kind: 'zhihu-answer',
+                platform: 'zhihu',
+                action: 'save-zhihu-answer',
+                label: '保存知乎回答到知识库',
+                description: '当前页面已识别为知乎回答页，将保存问题和最高赞回答。',
+                primaryEnabled: true,
+                detected: true,
+            };
+        }
+        return createLinkFallbackPageInfo({
+            kind: 'zhihu-page',
+            platform: 'zhihu',
+            description: '当前页面还没有稳定识别到可保存的知乎回答。',
+        });
+    }
+
+    if (hostname === 'zhuanlan.zhihu.com') {
+        const isArticlePage = /^\/p\/\d+/.test(pathname);
+        if (isArticlePage) {
+            return {
+                kind: 'zhihu-article',
+                platform: 'zhihu',
+                action: 'save-zhihu-article',
+                label: '保存知乎文章到知识库',
+                description: '当前页面已识别为知乎专栏文章，将保存正文和专栏信息。',
+                primaryEnabled: true,
+                detected: true,
+            };
+        }
+        return createLinkFallbackPageInfo({
+            kind: 'zhihu-page',
+            platform: 'zhihu',
+            description: '当前页面还没有稳定识别到可保存的知乎文章。',
+        });
+    }
+
     if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com') || hostname === 'youtu.be') {
         const isVideoPage = pathname.startsWith('/watch') || pathname.startsWith('/shorts/') || hostname === 'youtu.be';
         if (!isVideoPage) {
@@ -1177,6 +1217,8 @@ async function runXhsDomAction(action, options = {}) {
         savePageLink: { type: 'save-page-link', pending: '保存中...', done: '已保存到 RedBox' },
         saveYoutube: { type: 'save-youtube', pending: '保存中...', done: '已保存 YouTube 视频' },
         saveDouyin: { type: 'save-douyin', pending: '保存中...', done: '已保存抖音视频' },
+        saveZhihuAnswer: { type: 'save-zhihu-answer', pending: '保存中...', done: '已保存知乎回答' },
+        saveZhihuArticle: { type: 'save-zhihu-article', pending: '保存中...', done: '已保存知乎文章' },
         saveBilibili: { type: 'save-bilibili', pending: '保存中...', done: '已保存 Bilibili 内容' },
         saveKuaishou: { type: 'save-kuaishou', pending: '保存中...', done: '已保存快手内容' },
         saveTiktok: { type: 'save-tiktok', pending: '保存中...', done: '已保存 TikTok 内容' },
@@ -1849,6 +1891,26 @@ function getRedboxOverlayConfig(pageInfo) {
             subtitle: '微信公众号',
             actions: [
                 { label: '保存文章', action: 'savePageLink', primary: true, title: '保存当前公众号文章到 RedBox' },
+            ],
+        };
+    }
+    if (pageInfo?.kind === 'zhihu-answer') {
+        return {
+            variant: 'zhihu',
+            title: 'RedBox 回答采集',
+            subtitle: '知乎',
+            actions: [
+                { label: '保存回答', action: 'saveZhihuAnswer', primary: true, title: '保存当前知乎回答到 RedBox' },
+            ],
+        };
+    }
+    if (pageInfo?.kind === 'zhihu-article') {
+        return {
+            variant: 'zhihu',
+            title: 'RedBox 文章采集',
+            subtitle: '知乎专栏',
+            actions: [
+                { label: '保存文章', action: 'saveZhihuArticle', primary: true, title: '保存当前知乎专栏文章到 RedBox' },
             ],
         };
     }

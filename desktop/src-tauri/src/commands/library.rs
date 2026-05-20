@@ -1090,7 +1090,9 @@ pub(crate) fn knowledge_get_item_detail_value(
     payload: &KnowledgeItemDetailRequest,
 ) -> Result<Value, String> {
     match payload.kind.as_str() {
-        "redbook-note" => load_note_detail(state, &payload.item_id),
+        "redbook-note" | "link-article" | "wechat-article" | "zhihu-answer" | "zhihu-article" => {
+            load_note_detail(state, &payload.item_id)
+        }
         "youtube-video" => load_youtube_detail(state, &payload.item_id),
         "document-source" => load_document_source_detail(state, &payload.item_id),
         other => Err(format!("未知知识项类型: {other}")),
@@ -1276,6 +1278,8 @@ pub fn handle_library_channel(
             | "knowledge:open-index-root"
             | "knowledge:health"
             | "knowledge:ingest-entry"
+            | "knowledge:ingest-zhihu-answer"
+            | "knowledge:ingest-zhihu-article"
             | "knowledge:ingest-document-source"
             | "knowledge:ingest-media-assets"
             | "knowledge:batch-ingest"
@@ -1358,6 +1362,18 @@ pub fn handle_library_channel(
                     serde_json::from_value(payload.clone())
                         .map_err(|error| format!("knowledge ingest entry payload 无效: {error}"))?;
                 knowledge::ingest_entry(Some(app), state, &request)
+            }
+            "knowledge:ingest-zhihu-answer" => {
+                let request: knowledge::ZhihuAnswerIngestRequest =
+                    serde_json::from_value(payload.clone())
+                        .map_err(|error| format!("zhihu answer payload 无效: {error}"))?;
+                knowledge::ingest_zhihu_answer(Some(app), state, &request)
+            }
+            "knowledge:ingest-zhihu-article" => {
+                let request: knowledge::ZhihuArticleIngestRequest =
+                    serde_json::from_value(payload.clone())
+                        .map_err(|error| format!("zhihu article payload 无效: {error}"))?;
+                knowledge::ingest_zhihu_article(Some(app), state, &request)
             }
             "knowledge:ingest-document-source" => {
                 let request: knowledge::KnowledgeDocumentSourceIngestRequest =
@@ -1471,7 +1487,8 @@ pub fn handle_library_channel(
                         continue;
                     }
                     let result = match kind.as_str() {
-                        "redbook-note" => knowledge::delete_note(app, state, &id),
+                        "redbook-note" | "link-article" | "wechat-article" | "zhihu-answer"
+                        | "zhihu-article" => knowledge::delete_note(app, state, &id),
                         "youtube-video" => knowledge::delete_youtube_note(app, state, &id),
                         "document-source" => knowledge::delete_document_source(app, state, &id),
                         _ => Ok(json!({ "success": false, "error": "不支持的知识库条目类型" })),

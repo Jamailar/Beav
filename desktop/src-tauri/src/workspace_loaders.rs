@@ -1059,6 +1059,7 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
                 capture_kind,
+                metadata: meta.get("metadata").cloned(),
                 html_file: if html_path.exists() {
                     Some(html_path.display().to_string())
                 } else {

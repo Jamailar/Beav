@@ -863,7 +863,7 @@ function createIpcRenderer() {
         fallbackChannel: 'knowledge:open-index-root',
       }),
       deleteNote: (noteId: string) => invokeChannel('knowledge:delete', noteId),
-      deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'youtube-video' | 'document-source' }> }) => invokeChannel('knowledge:delete-batch', payload),
+      deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source' }> }) => invokeChannel('knowledge:delete-batch', payload),
       transcribe: (noteId: string) => invokeChannel('knowledge:transcribe', noteId),
       deleteYoutube: (videoId: string) => invokeChannel('knowledge:delete-youtube', videoId),
       retryYoutubeSubtitle: (videoId: string) => invokeChannel('knowledge:retry-youtube-subtitle', videoId),

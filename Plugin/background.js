@@ -398,6 +398,10 @@ async function handleMessage(message, sender) {
       return await saveDouyinVideoFromTab(tabId);
     case 'save-youtube':
       return await saveYouTubeFromTab(tabId);
+    case 'save-zhihu-answer':
+      return await saveZhihuAnswerFromTab(tabId);
+    case 'save-zhihu-article':
+      return await saveZhihuArticleFromTab(tabId);
     case 'save-bilibili':
     case 'save-kuaishou':
     case 'save-tiktok':
@@ -490,6 +494,44 @@ function detectCaptureTargetFromUrl(rawUrl) {
       description: '当前页面已识别为公众号文章，将完整保存正文、图片和排版。',
       detected: true,
     };
+  }
+
+  if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) {
+    const isAnswerPage = /^\/question\/\d+\/answer\/\d+/.test(pathname);
+    if (isAnswerPage) {
+      return {
+        kind: 'zhihu-answer',
+        platform: 'zhihu',
+        action: 'save-zhihu-answer',
+        label: '保存知乎回答到知识库',
+        description: '当前页面已识别为知乎回答页，将保存问题和最高赞回答。',
+        detected: true,
+      };
+    }
+    return createLinkFallbackPageInfo({
+      kind: 'zhihu-page',
+      platform: 'zhihu',
+      description: '当前页面还没有稳定识别到可保存的知乎回答。',
+    });
+  }
+
+  if (hostname === 'zhuanlan.zhihu.com') {
+    const isArticlePage = /^\/p\/\d+/.test(pathname);
+    if (isArticlePage) {
+      return {
+        kind: 'zhihu-article',
+        platform: 'zhihu',
+        action: 'save-zhihu-article',
+        label: '保存知乎文章到知识库',
+        description: '当前页面已识别为知乎专栏文章，将保存正文和专栏信息。',
+        detected: true,
+      };
+    }
+    return createLinkFallbackPageInfo({
+      kind: 'zhihu-page',
+      platform: 'zhihu',
+      description: '当前页面还没有稳定识别到可保存的知乎文章。',
+    });
   }
 
   if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com') || hostname === 'youtu.be') {
@@ -1208,6 +1250,10 @@ function createXhsTaskTitle(type, message = {}, tabId = 0) {
       return '保存 X 内容';
     case 'save-instagram':
       return '保存 Instagram 内容';
+    case 'save-zhihu-answer':
+      return '保存知乎回答';
+    case 'save-zhihu-article':
+      return '保存知乎文章';
     default:
       return tabId ? `小红书任务 #${tabId}` : '小红书采集任务';
   }
@@ -1516,6 +1562,10 @@ function getXhsTaskActionLabel(type) {
       return '保存 X';
     case 'save-instagram':
       return '保存 Instagram';
+    case 'save-zhihu-answer':
+      return '保存知乎回答';
+    case 'save-zhihu-article':
+      return '保存知乎文章';
     default:
       return '执行任务';
   }
@@ -2183,6 +2233,39 @@ async function postKnowledgeEntry(payload) {
   return response;
 }
 
+async function postKnowledgeZhihuAnswer(payload) {
+  const endpoint = await resolveKnowledgeApiEndpoint();
+  pluginLog('zhihu-answer-submit', {
+    endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/zhihu/answers`,
+    questionId: String(payload?.question?.id || ''),
+    answerId: String(payload?.answer?.id || ''),
+    sourceLink: String(payload?.source?.sourceLink || payload?.answer?.url || ''),
+  });
+  const response = await postKnowledgeJson('/zhihu/answers', payload, 'zhihu-answer-submit');
+  pluginLog('zhihu-answer-submit-success', {
+    entryId: response?.entryId || '',
+    duplicate: Boolean(response?.duplicate),
+    updated: Boolean(response?.updated),
+  });
+  return response;
+}
+
+async function postKnowledgeZhihuArticle(payload) {
+  const endpoint = await resolveKnowledgeApiEndpoint();
+  pluginLog('zhihu-article-submit', {
+    endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/zhihu/articles`,
+    articleId: String(payload?.article?.id || ''),
+    sourceLink: String(payload?.source?.sourceLink || payload?.article?.url || ''),
+  });
+  const response = await postKnowledgeJson('/zhihu/articles', payload, 'zhihu-article-submit');
+  pluginLog('zhihu-article-submit-success', {
+    entryId: response?.entryId || '',
+    duplicate: Boolean(response?.duplicate),
+    updated: Boolean(response?.updated),
+  });
+  return response;
+}
+
 async function postKnowledgeMediaAssets(payload) {
   const endpoint = await resolveKnowledgeApiEndpoint();
   pluginLog('media-submit', {
@@ -2484,6 +2567,124 @@ function buildPageLinkEntry(payload) {
     },
     options: {
       dedupeKey: undefined,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildZhihuAnswerRequest(payload = {}) {
+  const sourceUrl = normalizeText(payload?.source || payload?.answerUrl || payload?.url);
+  const questionId = normalizeText(payload?.questionId);
+  const answerId = normalizeText(payload?.answerId);
+  const questionTitle = normalizeText(payload?.questionTitle || payload?.title);
+  const answerText = normalizeText(payload?.answerText || payload?.text);
+  const answerHtml = normalizeText(payload?.answerHtml || payload?.html);
+
+  if (!answerId || !questionTitle || (!answerText && !answerHtml)) {
+    throw new Error('当前页面不是可识别的知乎回答页');
+  }
+
+  return {
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      sourceDomain: 'www.zhihu.com',
+      externalId: answerId,
+    }),
+    question: {
+      id: questionId || undefined,
+      url: normalizeText(payload?.questionUrl) || (questionId ? `https://www.zhihu.com/question/${questionId}` : undefined),
+      title: questionTitle,
+      detail: normalizeText(payload?.questionDetail) || undefined,
+      topics: Array.isArray(payload?.topics) ? payload.topics.map(normalizeText).filter(Boolean) : [],
+      followers: Number.isFinite(Number(payload?.questionStats?.followers)) ? Number(payload.questionStats.followers) : undefined,
+      views: Number.isFinite(Number(payload?.questionStats?.views)) ? Number(payload.questionStats.views) : undefined,
+    },
+    answer: {
+      id: answerId,
+      url: sourceUrl || undefined,
+      text: answerText || undefined,
+      html: answerHtml || undefined,
+      excerpt: truncateText(answerText || normalizeText(payload?.excerpt), 180),
+      publishedAt: normalizeText(payload?.publishedAt) || undefined,
+      updatedAt: normalizeText(payload?.updatedAt) || undefined,
+      location: normalizeText(payload?.location) || undefined,
+      author: {
+        id: normalizeText(payload?.authorId) || undefined,
+        name: normalizeText(payload?.author) || '知乎用户',
+        url: normalizeText(payload?.authorProfileUrl) || undefined,
+        avatarUrl: normalizeText(payload?.authorAvatarUrl) || undefined,
+        headline: normalizeText(payload?.authorHeadline) || undefined,
+      },
+      stats: {
+        upvotes: Number(payload?.stats?.upvotes || 0),
+        comments: Number(payload?.stats?.comments || 0),
+        collects: Number(payload?.stats?.collects || 0),
+        likes: Number(payload?.stats?.likes || 0),
+      },
+    },
+    options: {
+      dedupeKey: `zhihu-answer:${answerId}`,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildZhihuArticleRequest(payload = {}) {
+  const sourceUrl = normalizeText(payload?.source || payload?.articleUrl || payload?.url);
+  const articleId = normalizeText(payload?.articleId);
+  const title = normalizeText(payload?.title);
+  const articleText = normalizeText(payload?.articleText || payload?.text);
+  const articleHtml = normalizeText(payload?.articleHtml || payload?.html);
+
+  if (!articleId || !title || (!articleText && !articleHtml)) {
+    throw new Error('当前页面不是可识别的知乎专栏文章');
+  }
+
+  return {
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      sourceDomain: 'zhuanlan.zhihu.com',
+      externalId: articleId,
+    }),
+    article: {
+      id: articleId,
+      url: sourceUrl || undefined,
+      title,
+      text: articleText || undefined,
+      html: articleHtml || undefined,
+      excerpt: truncateText(articleText || normalizeText(payload?.excerpt), 180),
+      publishedAt: normalizeText(payload?.publishedAt) || undefined,
+      updatedAt: normalizeText(payload?.updatedAt) || undefined,
+      location: normalizeText(payload?.location) || undefined,
+      author: {
+        id: normalizeText(payload?.authorId) || undefined,
+        name: normalizeText(payload?.author) || '知乎用户',
+        url: normalizeText(payload?.authorProfileUrl) || undefined,
+        avatarUrl: normalizeText(payload?.authorAvatarUrl) || undefined,
+        headline: normalizeText(payload?.authorHeadline) || undefined,
+      },
+      column: {
+        id: normalizeText(payload?.columnId) || undefined,
+        name: normalizeText(payload?.columnName) || undefined,
+        url: normalizeText(payload?.columnUrl) || undefined,
+        description: normalizeText(payload?.columnDescription) || undefined,
+        coverUrl: normalizeText(payload?.columnCoverUrl) || undefined,
+      },
+      stats: {
+        upvotes: Number(payload?.stats?.upvotes || 0),
+        comments: Number(payload?.stats?.comments || 0),
+        collects: Number(payload?.stats?.collects || 0),
+        likes: Number(payload?.stats?.likes || 0),
+      },
+      imageUrls: Array.isArray(payload?.imageUrls) ? payload.imageUrls.map(normalizeText).filter(Boolean) : [],
+      coverUrl: normalizeText(payload?.coverUrl) || undefined,
+    },
+    options: {
+      dedupeKey: `zhihu-article:${articleId}`,
       allowUpdate: true,
       summarize: false,
       transcribe: false,
@@ -3410,6 +3611,230 @@ function extractSocialPlatformPayload(platformHint = '') {
   return payload;
 }
 
+function extractZhihuAnswerPayload() {
+  function clean(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function cleanMultiline(value) {
+    return String(value || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function attr(selector, name, root = document) {
+    return clean(root.querySelector(selector)?.getAttribute(name) || '');
+  }
+
+  function text(selector, root = document) {
+    return clean(root.querySelector(selector)?.textContent || '');
+  }
+
+  function absoluteUrl(value) {
+    const raw = clean(value);
+    if (!raw) return '';
+    try {
+      return new URL(raw, location.href).href;
+    } catch {
+      return '';
+    }
+  }
+
+  function numberText(value) {
+    const raw = clean(value).replace(/,/g, '');
+    const match = raw.match(/(\d+(?:\.\d+)?)(万|w|k|m)?/i);
+    if (!match) return 0;
+    const base = Number(match[1]);
+    if (!Number.isFinite(base)) return 0;
+    const unit = String(match[2] || '').toLowerCase();
+    if (unit === '万' || unit === 'w') return Math.round(base * 10000);
+    if (unit === 'k') return Math.round(base * 1000);
+    if (unit === 'm') return Math.round(base * 1000000);
+    return Math.round(base);
+  }
+
+  function parseJsonAttribute(value) {
+    try {
+      return JSON.parse(value || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  const pathMatch = location.pathname.match(/\/question\/(\d+)\/answer\/(\d+)/);
+  const questionId = pathMatch?.[1] || clean(location.pathname.match(/\/question\/(\d+)/)?.[1]);
+  const urlAnswerId = pathMatch?.[2] || '';
+  const candidates = Array.from(document.querySelectorAll('.ContentItem.AnswerItem, [itemtype="http://schema.org/Answer"]'));
+  const answerRoot = candidates.find((node) => {
+    const zop = parseJsonAttribute(node.getAttribute('data-zop'));
+    const itemId = clean(zop.itemId || node.getAttribute('name'));
+    return urlAnswerId && itemId === urlAnswerId;
+  }) || candidates[0];
+
+  if (!answerRoot) {
+    return {
+      source: location.href,
+      questionId,
+      answerId: urlAnswerId,
+      questionTitle: text('.QuestionHeader-title') || document.title,
+      answerText: '',
+    };
+  }
+
+  const zop = parseJsonAttribute(answerRoot.getAttribute('data-zop'));
+  const answerId = clean(zop.itemId || answerRoot.getAttribute('name') || urlAnswerId);
+  const extra = parseJsonAttribute(answerRoot.getAttribute('data-za-extra-module'));
+  const extraContent = extra?.card?.content || {};
+  const richText = answerRoot.querySelector('.RichText[itemprop="text"], .RichText.ztext, [itemprop="text"]');
+  const authorMetaRoot = answerRoot.querySelector('[itemprop="author"]') || answerRoot;
+  const authorUrl = attr('meta[itemprop="url"]', 'content', authorMetaRoot) || absoluteUrl(attr('.UserLink-link', 'href', authorMetaRoot));
+  const authorId = authorUrl ? authorUrl.replace(/\/+$/g, '').split('/').pop() : clean(extraContent.author_member_hash_id);
+  const answerUrl = attr('meta[itemprop="url"]', 'content', answerRoot)
+    || (questionId && answerId ? `https://www.zhihu.com/question/${questionId}/answer/${answerId}` : location.href);
+  const questionTitle = text('.QuestionHeader-title') || clean(zop.title) || document.title;
+  const topics = Array.from(document.querySelectorAll('.QuestionHeader-topics .Tag-content, .QuestionTopic .Tag-content, .TopicLink'))
+    .map((node) => clean(node.textContent))
+    .filter(Boolean);
+  const uniqueTopics = Array.from(new Set(topics));
+  const questionDetail = cleanMultiline(document.querySelector('.QuestionRichText [itemprop="text"], .QuestionRichText')?.textContent || '');
+  const upvoteCount = numberText(attr('meta[itemprop="upvoteCount"]', 'content', answerRoot) || text('[class*="Voters"], .css-1lr85n', answerRoot));
+  const commentCount = numberText(attr('meta[itemprop="commentCount"]', 'content', answerRoot) || text('button[aria-label*="评论"], .ContentItem-action', answerRoot));
+  const collectCount = numberText(Array.from(answerRoot.querySelectorAll('button[aria-label="收藏"], button')).map((node) => clean(node.textContent)).find((value) => /^收藏\s*\d/.test(value)) || '');
+  const likeCount = numberText(Array.from(answerRoot.querySelectorAll('button[aria-label="喜欢"], button')).map((node) => clean(node.textContent)).find((value) => /^喜欢\s*\d/.test(value)) || '');
+
+  return {
+    platform: 'zhihu',
+    contentType: 'answer',
+    source: absoluteUrl(answerUrl) || location.href,
+    questionId,
+    answerId,
+    questionUrl: questionId ? `https://www.zhihu.com/question/${questionId}` : '',
+    questionTitle,
+    questionDetail,
+    topics: uniqueTopics,
+    answerText: cleanMultiline(richText?.innerText || richText?.textContent || ''),
+    answerHtml: richText?.innerHTML || '',
+    publishedAt: attr('meta[itemprop="dateCreated"]', 'content', answerRoot),
+    updatedAt: attr('meta[itemprop="dateModified"]', 'content', answerRoot),
+    location: clean(text('.ContentItem-time', answerRoot).split('・').pop() || ''),
+    author: attr('meta[itemprop="name"]', 'content', authorMetaRoot) || text('.AuthorInfo-name .UserLink-link, .AuthorInfo-name', authorMetaRoot) || clean(zop.authorName),
+    authorId,
+    authorProfileUrl: absoluteUrl(authorUrl),
+    authorAvatarUrl: attr('meta[itemprop="image"]', 'content', authorMetaRoot) || attr('.AuthorInfo-avatar', 'src', authorMetaRoot),
+    authorHeadline: text('.AuthorInfo-badgeText, .AuthorInfo-detail', authorMetaRoot),
+    stats: {
+      upvotes: upvoteCount || Number(extraContent.upvote_num || 0),
+      comments: commentCount || Number(extraContent.comment_num || 0),
+      collects: collectCount,
+      likes: likeCount,
+    },
+  };
+}
+
+function extractZhihuArticlePayload() {
+  function clean(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function cleanMultiline(value) {
+    return String(value || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function attr(selector, name, root = document) {
+    return clean(root.querySelector(selector)?.getAttribute(name) || '');
+  }
+
+  function text(selector, root = document) {
+    return clean(root.querySelector(selector)?.textContent || '');
+  }
+
+  function absoluteUrl(value) {
+    const raw = clean(value);
+    if (!raw) return '';
+    try {
+      return new URL(raw, location.href).href;
+    } catch {
+      return '';
+    }
+  }
+
+  function numberText(value) {
+    const raw = clean(value).replace(/,/g, '');
+    const match = raw.match(/(\d+(?:\.\d+)?)(万|w|k|m)?/i);
+    if (!match) return 0;
+    const base = Number(match[1]);
+    if (!Number.isFinite(base)) return 0;
+    const unit = String(match[2] || '').toLowerCase();
+    if (unit === '万' || unit === 'w') return Math.round(base * 10000);
+    if (unit === 'k') return Math.round(base * 1000);
+    if (unit === 'm') return Math.round(base * 1000000);
+    return Math.round(base);
+  }
+
+  const articleRoot = document.querySelector('article.Post-Main, .Post-Main, [itemprop="headline"]')?.closest('article') || document;
+  const pathMatch = location.pathname.match(/\/p\/(\d+)/);
+  const articleId = pathMatch?.[1] || '';
+  const articleUrl = attr('meta[itemprop="url"]', 'content', articleRoot) || location.href;
+  const richText = articleRoot.querySelector('.Post-RichTextContainer .RichText, .Post-RichText, .RichText.ztext');
+  const authorMetaRoot = articleRoot.querySelector('[itemprop="author"]') || articleRoot;
+  const authorUrl = attr('meta[itemprop="url"]', 'content', authorMetaRoot) || absoluteUrl(attr('.UserLink-link', 'href', authorMetaRoot));
+  const authorId = authorUrl ? authorUrl.replace(/\/+$/g, '').split('/').pop() : '';
+  const columnLink = articleRoot.querySelector('a[href*="zhuanlan.zhihu.com/c_"], a[href*="zhihu.com/column/"], a[href*="zhihu.com/column/c_"]');
+  const columnUrl = absoluteUrl(columnLink?.getAttribute('href') || '');
+  const columnNameFromHeader = clean(columnLink?.getAttribute('aria-label') || columnLink?.textContent || '')
+    .replace(/^收录于\s*[·・]\s*/u, '')
+    .replace(/^所属专栏\s*[·・]\s*/u, '')
+    .replace(/\s*\d+\s*小时前\s*更新.*$/u, '')
+    .trim();
+  const columnIdMatch = columnUrl.match(/(?:c_|column\/)(\d+)/);
+  const imageUrls = Array.from(richText?.querySelectorAll('img') || [])
+    .map((node) => absoluteUrl(node.getAttribute('data-original') || node.getAttribute('src') || ''))
+    .filter(Boolean);
+  const uniqueImageUrls = Array.from(new Set(imageUrls));
+  const upvoteCount = numberText(text('.css-1lr85n', articleRoot) || attr('button[aria-label^="赞同"]', 'aria-label', articleRoot));
+  const commentCount = numberText(attr('meta[itemprop="commentCount"]', 'content', articleRoot) || text('button[aria-label*="评论"], .BottomActions-CommentBtn', articleRoot));
+  const collectCount = numberText(Array.from(articleRoot.querySelectorAll('button[aria-label="收藏"], button')).map((node) => clean(node.textContent)).find((value) => /^收藏\s*\d/.test(value)) || '');
+  const likeCount = numberText(Array.from(articleRoot.querySelectorAll('button[aria-label="喜欢"], button')).map((node) => clean(node.textContent)).find((value) => /^喜欢\s*\d/.test(value)) || '');
+
+  return {
+    platform: 'zhihu',
+    contentType: 'article',
+    source: absoluteUrl(articleUrl) || location.href,
+    articleId,
+    articleUrl: absoluteUrl(articleUrl) || location.href,
+    title: attr('meta[itemprop="headline"]', 'content', articleRoot) || text('.Post-Title', articleRoot) || document.title,
+    articleText: cleanMultiline(richText?.innerText || richText?.textContent || ''),
+    articleHtml: richText?.innerHTML || '',
+    publishedAt: attr('meta[itemprop="datePublished"]', 'content', articleRoot),
+    updatedAt: attr('meta[itemprop="dateModified"]', 'content', articleRoot),
+    location: clean(text('.ContentItem-time', articleRoot).split('・').pop() || ''),
+    author: attr('meta[itemprop="name"]', 'content', authorMetaRoot) || text('.AuthorInfo-name .UserLink-link, .AuthorInfo-name', authorMetaRoot),
+    authorId,
+    authorProfileUrl: absoluteUrl(authorUrl),
+    authorAvatarUrl: attr('meta[itemprop="image"]', 'content', authorMetaRoot) || attr('.AuthorInfo-avatar', 'src', authorMetaRoot),
+    authorHeadline: text('.AuthorInfo-badgeText, .AuthorInfo-detail', authorMetaRoot),
+    columnId: columnIdMatch?.[1] || '',
+    columnName: columnNameFromHeader,
+    columnUrl,
+    columnDescription: text('.css-6tjr2x, .css-fkrpal', articleRoot),
+    columnCoverUrl: attr('a[href*="zhuanlan.zhihu.com/c_"] img, a[href*="zhihu.com/column/"] img', 'src', articleRoot),
+    imageUrls: uniqueImageUrls,
+    coverUrl: uniqueImageUrls[0] || '',
+    stats: {
+      upvotes: upvoteCount,
+      comments: commentCount,
+      collects: collectCount,
+      likes: likeCount,
+    },
+  };
+}
+
 async function saveSelectedTextFromTab(tabId) {
   const payload = await runExtraction(tabId, extractSelectedTextPayload);
   const response = await postKnowledgeEntry(buildSelectionEntry(payload));
@@ -3432,6 +3857,12 @@ async function saveCurrentPageFromTab(tabId) {
   }
   if (action === 'save-youtube') {
     return await saveYouTubeFromTab(tabId);
+  }
+  if (action === 'save-zhihu-answer') {
+    return await saveZhihuAnswerFromTab(tabId);
+  }
+  if (action === 'save-zhihu-article') {
+    return await saveZhihuArticleFromTab(tabId);
   }
   if (/^save-(bilibili|kuaishou|tiktok|reddit|x|instagram)$/.test(action)) {
     return await saveSocialPlatformFromTab(tabId, action.replace(/^save-/, ''));
@@ -3461,6 +3892,36 @@ async function saveYouTubeFromTab(tabId) {
     mode: 'youtube',
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
+  };
+}
+
+async function saveZhihuAnswerFromTab(tabId) {
+  const payload = await runExtraction(tabId, extractZhihuAnswerPayload, { world: 'MAIN' });
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('当前知乎页面内容提取失败，请刷新页面后重试');
+  }
+  const response = await postKnowledgeZhihuAnswer(buildZhihuAnswerRequest(payload));
+  return {
+    success: true,
+    mode: 'zhihu-answer',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
+    updated: Boolean(response.updated),
+  };
+}
+
+async function saveZhihuArticleFromTab(tabId) {
+  const payload = await runExtraction(tabId, extractZhihuArticlePayload, { world: 'MAIN' });
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('当前知乎专栏页面内容提取失败，请刷新页面后重试');
+  }
+  const response = await postKnowledgeZhihuArticle(buildZhihuArticleRequest(payload));
+  return {
+    success: true,
+    mode: 'zhihu-article',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
+    updated: Boolean(response.updated),
   };
 }
 

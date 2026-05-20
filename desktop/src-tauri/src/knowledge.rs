@@ -58,6 +58,7 @@ pub(crate) struct KnowledgeEntryContentInput {
     pub transcript: Option<String>,
     pub tags: Vec<String>,
     pub stats: Option<KnowledgeEntryStatsInput>,
+    pub metadata: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -114,6 +115,109 @@ pub(crate) struct KnowledgeBatchIngestRequest {
     pub entries: Vec<KnowledgeEntryIngestRequest>,
     pub document_sources: Vec<KnowledgeDocumentSourceIngestRequest>,
     pub media_assets: Vec<KnowledgeMediaAssetIngestRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuQuestionInput {
+    pub id: Option<String>,
+    pub url: Option<String>,
+    pub title: String,
+    pub detail: Option<String>,
+    pub topics: Vec<String>,
+    pub followers: Option<i64>,
+    pub views: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuAuthorInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub url: Option<String>,
+    pub avatar_url: Option<String>,
+    pub headline: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuAnswerStatsInput {
+    pub upvotes: Option<i64>,
+    pub comments: Option<i64>,
+    pub collects: Option<i64>,
+    pub likes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuAnswerInput {
+    pub id: String,
+    pub url: Option<String>,
+    pub text: Option<String>,
+    pub html: Option<String>,
+    pub excerpt: Option<String>,
+    pub published_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub location: Option<String>,
+    pub author: ZhihuAuthorInput,
+    pub stats: ZhihuAnswerStatsInput,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuAnswerIngestRequest {
+    pub space_id: Option<String>,
+    pub source: KnowledgeSourceInput,
+    pub question: ZhihuQuestionInput,
+    pub answer: ZhihuAnswerInput,
+    pub options: KnowledgeIngestOptionsInput,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuArticleColumnInput {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub url: Option<String>,
+    pub description: Option<String>,
+    pub cover_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuArticleStatsInput {
+    pub upvotes: Option<i64>,
+    pub comments: Option<i64>,
+    pub collects: Option<i64>,
+    pub likes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuArticleInput {
+    pub id: String,
+    pub url: Option<String>,
+    pub title: String,
+    pub text: Option<String>,
+    pub html: Option<String>,
+    pub excerpt: Option<String>,
+    pub published_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub location: Option<String>,
+    pub author: ZhihuAuthorInput,
+    pub column: ZhihuArticleColumnInput,
+    pub stats: ZhihuArticleStatsInput,
+    pub image_urls: Vec<String>,
+    pub cover_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ZhihuArticleIngestRequest {
+    pub space_id: Option<String>,
+    pub source: KnowledgeSourceInput,
+    pub article: ZhihuArticleInput,
+    pub options: KnowledgeIngestOptionsInput,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1410,6 +1514,284 @@ fn derive_note_author(request: &KnowledgeEntryIngestRequest, normalized_kind: &s
     })
 }
 
+fn zhihu_answer_url(
+    question_id: Option<&str>,
+    answer_id: &str,
+    fallback: Option<&str>,
+) -> Option<String> {
+    fallback.map(ToString::to_string).or_else(|| {
+        question_id.map(|id| format!("https://www.zhihu.com/question/{id}/answer/{answer_id}"))
+    })
+}
+
+fn zhihu_answer_text(request: &ZhihuAnswerIngestRequest) -> String {
+    let question_title = normalize_string(Some(request.question.title.clone()))
+        .unwrap_or_else(|| "知乎问题".to_string());
+    let question_detail = normalize_string(request.question.detail.clone());
+    let answer_text = normalize_string(request.answer.text.clone())
+        .or_else(|| normalize_string(request.answer.excerpt.clone()))
+        .unwrap_or_default();
+    let mut sections = vec![format!("# {question_title}")];
+    if let Some(detail) = question_detail {
+        sections.push(format!("## 问题描述\n{detail}"));
+    }
+    sections.push(format!("## 最高赞回答\n{answer_text}"));
+    sections.join("\n\n")
+}
+
+fn zhihu_answer_metadata(
+    request: &ZhihuAnswerIngestRequest,
+    answer_url: Option<&str>,
+    question_url: Option<&str>,
+) -> Value {
+    json!({
+        "zhihu": {
+            "contentType": "answer",
+            "question": {
+                "id": normalize_string(request.question.id.clone()),
+                "url": question_url,
+                "title": normalize_string(Some(request.question.title.clone())),
+                "detail": normalize_string(request.question.detail.clone()),
+                "topics": normalize_vec(request.question.topics.clone()),
+                "followers": request.question.followers,
+                "views": request.question.views,
+            },
+            "answer": {
+                "id": normalize_string(Some(request.answer.id.clone())),
+                "url": answer_url,
+                "publishedAt": normalize_string(request.answer.published_at.clone()),
+                "updatedAt": normalize_string(request.answer.updated_at.clone()),
+                "location": normalize_string(request.answer.location.clone()),
+                "stats": {
+                    "upvotes": request.answer.stats.upvotes,
+                    "comments": request.answer.stats.comments,
+                    "collects": request.answer.stats.collects,
+                    "likes": request.answer.stats.likes,
+                },
+            }
+        }
+    })
+}
+
+pub(crate) fn zhihu_answer_to_entry_request(
+    request: &ZhihuAnswerIngestRequest,
+) -> Result<KnowledgeEntryIngestRequest, String> {
+    let answer_id = normalize_string(Some(request.answer.id.clone()))
+        .ok_or_else(|| "zhihu answer 缺少 answer.id".to_string())?;
+    let question_title = normalize_string(Some(request.question.title.clone()))
+        .ok_or_else(|| "zhihu answer 缺少 question.title".to_string())?;
+    let answer_text = normalize_string(request.answer.text.clone())
+        .or_else(|| normalize_string(request.answer.excerpt.clone()));
+    let answer_html = normalize_string(request.answer.html.clone());
+    if answer_text.is_none() && answer_html.is_none() {
+        return Err("zhihu answer 缺少 answer.text 或 answer.html".to_string());
+    }
+
+    let question_id = normalize_string(request.question.id.clone());
+    let answer_url = zhihu_answer_url(
+        question_id.as_deref(),
+        &answer_id,
+        normalize_string(request.answer.url.clone())
+            .or_else(|| source_link_from_input(&request.source))
+            .as_deref(),
+    );
+    let question_url = normalize_string(request.question.url.clone()).or_else(|| {
+        question_id
+            .as_ref()
+            .map(|id| format!("https://www.zhihu.com/question/{id}"))
+    });
+    let mut source = request.source.clone();
+    source.source_domain = source
+        .source_domain
+        .clone()
+        .or_else(|| Some("www.zhihu.com".to_string()));
+    source.source_link = source.source_link.clone().or_else(|| answer_url.clone());
+    source.source_url = source.source_url.clone().or_else(|| answer_url.clone());
+    source.external_id = source
+        .external_id
+        .clone()
+        .or_else(|| Some(answer_id.clone()));
+
+    let tags = {
+        let mut values = vec!["知乎".to_string(), "知乎回答".to_string()];
+        values.extend(normalize_vec(request.question.topics.clone()));
+        values
+    };
+    let text = zhihu_answer_text(request);
+    let excerpt = normalize_string(request.answer.excerpt.clone())
+        .or_else(|| answer_text.clone())
+        .map(|value| truncated_plain_text(&value, 180));
+    let metadata = zhihu_answer_metadata(request, answer_url.as_deref(), question_url.as_deref());
+    let options = KnowledgeIngestOptionsInput {
+        dedupe_key: request
+            .options
+            .dedupe_key
+            .clone()
+            .or_else(|| Some(format!("zhihu-answer:{answer_id}"))),
+        allow_update: request.options.allow_update,
+        summarize: request.options.summarize,
+        transcribe: false,
+    };
+
+    Ok(KnowledgeEntryIngestRequest {
+        space_id: request.space_id.clone(),
+        kind: "zhihu-answer".to_string(),
+        source,
+        content: KnowledgeEntryContentInput {
+            title: question_title,
+            author: normalize_string(Some(request.answer.author.name.clone())),
+            author_id: normalize_string(request.answer.author.id.clone()),
+            author_url: normalize_string(request.answer.author.url.clone()),
+            author_profile_url: normalize_string(request.answer.author.url.clone()),
+            author_avatar_url: normalize_string(request.answer.author.avatar_url.clone()),
+            author_description: normalize_string(request.answer.author.headline.clone()),
+            text: Some(text),
+            excerpt,
+            html: answer_html,
+            description: normalize_string(request.question.detail.clone()),
+            site_name: Some("知乎".to_string()),
+            tags,
+            stats: Some(KnowledgeEntryStatsInput {
+                likes: request.answer.stats.upvotes.or(request.answer.stats.likes),
+                collects: request.answer.stats.collects,
+            }),
+            metadata: Some(metadata),
+            ..KnowledgeEntryContentInput::default()
+        },
+        assets: KnowledgeEntryAssetsInput::default(),
+        options,
+    })
+}
+
+fn zhihu_article_url(article_id: &str, fallback: Option<&str>) -> Option<String> {
+    fallback
+        .map(ToString::to_string)
+        .or_else(|| Some(format!("https://zhuanlan.zhihu.com/p/{article_id}")))
+}
+
+fn zhihu_article_text(request: &ZhihuArticleIngestRequest) -> String {
+    let title = normalize_string(Some(request.article.title.clone()))
+        .unwrap_or_else(|| "知乎专栏文章".to_string());
+    let text = normalize_string(request.article.text.clone())
+        .or_else(|| normalize_string(request.article.excerpt.clone()))
+        .unwrap_or_default();
+    format!("# {title}\n\n{text}")
+}
+
+fn zhihu_article_metadata(request: &ZhihuArticleIngestRequest, article_url: Option<&str>) -> Value {
+    json!({
+        "zhihu": {
+            "contentType": "article",
+            "article": {
+                "id": normalize_string(Some(request.article.id.clone())),
+                "url": article_url,
+                "title": normalize_string(Some(request.article.title.clone())),
+                "publishedAt": normalize_string(request.article.published_at.clone()),
+                "updatedAt": normalize_string(request.article.updated_at.clone()),
+                "location": normalize_string(request.article.location.clone()),
+                "stats": {
+                    "upvotes": request.article.stats.upvotes,
+                    "comments": request.article.stats.comments,
+                    "collects": request.article.stats.collects,
+                    "likes": request.article.stats.likes
+                }
+            },
+            "column": {
+                "id": normalize_string(request.article.column.id.clone()),
+                "name": normalize_string(request.article.column.name.clone()),
+                "url": normalize_string(request.article.column.url.clone()),
+                "description": normalize_string(request.article.column.description.clone()),
+                "coverUrl": normalize_string(request.article.column.cover_url.clone())
+            }
+        }
+    })
+}
+
+pub(crate) fn zhihu_article_to_entry_request(
+    request: &ZhihuArticleIngestRequest,
+) -> Result<KnowledgeEntryIngestRequest, String> {
+    let article_id = normalize_string(Some(request.article.id.clone()))
+        .ok_or_else(|| "zhihu article 缺少 article.id".to_string())?;
+    let title = normalize_string(Some(request.article.title.clone()))
+        .ok_or_else(|| "zhihu article 缺少 article.title".to_string())?;
+    let article_text = normalize_string(request.article.text.clone())
+        .or_else(|| normalize_string(request.article.excerpt.clone()));
+    let article_html = normalize_string(request.article.html.clone());
+    if article_text.is_none() && article_html.is_none() {
+        return Err("zhihu article 缺少 article.text 或 article.html".to_string());
+    }
+
+    let article_url = zhihu_article_url(
+        &article_id,
+        normalize_string(request.article.url.clone()).as_deref(),
+    );
+    let mut source = request.source.clone();
+    source.source_domain = source
+        .source_domain
+        .clone()
+        .or_else(|| Some("zhuanlan.zhihu.com".to_string()));
+    source.source_link = source.source_link.clone().or_else(|| article_url.clone());
+    source.source_url = source.source_url.clone().or_else(|| article_url.clone());
+    source.external_id = source
+        .external_id
+        .clone()
+        .or_else(|| Some(article_id.clone()));
+    let mut tags = vec!["知乎".to_string(), "知乎文章".to_string()];
+    if let Some(column_name) = normalize_string(request.article.column.name.clone()) {
+        tags.push(column_name);
+    }
+    let excerpt = normalize_string(request.article.excerpt.clone())
+        .or_else(|| article_text.clone())
+        .map(|value| truncated_plain_text(&value, 180));
+    let metadata = zhihu_article_metadata(request, article_url.as_deref());
+    let options = KnowledgeIngestOptionsInput {
+        dedupe_key: request
+            .options
+            .dedupe_key
+            .clone()
+            .or_else(|| Some(format!("zhihu-article:{article_id}"))),
+        allow_update: request.options.allow_update,
+        summarize: request.options.summarize,
+        transcribe: false,
+    };
+
+    Ok(KnowledgeEntryIngestRequest {
+        space_id: request.space_id.clone(),
+        kind: "zhihu-article".to_string(),
+        source,
+        content: KnowledgeEntryContentInput {
+            title,
+            author: normalize_string(Some(request.article.author.name.clone())),
+            author_id: normalize_string(request.article.author.id.clone()),
+            author_url: normalize_string(request.article.author.url.clone()),
+            author_profile_url: normalize_string(request.article.author.url.clone()),
+            author_avatar_url: normalize_string(request.article.author.avatar_url.clone()),
+            author_description: normalize_string(request.article.author.headline.clone()),
+            text: Some(zhihu_article_text(request)),
+            excerpt,
+            html: article_html,
+            site_name: Some("知乎专栏".to_string()),
+            tags,
+            stats: Some(KnowledgeEntryStatsInput {
+                likes: request
+                    .article
+                    .stats
+                    .upvotes
+                    .or(request.article.stats.likes),
+                collects: request.article.stats.collects,
+            }),
+            metadata: Some(metadata),
+            ..KnowledgeEntryContentInput::default()
+        },
+        assets: KnowledgeEntryAssetsInput {
+            cover_url: normalize_string(request.article.cover_url.clone()),
+            image_urls: normalize_vec(request.article.image_urls.clone()),
+            ..KnowledgeEntryAssetsInput::default()
+        },
+        options,
+    })
+}
+
 fn resolve_note_seed(request: &KnowledgeEntryIngestRequest) -> String {
     normalize_string(request.source.external_id.clone())
         .or_else(|| normalize_string(request.options.dedupe_key.clone()))
@@ -1767,6 +2149,7 @@ fn ingest_note_entry(
         "id": entry_id,
         "type": note_meta_type(&normalized_kind),
         "captureKind": normalized_kind,
+        "metadata": request.content.metadata.clone(),
         "sourceDomain": source_domain.clone(),
         "sourceLink": source_link.clone(),
         "sourceUrl": source_link.clone(),
@@ -1840,6 +2223,24 @@ fn ingest_note_entry(
             "autoTranscribe": should_process_transcription,
         },
     }))
+}
+
+pub(crate) fn ingest_zhihu_answer(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &ZhihuAnswerIngestRequest,
+) -> Result<Value, String> {
+    let entry_request = zhihu_answer_to_entry_request(request)?;
+    ingest_entry(app, state, &entry_request)
+}
+
+pub(crate) fn ingest_zhihu_article(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &ZhihuArticleIngestRequest,
+) -> Result<Value, String> {
+    let entry_request = zhihu_article_to_entry_request(request)?;
+    ingest_entry(app, state, &entry_request)
 }
 
 fn relative_media_path_from_absolute(media_root: &Path, absolute_path: &Path) -> Option<String> {
@@ -2082,8 +2483,8 @@ pub(crate) fn ingest_entry(
     match kind {
         "youtube-video" => ingest_youtube_entry(app, state, request),
         "xhs-note" | "xhs-video" | "douyin-video" | "link-article" | "wechat-article"
-        | "xhs-blogger" | "xhs-comments" | "knowledge-note" | "webpage" | "article"
-        | "text-note" => ingest_note_entry(app, state, request),
+        | "zhihu-answer" | "zhihu-article" | "xhs-blogger" | "xhs-comments" | "knowledge-note"
+        | "webpage" | "article" | "text-note" => ingest_note_entry(app, state, request),
         kind if is_supported_social_entry_kind(kind) => ingest_note_entry(app, state, request),
         other => Err(format!("暂不支持的 knowledge entry kind: {other}")),
     }
@@ -2182,11 +2583,17 @@ pub(crate) fn knowledge_http_health(
             },
             "routes": {
                 "entries": "/api/knowledge/entries",
+                "zhihuAnswers": "/api/knowledge/zhihu/answers",
+                "zhihuArticles": "/api/knowledge/zhihu/articles",
                 "documentSources": "/api/knowledge/document-sources",
                 "mediaAssets": "/api/knowledge/media-assets",
                 "batchIngest": "/api/knowledge/batch-ingest",
             },
             "capabilities": {
+                "importApiVersions": {
+                    "entries": [1],
+                    "zhihu": [1]
+                },
                 "sourceFields": ["sourceDomain", "sourceLink", "sourceUrl"],
                 "entryKinds": [
                     "youtube-video",
@@ -2197,6 +2604,8 @@ pub(crate) fn knowledge_http_health(
                     "douyin-video",
                     "link-article",
                     "wechat-article",
+                    "zhihu-answer",
+                    "zhihu-article",
                     "knowledge-note",
                     "webpage",
                     "article",
@@ -2735,7 +3144,9 @@ mod tests {
         extract_css_url_near, extract_html_attribute_near, extract_json_string_values,
         is_supported_social_entry_kind, materialize_note_asset_source,
         maybe_backfill_xiaohongshu_assets, note_entry_id, note_transcript_file_from_meta,
-        should_auto_transcribe_knowledge_video, youtube_entry_id, KnowledgeEntryAssetsInput,
+        should_auto_transcribe_knowledge_video, youtube_entry_id, zhihu_answer_to_entry_request,
+        zhihu_article_to_entry_request, KnowledgeEntryAssetsInput,
+        ZhihuAnswerIngestRequest, ZhihuArticleIngestRequest,
     };
     use serde_json::json;
     use std::fs;
@@ -2874,6 +3285,127 @@ mod tests {
         assert!(!is_supported_social_entry_kind("unknown-social-kind"));
     }
 
+    #[test]
+    fn zhihu_answer_request_maps_to_knowledge_entry_contract() {
+        let request: ZhihuAnswerIngestRequest = serde_json::from_value(json!({
+            "question": {
+                "id": "661907575",
+                "title": "为什么现在的 AI 大模型好像只有中美在做？",
+                "detail": "问题描述",
+                "topics": ["人工智能", "大模型"],
+                "followers": 2799,
+                "views": 6076936
+            },
+            "answer": {
+                "id": "2034059560181290180",
+                "url": "https://www.zhihu.com/question/661907575/answer/2034059560181290180",
+                "text": "你看到的是真实的。",
+                "html": "<p>你看到的是真实的。</p>",
+                "publishedAt": "2026-05-02T15:59:50.000Z",
+                "author": {
+                    "id": "nx2lbn",
+                    "name": "X学长说编程",
+                    "url": "https://www.zhihu.com/people/nx2lbn"
+                },
+                "stats": {
+                    "upvotes": 493,
+                    "comments": 59,
+                    "collects": 263,
+                    "likes": 5
+                }
+            }
+        }))
+        .expect("request should parse");
+
+        let entry = zhihu_answer_to_entry_request(&request).expect("answer should map");
+
+        assert_eq!(entry.kind, "zhihu-answer");
+        assert_eq!(
+            entry.options.dedupe_key.as_deref(),
+            Some("zhihu-answer:2034059560181290180")
+        );
+        assert_eq!(
+            entry.source.external_id.as_deref(),
+            Some("2034059560181290180")
+        );
+        assert_eq!(entry.content.author.as_deref(), Some("X学长说编程"));
+        assert!(entry.content.tags.iter().any(|item| item == "知乎回答"));
+        assert_eq!(
+            entry
+                .content
+                .metadata
+                .as_ref()
+                .and_then(|value| value.pointer("/zhihu/contentType"))
+                .and_then(|value| value.as_str()),
+            Some("answer")
+        );
+        assert_eq!(
+            entry
+                .content
+                .metadata
+                .as_ref()
+                .and_then(|value| value.pointer("/zhihu/answer/stats/upvotes"))
+                .and_then(|value| value.as_i64()),
+            Some(493)
+        );
+    }
+
+    #[test]
+    fn zhihu_article_request_maps_to_knowledge_entry_contract() {
+        let request: ZhihuArticleIngestRequest = serde_json::from_value(json!({
+            "article": {
+                "id": "1994423521271637277",
+                "url": "https://zhuanlan.zhihu.com/p/1994423521271637277",
+                "title": "马年第一颗雷爆了！烧光500亿，“中国宝马”倒下",
+                "text": "岁末年初，当寒冬笼罩中国汽车产业。",
+                "html": "<p>岁末年初，当寒冬笼罩中国汽车产业。</p>",
+                "publishedAt": "2026-01-14T01:02:39.000Z",
+                "author": {
+                    "id": "xiangshiqiche",
+                    "name": "象视汽车",
+                    "url": "https://www.zhihu.com/people/xiangshiqiche"
+                },
+                "column": {
+                    "id": "1595837101454635008",
+                    "name": "汽车行业",
+                    "url": "https://zhuanlan.zhihu.com/c_1595837101454635008"
+                },
+                "stats": {
+                    "upvotes": 269,
+                    "comments": 144,
+                    "collects": 51,
+                    "likes": 26
+                },
+                "imageUrls": ["https://pic2.zhimg.com/demo.jpg"],
+                "coverUrl": "https://pic2.zhimg.com/demo.jpg"
+            }
+        }))
+        .expect("request should parse");
+
+        let entry = zhihu_article_to_entry_request(&request).expect("article should map");
+
+        assert_eq!(entry.kind, "zhihu-article");
+        assert_eq!(
+            entry.options.dedupe_key.as_deref(),
+            Some("zhihu-article:1994423521271637277")
+        );
+        assert_eq!(entry.content.author.as_deref(), Some("象视汽车"));
+        assert!(entry.content.tags.iter().any(|item| item == "知乎文章"));
+        assert!(entry.content.tags.iter().any(|item| item == "汽车行业"));
+        assert_eq!(
+            entry
+                .content
+                .metadata
+                .as_ref()
+                .and_then(|value| value.pointer("/zhihu/contentType"))
+                .and_then(|value| value.as_str()),
+            Some("article")
+        );
+        assert_eq!(
+            entry.assets.cover_url.as_deref(),
+            Some("https://pic2.zhimg.com/demo.jpg")
+        );
+    }
     #[test]
     fn entry_ids_are_safe_for_windows_directories() {
         let note_id =
