@@ -1140,6 +1140,7 @@ export function Chat({
   );
   const composerRef = useRef<ChatComposerHandle>(null);
   const {
+    attachFiles,
     clearPendingAttachment,
     dragHandlers,
     isAttachmentUploading,
@@ -4018,6 +4019,7 @@ export function Chat({
         attachmentStatus={isAttachmentUploading ? 'uploading' : pendingAttachment ? 'uploaded' : null}
         attachmentPreviewMode={attachmentPreviewMode}
         onPickAttachment={allowFileUpload ? pickAttachment : undefined}
+        onPasteImageFiles={allowFileUpload ? attachFiles : undefined}
         onClearAttachment={clearPendingAttachment}
         onRemoveAttachment={removePendingAttachment}
         modelOptions={chatModelOptions}
