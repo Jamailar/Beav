@@ -262,6 +262,7 @@ function buildKnowledgeReferenceRuntimeContext(items: ChatKnowledgeMentionOption
 export interface ChatShortcut {
   label: string;
   text: string;
+  displayContent?: string;
   action?: 'send' | 'inject';
 }
 
@@ -606,17 +607,101 @@ function defaultComposerShortcuts(context: ChatShortcutContext): ChatShortcut[] 
   const attachment = context.attachment || undefined;
   if (attachmentKind === 'image' && attachmentCapability(attachment, 'imageVision')) {
     return [
-      { label: '生成电商套图', text: '请基于我上传的图片，生成一套电商套图方案。先分析图片主体、卖点、适用人群和视觉风格，再输出主图、卖点图、场景图、细节图、对比图的画面方案、标题文案、辅助文案和可执行生成提示词。' },
-      { label: '生成封面图', text: '请基于我上传的图片，生成一张适合社媒内容的封面图方案。请明确封面定位、主标题、视觉钩子、构图方式、字体和色彩建议，并给出可直接用于生成封面的提示词。' },
-      { label: '生成同款图', text: '请分析我上传图片的视觉风格、构图、光线、材质、色彩和主体表达，然后生成一组同款视觉提示词。要求保留核心风格，但不要直接复制原图内容。' },
-      { label: '提取卖点文案', text: '请从我上传的图片中提取可用于商业转化的卖点、场景、情绪价值和视觉亮点，并改写成一组适合详情页或社媒投放的标题和短文案。' },
+      {
+        label: '生成电商套图',
+        text: [
+          '请基于我上传的图片执行「电商套图生成」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先分析图片主体、可售卖点、适用人群、使用场景、画面风格和潜在转化诉求。',
+          '2. 判断这张图最适合做主图、卖点图、场景图、细节图还是对比图，并说明判断依据。',
+          '3. 设计一套 5 张左右的电商套图：每张图都要包含画面目标、构图、主标题、副文案、素材需求、视觉风格和注意事项。',
+          '4. 为每张图输出可直接用于生成图片的提示词，提示词要包含主体、背景、构图、光线、材质、色彩、比例和风格约束。',
+          '5. 最后给出最推荐先生成的 1 张图，并说明原因。',
+        ].join('\n'),
+      },
+      {
+        label: '生成封面图',
+        text: [
+          '请基于我上传的图片执行「封面图生成」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先分析图片里最适合作为封面钩子的主体、情绪、反差、场景和视觉焦点。',
+          '2. 给出 3 个封面方向，每个方向包含目标受众、主标题、辅助文案、构图、字体感觉、色彩和视觉重心。',
+          '3. 标出原图里必须保留、可以弱化、应该避开的元素。',
+          '4. 为最推荐方向输出一条可直接生成封面图的完整提示词。',
+          '5. 最终回复用简洁结构输出，不要写成泛泛建议。',
+        ].join('\n'),
+      },
+      {
+        label: '生成同款图',
+        text: [
+          '请基于我上传的图片执行「同款视觉生成」工作流。',
+          '',
+          '工作流要求：',
+          '1. 拆解原图的构图、镜头距离、光线、色彩、材质、主体姿态、背景层次和整体风格。',
+          '2. 提炼可复用的视觉 DNA，但不要要求复制原图、商标、人物身份或受版权保护的具体元素。',
+          '3. 生成 3 组同款视觉方案，分别偏产品展示、生活方式、社媒封面。',
+          '4. 每组都给出完整图片生成提示词和负面约束。',
+          '5. 说明哪一组最适合继续商业化使用。',
+        ].join('\n'),
+      },
+      {
+        label: '提取卖点文案',
+        text: [
+          '请基于我上传的图片执行「卖点文案提取」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先识别图片里的产品、场景、用户利益、情绪价值和视觉证据。',
+          '2. 提炼可用于转化的卖点，不要编造图片无法支持的参数、功效或事实。',
+          '3. 输出 10 条短标题、5 条详情页卖点文案、5 条社媒投放短文案。',
+          '4. 每条文案都要标注适用位置：主图、详情页、封面、广告、社媒正文。',
+          '5. 最后给出最推荐的一组标题 + 副文案组合。',
+        ].join('\n'),
+      },
     ];
   }
   if (attachmentKind === 'video' && (attachmentCapability(attachment, 'videoAnalyze') || attachmentCapability(attachment, 'videoEdit'))) {
     return [
-      { label: '爆款分析', text: '请先调用视频分析能力完整分析我上传的视频，再从爆款内容角度输出：核心主题、前 3 秒钩子、情绪节奏、内容结构、亮点片段、可复用金句、传播风险和优化建议。最后给出一版更容易出爆款的改造方案。' },
-      { label: '字幕提取', text: '请提取我上传视频里的字幕或语音内容，输出可编辑字幕文本，并尽量保留时间顺序。如果能生成字幕文件，请输出字幕文件路径；如果有听不清或需要人工确认的片段，请单独标出来。' },
-      { label: '剪辑切片', text: '请先调用视频分析能力分析我上传的视频，找出最精彩、最适合单独发布的切片片段。然后把这些精彩片段剪辑成独立的视频片段，并输出每个片段的主题、时间范围、推荐标题、用途和生成后的文件路径。' },
+      {
+        label: '爆款分析',
+        text: [
+          '请基于我上传的视频执行「爆款分析」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先调用视频分析能力完整读取视频内容，不要只凭文件名或封面判断。',
+          '2. 分析前 3 秒钩子、核心主题、情绪曲线、节奏变化、内容结构、视觉记忆点和可复用金句。',
+          '3. 标出最可能带来完播、收藏、评论或转发的片段，并说明原因。',
+          '4. 判断当前视频的主要问题：开头、节奏、信息密度、表达顺序、画面素材、字幕或结尾行动号召。',
+          '5. 输出一版爆款改造方案：新标题、开头重写、结构调整、剪辑节奏、字幕策略和发布建议。',
+        ].join('\n'),
+      },
+      {
+        label: '字幕提取',
+        text: [
+          '请基于我上传的视频执行「字幕提取」工作流。',
+          '',
+          '工作流要求：',
+          '1. 优先调用可用的字幕/语音识别能力提取视频字幕或语音内容。',
+          '2. 尽量保留时间顺序；如果工具能生成 SRT/VTT/TXT 字幕文件，请生成并输出文件路径。',
+          '3. 对听不清、多人重叠、疑似错字或需要人工确认的片段单独标注。',
+          '4. 输出一版可直接复制使用的清洁字幕文本。',
+          '5. 最后总结视频的核心内容，方便我确认字幕是否覆盖完整。',
+        ].join('\n'),
+      },
+      {
+        label: '剪辑切片',
+        text: [
+          '请基于我上传的视频执行「剪辑切片」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先调用视频分析能力完整分析视频，找出最精彩、最适合独立发布的切片片段。',
+          '2. 每个候选片段都要给出开始时间、结束时间、片段主题、爆点理由、适合平台和推荐标题。',
+          '3. 选择最值得产出的片段，调用可用的视频处理能力把这些片段剪辑成独立视频文件。',
+          '4. 每个成片都要尽量保留上下文完整性，不要只剪一句没有前后语义的话。',
+          '5. 最终输出切片清单、生成后的文件路径、推荐发布顺序和每个切片的标题建议。',
+        ].join('\n'),
+      },
     ];
   }
   if (attachmentKind === 'file' && (
@@ -3547,6 +3632,7 @@ export function Chat({
     knowledgeMentions: ChatKnowledgeMentionOption[] = selectedKnowledgeMentions,
     skillMentions: ChatSkillMentionOption[] = selectedSkillMentions,
     assetMentions: ChatAssetMentionOption[] = selectedAssetMentions,
+    displayContentOverride?: string,
   ) => {
     const primaryAttachment = attachments[0];
     const safeKnowledgeMentions = knowledgeMentions.filter((item) => item.id);
@@ -3572,7 +3658,8 @@ export function Chat({
     ].filter(Boolean);
     const missingInlineLabels = inlineLabels.filter((label) => !normalizedContent.includes(label));
     const knowledgeLabels = safeKnowledgeMentions.map((item) => `#${item.title || '知识库内容'}`);
-    const displayBody = normalizedContent || (attachments.length > 0 ? `请分析这些附件：${attachments.map((item) => item.name).join('、')}` : safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
+    const normalizedDisplayOverride = String(displayContentOverride || '').trim();
+    const displayBody = normalizedDisplayOverride || normalizedContent || (attachments.length > 0 ? `请分析这些附件：${attachments.map((item) => item.name).join('、')}` : safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
     const displayText = [...missingInlineLabels, ...knowledgeLabels, displayBody].filter(Boolean).join(' ').trim();
     if (!displayText) return;
     const attachmentBlockReason = attachmentsSendBlockReason(attachments);
@@ -3755,8 +3842,25 @@ export function Chat({
     if (currentAttachmentActionKey) {
       setDismissedAttachmentActionKey(currentAttachmentActionKey);
     }
-    void sendMessage(shortcut.text);
-  }, [currentAttachmentActionKey, sendMessage]);
+    void sendMessage(
+      shortcut.text,
+      pendingAttachments,
+      selectedMemberMention || fixedMemberMention,
+      selectedKnowledgeMentions,
+      selectedSkillMentions,
+      selectedAssetMentions,
+      shortcut.displayContent || shortcut.label,
+    );
+  }, [
+    currentAttachmentActionKey,
+    fixedMemberMention,
+    pendingAttachments,
+    selectedAssetMentions,
+    selectedKnowledgeMentions,
+    selectedMemberMention,
+    selectedSkillMentions,
+    sendMessage,
+  ]);
   const showInlineShortcutChips = Boolean(
     showComposerShortcuts &&
     shortcuts.length > 0 &&
