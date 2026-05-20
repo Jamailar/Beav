@@ -276,6 +276,30 @@ const isVisualIndexFilePath = (path: string) => {
     return VISUAL_INDEX_EXTENSIONS.has(extension);
 };
 
+const isNativeFilePickerCanceled = (error?: string) => {
+    const message = String(error || '').toLowerCase();
+    return message.includes('用户已取消')
+        || message.includes('user canceled')
+        || message.includes('user cancelled')
+        || message.includes('canceled')
+        || message.includes('cancelled')
+        || message.includes('(-128)');
+};
+
+function ObsidianIcon({ className }: { className?: string }) {
+    return (
+        <svg
+            role="img"
+            aria-label="Obsidian"
+            viewBox="0 0 24 24"
+            className={className}
+            fill="currentColor"
+        >
+            <path d="M19.355 18.538a68.967 68.959 0 0 0 1.858-2.954.81.81 0 0 0-.062-.9c-.516-.685-1.504-2.075-2.042-3.362-.553-1.321-.636-3.375-.64-4.377a1.707 1.707 0 0 0-.358-1.05l-3.198-4.064a3.744 3.744 0 0 1-.076.543c-.106.503-.307 1.004-.536 1.5-.134.29-.29.6-.446.914l-.31.626c-.516 1.068-.997 2.227-1.132 3.59-.124 1.26.046 2.73.815 4.481.128.011.257.025.386.044a6.363 6.363 0 0 1 3.326 1.505c.916.79 1.744 1.922 2.415 3.5zM8.199 22.569c.073.012.146.02.22.02.78.024 2.095.092 3.16.29.87.16 2.593.64 4.01 1.055 1.083.316 2.198-.548 2.355-1.664.114-.814.33-1.735.725-2.58l-.01.005c-.67-1.87-1.522-3.078-2.416-3.849a5.295 5.295 0 0 0-2.778-1.257c-1.54-.216-2.952.19-3.84.45.532 2.218.368 4.829-1.425 7.531zM5.533 9.938c-.023.1-.056.197-.098.29L2.82 16.059a1.602 1.602 0 0 0 .313 1.772l4.116 4.24c2.103-3.101 1.796-6.02.836-8.3-.728-1.73-1.832-3.081-2.55-3.831zM9.32 14.01c.615-.183 1.606-.465 2.745-.534-.683-1.725-.848-3.233-.716-4.577.154-1.552.7-2.847 1.235-3.95.113-.235.223-.454.328-.664.149-.297.288-.577.419-.86.217-.47.379-.885.46-1.27.08-.38.08-.72-.014-1.043-.095-.325-.297-.675-.68-1.06a1.6 1.6 0 0 0-1.475.36l-4.95 4.452a1.602 1.602 0 0 0-.513.952l-.427 2.83c.672.59 2.328 2.316 3.335 4.711.09.21.175.43.253.653z" />
+        </svg>
+    );
+}
+
 const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     id: item.itemId,
     knowledgeKind: item.kind,
@@ -1661,6 +1685,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const handleAddDocumentFiles = async () => {
         const result = await window.ipcRenderer.knowledge.addDocFiles() as { success?: boolean; error?: string };
         if (!result?.success) {
+            if (isNativeFilePickerCanceled(result?.error)) return;
             void appAlert(result?.error || '添加文件失败');
             return;
         }
@@ -1670,6 +1695,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const handleAddDocumentFolder = async () => {
         const result = await window.ipcRenderer.knowledge.addDocFolder() as { success?: boolean; error?: string };
         if (!result?.success) {
+            if (isNativeFilePickerCanceled(result?.error)) return;
             void appAlert(result?.error || '添加文件夹失败');
             return;
         }
@@ -1679,6 +1705,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const handleAddObsidianVault = async () => {
         const result = await window.ipcRenderer.knowledge.addObsidianVault() as { success?: boolean; error?: string };
         if (!result?.success) {
+            if (isNativeFilePickerCanceled(result?.error)) return;
             void appAlert(result?.error || '添加 Obsidian 仓库失败');
             return;
         }
@@ -2470,16 +2497,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                             </div>
                                         ))}
                                     </div>
-                                    <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={() => void handleOpenBrowserPluginDownload()}
-                                            className="inline-flex h-10 items-center gap-2 rounded-xl bg-accent-primary px-4 text-[13px] font-bold text-white shadow-lg shadow-accent-primary/20 transition-all hover:bg-accent-hover active:scale-95"
-                                        >
-                                            <Download className="h-4 w-4" />
-                                            下载浏览器插件
-                                            <ExternalLink className="h-3.5 w-3.5 opacity-80" />
-                                        </button>
+                                    <div className="mt-7 flex flex-wrap items-center justify-center gap-2.5">
                                         <button
                                             type="button"
                                             onClick={handleAddDocumentFiles}
@@ -2496,6 +2514,35 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                             <FolderPlus className="h-4 w-4" />
                                             添加文件夹
                                         </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleAddObsidianVault}
+                                            className="inline-flex h-10 items-center gap-2 rounded-xl border border-border/80 bg-surface-elevated px-4 text-[13px] font-bold text-text-primary transition-all hover:bg-surface-secondary/80 active:scale-95"
+                                        >
+                                            <ObsidianIcon className="h-4 w-4 text-[#7C3AED]" />
+                                            绑定 Obsidian
+                                        </button>
+                                    </div>
+                                    <div className="mt-7 flex items-center justify-center">
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleOpenBrowserPluginDownload()}
+                                            className="inline-flex h-10 items-center gap-2 rounded-xl bg-accent-primary px-4 text-[13px] font-bold text-white shadow-lg shadow-accent-primary/20 transition-all hover:bg-accent-hover active:scale-95"
+                                        >
+                                            <Download className="h-4 w-4" />
+                                            下载浏览器插件
+                                            <ExternalLink className="h-3.5 w-3.5 opacity-80" />
+                                        </button>
+                                    </div>
+                                    <div className="mt-4 w-full max-w-[480px] rounded-xl border border-border/70 bg-surface-secondary/45 px-4 py-3 text-left">
+                                        <div className="text-[11px] font-extrabold uppercase tracking-wider text-text-secondary">
+                                            插件安装
+                                        </div>
+                                        <ol className="mt-2 space-y-1.5 text-[12px] font-medium leading-5 text-text-tertiary">
+                                            <li><span className="font-bold text-text-primary">1.</span> 点击“下载浏览器插件”，在下载页获取插件压缩包。</li>
+                                            <li><span className="font-bold text-text-primary">2.</span> 解压后打开 Chrome / Edge 的扩展管理页。</li>
+                                            <li><span className="font-bold text-text-primary">3.</span> 开启开发者模式，选择“加载已解压的扩展程序”。</li>
+                                        </ol>
                                     </div>
                                 </div>
                             ) : (
@@ -2765,45 +2812,40 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                         >
                                             {selectionButton}
                                             {isTextArticleCard ? (
-                                                <div className={clsx('flex gap-4', embeddedUsesCompactCard ? 'flex-col' : 'items-start')}>
-                                                    <div className={clsx(
-                                                        'flex shrink-0 items-center justify-center rounded-[14px] bg-sky-500/10 text-sky-600 border border-sky-100',
-                                                        embeddedUsesCompactCard ? 'h-9 w-9' : 'h-11 w-11',
-                                                    )}>
-                                                        <FileText className="w-5 h-5" />
+                                                <div className="min-w-0">
+                                                    <div className="mb-2 flex items-center justify-between gap-2">
+                                                        <span className={clsx('shrink-0 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm border border-black/[0.02]', getKnowledgeKindBadgeClass(item.kind))}>
+                                                            {getKnowledgeKindLabel(item.kind)}
+                                                        </span>
+                                                        <span className="min-w-0 truncate text-[10px] font-bold text-text-tertiary/50 uppercase tracking-tighter">
+                                                            {note.siteName || note.author || new Date(note.createdAt).toLocaleDateString()}
+                                                        </span>
                                                     </div>
-                                                    <div className="min-w-0 flex-1">
-                                                        <div className="flex items-start justify-between gap-3">
-                                                            <div className={clsx(
-                                                                'font-extrabold text-text-primary tracking-tight group-hover:text-accent-primary transition-colors',
-                                                                embeddedUsesCompactCard ? 'text-[14px] line-clamp-3' : 'text-[15px] line-clamp-2',
-                                                            )}>
-                                                                {note.title}
-                                                            </div>
-                                                            <span className={clsx('shrink-0 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm border border-black/[0.02]', getKnowledgeKindBadgeClass(item.kind))}>
-                                                                {getKnowledgeKindLabel(item.kind)}
+                                                    <div className={clsx(
+                                                        'font-extrabold text-text-primary tracking-tight group-hover:text-accent-primary transition-colors',
+                                                        embeddedUsesCompactCard ? 'text-[14px] line-clamp-4' : 'text-[15px] line-clamp-3',
+                                                    )}>
+                                                        {note.title}
+                                                    </div>
+                                                    <div className={clsx(
+                                                        'mt-2.5 text-text-tertiary leading-relaxed font-medium',
+                                                        embeddedUsesCompactCard ? 'text-[12px] line-clamp-6' : 'text-[12px] line-clamp-5',
+                                                    )}>
+                                                        {notePreviewText}
+                                                    </div>
+                                                    <div className="mt-4 flex items-center gap-2.5 text-[10px] font-bold text-text-tertiary/60 flex-wrap uppercase tracking-tighter">
+                                                        <span>{new Date(note.createdAt).toLocaleDateString()}</span>
+                                                        {note.sourceUrl && (
+                                                            <span className="flex min-w-0 items-center gap-1 max-w-full">
+                                                                <ExternalLink className="w-3 h-3 shrink-0 opacity-40" />
+                                                                {renderAuthorInline(note, 'truncate max-w-[180px]')}
                                                             </span>
-                                                        </div>
-                                                        <div className={clsx(
-                                                            'mt-2.5 text-text-tertiary leading-relaxed font-medium',
-                                                            embeddedUsesCompactCard ? 'text-[12px] line-clamp-6' : 'text-[12px] line-clamp-5',
-                                                        )}>
-                                                            {notePreviewText}
-                                                        </div>
-                                                        <div className="mt-4 flex items-center gap-2.5 text-[10px] font-bold text-text-tertiary/60 flex-wrap uppercase tracking-tighter">
-                                                            <span>{new Date(note.createdAt).toLocaleDateString()}</span>
-                                                            {note.sourceUrl && (
-                                                                <span className="flex items-center gap-1 max-w-full">
-                                                                    <ExternalLink className="w-3 h-3 opacity-40" />
-                                                                    {renderAuthorInline(note, 'truncate max-w-[140px]')}
-                                                                </span>
-                                                            )}
-                                                            {note.tags?.slice(0, 2).map((tag) => (
-                                                                <span key={tag} className={clsx('px-1.5 py-0.5 rounded-md border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
-                                                                    #{tag}
-                                                                </span>
-                                                            ))}
-                                                        </div>
+                                                        )}
+                                                        {note.tags?.slice(0, 2).map((tag) => (
+                                                            <span key={tag} className={clsx('px-1.5 py-0.5 rounded-md border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
+                                                                #{tag}
+                                                            </span>
+                                                        ))}
                                                     </div>
                                                 </div>
                                             ) : coverImage ? (
