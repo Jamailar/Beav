@@ -39,6 +39,13 @@ import {
 import { resolveAssetUrl } from '../utils/pathManager';
 import { SelectMenu } from '../components/ui/SelectMenu';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
+import {
+    filterAiModelsByCapability,
+    normalizeAiModelDescriptors,
+    parseAiSources,
+    type AiModelDescriptor,
+} from './settings/shared';
+import { type AiSourceConfig } from '../config/aiSources';
 
 interface SubjectCategory {
     id: string;
@@ -153,6 +160,10 @@ const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '场景'];
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。请用自然稳定的语速朗读这段文字，保持音量一致、停顿清晰，让系统更好地学习你的声音特点和语气节奏。';
 const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 30;
 const SUBJECT_AUTOSAVE_DELAY_MS = 600;
+const DEFAULT_VOICE_TTS_MODEL = 'cosyvoice-v3.5-plus';
+const DEFAULT_VOICE_CLONE_MODEL = 'cosyvoice-v3.5-plus-voice-clone';
+const MINIMAX_VOICE_CLONE_MODEL = 'minimax-voice-clone';
+const COSYVOICE_CLONE_MODEL = 'cosyvoice-v3.5-plus-voice-clone';
 const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
     generated: '已生成',
     planned: '计划项',
@@ -164,9 +175,25 @@ type SubjectVoiceInfo = {
     detail?: string;
     tone: 'muted' | 'active' | 'ready' | 'failed';
     voiceId?: string;
+    targetTtsModel?: string;
+    cloneModel?: string;
     jobId?: string;
     error?: string;
     canRetry: boolean;
+};
+
+type SubjectVoiceSlotInfo = {
+    voiceId: string;
+    targetTtsModel: string;
+    cloneModel?: string;
+    provider?: string;
+    status?: string;
+};
+
+type VoiceCloneModelOption = {
+    value: string;
+    label: string;
+    description?: string;
 };
 
 const categoryIconForName = (name: string) => {
@@ -356,6 +383,67 @@ function mediaAssetKindLabel(asset: MediaAsset): string {
     return asset.aspectRatio || asset.size || '图片';
 }
 
+function parseJsonObject(value: unknown): Record<string, unknown> {
+    if (!value) return {};
+    if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    if (typeof value !== 'string' || !value.trim()) return {};
+    try {
+        const parsed = JSON.parse(value) as unknown;
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : {};
+    } catch {
+        return {};
+    }
+}
+
+function sourceModelDescriptors(source: AiSourceConfig): AiModelDescriptor[] {
+    return normalizeAiModelDescriptors([
+        ...(Array.isArray(source.modelsMeta) ? source.modelsMeta : []),
+        ...(Array.isArray(source.models) ? source.models : []),
+        source.model,
+    ]);
+}
+
+function buildVoiceCloneModelOptions(settings: Record<string, unknown>): { options: VoiceCloneModelOption[]; selectedModel: string } {
+    const routes = parseJsonObject(settings.ai_model_routes_json);
+    const voiceRoute = parseJsonObject(routes.voiceTts);
+    const selectedModel = String(
+        settings.voice_tts_model
+        || settings.tts_model
+        || voiceRoute.model
+        || DEFAULT_VOICE_TTS_MODEL
+    ).trim();
+    const aiSources = parseAiSources(typeof settings.ai_sources_json === 'string' ? settings.ai_sources_json : undefined);
+    const descriptors = aiSources.flatMap((source) => sourceModelDescriptors(source));
+    const ttsModels = filterAiModelsByCapability(descriptors, 'tts');
+    const audioModels = ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(descriptors, 'audio');
+    const seen = new Set<string>();
+    const options = audioModels
+        .map((model) => model.id.trim())
+        .filter((model) => model && !seen.has(model) && seen.add(model))
+        .map((model) => ({
+            value: model,
+            label: model,
+            description: `${cloneModelForTargetTtsModel(model)} · 克隆后音色绑定此模型`,
+        }));
+    if (selectedModel && !options.some((option) => option.value === selectedModel)) {
+        options.unshift({
+            value: selectedModel,
+            label: selectedModel,
+            description: `${cloneModelForTargetTtsModel(selectedModel, String(settings.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL))} · 当前设置`,
+        });
+    }
+    if (!options.length) {
+        options.push({
+            value: DEFAULT_VOICE_TTS_MODEL,
+            label: DEFAULT_VOICE_TTS_MODEL,
+            description: `${COSYVOICE_CLONE_MODEL} · 默认`,
+        });
+    }
+    return { options, selectedModel: selectedModel || options[0]?.value || DEFAULT_VOICE_TTS_MODEL };
+}
+
 function AudioMediaThumb({ src, compact = false }: { src: string; compact?: boolean }) {
     return (
         <div className={clsx(
@@ -390,25 +478,107 @@ function subjectVoiceString(subject: SubjectRecord, keys: string[]): string {
     return '';
 }
 
+function normalizedModelKey(value?: string): string {
+    return String(value || '').trim().toLowerCase();
+}
+
+function voiceValueString(voice: Record<string, unknown> | undefined, keys: string[]): string {
+    if (!voice) return '';
+    for (const key of keys) {
+        const value = voice[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+}
+
+function subjectVoiceMappingForModel(subject: SubjectRecord, targetTtsModel?: string): Record<string, unknown> | undefined {
+    const modelKey = normalizedModelKey(targetTtsModel);
+    if (!modelKey) return subject.voice;
+    const voiceMappings = subject.voice?.voiceMappings;
+    if (!voiceMappings || typeof voiceMappings !== 'object' || Array.isArray(voiceMappings)) {
+        return undefined;
+    }
+    const mapping = (voiceMappings as Record<string, unknown>)[modelKey];
+    return mapping && typeof mapping === 'object' && !Array.isArray(mapping)
+        ? mapping as Record<string, unknown>
+        : undefined;
+}
+
+function subjectVoiceMetadata(subject: SubjectRecord, targetTtsModel?: string): Record<string, unknown> | undefined {
+    const modelKey = normalizedModelKey(targetTtsModel);
+    if (!modelKey) return subject.voice;
+    const mappedVoice = subjectVoiceMappingForModel(subject, targetTtsModel);
+    if (mappedVoice) return mappedVoice;
+    const topLevelTarget = normalizedModelKey(voiceValueString(subject.voice, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']));
+    return topLevelTarget === modelKey ? subject.voice : undefined;
+}
+
+function subjectVoiceSlots(subject: SubjectRecord): SubjectVoiceSlotInfo[] {
+    const slots = new Map<string, SubjectVoiceSlotInfo>();
+    const addSlot = (voice: Record<string, unknown> | undefined) => {
+        const voiceId = voiceValueString(voice, ['voiceId', 'voice_id']);
+        const targetTtsModel = voiceValueString(voice, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model', 'model']);
+        if (!voiceId || !targetTtsModel) return;
+        const key = normalizedModelKey(targetTtsModel);
+        if (!key) return;
+        slots.set(key, {
+            voiceId,
+            targetTtsModel,
+            cloneModel: voiceValueString(voice, ['cloneModel', 'clone_model']),
+            provider: voiceValueString(voice, ['provider']),
+            status: voiceValueString(voice, ['status']),
+        });
+    };
+
+    const voiceMappings = subject.voice?.voiceMappings;
+    if (voiceMappings && typeof voiceMappings === 'object' && !Array.isArray(voiceMappings)) {
+        Object.values(voiceMappings as Record<string, unknown>).forEach((mapping) => {
+            if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)) {
+                addSlot(mapping as Record<string, unknown>);
+            }
+        });
+    }
+    addSlot(subject.voice);
+    return Array.from(slots.values()).sort((left, right) => left.targetTtsModel.localeCompare(right.targetTtsModel));
+}
+
 function shortVoiceId(value?: string): string {
     if (!value) return '';
     if (value.length <= 18) return value;
     return `${value.slice(0, 10)}...${value.slice(-4)}`;
 }
 
-function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | null): SubjectVoiceInfo {
-    const voiceId = subjectVoiceString(subject, ['voiceId', 'voice_id']);
+function displayModelName(value?: string): string {
+    return String(value || '').trim();
+}
+
+function cloneModelForTargetTtsModel(targetTtsModel: string, fallbackCloneModel = DEFAULT_VOICE_CLONE_MODEL): string {
+    const key = normalizedModelKey(targetTtsModel);
+    if (key.includes('cosyvoice')) return COSYVOICE_CLONE_MODEL;
+    if (key.startsWith('speech-') || key.startsWith('speech_') || key.includes('minimax')) return MINIMAX_VOICE_CLONE_MODEL;
+    return fallbackCloneModel || DEFAULT_VOICE_CLONE_MODEL;
+}
+
+function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | null, targetTtsModel?: string): SubjectVoiceInfo {
+    const voice = subjectVoiceMetadata(subject, targetTtsModel);
+    const voiceId = voiceValueString(voice, ['voiceId', 'voice_id']);
+    const voiceTargetTtsModel = voiceValueString(voice, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']);
+    const cloneModel = voiceValueString(voice, ['cloneModel', 'clone_model', 'model']);
     const jobId = subjectVoiceString(subject, ['jobId']);
-    const status = subjectVoiceString(subject, ['status']).toLowerCase();
-    const lastError = subjectVoiceString(subject, ['lastError', 'error']);
+    const status = voiceValueString(voice, ['status']).toLowerCase();
+    const lastError = voiceValueString(voice, ['lastError', 'error']);
     const hasSample = Boolean(subject.voicePreviewUrl || subject.voicePath);
     const jobStatus = String(job?.status || '').toLowerCase();
+    const topLevelTarget = subjectVoiceString(subject, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']);
+    const activeJobApplies = !targetTtsModel || normalizedModelKey(topLevelTarget) === normalizedModelKey(targetTtsModel);
 
-    if (jobStatus && !isMediaJobTerminal(jobStatus)) {
+    if (activeJobApplies && jobStatus && !isMediaJobTerminal(jobStatus)) {
         return {
             label: jobStatus === 'queued' ? '声音复刻排队中' : '声音复刻中',
             detail: jobId ? shortVoiceId(jobId) : undefined,
             tone: 'active',
+            targetTtsModel: subjectVoiceString(subject, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']) || targetTtsModel,
+            cloneModel: subjectVoiceString(subject, ['model', 'cloneModel', 'clone_model']),
             jobId,
             canRetry: false,
         };
@@ -419,6 +589,8 @@ function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | nul
             label: '声音复刻排队中',
             detail: jobId ? shortVoiceId(jobId) : undefined,
             tone: 'active',
+            targetTtsModel: subjectVoiceString(subject, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']) || targetTtsModel,
+            cloneModel: subjectVoiceString(subject, ['model', 'cloneModel', 'clone_model']),
             jobId,
             canRetry: false,
         };
@@ -430,6 +602,8 @@ function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | nul
             detail: shortVoiceId(voiceId),
             tone: 'ready',
             voiceId,
+            targetTtsModel: voiceTargetTtsModel || targetTtsModel,
+            cloneModel,
             jobId,
             canRetry: hasSample,
         };
@@ -440,6 +614,8 @@ function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | nul
             label: '声音复刻失败',
             detail: lastError || job?.attempt?.lastError || undefined,
             tone: 'failed',
+            targetTtsModel: subjectVoiceString(subject, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']) || targetTtsModel,
+            cloneModel: subjectVoiceString(subject, ['model', 'cloneModel', 'clone_model']),
             jobId,
             error: lastError || job?.attempt?.lastError || undefined,
             canRetry: hasSample,
@@ -450,6 +626,7 @@ function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | nul
         return {
             label: '待复刻',
             tone: 'muted',
+            targetTtsModel,
             jobId,
             canRetry: true,
         };
@@ -467,6 +644,27 @@ function voiceInfoClassName(tone: SubjectVoiceInfo['tone']): string {
     if (tone === 'active') return 'border-blue-200 bg-blue-50 text-blue-700';
     if (tone === 'failed') return 'border-red-200 bg-red-50 text-red-700';
     return 'border-border bg-surface-secondary/50 text-text-tertiary';
+}
+
+function VoiceSlotBadges({ slots, compact = false }: { slots: SubjectVoiceSlotInfo[]; compact?: boolean }) {
+    if (slots.length === 0) return null;
+    return (
+        <div className={clsx('flex flex-wrap', compact ? 'gap-1' : 'gap-1.5')}>
+            {slots.map((slot) => (
+                <span
+                    key={`${slot.targetTtsModel}-${slot.voiceId}`}
+                    className={clsx(
+                        'inline-flex max-w-full items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 text-emerald-700',
+                        compact ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-1 text-[11px]',
+                    )}
+                    title={`${slot.targetTtsModel}: ${slot.voiceId}`}
+                >
+                    <span className="truncate font-mono">{displayModelName(slot.targetTtsModel)}</span>
+                    <span className="font-mono opacity-75">{shortVoiceId(slot.voiceId)}</span>
+                </span>
+            ))}
+        </div>
+    );
 }
 
 function formatAssetDate(value?: string): string {
@@ -510,6 +708,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [initialVideoPresent, setInitialVideoPresent] = useState(false);
     const [recordingError, setRecordingError] = useState('');
     const [recordingHint, setRecordingHint] = useState('');
+    const [voiceCloneModelOptions, setVoiceCloneModelOptions] = useState<VoiceCloneModelOption[]>([]);
+    const [selectedVoiceCloneTtsModel, setSelectedVoiceCloneTtsModel] = useState(DEFAULT_VOICE_TTS_MODEL);
     const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
     const recordingIntervalRef = useRef<number | null>(null);
     const hasLoadedSnapshotRef = useRef(false);
@@ -602,13 +802,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }
         setError('');
         try {
-            const [categoriesResult, subjectsResult, mediaResult] = await uiMeasure('subjects', 'load_data', async () => (
+            const [categoriesResult, subjectsResult, mediaResult, settingsResult] = await uiMeasure('subjects', 'load_data', async () => (
                 Promise.all([
                     window.ipcRenderer.subjects.categories.list(),
                     window.ipcRenderer.subjects.list({ limit: 500 }),
                     isModalVariant
                         ? window.ipcRenderer.invoke('media:list', { limit: 500 }) as Promise<{ success?: boolean; error?: string; assets?: MediaAsset[] }>
                         : Promise.resolve({ success: true, assets: [] }),
+                    window.ipcRenderer.getSettings().catch(() => ({})),
                 ])
             ), { requestId });
             if (!categoriesResult?.success) {
@@ -619,8 +820,15 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             }
             if (requestId !== loadDataRequestRef.current) return;
             const nextCategories = Array.isArray(categoriesResult.categories) ? categoriesResult.categories : [];
+            const voiceModelSettings = buildVoiceCloneModelOptions(settingsResult as Record<string, unknown>);
             setCategories(nextCategories);
             setSubjects(Array.isArray(subjectsResult.subjects) ? subjectsResult.subjects : []);
+            setVoiceCloneModelOptions(voiceModelSettings.options);
+            setSelectedVoiceCloneTtsModel((current) => (
+                current && voiceModelSettings.options.some((option) => option.value === current)
+                    ? current
+                    : voiceModelSettings.selectedModel
+            ));
             setMediaAssets(
                 Array.isArray(mediaResult?.assets)
                     ? mediaResult.assets.map(normalizeMediaAsset).sort((a, b) => (
@@ -702,15 +910,26 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         () => {
             if (!activeDraftSubject) return null;
             if (retryingVoiceSubjectId === activeDraftSubject.id) {
+                const targetTtsModel = selectedVoiceCloneTtsModel || DEFAULT_VOICE_TTS_MODEL;
                 return {
                     label: '声音复刻提交中',
                     tone: 'active',
+                    targetTtsModel,
+                    cloneModel: cloneModelForTargetTtsModel(targetTtsModel),
                     canRetry: false,
                 } satisfies SubjectVoiceInfo;
             }
-            return subjectVoiceInfo(activeDraftSubject, voiceJobsById[subjectVoiceString(activeDraftSubject, ['jobId'])]);
+            return subjectVoiceInfo(
+                activeDraftSubject,
+                voiceJobsById[subjectVoiceString(activeDraftSubject, ['jobId'])],
+                selectedVoiceCloneTtsModel,
+            );
         },
-        [activeDraftSubject, retryingVoiceSubjectId, voiceJobsById],
+        [activeDraftSubject, retryingVoiceSubjectId, selectedVoiceCloneTtsModel, voiceJobsById],
+    );
+    const activeDraftVoiceSlots = useMemo(
+        () => activeDraftSubject ? subjectVoiceSlots(activeDraftSubject) : [],
+        [activeDraftSubject],
     );
     const filteredSubjects = useMemo(() => {
         const keyword = query.trim().toLowerCase();
@@ -953,10 +1172,17 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setRecordingError('');
         setRecordingHint('正在提交音色复刻...');
         try {
+            const targetTtsModel = selectedVoiceCloneTtsModel || DEFAULT_VOICE_TTS_MODEL;
+            const cloneModel = cloneModelForTargetTtsModel(targetTtsModel);
             const result = await window.ipcRenderer.voice.clone({
                 ownerAssetId: subject.id,
                 samplePath: subject.voicePath,
                 name: subject.name,
+                model: cloneModel,
+                cloneModel,
+                targetTtsModel,
+                target_tts_model: targetTtsModel,
+                ttsModel: targetTtsModel,
                 waitForCompletion: false,
             }) as { success?: boolean; error?: string };
             if (!result?.success) {
@@ -973,7 +1199,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         } finally {
             setRetryingVoiceSubjectId(null);
         }
-    }, [loadData]);
+    }, [loadData, selectedVoiceCloneTtsModel]);
 
     const saveVoiceDataUrl = useCallback(async (dataUrl: string, fileName: string) => {
         const duration = await getAudioDurationSeconds(dataUrl);
@@ -1755,6 +1981,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     <div className={clsx('grid gap-3', isModalVariant ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4' : 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5')}>
                         {filteredSubjects.map((subject) => {
                             const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
+                            const voiceSlots = subjectVoiceSlots(subject);
                             return (
                             <div
                                 key={subject.id}
@@ -1802,11 +2029,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 ))}
                                             </div>
                                         )}
+                                        <VoiceSlotBadges slots={voiceSlots} compact />
                                             <div className="flex items-center justify-between text-[9px] text-text-tertiary">
                                             <span>属性 {subject.attributes.length}</span>
                                             <span>图片 {(subject.previewUrls || []).length}</span>
                                             <span className={clsx('rounded-md border px-1.5 py-0.5', voiceInfoClassName(voiceInfo.tone))}>
-                                                {voiceInfo.label}
+                                                {voiceInfo.targetTtsModel ? `${voiceInfo.label} · ${shortVoiceId(voiceInfo.targetTtsModel)}` : voiceInfo.label}
                                             </span>
                                         </div>
                                     </div>
@@ -1819,6 +2047,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
                         {filteredSubjects.map((subject) => {
                             const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
+                            const voiceSlots = subjectVoiceSlots(subject);
                             return (
                             <button
                                 key={subject.id}
@@ -1845,8 +2074,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
                                     {new Date(subject.updatedAt).toLocaleDateString()}
                                 </div>
+                                <div className="hidden max-w-[280px] md:block">
+                                    <VoiceSlotBadges slots={voiceSlots} compact />
+                                </div>
                                 <div className={clsx('hidden rounded-md border px-2 py-1 text-[11px] md:block', voiceInfoClassName(voiceInfo.tone))}>
-                                    {voiceInfo.label}
+                                    {voiceInfo.targetTtsModel ? `${voiceInfo.label} · ${shortVoiceId(voiceInfo.targetTtsModel)}` : voiceInfo.label}
                                 </div>
                             </button>
                             );
@@ -2312,30 +2544,45 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             )}
                                             {activeDraftSubject && activeDraftVoiceInfo && (
                                                 <div className="space-y-2">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void handleRetryVoiceClone(activeDraftSubject)}
-                                                        disabled={!activeDraftVoiceInfo.canRetry || retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active'}
-                                                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))] disabled:cursor-not-allowed disabled:opacity-50"
-                                                    >
-                                                        <RefreshCw className={clsx('h-3.5 w-3.5', (retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active') && 'animate-spin')} />
-                                                        {retryingVoiceSubjectId === activeDraftSubject.id
-                                                            ? '提交中'
-                                                            : activeDraftVoiceInfo.tone === 'active'
-                                                                ? '音色复刻中'
-                                                                : '重新克隆音色'}
-                                                    </button>
+                                                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                                                        <SelectMenu
+                                                            value={selectedVoiceCloneTtsModel}
+                                                            onChange={setSelectedVoiceCloneTtsModel}
+                                                            options={voiceCloneModelOptions}
+                                                            placeholder="选择 TTS 模型"
+                                                            className="w-full"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleRetryVoiceClone(activeDraftSubject)}
+                                                            disabled={!activeDraftVoiceInfo.canRetry || retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active'}
+                                                            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))] disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            <RefreshCw className={clsx('h-3.5 w-3.5', (retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active') && 'animate-spin')} />
+                                                            {retryingVoiceSubjectId === activeDraftSubject.id
+                                                                ? '提交中'
+                                                                : activeDraftVoiceInfo.tone === 'active'
+                                                                    ? '音色复刻中'
+                                                                    : '克隆音色'}
+                                                        </button>
+                                                    </div>
                                                     <div className={clsx('rounded-lg border px-3 py-2 text-xs', voiceInfoClassName(activeDraftVoiceInfo.tone))}>
                                                         <div className="flex flex-wrap items-center gap-2">
                                                             <span className="font-semibold">{activeDraftVoiceInfo.label}</span>
                                                             {activeDraftVoiceInfo.detail && (
                                                                 <span className="font-mono text-[11px] opacity-80">{activeDraftVoiceInfo.detail}</span>
                                                             )}
+                                                            {activeDraftVoiceInfo.targetTtsModel && (
+                                                                <span className="rounded-md bg-white/65 px-1.5 py-0.5 font-mono text-[10px] opacity-85">
+                                                                    {displayModelName(activeDraftVoiceInfo.targetTtsModel)}
+                                                                </span>
+                                                            )}
                                                         </div>
                                                         {activeDraftVoiceInfo.error && (
                                                             <div className="mt-1 line-clamp-2 opacity-80">{activeDraftVoiceInfo.error}</div>
                                                         )}
                                                     </div>
+                                                    <VoiceSlotBadges slots={activeDraftVoiceSlots} />
                                                 </div>
                                             )}
                                         </div>
@@ -2371,6 +2618,17 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             <div>ID：{draft.id}</div>
                                             {activeDraftVoiceInfo?.voiceId && (
                                                 <div>音色ID：<span className="font-mono">{activeDraftVoiceInfo.voiceId}</span></div>
+                                            )}
+                                            {activeDraftVoiceInfo?.targetTtsModel && (
+                                                <div>TTS模型：<span className="font-mono">{activeDraftVoiceInfo.targetTtsModel}</span></div>
+                                            )}
+                                            {activeDraftVoiceInfo?.cloneModel && (
+                                                <div>克隆模型：<span className="font-mono">{activeDraftVoiceInfo.cloneModel}</span></div>
+                                            )}
+                                            {activeDraftVoiceSlots.length > 0 && (
+                                                <div className="pt-1">
+                                                    <VoiceSlotBadges slots={activeDraftVoiceSlots} />
+                                                </div>
                                             )}
                                         </div>
                                     )}

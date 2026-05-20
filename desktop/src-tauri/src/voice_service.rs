@@ -1,7 +1,6 @@
 use base64::Engine;
 use reqwest::blocking::{multipart, Client};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +9,11 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
 use crate::commands::library::persist_media_workspace_catalog;
-use crate::helpers::{file_url_for_path, storage_safe_file_stem};
+use crate::helpers::file_url_for_path;
+use crate::logging::{
+    self,
+    event::{LogLevel, LogSource},
+};
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
 use crate::{
     ffmpeg_executable, file_content_hash, guess_mime_and_kind, make_id, media_root,
@@ -19,8 +22,8 @@ use crate::{
     subjects_root, workspace_root, AppState, MediaAssetRecord, SubjectRecord,
 };
 
-const DEFAULT_CLONE_MODEL: &str = "minimax-voice-clone";
-const DEFAULT_TTS_MODEL: &str = "speech-2.8-turbo";
+const DEFAULT_CLONE_MODEL: &str = "cosyvoice-v3.5-plus-voice-clone";
+const DEFAULT_TTS_MODEL: &str = "cosyvoice-v3.5-plus";
 const COSYVOICE_TTS_MODEL: &str = "cosyvoice-v3.5-plus";
 const COSYVOICE_CLONE_MODEL: &str = "cosyvoice-v3.5-plus-voice-clone";
 const MINIMAX_SYSTEM_VOICES_JSON: &str = include_str!("../resources/minimax-system-voices.json");
@@ -31,6 +34,19 @@ struct VoiceGatewayConfig {
     api_key: Option<String>,
     clone_model: String,
     tts_model: String,
+}
+
+fn log_voice_clone_event(level: LogLevel, event: &str, message: String, fields: Value) {
+    eprintln!("[redbox][voice_clone][{event}] {message} {fields}");
+    logging::emit_legacy_line(
+        LogSource::Host,
+        level,
+        "voice_clone",
+        event,
+        message,
+        fields,
+        None,
+    );
 }
 
 fn payload_string_alias(payload: &Value, keys: &[&str]) -> Option<String> {
@@ -48,6 +64,158 @@ fn is_cosyvoice_model(model: &str) -> bool {
 fn is_minimax_tts_model(model: &str) -> bool {
     let key = normalized_model_key(model);
     key.contains("minimax") || key.starts_with("speech-") || key.starts_with("speech_")
+}
+
+fn tts_model_supports_prompt(model: &str) -> bool {
+    is_cosyvoice_model(model) || !is_minimax_tts_model(model)
+}
+
+fn tts_model_supports_emotion(model: &str) -> bool {
+    is_minimax_tts_model(model) || !is_cosyvoice_model(model)
+}
+
+fn extract_xml_tag_names(input: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = input;
+    while let Some(start) = rest.find('<') {
+        let after_start = &rest[start + 1..];
+        let after_slash = after_start.trim_start_matches('/');
+        let Some(first) = after_slash.chars().next() else {
+            rest = after_start;
+            continue;
+        };
+        if !first.is_ascii_alphabetic() {
+            rest = after_start;
+            continue;
+        }
+        let name: String = after_slash
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+            .collect();
+        if !name.is_empty() {
+            names.push(name.to_ascii_lowercase());
+        }
+        rest = after_start;
+    }
+    names
+}
+
+fn xml_attr_value(tag: &str, attr: &str) -> Option<String> {
+    let lower_tag = tag.to_ascii_lowercase();
+    let pattern = format!("{}=", attr.to_ascii_lowercase());
+    let attr_start = lower_tag.find(&pattern)? + pattern.len();
+    let rest = tag[attr_start..].trim_start();
+    let mut chars = rest.chars();
+    let first = chars.next()?;
+    if first == '"' || first == '\'' {
+        let value: String = chars.take_while(|ch| *ch != first).collect();
+        return Some(value);
+    }
+    Some(
+        rest.chars()
+            .take_while(|ch| !ch.is_whitespace() && *ch != '>' && *ch != '/')
+            .collect(),
+    )
+}
+
+fn validate_cosyvoice_speak_attr(tag: &str, attr: &str, min: f64, max: f64) -> Result<(), String> {
+    let Some(raw) = xml_attr_value(tag, attr) else {
+        return Ok(());
+    };
+    let value = raw.parse::<f64>().map_err(|_| {
+        format!(
+            "CosyVoice SSML `<speak>` attribute `{attr}` must be a number in [{min}, {max}], got `{raw}`"
+        )
+    })?;
+    if !(min..=max).contains(&value) {
+        return Err(format!(
+            "CosyVoice SSML `<speak>` attribute `{attr}` must be in [{min}, {max}], got `{raw}`"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_cosyvoice_speak_volume_scale(tag: &str) -> Result<(), String> {
+    let Some(raw) = xml_attr_value(tag, "volume") else {
+        return Ok(());
+    };
+    let value = raw.parse::<f64>().map_err(|_| {
+        format!(
+            "CosyVoice SSML `<speak>` attribute `volume` must be a number in [0, 100], got `{raw}`"
+        )
+    })?;
+    if value > 0.0 && value < 20.0 {
+        return Err(format!(
+            "CosyVoice SSML `<speak>` attribute `volume` uses a 0-100 scale, got `{raw}`. Values below 20 are near silent; use about 45-70 for normal narration."
+        ));
+    }
+    Ok(())
+}
+
+fn validate_cosyvoice_speak_tags(input: &str) -> Result<(), String> {
+    let mut rest = input;
+    while let Some(start) = rest.to_ascii_lowercase().find("<speak") {
+        let after_start = &rest[start..];
+        let Some(end) = after_start.find('>') else {
+            return Err("CosyVoice SSML `<speak>` tag is not closed".to_string());
+        };
+        let tag = &after_start[..=end];
+        validate_cosyvoice_speak_attr(tag, "rate", 0.5, 2.0)?;
+        validate_cosyvoice_speak_attr(tag, "pitch", 0.5, 2.0)?;
+        validate_cosyvoice_speak_attr(tag, "volume", 0.0, 100.0)?;
+        validate_cosyvoice_speak_volume_scale(tag)?;
+        rest = &after_start[end + 1..];
+    }
+    Ok(())
+}
+
+fn validate_cosyvoice_speech_input(model: &str, input: &str) -> Result<(), String> {
+    if !is_cosyvoice_model(model) {
+        return Ok(());
+    }
+    let lower = input.to_ascii_lowercase();
+    for (needle, reason) in [
+        (
+            "<prosody",
+            "CosyVoice does not support `<prosody>`; use `<speak rate=\"0.9\" pitch=\"0.95\" volume=\"60\">...</speak>` or plain text.",
+        ),
+        (
+            "</prosody",
+            "CosyVoice does not support `<prosody>`; remove the tag before calling voice.speech.",
+        ),
+        (
+            "<emphasis",
+            "CosyVoice does not support `<emphasis>`; express emphasis with punctuation and `<break/>`.",
+        ),
+        (
+            "<voice",
+            "CosyVoice does not support W3C `<voice>`; use payload `voiceId` instead.",
+        ),
+        (
+            "<#",
+            "CosyVoice does not support MiniMax pause markers like `<#0.6#>`; use `<break time=\"600ms\"/>`.",
+        ),
+    ] {
+        if lower.contains(needle) {
+            return Err(reason.to_string());
+        }
+    }
+    for marker in ["(laughs)", "(sighs)", "(breath)"] {
+        if lower.contains(marker) {
+            return Err(format!(
+                "CosyVoice does not support MiniMax tone marker `{marker}`; remove it from input."
+            ));
+        }
+    }
+    let allowed = ["speak", "break", "sub", "phoneme", "soundevent", "say-as"];
+    for tag in extract_xml_tag_names(input) {
+        if !allowed.contains(&tag.as_str()) {
+            return Err(format!(
+                "CosyVoice SSML tag `<{tag}>` is not supported. Supported tags: speak, break, sub, phoneme, soundEvent, say-as."
+            ));
+        }
+    }
+    validate_cosyvoice_speak_tags(input)
 }
 
 fn clone_model_target_tts_model(clone_model: &str, fallback_tts_model: &str) -> String {
@@ -71,10 +239,16 @@ fn clone_target_tts_model_from_payload(
 ) -> String {
     payload_string_alias(
         payload,
-        &["targetTtsModel", "target_tts_model", "ttsModel", "tts_model"],
+        &[
+            "targetTtsModel",
+            "target_tts_model",
+            "ttsModel",
+            "tts_model",
+        ],
     )
     .unwrap_or_else(|| {
-        let fallback = if normalized_model_key(fallback_tts_model) == normalized_model_key(clone_model)
+        let fallback = if normalized_model_key(fallback_tts_model)
+            == normalized_model_key(clone_model)
             && normalized_model_key(clone_model).contains("clone")
         {
             DEFAULT_TTS_MODEL
@@ -123,6 +297,10 @@ fn payload_i64_alias(payload: &Value, keys: &[&str]) -> Option<i64> {
         .find_map(|key| payload_field(payload, key).and_then(Value::as_i64))
 }
 
+fn payload_field_alias<'a>(payload: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|key| payload_field(payload, key))
+}
+
 fn clean_base_url(value: String) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
@@ -147,11 +325,16 @@ fn resolve_voice_config(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let clone_model = payload
-        .and_then(|value| payload_string(value, "model"))
+        .and_then(|value| payload_string_alias(value, &["cloneModel", "clone_model"]))
         .or_else(|| payload_string(&settings, "voice_clone_model"))
         .unwrap_or_else(|| DEFAULT_CLONE_MODEL.to_string());
     let tts_model = payload
-        .and_then(|value| payload_string(value, "model"))
+        .and_then(|value| {
+            payload_string_alias(
+                value,
+                &["ttsModel", "tts_model", "voiceTtsModel", "voice_tts_model"],
+            )
+        })
         .or_else(|| payload_string(&settings, "voice_tts_model"))
         .or_else(|| payload_string(&settings, "tts_model"))
         .unwrap_or_else(|| DEFAULT_TTS_MODEL.to_string());
@@ -225,10 +408,15 @@ fn enrich_cloned_voice_metadata(
     }
     if !target_tts_model.trim().is_empty() {
         object.insert("targetTtsModel".to_string(), json!(target_tts_model.trim()));
-        object.insert("target_tts_model".to_string(), json!(target_tts_model.trim()));
+        object.insert(
+            "target_tts_model".to_string(),
+            json!(target_tts_model.trim()),
+        );
         object.insert("ttsModel".to_string(), json!(target_tts_model.trim()));
     }
-    if let Some(provider) = payload_string(payload, "provider").filter(|value| !value.trim().is_empty()) {
+    if let Some(provider) =
+        payload_string(payload, "provider").filter(|value| !value.trim().is_empty())
+    {
         object.insert("provider".to_string(), json!(provider));
     } else if is_cosyvoice_model(clone_model) || is_cosyvoice_model(target_tts_model) {
         object.insert("provider".to_string(), json!("cosyvoice"));
@@ -282,7 +470,12 @@ fn voice_matches_selected_tts_model(value: &Value, selected_tts_model: &str) -> 
     if voice_target_tts_model(value).is_some() {
         return voice_mapping_matches_model(value, model);
     }
-    for key in ["supportedModels", "supported_models", "ttsModels", "tts_models"] {
+    for key in [
+        "supportedModels",
+        "supported_models",
+        "ttsModels",
+        "tts_models",
+    ] {
         if let Some(items) = value.get(key).and_then(Value::as_array) {
             return items.iter().any(|item| {
                 item.as_str()
@@ -432,7 +625,10 @@ fn subject_voice_list_items(
                 .unwrap_or(true);
             if include_legacy {
                 if let Some(item) = subject_voice_list_item(subject, voice) {
-                    if items.iter().all(|existing| voice_list_item_id(existing) != voice_list_item_id(&item)) {
+                    if items
+                        .iter()
+                        .all(|existing| voice_list_item_id(existing) != voice_list_item_id(&item))
+                    {
                         items.push(item);
                     }
                 }
@@ -470,9 +666,10 @@ fn subject_voice_list_item(subject: &SubjectRecord, voice: &Value) -> Option<Val
     }))
 }
 
-fn subject_voice_id(
+fn subject_voice_id_for_tts_model_state(
     state: &State<'_, AppState>,
     subject_id: &str,
+    tts_model: &str,
 ) -> Result<Option<String>, String> {
     ensure_store_hydrated_for_subjects(state)?;
     with_store(state, |store| {
@@ -480,8 +677,55 @@ fn subject_voice_id(
             .subjects
             .iter()
             .find(|subject| subject.id == subject_id)
-            .and_then(|subject| subject.voice.as_ref())
-            .and_then(|voice| payload_string_alias(voice, &["voiceId", "voice_id"])))
+            .and_then(|subject| subject_voice_id_for_tts_model(subject, tts_model)))
+    })
+}
+
+fn subject_voice_job_matches_state(
+    state: &State<'_, AppState>,
+    subject_id: &str,
+    job_id: &str,
+    tts_model: &str,
+) -> Result<bool, String> {
+    let job_id = job_id.trim();
+    if job_id.is_empty() {
+        return Ok(true);
+    }
+    ensure_store_hydrated_for_subjects(state)?;
+    with_store(state, |store| {
+        let Some(subject) = store
+            .subjects
+            .iter()
+            .find(|subject| subject.id == subject_id)
+        else {
+            return Ok(false);
+        };
+        let Some(voice) = subject.voice.as_ref() else {
+            return Ok(false);
+        };
+        if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
+            for mapping in mappings.values() {
+                if !voice_mapping_matches_model(mapping, tts_model) {
+                    continue;
+                }
+                let mapping_job_id = payload_string(mapping, "jobId").unwrap_or_default();
+                if !mapping_job_id.trim().is_empty() {
+                    return Ok(mapping_job_id.trim() == job_id);
+                }
+            }
+        }
+        let current_job_id = payload_string(voice, "jobId").unwrap_or_default();
+        let current_tts_model = voice_target_tts_model(voice).unwrap_or_default();
+        if !current_tts_model.trim().is_empty()
+            && normalized_model_key(&current_tts_model) != normalized_model_key(tts_model)
+        {
+            return Ok(true);
+        }
+        if current_job_id.trim() != job_id {
+            return Ok(false);
+        }
+        Ok(current_tts_model.trim().is_empty()
+            || normalized_model_key(&current_tts_model) == normalized_model_key(tts_model))
     })
 }
 
@@ -500,6 +744,145 @@ fn subject_voice_id_for_tts_model(record: &SubjectRecord, tts_model: &str) -> Op
         return payload_string_alias(voice, &["voiceId", "voice_id"]);
     }
     None
+}
+
+fn tts_model_for_voice_id_from_subjects(
+    subjects: &[SubjectRecord],
+    voice_id: &str,
+) -> Option<String> {
+    let target_voice_id = voice_id.trim();
+    if target_voice_id.is_empty() {
+        return None;
+    }
+    for subject in subjects {
+        let Some(voice) = subject.voice.as_ref() else {
+            continue;
+        };
+        if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
+            for mapping in mappings.values() {
+                let mapping_matches_voice = payload_string_alias(mapping, &["voiceId", "voice_id"])
+                    .map(|id| id == target_voice_id)
+                    .unwrap_or(false);
+                if mapping_matches_voice {
+                    if let Some(model) =
+                        voice_target_tts_model(mapping).filter(|value| !value.trim().is_empty())
+                    {
+                        return Some(model);
+                    }
+                }
+            }
+        }
+        let legacy_matches = payload_string_alias(voice, &["voiceId", "voice_id"])
+            .map(|id| id == target_voice_id)
+            .unwrap_or(false);
+        if legacy_matches {
+            if let Some(model) =
+                voice_target_tts_model(voice).filter(|value| !value.trim().is_empty())
+            {
+                return Some(model);
+            }
+        }
+    }
+    None
+}
+
+fn tts_model_for_voice_id_state(
+    state: &State<'_, AppState>,
+    voice_id: &str,
+) -> Result<Option<String>, String> {
+    ensure_store_hydrated_for_subjects(state)?;
+    with_store(state, |store| {
+        Ok(tts_model_for_voice_id_from_subjects(
+            &store.subjects,
+            voice_id,
+        ))
+    })
+}
+
+fn delete_stale_cloned_voice(
+    config: &VoiceGatewayConfig,
+    subject_id: &str,
+    target_tts_model: &str,
+    job_id: Option<&str>,
+    voice: &Value,
+) {
+    let Some(voice_id) = payload_string_alias(voice, &["voiceId", "voice_id"])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    match delete_platform_voice(config, &voice_id) {
+        Ok(()) => log_voice_clone_event(
+            LogLevel::Info,
+            "cleanup_stale_voice",
+            format!("deleted stale voice clone result for subject={subject_id} target_tts_model={target_tts_model}"),
+            json!({
+                "ownerAssetId": subject_id,
+                "targetTtsModel": target_tts_model,
+                "jobId": job_id,
+                "deletedVoiceId": voice_id,
+            }),
+        ),
+        Err(error) => log_voice_clone_event(
+            LogLevel::Warn,
+            "cleanup_stale_voice_failed",
+            format!("failed to delete stale voice clone result for subject={subject_id}: {error}"),
+            json!({
+                "ownerAssetId": subject_id,
+                "targetTtsModel": target_tts_model,
+                "jobId": job_id,
+                "deletedVoiceId": voice_id,
+                "error": error,
+            }),
+        ),
+    }
+}
+
+fn cleanup_replaced_subject_voice(
+    config: &VoiceGatewayConfig,
+    subject_id: &str,
+    target_tts_model: &str,
+    previous_voice_id: Option<String>,
+    next_voice: &Value,
+) {
+    let Some(previous_voice_id) = previous_voice_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let next_voice_id = payload_string_alias(next_voice, &["voiceId", "voice_id"])
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    if previous_voice_id == next_voice_id {
+        return;
+    }
+    match delete_platform_voice(config, &previous_voice_id) {
+        Ok(()) => log_voice_clone_event(
+            LogLevel::Info,
+            "cleanup_replaced_voice",
+            format!("deleted replaced voice id for subject={subject_id} target_tts_model={target_tts_model}"),
+            json!({
+                "ownerAssetId": subject_id,
+                "targetTtsModel": target_tts_model,
+                "deletedVoiceId": previous_voice_id,
+                "nextVoiceId": next_voice_id,
+            }),
+        ),
+        Err(error) => log_voice_clone_event(
+            LogLevel::Warn,
+            "cleanup_replaced_voice_failed",
+            format!("failed to delete replaced voice id for subject={subject_id}: {error}"),
+            json!({
+                "ownerAssetId": subject_id,
+                "targetTtsModel": target_tts_model,
+                "deletedVoiceId": previous_voice_id,
+                "nextVoiceId": next_voice_id,
+                "error": error,
+            }),
+        ),
+    }
 }
 
 fn resolve_sample_path(
@@ -690,6 +1073,25 @@ pub(crate) fn clone_voice(
     }
     let model = payload_string(payload, "model").unwrap_or_else(|| config.clone_model.clone());
     let target_tts_model = clone_target_tts_model_from_payload(payload, &model, &config.tts_model);
+    let job_id = payload_string(payload, "jobId");
+    log_voice_clone_event(
+        LogLevel::Info,
+        "request",
+        format!("voice clone request model={model} target_tts_model={target_tts_model}"),
+        json!({
+            "jobId": job_id,
+            "ownerAssetId": owner_asset_id,
+            "model": model,
+            "targetTtsModel": target_tts_model,
+            "configuredCloneModel": config.clone_model,
+            "configuredTtsModel": config.tts_model,
+            "baseUrl": config.base_url,
+            "samplePath": sample_path.display().to_string(),
+            "uploadPath": upload_path.display().to_string(),
+            "mimeType": mime_type,
+            "expectedBytes": expected_bytes,
+        }),
+    );
     if !model.trim().is_empty() {
         form = form.text("model", model.clone());
     }
@@ -709,18 +1111,73 @@ pub(crate) fn clone_voice(
     let status = response.status();
     let body = response.text().map_err(|error| error.to_string())?;
     if !status.is_success() {
+        log_voice_clone_event(
+            LogLevel::Error,
+            "upstream_error",
+            format!(
+                "voice clone upstream failed status={status} model={model} target_tts_model={target_tts_model}"
+            ),
+            json!({
+                "jobId": job_id,
+                "ownerAssetId": owner_asset_id,
+                "model": model,
+                "targetTtsModel": target_tts_model,
+                "httpStatus": status.as_u16(),
+                "baseUrl": config.base_url,
+                "upstreamBody": body,
+            }),
+        );
         return Err(format!("voice clone failed with HTTP {status}: {body}"));
     }
     let raw = serde_json::from_str::<Value>(&body).map_err(|error| error.to_string())?;
     let mut voice = normalize_voice_response(raw.clone(), name)?;
     enrich_cloned_voice_metadata(&mut voice, &model, &target_tts_model, payload);
+    log_voice_clone_event(
+        LogLevel::Info,
+        "success",
+        format!("voice clone completed model={model} target_tts_model={target_tts_model}"),
+        json!({
+            "jobId": job_id,
+            "ownerAssetId": owner_asset_id,
+            "model": model,
+            "targetTtsModel": target_tts_model,
+            "voiceId": payload_string_alias(&voice, &["voiceId", "voice_id"]),
+            "baseUrl": config.base_url,
+        }),
+    );
     if owner_asset_id.is_some()
         && payload_bool_alias(payload, &["writeBack", "write_back"]).unwrap_or(true)
     {
         if let Some(subject_id) = owner_asset_id.as_deref() {
-            let previous_voice_id = subject_voice_id(state, subject_id)?;
+            if let Some(job_id) = job_id.as_deref() {
+                if !subject_voice_job_matches_state(state, subject_id, job_id, &target_tts_model)? {
+                    delete_stale_cloned_voice(
+                        &config,
+                        subject_id,
+                        &target_tts_model,
+                        Some(job_id),
+                        &voice,
+                    );
+                    return Ok(json!({
+                        "success": true,
+                        "stale": true,
+                        "voice": voice,
+                        "ownerAssetId": owner_asset_id,
+                        "samplePath": sample_path.display().to_string(),
+                        "raw": raw,
+                    }));
+                }
+            }
+            let previous_voice_id =
+                subject_voice_id_for_tts_model_state(state, subject_id, &target_tts_model)?;
             patch_subject_voice_state(state, subject_id, voice.clone())?;
-            let _ = previous_voice_id;
+            cleanup_replaced_subject_voice(
+                &config,
+                subject_id,
+                &target_tts_model,
+                previous_voice_id,
+                &voice,
+            );
         }
     }
     Ok(json!({
@@ -743,6 +1200,22 @@ fn clone_voice_from_managed_key(
     let model = payload_string(payload, "model").unwrap_or_else(|| config.clone_model.clone());
     let target_tts_model = clone_target_tts_model_from_payload(payload, &model, &config.tts_model);
     let name = payload_string(payload, "name");
+    let job_id = payload_string(payload, "jobId");
+    log_voice_clone_event(
+        LogLevel::Info,
+        "request",
+        format!("voice clone request model={model} target_tts_model={target_tts_model}"),
+        json!({
+            "jobId": job_id,
+            "ownerAssetId": owner_asset_id,
+            "model": model,
+            "targetTtsModel": target_tts_model,
+            "configuredCloneModel": config.clone_model,
+            "configuredTtsModel": config.tts_model,
+            "baseUrl": config.base_url,
+            "sampleFileKey": sample_file_key,
+        }),
+    );
     let mut body = Map::new();
     body.insert(
         "sample_file_key".to_string(),
@@ -760,7 +1233,10 @@ fn clone_voice_from_managed_key(
         body.insert("model".to_string(), json!(model.clone()));
     }
     if !target_tts_model.trim().is_empty() {
-        body.insert("target_tts_model".to_string(), json!(target_tts_model.clone()));
+        body.insert(
+            "target_tts_model".to_string(),
+            json!(target_tts_model.clone()),
+        );
     }
 
     let client = Client::builder()
@@ -779,6 +1255,23 @@ fn clone_voice_from_managed_key(
     let status = response.status();
     let body = response.text().map_err(|error| error.to_string())?;
     if !status.is_success() {
+        log_voice_clone_event(
+            LogLevel::Error,
+            "upstream_error",
+            format!(
+                "voice clone upstream failed status={status} model={model} target_tts_model={target_tts_model}"
+            ),
+            json!({
+                "jobId": job_id,
+                "ownerAssetId": owner_asset_id,
+                "model": model,
+                "targetTtsModel": target_tts_model,
+                "httpStatus": status.as_u16(),
+                "baseUrl": config.base_url,
+                "sampleFileKey": sample_file_key,
+                "upstreamBody": body,
+            }),
+        );
         return Err(format!("voice clone failed with HTTP {status}: {body}"));
     }
     let raw = serde_json::from_str::<Value>(&body).map_err(|error| error.to_string())?;
@@ -791,11 +1284,51 @@ fn clone_voice_from_managed_key(
         && payload_bool_alias(payload, &["writeBack", "write_back"]).unwrap_or(true)
     {
         if let Some(subject_id) = owner_asset_id.as_deref() {
-            let previous_voice_id = subject_voice_id(state, subject_id)?;
+            if let Some(job_id) = job_id.as_deref() {
+                if !subject_voice_job_matches_state(state, subject_id, job_id, &target_tts_model)? {
+                    delete_stale_cloned_voice(
+                        config,
+                        subject_id,
+                        &target_tts_model,
+                        Some(job_id),
+                        &voice,
+                    );
+                    return Ok(json!({
+                        "success": true,
+                        "stale": true,
+                        "voice": voice,
+                        "ownerAssetId": owner_asset_id,
+                        "sampleFileKey": sample_file_key,
+                        "raw": raw,
+                    }));
+                }
+            }
+            let previous_voice_id =
+                subject_voice_id_for_tts_model_state(state, subject_id, &target_tts_model)?;
             patch_subject_voice_state(state, subject_id, voice.clone())?;
-            let _ = previous_voice_id;
+            cleanup_replaced_subject_voice(
+                config,
+                subject_id,
+                &target_tts_model,
+                previous_voice_id,
+                &voice,
+            );
         }
     }
+    log_voice_clone_event(
+        LogLevel::Info,
+        "success",
+        format!("voice clone completed model={model} target_tts_model={target_tts_model}"),
+        json!({
+            "jobId": job_id,
+            "ownerAssetId": owner_asset_id,
+            "model": model,
+            "targetTtsModel": target_tts_model,
+            "voiceId": payload_string_alias(&voice, &["voiceId", "voice_id"]),
+            "baseUrl": config.base_url,
+            "sampleFileKey": sample_file_key,
+        }),
+    );
     Ok(json!({
         "success": true,
         "voice": voice,
@@ -1097,20 +1630,37 @@ fn build_speech_request_body(
     response_format: String,
 ) -> Result<Map<String, Value>, String> {
     let mut body = Map::new();
-    body.insert("model".to_string(), json!(model));
+    let supports_prompt = tts_model_supports_prompt(&model);
+    let supports_emotion = tts_model_supports_emotion(&model);
+    validate_cosyvoice_speech_input(&model, &input)?;
+    body.insert("model".to_string(), json!(model.clone()));
     body.insert("input".to_string(), json!(input));
     body.insert("voice_id".to_string(), json!(voice_id.clone()));
     body.insert("response_format".to_string(), json!(response_format));
     body.insert("return_audio_binary".to_string(), json!(true));
 
+    if supports_prompt {
+        if let Some(prompt) =
+            payload_string_alias(payload, &["prompt", "stylePrompt", "style_prompt"])
+                .filter(|value| !value.trim().is_empty())
+        {
+            body.insert("prompt".to_string(), json!(prompt));
+        }
+    }
+    if let Some(language_hints) = payload_field_alias(payload, &["language_hints", "languageHints"])
+    {
+        body.insert("language_hints".to_string(), language_hints.clone());
+    }
     if let Some(speed) = speech_speed(payload)? {
         body.insert("speed".to_string(), json!(speed));
     }
     if let Some(pitch) = speech_pitch(payload)? {
         body.insert("pitch".to_string(), json!(pitch));
     }
-    if let Some(emotion) = speech_emotion(payload)? {
-        body.insert("emotion".to_string(), json!(emotion));
+    if supports_emotion {
+        if let Some(emotion) = speech_emotion(payload)? {
+            body.insert("emotion".to_string(), json!(emotion));
+        }
     }
     if let Some(add_silence) =
         payload_f64_alias(payload, &["addSilence", "add_silence"]).or_else(|| {
@@ -1147,6 +1697,9 @@ fn build_speech_request_body(
         .filter(|object| !object.is_empty())
     {
         let mut merged = voice_setting.clone();
+        if !supports_emotion {
+            merged.remove("emotion");
+        }
         merged
             .entry("voice_id".to_string())
             .or_insert_with(|| json!(voice_id));
@@ -1235,6 +1788,11 @@ pub(crate) fn speech_sequence_segment_payload(
         "responseFormat",
         "response_format",
         "format",
+        "prompt",
+        "stylePrompt",
+        "style_prompt",
+        "language_hints",
+        "languageHints",
         "languageBoost",
         "language_boost",
         "speed",
@@ -1294,7 +1852,13 @@ fn synthesize_speech_inner(
     let voice_id = payload_string_alias(payload, &["voiceId", "voice_id", "voice"])
         .ok_or_else(|| "voice.speech requires voiceId".to_string())?;
     let config = resolve_voice_config(state, Some(payload))?;
-    let model = payload_string(payload, "model").unwrap_or_else(|| config.tts_model.clone());
+    let model = payload_string(payload, "model")
+        .or_else(|| {
+            tts_model_for_voice_id_state(state, &voice_id)
+                .ok()
+                .flatten()
+        })
+        .unwrap_or_else(|| config.tts_model.clone());
     validate_speech_voice_for_model(state, &voice_id, &model)?;
     let response_format =
         payload_string_alias(payload, &["responseFormat", "response_format", "format"])
@@ -1307,6 +1871,8 @@ fn synthesize_speech_inner(
         model.clone(),
         response_format.clone(),
     )?;
+    let url = gateway_url(&config, "/audio/speech");
+    let request_body = Value::Object(body);
 
     let client = Client::builder()
         .timeout(Duration::from_secs(180))
@@ -1315,10 +1881,10 @@ fn synthesize_speech_inner(
     let response = authorized_request(
         &client,
         reqwest::Method::POST,
-        &gateway_url(&config, "/audio/speech"),
+        &url,
         config.api_key.as_deref(),
     )
-    .json(&Value::Object(body))
+    .json(&request_body)
     .send()
     .map_err(|error| error.to_string())?;
     let status = response.status();
@@ -1337,10 +1903,6 @@ fn synthesize_speech_inner(
     }
     let (audio_bytes, extension) =
         decode_audio_response(content_type.as_deref(), bytes, response_format.as_str())?;
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    hasher.update(voice_id.as_bytes());
-    let digest = format!("{:x}", hasher.finalize());
     let title = payload_string(payload, "title").unwrap_or_else(|| {
         let stem = input.chars().take(24).collect::<String>();
         if stem.trim().is_empty() {
@@ -1349,7 +1911,7 @@ fn synthesize_speech_inner(
             stem
         }
     });
-    let file_stem = storage_safe_file_stem(&format!("{}-{}", title, &digest[..12]));
+    let file_stem = make_id("tts");
     let relative_path = format!("generated/tts/{file_stem}.{extension}");
     let absolute_path = media_root(state)?.join(&relative_path);
     if let Some(parent) = absolute_path.parent() {
@@ -1405,7 +1967,9 @@ fn validate_speech_voice_for_model(
     model: &str,
 ) -> Result<(), String> {
     if is_cosyvoice_model(model) && is_minimax_system_voice_id(voice_id) {
-        return Err("cosyvoice-v3.5-plus 不支持系统音色，请选择已复刻到 CosyVoice 的音色".to_string());
+        return Err(
+            "cosyvoice-v3.5-plus 不支持系统音色，请选择已复刻到 CosyVoice 的音色".to_string(),
+        );
     }
     ensure_store_hydrated_for_subjects(state)?;
     let subjects = with_store(state, |store| Ok(store.subjects.clone()))?;
@@ -1417,7 +1981,10 @@ fn validate_speech_voice_for_model(
             .map(|id| id == voice_id)
             .unwrap_or(false);
         if legacy_matches && voice_target_tts_model(voice).is_none() && is_cosyvoice_model(model) {
-            return Err("当前角色音色没有 CosyVoice 映射，请先用 cosyvoice-v3.5-plus-voice-clone 复刻".to_string());
+            return Err(
+                "当前角色音色没有 CosyVoice 映射，请先用 cosyvoice-v3.5-plus-voice-clone 复刻"
+                    .to_string(),
+            );
         }
         if legacy_matches && voice_mapping_matches_model(voice, model) {
             return Ok(());
@@ -1473,7 +2040,8 @@ pub(crate) fn spawn_subject_voice_clone_if_needed(
     let state = app.state::<AppState>();
     let config = resolve_voice_config(&state, None)?;
     let target_tts_model = clone_model_target_tts_model(&config.clone_model, &config.tts_model);
-    if record.voice_path.is_none() || subject_voice_has_id_for_tts_model(record, &target_tts_model) {
+    if record.voice_path.is_none() || subject_voice_has_id_for_tts_model(record, &target_tts_model)
+    {
         return Ok(());
     }
     if !matches!(
@@ -1536,20 +2104,8 @@ fn voice_clone_payload_for_subject(
     Ok(payload)
 }
 
-fn patch_subject_voice_state(
-    state: &State<'_, AppState>,
-    subject_id: &str,
-    voice: Value,
-) -> Result<(), String> {
-    ensure_store_hydrated_for_subjects(state)?;
-    let root = subjects_root(state)?;
-    let (categories, mut subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
-    let Some(index) = subjects.iter().position(|subject| subject.id == subject_id) else {
-        return Ok(());
-    };
-    let mut merged = subjects[index].voice.clone().unwrap_or_else(|| json!({}));
+fn merge_subject_voice_state(existing: Option<&Value>, voice: &Value) -> Value {
+    let mut merged = existing.cloned().unwrap_or_else(|| json!({}));
     if !merged.is_object() {
         merged = json!({});
     }
@@ -1557,16 +2113,21 @@ fn patch_subject_voice_state(
         for (key, value) in source {
             target.insert(key.clone(), value.clone());
         }
-        if let (Some(voice_id), Some(target_tts_model)) = (
-            payload_string_alias(&voice, &["voiceId", "voice_id"]),
-            voice_target_tts_model(&voice),
-        ) {
+        if let Some(target_tts_model) = voice_target_tts_model(voice) {
             let mapping_key = normalized_model_key(&target_tts_model);
             let mut mapping = source.clone();
-            mapping.insert("voiceId".to_string(), json!(voice_id.clone()));
-            mapping.insert("voice_id".to_string(), json!(voice_id));
-            mapping.insert("targetTtsModel".to_string(), json!(target_tts_model.clone()));
-            mapping.insert("target_tts_model".to_string(), json!(target_tts_model.clone()));
+            if let Some(voice_id) = payload_string_alias(voice, &["voiceId", "voice_id"]) {
+                mapping.insert("voiceId".to_string(), json!(voice_id.clone()));
+                mapping.insert("voice_id".to_string(), json!(voice_id));
+            }
+            mapping.insert(
+                "targetTtsModel".to_string(),
+                json!(target_tts_model.clone()),
+            );
+            mapping.insert(
+                "target_tts_model".to_string(),
+                json!(target_tts_model.clone()),
+            );
             mapping.insert("ttsModel".to_string(), json!(target_tts_model));
             mapping.insert("updatedAt".to_string(), json!(now_iso()));
             let voice_mappings = target
@@ -1582,6 +2143,23 @@ fn patch_subject_voice_state(
         target.insert("updatedAt".to_string(), json!(now_iso()));
         target.remove("lastError");
     }
+    merged
+}
+
+fn patch_subject_voice_state(
+    state: &State<'_, AppState>,
+    subject_id: &str,
+    voice: Value,
+) -> Result<(), String> {
+    ensure_store_hydrated_for_subjects(state)?;
+    let root = subjects_root(state)?;
+    let (categories, mut subjects) = with_store(state, |store| {
+        Ok((store.categories.clone(), store.subjects.clone()))
+    })?;
+    let Some(index) = subjects.iter().position(|subject| subject.id == subject_id) else {
+        return Ok(());
+    };
+    let merged = merge_subject_voice_state(subjects[index].voice.as_ref(), &voice);
     subjects[index].voice = Some(merged);
     subjects[index].updated_at = now_iso();
     persist_subjects_workspace(&root, &categories, &subjects)?;
@@ -1645,6 +2223,8 @@ pub(crate) fn patch_subject_voice_queued(
     let mut voice = json!({
         "status": "queued",
         "jobId": job_id,
+        "voiceId": Value::Null,
+        "voice_id": Value::Null,
         "updatedAt": now_iso(),
     });
     if let Some(path) = payload_string_alias(payload, &["samplePath", "sampleFilePath"]) {
@@ -1690,6 +2270,8 @@ pub(crate) fn patch_subject_voice_failure(
     if let Some(target) = merged.as_object_mut() {
         target.insert("status".to_string(), json!("failed"));
         target.insert("lastError".to_string(), json!(error));
+        target.insert("voiceId".to_string(), Value::Null);
+        target.insert("voice_id".to_string(), Value::Null);
         target.insert("updatedAt".to_string(), json!(now_iso()));
     }
     subjects[index].voice = Some(merged);
@@ -1705,6 +2287,139 @@ pub(crate) fn patch_subject_voice_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_subject_with_voice(voice: Value) -> SubjectRecord {
+        SubjectRecord {
+            id: "subject-test".to_string(),
+            name: "Test".to_string(),
+            category_id: None,
+            description: None,
+            tags: Vec::new(),
+            attributes: Vec::new(),
+            image_paths: Vec::new(),
+            voice_path: None,
+            video_path: None,
+            voice_script: None,
+            voice: Some(voice),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+            updated_at: "2026-05-19T00:00:00Z".to_string(),
+            absolute_image_paths: Vec::new(),
+            preview_urls: Vec::new(),
+            primary_preview_url: None,
+            absolute_voice_path: None,
+            voice_preview_url: None,
+            absolute_video_path: None,
+            video_preview_url: None,
+        }
+    }
+
+    #[test]
+    fn subject_voice_merge_replaces_same_model_mapping() {
+        let existing = json!({
+            "voiceId": "voice_old",
+            "voice_id": "voice_old",
+            "targetTtsModel": "cosyvoice-v3.5-plus",
+            "voiceMappings": {
+                "cosyvoice-v3.5-plus": {
+                    "voiceId": "voice_old",
+                    "voice_id": "voice_old",
+                    "targetTtsModel": "cosyvoice-v3.5-plus"
+                },
+                "speech-2.8-hd": {
+                    "voiceId": "voice_minimax",
+                    "voice_id": "voice_minimax",
+                    "targetTtsModel": "speech-2.8-hd"
+                }
+            }
+        });
+        let next = json!({
+            "voiceId": "voice_new",
+            "voice_id": "voice_new",
+            "targetTtsModel": "cosyvoice-v3.5-plus",
+            "target_tts_model": "cosyvoice-v3.5-plus",
+            "ttsModel": "cosyvoice-v3.5-plus",
+            "status": "ready"
+        });
+
+        let merged = merge_subject_voice_state(Some(&existing), &next);
+
+        assert_eq!(
+            payload_string_alias(&merged, &["voiceId", "voice_id"]).as_deref(),
+            Some("voice_new")
+        );
+        assert_eq!(
+            merged
+                .pointer("/voiceMappings/cosyvoice-v3.5-plus/voiceId")
+                .and_then(Value::as_str),
+            Some("voice_new")
+        );
+        assert_eq!(
+            merged
+                .pointer("/voiceMappings/speech-2.8-hd/voiceId")
+                .and_then(Value::as_str),
+            Some("voice_minimax")
+        );
+    }
+
+    #[test]
+    fn subject_voice_merge_tracks_pending_job_per_model() {
+        let existing = json!({
+            "voiceId": "voice_cosy",
+            "voice_id": "voice_cosy",
+            "targetTtsModel": "cosyvoice-v3.5-plus",
+            "voiceMappings": {
+                "cosyvoice-v3.5-plus": {
+                    "voiceId": "voice_cosy",
+                    "voice_id": "voice_cosy",
+                    "targetTtsModel": "cosyvoice-v3.5-plus"
+                }
+            }
+        });
+        let queued = json!({
+            "status": "queued",
+            "jobId": "media-job-minimax",
+            "voiceId": null,
+            "voice_id": null,
+            "targetTtsModel": "minimax",
+            "target_tts_model": "minimax",
+            "ttsModel": "minimax"
+        });
+
+        let merged = merge_subject_voice_state(Some(&existing), &queued);
+
+        assert_eq!(
+            merged
+                .pointer("/voiceMappings/cosyvoice-v3.5-plus/voiceId")
+                .and_then(Value::as_str),
+            Some("voice_cosy")
+        );
+        assert_eq!(
+            merged
+                .pointer("/voiceMappings/minimax/jobId")
+                .and_then(Value::as_str),
+            Some("media-job-minimax")
+        );
+        assert!(merged.pointer("/voiceMappings/minimax/voiceId").is_none());
+    }
+
+    #[test]
+    fn tts_model_for_voice_id_reads_model_bound_voice_mapping() {
+        let subjects = vec![test_subject_with_voice(json!({
+            "voiceId": "voice_legacy",
+            "targetTtsModel": "speech-2.8-hd",
+            "voiceMappings": {
+                "cosyvoice-v3.5-plus": {
+                    "voiceId": "voice_cosy",
+                    "targetTtsModel": "cosyvoice-v3.5-plus"
+                }
+            }
+        }))];
+
+        assert_eq!(
+            tts_model_for_voice_id_from_subjects(&subjects, "voice_cosy").as_deref(),
+            Some("cosyvoice-v3.5-plus")
+        );
+    }
 
     #[test]
     fn speech_request_body_forwards_minimax_delivery_controls() {
@@ -1783,6 +2498,144 @@ mod tests {
     }
 
     #[test]
+    fn speech_request_body_forwards_prompt_and_language_hints() {
+        let payload = json!({
+            "prompt": "请用温柔、平稳的语气朗读。",
+            "language_hints": ["zh"],
+            "sample_rate": 24000,
+            "emotion": "happy",
+            "voice_setting": {
+                "emotion": "sad"
+            }
+        });
+
+        let body = build_speech_request_body(
+            &payload,
+            "这里是开场白，接下来进入重点。".to_string(),
+            "voice_xxx".to_string(),
+            "cosyvoice-v3.5-plus".to_string(),
+            "mp3".to_string(),
+        )
+        .expect("request body");
+        let body_value = Value::Object(body);
+
+        assert_eq!(
+            body_value.get("prompt").and_then(Value::as_str),
+            Some("请用温柔、平稳的语气朗读。")
+        );
+        assert_eq!(
+            body_value
+                .get("language_hints")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("zh")
+        );
+        assert_eq!(
+            body_value.get("sample_rate").and_then(Value::as_i64),
+            Some(24000)
+        );
+        assert!(body_value.get("emotion").is_none());
+        assert!(body_value.pointer("/voice_setting/emotion").is_none());
+    }
+
+    #[test]
+    fn speech_request_body_rejects_unsupported_cosyvoice_ssml() {
+        let payload = json!({
+            "prompt": "请用清晰、平稳的语气朗读。"
+        });
+        let error = build_speech_request_body(
+            &payload,
+            "<speak><prosody rate=\"0.9\" volume=\"medium\">文本</prosody></speak>".to_string(),
+            "voice_xxx".to_string(),
+            "cosyvoice-v3.5-plus".to_string(),
+            "mp3".to_string(),
+        )
+        .expect_err("unsupported CosyVoice SSML should be rejected");
+
+        assert!(error.contains("CosyVoice does not support `<prosody>`"));
+    }
+
+    #[test]
+    fn speech_request_body_rejects_non_numeric_cosyvoice_speak_volume() {
+        let payload = json!({
+            "prompt": "请用清晰、平稳的语气朗读。"
+        });
+        let error = build_speech_request_body(
+            &payload,
+            "<speak rate=\"0.9\" volume=\"medium\">文本</speak>".to_string(),
+            "voice_xxx".to_string(),
+            "cosyvoice-v3.5-plus".to_string(),
+            "mp3".to_string(),
+        )
+        .expect_err("invalid CosyVoice speak volume should be rejected");
+
+        assert!(error.contains("`volume` must be a number"));
+    }
+
+    #[test]
+    fn speech_request_body_rejects_cosyvoice_fractional_volume_scale() {
+        let payload = json!({
+            "prompt": "请用清晰、平稳的语气朗读。"
+        });
+        let error = build_speech_request_body(
+            &payload,
+            "<speak rate=\"0.9\" pitch=\"0.95\" volume=\"1.0\">文本</speak>".to_string(),
+            "voice_xxx".to_string(),
+            "cosyvoice-v3.5-plus".to_string(),
+            "mp3".to_string(),
+        )
+        .expect_err("fractional-scale CosyVoice volume should be rejected");
+
+        assert!(error.contains("uses a 0-100 scale"));
+    }
+
+    #[test]
+    fn speech_request_body_accepts_plain_cosyvoice_input() {
+        let payload = json!({
+            "prompt": "请用清晰、平稳的说明语气朗读。",
+            "language_hints": ["zh"]
+        });
+        let body = build_speech_request_body(
+            &payload,
+            "在 Mac 上彻底删除文件，不是移到废纸篓，有几种方法。".to_string(),
+            "voice_xxx".to_string(),
+            "cosyvoice-v3.5-plus".to_string(),
+            "mp3".to_string(),
+        )
+        .expect("plain CosyVoice input should pass");
+
+        assert_eq!(
+            body.get("input").and_then(Value::as_str),
+            Some("在 Mac 上彻底删除文件，不是移到废纸篓，有几种方法。")
+        );
+    }
+
+    #[test]
+    fn speech_request_body_drops_prompt_for_minimax_models() {
+        let payload = json!({
+            "prompt": "请用温柔、平稳的语气朗读。",
+            "emotion": "happy"
+        });
+
+        let body = build_speech_request_body(
+            &payload,
+            "这里是开场白，接下来进入重点。".to_string(),
+            "voice_xxx".to_string(),
+            "speech-2.8-turbo".to_string(),
+            "mp3".to_string(),
+        )
+        .expect("request body");
+        let body_value = Value::Object(body);
+
+        assert!(body_value.get("prompt").is_none());
+        assert_eq!(
+            body_value.get("emotion").and_then(Value::as_str),
+            Some("happy")
+        );
+    }
+
+    #[test]
     fn speech_request_body_rejects_invalid_delivery_controls() {
         let payload = json!({
             "speed": 2.5,
@@ -1806,6 +2659,8 @@ mod tests {
         let parent = json!({
             "voiceId": "voice_parent",
             "model": "speech-2.8-hd",
+            "prompt": "旁白语气平稳。",
+            "language_hints": ["zh"],
             "speed": 0.95,
             "emotion": "calm",
             "audio_setting": {
@@ -1848,6 +2703,18 @@ mod tests {
                 .pointer("/audio_setting/sample_rate")
                 .and_then(Value::as_i64),
             Some(32000)
+        );
+        assert_eq!(
+            payload.get("prompt").and_then(Value::as_str),
+            Some("旁白语气平稳。")
+        );
+        assert_eq!(
+            payload
+                .get("language_hints")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("zh")
         );
         assert_eq!(
             payload
