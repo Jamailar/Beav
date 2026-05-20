@@ -827,7 +827,7 @@ pub(crate) fn initialize_auth_runtime(
                 .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
                 .unwrap_or_default();
             cache.call_records =
-                payload_string(&store.settings, "redbox_official_call_records_json")
+                payload_string(&store.settings, "redbox_auth_call_records_json")
                     .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
                     .unwrap_or_default();
             Ok(())
