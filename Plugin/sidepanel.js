@@ -54,6 +54,7 @@ const elements = {
 };
 
 const USER_PROFILE_FEATURE_ENABLED = true;
+const ACCOUNT_BINDING_FEATURE_ENABLED = false;
 let context = null;
 let refreshing = false;
 let capturePendingAction = '';
@@ -109,7 +110,7 @@ function bindEvents() {
   elements.taskQueuePause.addEventListener('click', () => void controlActiveTask('pause'));
   elements.taskQueueResume.addEventListener('click', () => void controlActiveTask('resume'));
   elements.taskQueueCancel.addEventListener('click', () => void controlActiveTask('cancel'));
-  if (USER_PROFILE_FEATURE_ENABLED) {
+  if (USER_PROFILE_FEATURE_ENABLED && ACCOUNT_BINDING_FEATURE_ENABLED) {
     elements.accountBindingAction.addEventListener('click', () => void bindCurrentProfileAsAccount());
   }
   elements.captureActions.addEventListener('click', (event) => {
@@ -299,8 +300,8 @@ function renderConnection(health) {
 }
 
 function renderWorkspaceAndAccounts(nextContext, healthPayload) {
-  elements.accountFooter?.classList.toggle('hidden', !USER_PROFILE_FEATURE_ENABLED);
-  if (!USER_PROFILE_FEATURE_ENABLED) {
+  elements.accountFooter?.classList.toggle('hidden', !ACCOUNT_BINDING_FEATURE_ENABLED);
+  if (!USER_PROFILE_FEATURE_ENABLED || !ACCOUNT_BINDING_FEATURE_ENABLED) {
     elements.workspaceName.textContent = healthPayload?.success
       ? `当前空间：${cleanTitle(healthPayload.workspaceName || healthPayload.spaceName || '') || '已连接'}`
       : '当前空间：未连接';
@@ -345,7 +346,7 @@ function renderWorkspaceAndAccounts(nextContext, healthPayload) {
 }
 
 function renderAccountBindingNotice(nextContext, healthPayload) {
-  if (!USER_PROFILE_FEATURE_ENABLED) {
+  if (!USER_PROFILE_FEATURE_ENABLED || !ACCOUNT_BINDING_FEATURE_ENABLED) {
     elements.accountBindingNotice.classList.add('hidden');
     elements.accountBindingAction.disabled = true;
     return;
@@ -895,7 +896,7 @@ function getCaptureActionConfig(nextContext) {
       title: 'RedBox 博主采集',
       subtitle: '小红书博主页',
       actions: [
-        { label: '绑定并学习账号', action: 'blogger', primary: true, title: '绑定当前账号并学习历史内容' },
+        { label: '采集博主笔记', action: 'bloggerNotes', primary: true, title: '采集当前博主主页笔记' },
       ],
     };
   }

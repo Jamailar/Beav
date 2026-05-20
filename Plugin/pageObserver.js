@@ -34,6 +34,7 @@ const REDBOX_XHS_PROFILE_ACTIONS_ID = 'redbox-xhs-profile-actions';
 const REDBOX_XHS_STYLE_ID = 'redbox-xhs-dom-style';
 const REDBOX_XHS_DETAIL_HOST_TAG = 'redbox-xhs-explore';
 const USER_PROFILE_FEATURE_ENABLED = true;
+const ACCOUNT_BINDING_FEATURE_ENABLED = false;
 
 function normalizeText(value) {
     return String(value || '').trim();
@@ -1687,9 +1688,11 @@ function injectXhsProfileActions() {
     const status = document.createElement('span');
     status.className = 'redbox-xhs-status';
     status.hidden = true;
+    if (ACCOUNT_BINDING_FEATURE_ENABLED) {
+        container.append(makeXhsDomButton('保存博主', 'blogger', { primary: true, statusTarget: container, title: '保存当前小红书博主资料到 RedBox' }));
+    }
     container.append(
-        makeXhsDomButton('保存博主', 'blogger', { primary: true, statusTarget: container, title: '保存当前小红书博主资料到 RedBox' }),
-        makeXhsDomButton('采集博主笔记', 'bloggerNotes', { statusTarget: container, title: '采集当前博主主页全部可加载笔记' }),
+        makeXhsDomButton('采集博主笔记', 'bloggerNotes', { primary: !ACCOUNT_BINDING_FEATURE_ENABLED, statusTarget: container, title: '采集当前博主主页全部可加载笔记' }),
         status,
     );
 
@@ -1816,8 +1819,7 @@ function getRedboxOverlayConfig(pageInfo) {
             title: 'RedBox 博主采集',
             subtitle: '小红书博主页',
             actions: [
-                { label: '保存博主', action: 'blogger', primary: true, title: '保存当前博主资料到 RedBox' },
-                { label: '采集博主笔记', action: 'bloggerNotes', title: '采集当前博主主页笔记' },
+                { label: '采集博主笔记', action: 'bloggerNotes', primary: true, title: '采集当前博主主页笔记' },
             ],
         };
     }
