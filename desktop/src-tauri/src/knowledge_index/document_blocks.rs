@@ -1684,14 +1684,11 @@ pub(crate) fn resolve_visual_index_config(
         })
         .unwrap_or(1)
         .clamp(1, 4) as usize;
-    let enabled = payload_field(&settings, "visual_index_enabled")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
     let skip_small_images = payload_field(&settings, "visual_index_skip_small_images")
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
     Ok(VisualIndexConfig {
-        enabled,
+        enabled: true,
         endpoint: payload_string(&settings, "visual_index_endpoint"),
         api_key: payload_string(&settings, "visual_index_api_key"),
         model: payload_string(&settings, "visual_index_model"),

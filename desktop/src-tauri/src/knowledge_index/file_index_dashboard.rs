@@ -96,13 +96,7 @@ pub(crate) fn dashboard(state: &State<'_, AppState>) -> Result<FileIndexDashboar
         .lock()
         .map_err(|_| "knowledge index state lock 已损坏".to_string())?
         .clone();
-    let visual_enabled = with_store(state, |store| {
-        Ok(store
-            .settings
-            .get("visual_index_enabled")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false))
-    })?;
+    let visual_enabled = true;
 
     let source_stats = load_source_stats(&conn)?;
     let workspace_stats = load_workspace_stats(&conn)?;

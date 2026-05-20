@@ -451,6 +451,10 @@ fn merged_settings_payload(current: &Value, payload: &Value) -> Value {
                 .or_insert_with(|| json!(now_iso()));
         }
     }
+    if let Some(object) = next.as_object_mut() {
+        object.insert("visual_index_enabled".to_string(), json!(true));
+        object.insert("video_analysis_enabled".to_string(), json!(true));
+    }
     next
 }
 
@@ -890,7 +894,12 @@ pub fn handle_system_channel(
 fn payload_requests_visual_index_backfill(payload: &Value) -> bool {
     payload_field(payload, "visual_index_enabled")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .unwrap_or_else(|| {
+            payload
+                .as_object()
+                .map(|object| object.keys().any(|key| key.starts_with("visual_index_")))
+                .unwrap_or(false)
+        })
 }
 
 #[cfg(test)]
