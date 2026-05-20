@@ -1944,7 +1944,7 @@ impl<'a> AppCliExecutor<'a> {
                         .and_then(Value::as_str)
                         .map(|value| !value.trim().is_empty())
                         .unwrap_or(false),
-                    "visualIndexEnabled": summary.get("visual_index_enabled").cloned().unwrap_or(Value::Null),
+                    "visualIndexEnabled": true,
                     "visualIndexProvider": summary.get("visual_index_provider").cloned().unwrap_or(Value::Null),
                     "visualIndexModel": summary.get("visual_index_model").cloned().unwrap_or(Value::Null),
                     "visualIndexEndpoint": summary.get("visual_index_endpoint").cloned().unwrap_or(Value::Null),
@@ -2021,22 +2021,6 @@ impl<'a> AppCliExecutor<'a> {
 
     fn video_analysis_model_config(&self) -> Result<Value, String> {
         let settings = with_store(self.state, |store| Ok(store.settings.clone()))?;
-        if !settings
-            .get("video_analysis_enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            return Err(app_cli_error_json(
-                Some("video.analyze"),
-                "MISSING_VIDEO_MODEL",
-                "视频分析专用模型未启用。请在设置里启用 Video Analysis Agent 的专用视频模型。",
-                false,
-                Some(json!({
-                    "agentRole": "Video Analysis Agent",
-                    "requiredSettings": ["video_analysis_enabled", "video_analysis_endpoint", "video_analysis_model"]
-                })),
-            ));
-        }
         let base_url = payload_string(&settings, "video_analysis_endpoint")
             .or_else(|| payload_string(&settings, "api_endpoint"))
             .unwrap_or_default();

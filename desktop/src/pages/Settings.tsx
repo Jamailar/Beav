@@ -351,6 +351,9 @@ type AiModelRouteConfig = {
 
 type AiModelRoutes = Record<AiModelRouteScope, AiModelRouteConfig>;
 
+const DEFAULT_VIDEO_ANALYSIS_ENABLED = true;
+const DEFAULT_VISUAL_INDEX_ENABLED = true;
+
 const DEFAULT_AI_MODEL_ROUTES: AiModelRoutes = {
   chat: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
   wander: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
@@ -360,8 +363,8 @@ const DEFAULT_AI_MODEL_ROUTES: AiModelRoutes = {
   transcription: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
   embedding: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
   image: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
-  visualIndex: { mode: 'disabled', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
-  videoAnalysis: { mode: 'disabled', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  visualIndex: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  videoAnalysis: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
   voiceTts: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: DEFAULT_VOICE_TTS_MODEL },
   voiceClone: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: DEFAULT_VOICE_CLONE_MODEL },
 };
@@ -1116,7 +1119,7 @@ export function Settings({
     embedding_endpoint: '',
     embedding_key: '',
     embedding_model: '',
-    visual_index_enabled: false,
+    visual_index_enabled: DEFAULT_VISUAL_INDEX_ENABLED,
     visual_index_provider: 'openai-compatible',
     visual_index_endpoint: '',
     visual_index_api_key: '',
@@ -1128,7 +1131,7 @@ export function Settings({
     visual_index_pdf_max_pages: '12',
     visual_index_pdf_render_dpi: '144',
     visual_index_concurrency: '1',
-    video_analysis_enabled: false,
+    video_analysis_enabled: DEFAULT_VIDEO_ANALYSIS_ENABLED,
     video_analysis_endpoint: '',
     video_analysis_api_key: '',
     video_analysis_model: '',
@@ -1598,11 +1601,9 @@ export function Settings({
   }, []);
 
   const filterVideoAnalysisModels = useCallback((models: AiModelDescriptor[]): AiModelDescriptor[] => {
-    const directVideoModels = models.filter((model) => (
+    return models.filter((model) => (
       model.capabilities.includes('chat') && model.inputCapabilities.includes('video')
     ));
-    if (directVideoModels.length > 0) return directVideoModels;
-    return filterAiModelsByCapability(models, 'chat');
   }, []);
 
   const pickBestVisualIndexModelForSource = useCallback((
@@ -1638,7 +1639,7 @@ export function Settings({
     if (currentDefault && videoModels.some((item) => item.id === currentDefault)) {
       return currentDefault;
     }
-    return String(videoModels[0]?.id || currentDefault || sourceModels[0]?.id || '').trim();
+    return String(videoModels[0]?.id || '').trim();
   }, [filterVideoAnalysisModels, getSourceModelList]);
 
   const resolveLinkedSourceId = useCallback((options: {
@@ -2563,20 +2564,25 @@ export function Settings({
   }, []);
 
   const applyRouteSource = useCallback((scope: AiModelRouteScope, mode: AiModelRouteMode) => {
-    if (mode === 'custom' && !firstCustomAiSource) {
+    const nextMode = (
+      (scope === 'visualIndex' || scope === 'videoAnalysis') && mode === 'disabled'
+        ? 'official'
+        : mode
+    );
+    if (nextMode === 'custom' && !firstCustomAiSource) {
       setMissingCustomSourceNoticeScope(scope);
       return;
     }
     setMissingCustomSourceNoticeScope(null);
-    const source = mode === 'official' ? officialAiSource : mode === 'custom' ? firstCustomAiSource : null;
-    const nextSourceId = source?.id || (mode === 'official' ? OFFICIAL_AUTO_SOURCE_ID : '');
-    updateAiModelRoute(scope, { mode, sourceId: nextSourceId, model: '' });
+    const source = nextMode === 'official' ? officialAiSource : nextMode === 'custom' ? firstCustomAiSource : null;
+    const nextSourceId = source?.id || (nextMode === 'official' ? OFFICIAL_AUTO_SOURCE_ID : '');
+    updateAiModelRoute(scope, { mode: nextMode, sourceId: nextSourceId, model: '' });
     if (!source) {
       if (scope === 'visualIndex') {
-        setFormData((prev) => ({ ...prev, visual_index_enabled: false }));
+        setFormData((prev) => ({ ...prev, visual_index_enabled: true }));
       }
       if (scope === 'videoAnalysis') {
-        setFormData((prev) => ({ ...prev, video_analysis_enabled: false }));
+        setFormData((prev) => ({ ...prev, video_analysis_enabled: true }));
       }
       return;
     }
@@ -2593,11 +2599,11 @@ export function Settings({
     if (scope === 'image') handleLinkedSourceChange('image', source.id);
     if (scope === 'voiceTts') handleLinkedSourceChange('voice', source.id);
     if (scope === 'visualIndex') {
-      setFormData((prev) => ({ ...prev, visual_index_enabled: mode !== 'disabled' }));
+      setFormData((prev) => ({ ...prev, visual_index_enabled: true }));
       handleLinkedSourceChange('visual', source.id);
     }
     if (scope === 'videoAnalysis') {
-      setFormData((prev) => ({ ...prev, video_analysis_enabled: mode !== 'disabled' }));
+      setFormData((prev) => ({ ...prev, video_analysis_enabled: true }));
       handleLinkedSourceChange('videoAnalysis', source.id);
     }
   }, [firstCustomAiSource, handleLinkedSourceChange, markAiSourceDraftDirty, officialAiSource, updateAiModelRoute]);
@@ -4283,17 +4289,13 @@ export function Settings({
           },
           visualIndex: {
             ...loadedModelRoutes.visualIndex,
-            mode: Boolean(settings.visual_index_enabled)
-              ? routeSourceMode(resolvedVisualIndexSourceId, loadedModelRoutes.visualIndex.mode === 'disabled' ? 'official' : loadedModelRoutes.visualIndex.mode)
-              : 'disabled',
+            mode: routeSourceMode(resolvedVisualIndexSourceId, loadedModelRoutes.visualIndex.mode === 'disabled' ? 'official' : loadedModelRoutes.visualIndex.mode),
             sourceId: resolvedVisualIndexSourceId,
             model: routeModelFirst(loadedModelRoutes.visualIndex.model, settings.visual_index_model),
           },
           videoAnalysis: {
             ...loadedModelRoutes.videoAnalysis,
-            mode: Boolean(settings.video_analysis_enabled)
-              ? routeSourceMode(resolvedVideoAnalysisSourceId, loadedModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : loadedModelRoutes.videoAnalysis.mode)
-              : 'disabled',
+            mode: routeSourceMode(resolvedVideoAnalysisSourceId, loadedModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : loadedModelRoutes.videoAnalysis.mode),
             sourceId: resolvedVideoAnalysisSourceId,
             model: routeModelFirst(loadedModelRoutes.videoAnalysis.model, settings.video_analysis_model),
           },
@@ -4383,7 +4385,7 @@ export function Settings({
           embedding_endpoint: settings.embedding_endpoint || '',
           embedding_key: settings.embedding_key || '',
           embedding_model: nextModelRoutes.embedding.model || '',
-          visual_index_enabled: Boolean(settings.visual_index_enabled),
+          visual_index_enabled: DEFAULT_VISUAL_INDEX_ENABLED,
           visual_index_provider: settings.visual_index_provider || 'openai-compatible',
           visual_index_endpoint: settings.visual_index_endpoint || '',
           visual_index_api_key: settings.visual_index_api_key || '',
@@ -4395,7 +4397,7 @@ export function Settings({
           visual_index_pdf_max_pages: String(settings.visual_index_pdf_max_pages || 12),
           visual_index_pdf_render_dpi: String(settings.visual_index_pdf_render_dpi || 144),
           visual_index_concurrency: String(settings.visual_index_concurrency || 1),
-          video_analysis_enabled: Boolean(settings.video_analysis_enabled),
+          video_analysis_enabled: DEFAULT_VIDEO_ANALYSIS_ENABLED,
           video_analysis_endpoint: settings.video_analysis_endpoint || '',
           video_analysis_api_key: settings.video_analysis_api_key || '',
           video_analysis_model: nextModelRoutes.videoAnalysis.model || '',
@@ -6032,7 +6034,13 @@ export function Settings({
       const resolvedTranscriptionModel = String(formData.transcription_model || pickBestModelForSource(resolvedTranscriptionSource) || '').trim();
       const resolvedEmbeddingModel = String(formData.embedding_model || pickBestModelForSource(resolvedEmbeddingSource) || '').trim();
       const resolvedVisualIndexModel = String(formData.visual_index_model || pickBestVisualIndexModelForSource(resolvedVisualIndexSource) || '').trim();
-      const resolvedVideoAnalysisModel = String(formData.video_analysis_model || pickBestVideoAnalysisModelForSource(resolvedVideoAnalysisSource) || '').trim();
+      const resolvedVideoAnalysisModels = resolvedVideoAnalysisSource ? filterVideoAnalysisModels(getSourceModelList(resolvedVideoAnalysisSource)) : [];
+      const requestedVideoAnalysisModel = String(formData.video_analysis_model || '').trim();
+      const resolvedVideoAnalysisModel = String(
+        requestedVideoAnalysisModel && resolvedVideoAnalysisModels.some((model) => model.id === requestedVideoAnalysisModel)
+          ? requestedVideoAnalysisModel
+          : pickBestVideoAnalysisModelForSource(resolvedVideoAnalysisSource),
+      ).trim();
       const resolvedImageModel = String(formData.image_model || pickBestModelForSource(resolvedImageSource) || '').trim();
       const resolvedVoiceTtsModel = String(formData.voice_tts_model || aiModelRoutes.voiceTts.model || formData.tts_model || DEFAULT_VOICE_TTS_MODEL).trim();
       const resolvedVoiceCloneModel = cloneModelForVoiceTtsModel(
@@ -6060,7 +6068,7 @@ export function Settings({
       ));
       const releaseLogRetentionDays = Math.max(1, Number(formData.release_log_retention_days || 7) || 7);
       const releaseLogMaxFileMb = Math.max(1, Number(formData.release_log_max_file_mb || 10) || 10);
-      const normalizedVisualIndexProvider = formData.visual_index_enabled ? 'openai-compatible' : 'disabled';
+      const normalizedVisualIndexProvider = 'openai-compatible';
       const parsedVisualIndexTimeoutSeconds = Number(formData.visual_index_timeout_seconds);
       const visualIndexTimeoutSeconds = Number.isFinite(parsedVisualIndexTimeoutSeconds)
         ? Math.min(300, Math.max(10, Math.floor(parsedVisualIndexTimeoutSeconds)))
@@ -6084,13 +6092,13 @@ export function Settings({
       const normalizedVisualIndexEndpoint = String(resolvedVisualIndexSource?.baseURL || formData.visual_index_endpoint || resolvedApiEndpoint).trim();
       const normalizedVisualIndexApiKey = String(resolvedVisualIndexSource?.apiKey || formData.visual_index_api_key || '').trim();
       const normalizedVisualIndexModel = resolvedVisualIndexModel;
-      if (formData.visual_index_enabled && normalizedVisualIndexProvider !== 'disabled' && (!normalizedVisualIndexEndpoint || !normalizedVisualIndexModel)) {
+      if (!normalizedVisualIndexEndpoint || !normalizedVisualIndexModel) {
         throw new Error('启用知识库视觉索引时必须填写多模态 Endpoint 和模型名');
       }
       const normalizedVideoAnalysisEndpoint = String(resolvedVideoAnalysisSource?.baseURL || formData.video_analysis_endpoint || resolvedApiEndpoint).trim();
       const normalizedVideoAnalysisApiKey = String(resolvedVideoAnalysisSource?.apiKey || formData.video_analysis_api_key || '').trim();
       const normalizedVideoAnalysisProtocol = String(resolvedVideoAnalysisSource?.protocol || formData.video_analysis_protocol || 'gemini').trim();
-      if (formData.video_analysis_enabled && (!normalizedVideoAnalysisEndpoint || !resolvedVideoAnalysisModel)) {
+      if (!normalizedVideoAnalysisEndpoint || !resolvedVideoAnalysisModel) {
         throw new Error('启用视频分析专用模型时必须填写 Endpoint 和模型名');
       }
       const routeScopedSource = (scope: AiModelRouteScope) => getRouteSource(aiModelRoutes[scope]) || officialAiSource || defaultSource || null;
@@ -6148,18 +6156,8 @@ export function Settings({
         resolvedImageSource,
         (source) => pickBestModelForSource(source, '', 'image'),
       );
-      const routeVisualIndexModel = routeModel(
-        'visualIndex',
-        resolvedVisualIndexModel,
-        resolvedVisualIndexSource,
-        pickBestVisualIndexModelForSource,
-      );
-      const routeVideoAnalysisModel = routeModel(
-        'videoAnalysis',
-        resolvedVideoAnalysisModel,
-        resolvedVideoAnalysisSource,
-        pickBestVideoAnalysisModelForSource,
-      );
+      const routeVisualIndexModel = resolvedVisualIndexModel;
+      const routeVideoAnalysisModel = resolvedVideoAnalysisModel;
       const routeVoiceTtsModel = routeModel(
         'voiceTts',
         resolvedVoiceTtsModel,
@@ -6204,13 +6202,13 @@ export function Settings({
         ),
         visualIndex: normalizeRouteForSource({
           ...aiModelRoutes.visualIndex,
-          mode: formData.visual_index_enabled ? aiModelRoutes.visualIndex.mode === 'disabled' ? 'official' : aiModelRoutes.visualIndex.mode : 'disabled',
+          mode: aiModelRoutes.visualIndex.mode === 'disabled' ? 'official' : aiModelRoutes.visualIndex.mode,
           sourceId: resolvedVisualIndexSource?.id || '',
           model: routeVisualIndexModel,
         }, resolvedVisualIndexSource?.id || ''),
         videoAnalysis: normalizeRouteForSource({
           ...aiModelRoutes.videoAnalysis,
-          mode: formData.video_analysis_enabled ? aiModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : aiModelRoutes.videoAnalysis.mode : 'disabled',
+          mode: aiModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : aiModelRoutes.videoAnalysis.mode,
           sourceId: resolvedVideoAnalysisSource?.id || '',
           model: routeVideoAnalysisModel,
         }, resolvedVideoAnalysisSource?.id || ''),
@@ -6250,7 +6248,7 @@ export function Settings({
         embedding_model: routeEmbeddingModel,
         embedding_endpoint: String(resolvedEmbeddingSource?.baseURL || formData.embedding_endpoint || resolvedApiEndpoint).trim(),
         embedding_key: String(resolvedEmbeddingSource?.apiKey || formData.embedding_key || '').trim(),
-        visual_index_enabled: Boolean(formData.visual_index_enabled) && normalizedVisualIndexProvider !== 'disabled',
+        visual_index_enabled: true,
         visual_index_provider: normalizedVisualIndexProvider,
         visual_index_endpoint: normalizedVisualIndexEndpoint,
         visual_index_api_key: normalizedVisualIndexApiKey,
@@ -6262,7 +6260,7 @@ export function Settings({
         visual_index_pdf_max_pages: visualIndexPdfMaxPages,
         visual_index_pdf_render_dpi: visualIndexPdfRenderDpi,
         visual_index_concurrency: visualIndexConcurrency,
-        video_analysis_enabled: Boolean(formData.video_analysis_enabled),
+        video_analysis_enabled: true,
         video_analysis_endpoint: normalizedVideoAnalysisEndpoint,
         video_analysis_api_key: normalizedVideoAnalysisApiKey,
         video_analysis_model: routeVideoAnalysisModel,
@@ -6411,7 +6409,10 @@ export function Settings({
     const pickFirstOfficialVideoModel = () => {
       const sourceModels = getSourceModelList(officialAiSource);
       const videoModels = filterVideoAnalysisModels(sourceModels);
-      return String(videoModels[0]?.id || sourceModels[0]?.id || '').trim();
+      if (preferredModel && videoModels.some((item) => item.id === preferredModel)) {
+        return preferredModel;
+      }
+      return String(videoModels[0]?.id || '').trim();
     };
     if (scope === 'voiceTts') return pickBestModelForSource(officialAiSource, preferredModel, 'tts') || pickBestModelForSource(officialAiSource, preferredModel, 'audio') || pickFirstOfficialModel('tts') || DEFAULT_VOICE_TTS_MODEL;
     if (scope === 'voiceClone') return pickBestModelForSource(officialAiSource, preferredModel, 'voice_clone') || pickBestModelForSource(officialAiSource, preferredModel, 'audio') || pickFirstOfficialModel('voice_clone') || DEFAULT_VOICE_CLONE_MODEL;
@@ -6419,7 +6420,7 @@ export function Settings({
     if (scope === 'embedding') return pickBestModelForSource(officialAiSource, preferredModel, 'embedding') || pickFirstOfficialModel('embedding') || 'text-embedding-3-small';
     if (scope === 'image') return pickBestModelForSource(officialAiSource, preferredModel, 'image') || pickFirstOfficialModel('image') || 'gpt-image-1';
     if (scope === 'visualIndex') return preferredModel || pickFirstOfficialVisualModel();
-    if (scope === 'videoAnalysis') return preferredModel || pickFirstOfficialVideoModel();
+    if (scope === 'videoAnalysis') return pickFirstOfficialVideoModel();
     if (scope === 'chat') return String(formData.model_name || defaultAiSource?.model || '').trim() || pickFirstOfficialModel('chat');
     return preferredModel || pickFirstOfficialModel('chat');
   }, [
@@ -7531,47 +7532,8 @@ export function Settings({
                   </div>
 
                   <div className="pt-4 border-t border-border">
-                    <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="mb-4">
                       <h3 className="text-sm font-medium text-text-primary">知识库视觉索引模型</h3>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          markAiSourceDraftDirty();
-                          const source = getAiSourceById(visualIndexSourceId);
-                          const nextEnabled = !formData.visual_index_enabled;
-                          const nextRoutes = {
-                            ...aiModelRoutes,
-                            visualIndex: {
-                              ...aiModelRoutes.visualIndex,
-                              mode: nextEnabled
-                                ? (aiModelRoutes.visualIndex.mode === 'disabled' ? 'official' : aiModelRoutes.visualIndex.mode)
-                                : 'disabled',
-                              sourceId: nextEnabled ? (visualIndexSourceId || source?.id || '') : aiModelRoutes.visualIndex.sourceId,
-                              model: nextEnabled
-                                ? String(formData.visual_index_model || pickBestVisualIndexModelForSource(source) || aiModelRoutes.visualIndex.model || '').trim()
-                                : aiModelRoutes.visualIndex.model,
-                            },
-                          } as AiModelRoutes;
-                          setAiModelRoutes(nextRoutes);
-                          setFormData((d) => {
-                            return {
-                              ...d,
-                              ai_model_routes_json: JSON.stringify(nextRoutes),
-                              visual_index_enabled: nextEnabled,
-                              visual_index_provider: nextEnabled ? 'openai-compatible' : 'disabled',
-                              visual_index_endpoint: nextEnabled ? String(source?.baseURL || d.visual_index_endpoint || '').trim() : d.visual_index_endpoint,
-                              visual_index_api_key: nextEnabled ? String(source?.apiKey || d.visual_index_api_key || '').trim() : d.visual_index_api_key,
-                              visual_index_model: nextEnabled ? String(d.visual_index_model || pickBestVisualIndexModelForSource(source) || '').trim() : d.visual_index_model,
-                            };
-                          });
-                        }}
-                        className="ui-switch-track shrink-0"
-                        data-size="md"
-                        data-state={formData.visual_index_enabled ? 'on' : 'off'}
-                        aria-label="启用知识库视觉索引"
-                      >
-                        <span className="ui-switch-thumb" />
-                      </button>
                     </div>
 
                     <div className="space-y-3">
@@ -7611,47 +7573,8 @@ export function Settings({
                   </div>
 
                   <div className="pt-4 border-t border-border">
-                    <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="mb-4">
                       <h3 className="text-sm font-medium text-text-primary">视频分析专用模型</h3>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          markAiSourceDraftDirty();
-                          const source = getAiSourceById(videoAnalysisSourceId);
-                          const nextEnabled = !formData.video_analysis_enabled;
-                          const nextRoutes = {
-                            ...aiModelRoutes,
-                            videoAnalysis: {
-                              ...aiModelRoutes.videoAnalysis,
-                              mode: nextEnabled
-                                ? (aiModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : aiModelRoutes.videoAnalysis.mode)
-                                : 'disabled',
-                              sourceId: nextEnabled ? (videoAnalysisSourceId || source?.id || '') : aiModelRoutes.videoAnalysis.sourceId,
-                              model: nextEnabled
-                                ? String(formData.video_analysis_model || pickBestVideoAnalysisModelForSource(source) || aiModelRoutes.videoAnalysis.model || '').trim()
-                                : aiModelRoutes.videoAnalysis.model,
-                            },
-                          } as AiModelRoutes;
-                          setAiModelRoutes(nextRoutes);
-                          setFormData((d) => {
-                            return {
-                              ...d,
-                              ai_model_routes_json: JSON.stringify(nextRoutes),
-                              video_analysis_enabled: nextEnabled,
-                              video_analysis_endpoint: nextEnabled ? String(source?.baseURL || d.video_analysis_endpoint || '').trim() : d.video_analysis_endpoint,
-                              video_analysis_api_key: nextEnabled ? String(source?.apiKey || d.video_analysis_api_key || '').trim() : d.video_analysis_api_key,
-                              video_analysis_protocol: nextEnabled ? String(source?.protocol || d.video_analysis_protocol || 'gemini').trim() : d.video_analysis_protocol,
-                              video_analysis_model: nextEnabled ? String(d.video_analysis_model || pickBestVideoAnalysisModelForSource(source) || '').trim() : d.video_analysis_model,
-                            };
-                          });
-                        }}
-                        className="ui-switch-track shrink-0"
-                        data-size="md"
-                        data-state={formData.video_analysis_enabled ? 'on' : 'off'}
-                        aria-label="启用视频分析专用模型"
-                      >
-                        <span className="ui-switch-thumb" />
-                      </button>
                     </div>
 
                     <div className="space-y-3">
