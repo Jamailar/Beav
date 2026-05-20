@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CreditCard, Gem, Globe2, QrCode, RefreshCw, Smartphone, Table2, UserRound } from 'lucide-react';
+import { Box, Check, Gem, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
@@ -818,21 +818,21 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, []);
 
   return (
-    <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 space-y-4">
+    <div className="rounded-2xl border border-black/[0.04] dark:border-white/[0.04] bg-black/[0.005] dark:bg-white/[0.005] p-5 space-y-5">
       {!session ? (
         !bootstrapped ? (
-          <div className="rounded-lg border border-border bg-surface-primary p-4 text-sm text-text-secondary">
+          <div className="rounded-xl border border-border bg-surface-primary p-5 text-sm text-text-secondary shadow-sm">
             正在检查登录状态…
           </div>
         ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="rounded-lg border border-border bg-surface-primary p-3 space-y-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div className="rounded-xl border border-black/[0.04] dark:border-white/[0.04] bg-white dark:bg-surface-primary p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between gap-2">
-              <div className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+              <div className="inline-flex items-center gap-1.5 text-xs text-text-secondary font-bold">
                 <Globe2 className="w-3.5 h-3.5" />
                 账号区
               </div>
-              <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/30 p-1">
+              <div className="inline-flex items-center rounded-full border border-black/[0.05] dark:border-white/[0.05] bg-black/[0.015] dark:bg-white/[0.015] p-0.5">
                 {realms.map((realm) => (
                   <button
                     key={realm.id}
@@ -840,8 +840,8 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                     onClick={() => void switchRealm(realm.id)}
                     disabled={authControlsDisabled || Boolean(session)}
                     className={clsx(
-                      'px-2.5 py-1 text-[11px] rounded-full transition-colors disabled:opacity-50',
-                      activeRealm === realm.id ? 'bg-surface-primary border border-border text-text-primary' : 'text-text-secondary',
+                      'px-2.5 py-1 text-[11px] font-bold rounded-full transition-colors disabled:opacity-50',
+                      activeRealm === realm.id ? 'bg-white dark:bg-surface-primary shadow-sm text-text-primary' : 'text-text-secondary',
                     )}
                   >
                     {realm.label}
@@ -849,72 +849,80 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                 ))}
               </div>
             </div>
-            <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/30 p-1">
+            <div className="inline-flex items-center rounded-full border border-black/[0.05] dark:border-white/[0.05] bg-black/[0.015] dark:bg-white/[0.015] p-0.5">
               <button
                 type="button"
                 onClick={() => setLoginTab('wechat')}
                 className={clsx(
-                  'px-3 py-1 text-xs rounded-full transition-colors inline-flex items-center gap-1',
-                  loginTab === 'wechat' ? 'bg-surface-primary border border-border text-text-primary' : 'text-text-secondary',
+                  'px-3 py-1.5 text-xs font-bold rounded-full transition-colors inline-flex items-center gap-1.5',
+                  loginTab === 'wechat' ? 'bg-white dark:bg-surface-primary shadow-sm text-text-primary' : 'text-text-secondary',
                 )}
               >
-                <QrCode className="w-3.5 h-3.5" />
-                微信登录
+                <QrCode className="w-3.5 h-3.5 text-accent-primary" />
+                微信扫码登录
               </button>
               <button
                 type="button"
                 onClick={() => setLoginTab('sms')}
                 className={clsx(
-                  'px-3 py-1 text-xs rounded-full transition-colors inline-flex items-center gap-1',
-                  loginTab === 'sms' ? 'bg-surface-primary border border-border text-text-primary' : 'text-text-secondary',
+                  'px-3 py-1.5 text-xs font-bold rounded-full transition-colors inline-flex items-center gap-1.5',
+                  loginTab === 'sms' ? 'bg-white dark:bg-surface-primary shadow-sm text-text-primary' : 'text-text-secondary',
                 )}
               >
-                <Smartphone className="w-3.5 h-3.5" />
-                短信登录
+                <Smartphone className="w-3.5 h-3.5 text-blue-500" />
+                短信极速登录
               </button>
             </div>
 
             {loginTab === 'wechat' ? (
-              <div className="space-y-3">
-                <div className="h-56 rounded-lg border border-border bg-surface-secondary/20 flex items-center justify-center overflow-hidden">
+              <div className="space-y-4">
+                <div className="h-56 rounded-xl border border-black/[0.04] dark:border-white/[0.04] bg-black/[0.01] dark:bg-white/[0.01] flex items-center justify-center overflow-hidden relative group">
                   {wechatQrUrl ? (
                     <img src={wechatQrUrl} alt="微信登录二维码" className="h-full w-full object-contain p-2" />
                   ) : (
-                    <div className="text-xs text-text-tertiary">点击“获取二维码”开始登录</div>
+                    <div className="text-xs font-medium text-text-tertiary">点击“获取二维码”开始安全登录</div>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-2">
                   <button
                     type="button"
                     onClick={() => void fetchWechatQr()}
                     disabled={authControlsDisabled}
-                    className="px-3 py-1.5 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                    className="px-4 py-2 text-xs font-bold border border-black/[0.05] dark:border-white/[0.05] bg-black/[0.01] dark:bg-white/[0.01] rounded-xl hover:bg-black/[0.03] dark:hover:bg-white/[0.03] active:scale-95 transition-all disabled:opacity-50"
                   >
-                    获取二维码
+                    获取最新二维码
                   </button>
-                  <span className="text-[11px] text-text-tertiary">状态：{wechatStatusText === 'idle' ? '待获取' : wechatStatusText}</span>
+                  <span className="text-[11px] font-bold text-text-tertiary">
+                    状态：
+                    <span className={clsx(
+                      "font-black uppercase tracking-wider",
+                      wechatStatusText === 'CONFIRMED' ? "text-emerald-500" : wechatStatusText === 'SCANNED' ? "text-accent-primary" : "text-text-tertiary"
+                    )}>
+                      {wechatStatusText === 'idle' ? '待获取' : wechatStatusText}
+                    </span>
+                  </span>
                 </div>
                 {wechatLoginUrl ? (
-                  <p className="text-[11px] text-text-tertiary">
+                  <p className="text-[11px] font-medium text-text-tertiary leading-relaxed">
                     扫码异常？
                     {' '}
-                    <a href={wechatLoginUrl} target="_blank" rel="noreferrer" className="text-accent-primary hover:underline">
-                      打开微信登录链接
+                    <a href={wechatLoginUrl} target="_blank" rel="noreferrer" className="text-accent-primary hover:underline font-bold">
+                      在新窗口打开微信登录链接
                     </a>
                   </p>
                 ) : null}
                 {wechatExpiresAt > 0 ? (
-                  <p className="text-[11px] text-text-tertiary">有效期至：{new Date(wechatExpiresAt).toLocaleTimeString()}</p>
+                  <p className="text-[10px] font-bold text-text-tertiary">二维码有效期至：{new Date(wechatExpiresAt).toLocaleTimeString()}</p>
                 ) : null}
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <input
                   type="text"
                   value={smsForm.phone}
                   onChange={(e) => setSmsForm((prev) => ({ ...prev, phone: e.target.value }))}
                   placeholder="手机号"
-                  className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                  className="w-full bg-black/[0.01] dark:bg-white/[0.01] rounded-xl border border-black/[0.05] dark:border-white/[0.05] px-3.5 py-2 text-sm focus:outline-none focus:border-accent-primary focus:bg-white dark:focus:bg-surface-primary transition-all font-medium"
                 />
                 <div className="grid grid-cols-[1fr_auto] gap-2">
                   <input
@@ -922,13 +930,13 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                     value={smsForm.code}
                     onChange={(e) => setSmsForm((prev) => ({ ...prev, code: e.target.value }))}
                     placeholder="短信验证码"
-                    className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                    className="w-full bg-black/[0.01] dark:bg-white/[0.01] rounded-xl border border-black/[0.05] dark:border-white/[0.05] px-3.5 py-2 text-sm focus:outline-none focus:border-accent-primary focus:bg-white dark:focus:bg-surface-primary transition-all font-medium"
                   />
                   <button
                     type="button"
                     onClick={() => void sendSmsCode()}
                     disabled={authControlsDisabled}
-                    className="px-3 py-2 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                    className="px-3.5 py-2 text-xs font-bold border border-black/[0.05] dark:border-white/[0.05] bg-black/[0.01] dark:bg-white/[0.01] rounded-xl hover:bg-black/[0.03] dark:hover:bg-white/[0.03] transition-all disabled:opacity-50"
                   >
                     发送验证码
                   </button>
@@ -938,146 +946,252 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                   value={smsForm.inviteCode}
                   onChange={(e) => setSmsForm((prev) => ({ ...prev, inviteCode: e.target.value }))}
                   placeholder="邀请码（可选）"
-                  className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                  className="w-full bg-black/[0.01] dark:bg-white/[0.01] rounded-xl border border-black/[0.05] dark:border-white/[0.05] px-3.5 py-2 text-sm focus:outline-none focus:border-accent-primary focus:bg-white dark:focus:bg-surface-primary transition-all font-medium"
                 />
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 pt-1">
                   <button
                     type="button"
                     onClick={() => void handleSmsAuth('login')}
                     disabled={authControlsDisabled}
-                    className="px-3 py-1.5 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                    className="px-4 py-2 text-xs font-extrabold text-white bg-accent-primary rounded-xl hover:brightness-105 active:scale-95 transition-all disabled:opacity-50"
                   >
-                    登录
+                    登录账户
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleSmsAuth('register')}
                     disabled={authControlsDisabled}
-                    className="px-3 py-1.5 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                    className="px-4 py-2 text-xs font-bold border border-black/[0.05] dark:border-white/[0.05] rounded-xl hover:bg-black/[0.02] dark:hover:bg-white/[0.02] active:scale-95 transition-all disabled:opacity-50"
                   >
-                    注册并登录
+                    注册新账号
                   </button>
                 </div>
               </div>
             )}
           </div>
 
-          <div className="rounded-lg border border-dashed border-border bg-surface-primary/50 p-4 flex flex-col justify-center">
-            <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
-              <UserRound className="w-4 h-4" />
+          <div className="rounded-xl border border-dashed border-black/[0.08] dark:border-white/[0.08] bg-black/[0.01] dark:bg-white/[0.005] p-5 flex flex-col justify-center select-none">
+            <div className="flex items-center gap-2.5 text-sm font-black text-text-primary">
+              <div className="w-6 h-6 rounded-md bg-accent-primary/10 flex items-center justify-center text-accent-primary">
+                <UserRound className="w-3.5 h-3.5" />
+              </div>
               等待全局登录
             </div>
-            <ul className="mt-3 text-xs text-text-secondary space-y-1">
-              <li>1. 自动绑定官方 API Key</li>
-              <li>2. 自动同步模型配置</li>
-              <li>3. 查看积分余额与调用记录</li>
+            <ul className="mt-4 text-xs text-text-secondary space-y-2 leading-relaxed">
+              <li className="flex items-start gap-1.5">
+                <span className="text-accent-primary mt-0.5">✔</span>
+                <span>自动绑定官方云端 API Key 凭证</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-accent-primary mt-0.5">✔</span>
+                <span>同步最新的 AI 大模型配置与服务</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-accent-primary mt-0.5">✔</span>
+                <span>便捷查询个人积分余额与实时调用账单</span>
+              </li>
             </ul>
           </div>
         </div>
         )
       ) : (
         <>
-          <div className="rounded-lg border border-border bg-surface-primary p-3 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
-                <Gem className="w-4 h-4" />
-                积分余额
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-text-primary">
-                  {hasPointsSnapshot
-                    ? `${Number(pointsValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 积分`
-                    : '—'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void refreshProfileAndPoints()}
-                  disabled={refreshControlsDisabled}
-                  title="刷新余额"
-                  className="p-1.5 text-text-tertiary hover:text-accent-primary transition-colors disabled:opacity-50"
-                >
-                  <RefreshCw className={clsx('w-3.5 h-3.5', refreshing && 'animate-spin')} />
-                </button>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {[20, 50, 100].map((amount) => (
-                <button
-                  key={amount}
-                  type="button"
-                  onClick={() => setRechargeAmount(amount.toFixed(2))}
-                  className={clsx(
-                    'px-3 py-1.5 text-xs border rounded transition-all',
-                    Number(rechargeAmount) === amount
-                      ? 'bg-accent-primary/10 border-accent-primary text-accent-primary'
-                      : 'border-border hover:bg-surface-secondary text-text-secondary',
+          <section className="overflow-hidden rounded-[18px] bg-[linear-gradient(130deg,rgb(var(--color-accent-primary)/0.075),rgb(245_158_11/0.045)_42%,rgb(255_255_255/0.82))] p-4 shadow-[0_18px_46px_-30px_rgba(194,92,16,0.38)] dark:bg-[linear-gradient(130deg,rgb(var(--color-accent-primary)/0.13),rgb(245_158_11/0.075)_42%,rgb(255_255_255/0.02))]">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="mb-2 text-xs font-bold text-text-secondary">当前积分余额</div>
+                <div className="flex flex-wrap items-end gap-2">
+                  {hasPointsSnapshot ? (
+                    <>
+                      <span className="text-[32px] font-black leading-none tracking-normal text-text-primary md:text-[36px]">
+                        {Number(pointsValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                      <span className="pb-1 text-sm font-bold text-text-secondary">积分</span>
+                    </>
+                  ) : (
+                    <span className="pb-1.5 text-xl font-black tracking-normal text-text-primary">待同步</span>
                   )}
-                >
-                  ¥{amount}
-                </button>
-              ))}
-              <div className="flex items-center gap-2 ml-1">
-                <input
-                  value={rechargeAmount}
-                  onChange={(e) => setRechargeAmount(e.target.value)}
-                  placeholder="其他金额"
-                  className="w-24 bg-surface-secondary/30 rounded border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:border-accent-primary transition-colors"
-                />
-                <button
-                  type="button"
-                    onClick={() => void handleCreateOrderAndPay()}
-                    disabled={paymentControlsDisabled || !rechargeAmount || Number(rechargeAmount) <= 0}
-                    className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs bg-accent-primary text-white rounded hover:brightness-110 shadow-sm transition-all disabled:opacity-50 disabled:grayscale"
-                  >
-                  <CreditCard className="w-3.5 h-3.5" />
-                  立即充值
-                </button>
+                </div>
               </div>
-            </div>
-            {rechargePreviewPoints > 0 ? (
-              <p className="text-[11px] text-accent-primary font-medium">
-                预计到账：{Number(rechargePreviewPoints).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 积分
-                {rechargeOrderNo ? ` · 当前订单：${rechargeOrderNo}` : ''}
-              </p>
-            ) : null}
-            {rechargeStatusText ? (
-              <p className="text-[11px] text-text-secondary">{rechargeStatusText}</p>
-            ) : null}
-          </div>
-
-          <div className="rounded-lg border border-border bg-surface-primary p-3 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-medium text-text-primary">调用记录</div>
               <button
                 type="button"
                 onClick={() => void refreshProfileAndPoints()}
                 disabled={refreshControlsDisabled}
-                title="刷新记录"
-                className="p-1.5 text-text-tertiary hover:text-accent-primary transition-colors disabled:opacity-50"
+                className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-black/[0.08] bg-white/78 px-3 text-xs font-bold text-text-secondary shadow-sm transition-all hover:border-accent-primary/[0.24] hover:bg-white hover:text-text-primary disabled:opacity-50 dark:border-white/[0.08] dark:bg-surface-primary/76"
               >
-                <RefreshCw className={clsx('w-3.5 h-3.5', refreshing && 'animate-spin')} />
+                <RefreshCw className={clsx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+                刷新余额
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-white/72 p-3.5 shadow-sm backdrop-blur dark:bg-surface-primary/64">
+              <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
+                <span className="text-sm font-bold text-text-primary">选择充值金额</span>
+                <span className="rounded-md bg-accent-primary/10 px-2 py-0.5 text-[11px] font-bold text-accent-primary">
+                  1 元 = {Number(pointsPerYuan).toLocaleString()} 积分
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                {[
+                  { amount: 20, badge: '' },
+                  { amount: 50, badge: '推荐' },
+                  { amount: 100, badge: '' },
+                ].map((pkg) => {
+                  const isSelected = Number(rechargeAmount) === pkg.amount;
+                  return (
+                    <button
+                      key={pkg.amount}
+                      type="button"
+                      onClick={() => setRechargeAmount(pkg.amount.toFixed(2))}
+                      className={clsx(
+                        'relative flex min-h-[96px] flex-col items-center justify-center rounded-lg border px-3 py-3.5 text-center transition-all active:scale-[0.99]',
+                        isSelected
+                          ? 'border-accent-primary bg-[linear-gradient(135deg,rgb(var(--color-accent-primary)/0.08),rgb(255_255_255/0.9))] text-accent-primary shadow-[0_18px_34px_-22px_rgb(var(--color-accent-primary)/0.58)] ring-1 ring-accent-primary/[0.16] dark:bg-surface-primary'
+                          : 'border-black/[0.08] bg-white/64 text-text-primary hover:border-accent-primary/[0.26] hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.025]'
+                      )}
+                    >
+                      {pkg.badge ? (
+                          <span className="absolute left-2 top-2 rounded-md bg-accent-primary px-1.5 py-0.5 text-[10px] font-black text-white shadow-sm">
+                          {pkg.badge}
+                        </span>
+                      ) : null}
+                      {isSelected ? (
+                        <span className="absolute right-2 top-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent-primary text-white">
+                          <Check className="h-3 w-3" />
+                        </span>
+                      ) : null}
+                      <span className="text-[24px] font-black leading-none tracking-normal">¥{pkg.amount}</span>
+                      <span className={clsx('mt-2.5 text-xs font-bold', isSelected ? 'text-accent-primary' : 'text-text-secondary')}>
+                        {(pkg.amount * pointsPerYuan).toLocaleString()} 积分
+                      </span>
+                    </button>
+                  );
+                })}
+
+                <div className="flex min-h-[96px] flex-col items-center justify-center rounded-lg border border-black/[0.08] bg-white/58 px-3 py-3.5 dark:border-white/[0.08] dark:bg-white/[0.02]">
+                  <label className="mb-2.5 text-xs font-bold text-text-primary">自定义金额</label>
+                  <div className="grid h-9 w-full max-w-[152px] grid-cols-[36px_1fr] overflow-hidden rounded-lg border border-black/[0.08] bg-white/72 dark:border-white/[0.08] dark:bg-surface-primary/72">
+                    <span className="flex items-center justify-center border-r border-black/[0.06] text-xs font-bold text-text-secondary dark:border-white/[0.08]">¥</span>
+                    <input
+                      value={rechargeAmount}
+                      onChange={(e) => setRechargeAmount(e.target.value)}
+                      placeholder="请输入金额"
+                      type="number"
+                      className="min-w-0 bg-transparent px-2.5 text-xs font-bold text-text-primary outline-none placeholder:text-text-tertiary/70"
+                    />
+                  </div>
+                  <span className="mt-1.5 text-[10px] font-medium text-text-tertiary">最低 ¥1</span>
+                </div>
+              </div>
+
+              <div className="mt-3.5 grid gap-3 rounded-xl border border-accent-primary/[0.12] bg-[linear-gradient(135deg,rgb(255_255_255/0.74),rgb(var(--color-accent-primary)/0.035))] p-3 dark:bg-white/[0.03] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                <div className="text-xs font-medium leading-5 text-text-secondary">
+                  <div>充值 ¥{normalizeRechargeAmountInput(rechargeAmount) || '0'}</div>
+                  <div>按 1 元 = {Number(pointsPerYuan).toLocaleString()} 积分计算</div>
+                  {rechargeOrderNo ? (
+                    <div className="truncate text-[11px] text-text-tertiary" title={rechargeOrderNo}>订单 {rechargeOrderNo}</div>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-[auto_auto] md:items-center">
+                  <div className="min-w-[150px]">
+                    <div className="text-xs font-bold text-text-primary">预计到账</div>
+                    <div className="mt-1 flex items-end gap-2">
+                      <span className="text-[28px] font-black leading-none tracking-normal text-accent-primary">
+                        {rechargePreviewPoints > 0
+                          ? Number(rechargePreviewPoints).toLocaleString(undefined, { maximumFractionDigits: 2 })
+                          : '—'}
+                      </span>
+                      <span className="pb-0.5 text-base font-black text-accent-primary">积分</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-2">
+                  <button
+                  type="button"
+                  onClick={() => void handleCreateOrderAndPay()}
+                  disabled={paymentControlsDisabled || !rechargeAmount || Number(rechargeAmount) <= 0}
+                    className="inline-flex h-10 min-w-[208px] items-center justify-center gap-1.5 rounded-lg bg-accent-primary px-4 text-sm font-black text-white shadow-[0_16px_34px_-16px_rgb(var(--color-accent-primary)/0.8)] transition-all hover:brightness-105 active:scale-[0.99] disabled:opacity-45"
+                  >
+                    <Zap className="h-4 w-4 fill-current" />
+                    立即充值
+                  </button>
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-text-tertiary">
+                    <LockKeyhole className="h-3 w-3" />
+                    安全支付，积分秒到账
+                  </span>
+                  </div>
+                </div>
+              </div>
+
+              {rechargeStatusText ? (
+                <div className="mt-4 rounded-lg border border-black/[0.05] bg-white/56 px-3 py-2 text-[11px] font-medium leading-relaxed text-text-secondary dark:border-white/[0.08] dark:bg-white/[0.03]">
+                  {rechargeStatusText}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="mt-4 grid gap-3 px-3 py-1.5 md:grid-cols-3">
+              {[
+                { icon: Zap, title: '秒到账', desc: '充值成功后积分立即到账' },
+                { icon: Box, title: '支持所有模型', desc: '全站模型通用，无使用限制' },
+                { icon: ShieldCheck, title: '安全稳定', desc: '官方托管，保障调用安全与稳定' },
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <div key={item.title} className="flex items-center gap-3 md:justify-center">
+                    <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-accent-primary/[0.08] text-accent-primary">
+                      <Icon className="h-5 w-5" />
+                    </span>
+                    <span>
+                      <span className="block text-sm font-bold text-text-primary">{item.title}</span>
+                      <span className="block text-xs text-text-tertiary">{item.desc}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <div className="rounded-xl border border-black/[0.06] bg-white p-5 shadow-sm dark:border-white/[0.06] dark:bg-surface-primary">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-blue-500">
+                  <Table2 className="h-4 w-4" />
+                </div>
+                <span className="text-base font-bold text-text-primary">调用记录</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void refreshProfileAndPoints()}
+                disabled={refreshControlsDisabled}
+                title="刷新明细"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-secondary/60 hover:text-text-primary disabled:opacity-50"
+              >
+                <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
               </button>
             </div>
             {!callRecords.length ? (
-              <div className="text-xs text-text-tertiary">暂无调用记录（或后端暂未开放该接口）。</div>
+              <div className="text-xs text-text-tertiary py-6 text-center font-medium">暂无调用记录明细（或后端服务暂未开放接口）。</div>
             ) : (
-              <div className="max-h-52 overflow-auto rounded border border-border/70">
-                <table className="w-full text-xs">
-                  <thead className="bg-surface-secondary/40 text-text-tertiary">
+              <div className="mt-4 max-h-80 overflow-auto rounded-xl border border-black/[0.06] dark:border-white/[0.06]">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead className="bg-black/[0.015] text-text-tertiary font-bold border-b border-black/[0.04] dark:bg-white/[0.01] dark:border-white/[0.04]">
                     <tr>
-                      <th className="text-left px-2 py-1.5 font-medium">时间</th>
-                      <th className="text-left px-2 py-1.5 font-medium">模型</th>
-                      <th className="text-right px-2 py-1.5 font-medium">积分</th>
-                      <th className="text-right px-2 py-1.5 font-medium">Tokens</th>
+                      <th className="px-5 py-3 font-bold">时间</th>
+                      <th className="px-5 py-3 font-bold">模型</th>
+                      <th className="px-5 py-3 text-right font-bold">积分消耗</th>
+                      <th className="px-5 py-3 text-right font-bold">Tokens</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-black/[0.03] dark:divide-white/[0.03]">
                     {callRecords.slice(0, 30).map((record) => (
-                      <tr key={record.id} className="border-t border-border/50">
-                        <td className="px-2 py-1.5 text-text-secondary">{new Date(record.createdAt).toLocaleString()}</td>
-                        <td className="px-2 py-1.5 text-text-secondary">{record.model || '-'}</td>
-                        <td className="px-2 py-1.5 text-right text-text-secondary">{record.points}</td>
-                        <td className="px-2 py-1.5 text-right text-text-secondary">{record.tokens}</td>
+                      <tr key={record.id} className="hover:bg-black/[0.005] dark:hover:bg-white/[0.005] transition-colors">
+                        <td className="px-5 py-3 text-sm font-medium text-text-secondary">{new Date(record.createdAt).toLocaleString()}</td>
+                        <td className="px-5 py-3 text-sm font-medium text-text-secondary">{record.model || '-'}</td>
+                        <td className="px-5 py-3 text-right text-sm font-bold text-accent-primary">{record.points}</td>
+                        <td className="px-5 py-3 text-right text-sm font-medium text-text-tertiary">{record.tokens}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1088,9 +1202,9 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
               <button
                 type="button"
                 onClick={onOpenPricing}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-black/[0.08] bg-white/70 px-4 py-3 text-sm font-bold text-text-secondary transition-all hover:border-accent-primary/20 hover:bg-accent-primary/5 hover:text-text-primary active:scale-[0.99] dark:border-white/[0.08] dark:bg-white/[0.02]"
               >
-                <Table2 className="h-3.5 w-3.5" />
+                <Table2 className="h-4 w-4 text-text-tertiary" />
                 查看完整价格表
               </button>
             ) : null}
@@ -1098,28 +1212,33 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
         </>
       )}
 
+      {/* Notice Banner */}
       <div
         className={clsx(
-          'text-[11px] rounded border px-3 py-2',
+          'text-xs rounded-xl border px-4 py-3 font-medium leading-relaxed flex items-center gap-2.5 shadow-sm',
           noticeType === 'error'
-            ? 'border-red-500/30 bg-red-500/5 text-red-500'
+            ? 'border-red-500/20 bg-red-500/5 text-red-500'
             : noticeType === 'success'
-              ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600'
-              : 'border-border bg-surface-primary text-text-tertiary',
+              ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-600'
+              : 'border-black/[0.04] dark:border-white/[0.04] bg-white dark:bg-surface-primary text-text-tertiary',
         )}
       >
-        {notice || '官方源会自动托管调用凭据。'}
+        <div className={clsx(
+          "w-1.5 h-1.5 rounded-full shrink-0",
+          noticeType === 'error' ? "bg-red-500" : noticeType === 'success' ? "bg-emerald-500" : "bg-accent-primary"
+        )} />
+        <span>{notice || '官方源会自动托管调用凭据，确保您的安全稳定连接。'}</span>
       </div>
 
       {session ? (
-        <div className="flex justify-end">
+        <div className="flex justify-end pt-1">
           <button
             type="button"
             onClick={() => void logout()}
             disabled={logoutDisabled}
-            className="px-2.5 py-1 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50/70 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-xs border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 font-bold rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10 active:scale-95 transition-all disabled:opacity-50"
           >
-            退出登录
+            退出当前官方账号
           </button>
         </div>
       ) : null}

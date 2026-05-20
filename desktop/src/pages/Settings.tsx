@@ -6882,7 +6882,7 @@ export function Settings({
 
       {/* Content */}
       <div className="min-w-0 flex-1 overflow-auto">
-        <div className="max-w-2xl mx-auto px-8 py-8 pb-32">
+        <div className={clsx('mx-auto px-8 py-8 pb-32', activeTab === 'ai' ? 'max-w-5xl' : 'max-w-2xl')}>
           <form onSubmit={handleSave} className="space-y-10">
 
             {/* General Tab */}
@@ -6933,7 +6933,10 @@ export function Settings({
               <div className="space-y-10">
                 {/* LLM Connection Config */}
                 <section className="space-y-6">
-                  <h2 className="text-lg font-medium text-text-primary mb-6">{t('settings.ai.title')}</h2>
+                  <div className="mb-6">
+                    <h2 className="text-2xl font-bold tracking-normal text-text-primary">{t('settings.ai.title')}</h2>
+                    <p className="mt-2 text-sm text-text-secondary">管理模型调用与积分使用</p>
+                  </div>
 
                   {officialAiPanelEnabled && (
                     <div ref={officialAiPanelRef} className="space-y-4 scroll-mt-6">
