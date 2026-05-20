@@ -9,15 +9,46 @@ use crate::workspace_loaders::read_json_file;
 use crate::*;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
 use url::Url;
 
 const DEFAULT_KNOWLEDGE_API_BODY_LIMIT: usize = 16 * 1_024 * 1_024;
 const DEFAULT_KNOWLEDGE_BATCH_LIMIT: usize = 64;
+const NOTE_TRANSCRIPTION_MAX_ATTEMPTS: usize = 3;
+static ACTIVE_NOTE_TRANSCRIPTION_JOBS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+struct NoteTranscriptionActiveGuard {
+    note_id: String,
+}
+
+impl Drop for NoteTranscriptionActiveGuard {
+    fn drop(&mut self) {
+        if let Ok(mut jobs) = active_note_transcription_jobs().lock() {
+            jobs.remove(&self.note_id);
+        }
+    }
+}
+
+fn active_note_transcription_jobs() -> &'static Mutex<HashSet<String>> {
+    ACTIVE_NOTE_TRANSCRIPTION_JOBS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn try_mark_note_transcription_active(note_id: &str) -> Option<NoteTranscriptionActiveGuard> {
+    let Ok(mut jobs) = active_note_transcription_jobs().lock() else {
+        return None;
+    };
+    if !jobs.insert(note_id.to_string()) {
+        return None;
+    }
+    Some(NoteTranscriptionActiveGuard {
+        note_id: note_id.to_string(),
+    })
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -1221,6 +1252,66 @@ fn write_note_transcription_meta_status(
     write_json_value(&meta_path, &meta)
 }
 
+fn write_note_transcription_attempt_meta_status(
+    entry_dir: &Path,
+    status: &str,
+    attempt: usize,
+    transcription_error: Option<&str>,
+) -> Result<(), String> {
+    let meta_path = entry_dir.join("meta.json");
+    let mut meta = read_json_value_or(&meta_path, json!({}));
+    if !meta.is_object() {
+        meta = json!({});
+    }
+    let object = meta
+        .as_object_mut()
+        .ok_or_else(|| "笔记元数据格式无效".to_string())?;
+    object.insert("transcriptionStatus".to_string(), json!(status));
+    object.insert("transcriptionAttempt".to_string(), json!(attempt));
+    object.insert(
+        "transcriptionMaxAttempts".to_string(),
+        json!(NOTE_TRANSCRIPTION_MAX_ATTEMPTS),
+    );
+    object.insert("lastTranscriptionAttemptAt".to_string(), json!(now_iso()));
+    object.insert(
+        "transcriptionError".to_string(),
+        transcription_error
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    if status == "failed" {
+        object.insert("transcriptionRetryable".to_string(), json!(false));
+    } else if status == "processing" {
+        object.insert("transcriptionRetryable".to_string(), json!(true));
+    }
+    write_json_value(&meta_path, &meta)
+}
+
+fn should_retry_note_transcription_error(error: &str) -> bool {
+    let normalized = error.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    ![
+        "未配置音频转写接口",
+        "缺少可转录的视频来源",
+        "未找到可用的视频源",
+        "source file not found",
+        "media.transcribe source file not found",
+        "笔记不存在",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(&marker.to_ascii_lowercase()))
+}
+
+fn note_transcription_retry_delay(attempt: usize) -> std::time::Duration {
+    std::time::Duration::from_secs(match attempt {
+        1 => 5,
+        2 => 20,
+        _ => 0,
+    })
+}
+
 fn emit_note_transcription_event(
     app: &AppHandle,
     note_id: &str,
@@ -1305,8 +1396,20 @@ fn spawn_note_transcription_processing(
     media_source: String,
     entry_dir: PathBuf,
 ) {
+    let Some(active_guard) = try_mark_note_transcription_active(&note_id) else {
+        let state = app.state::<AppState>();
+        append_debug_log_state(
+            &state,
+            format!(
+                "[RedBox note] background transcription already active: noteId={}",
+                note_id
+            ),
+        );
+        return;
+    };
     let app_handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _active_guard = active_guard;
         let state = app_handle.state::<AppState>();
         append_debug_log_state(
             &state,
@@ -1316,49 +1419,184 @@ fn spawn_note_transcription_processing(
             ),
         );
 
-        let start_outcome =
-            write_note_transcription_meta_status(&entry_dir, "processing", None, None).and_then(
-                |_| emit_note_transcription_event(&app_handle, &note_id, "processing", false, None),
-            );
-        if let Err(error) = start_outcome {
-            append_debug_log_state(
-                &state,
-                format!(
-                    "[RedBox note] failed to write processing state: noteId={} error={}",
-                    note_id, error
-                ),
-            );
-        }
-
-        let outcome = (|| -> Result<(), String> {
-            let transcript = transcribe_note_media_source(&state, &note_id, &media_source)?;
-            persist_note_transcript(&app_handle, &state, &note_id, &transcript)?;
-            write_note_transcription_meta_status(
+        let mut last_error: Option<String> = None;
+        for attempt in 1..=NOTE_TRANSCRIPTION_MAX_ATTEMPTS {
+            let start_outcome = write_note_transcription_attempt_meta_status(
                 &entry_dir,
-                "completed",
-                Some("transcript.md"),
-                None,
-            )?;
-            Ok(())
-        })();
+                "processing",
+                attempt,
+                last_error.as_deref(),
+            )
+            .and_then(|_| {
+                emit_note_transcription_event(&app_handle, &note_id, "processing", false, None)
+            });
+            if let Err(error) = start_outcome {
+                append_debug_log_state(
+                    &state,
+                    format!(
+                        "[RedBox note] failed to write processing state: noteId={} attempt={} error={}",
+                        note_id, attempt, error
+                    ),
+                );
+            }
 
-        if let Err(error) = outcome {
-            let _ = write_note_transcription_meta_status(&entry_dir, "failed", None, Some(&error));
-            let meta = read_json_value_or(&entry_dir.join("meta.json"), json!({ "id": note_id }));
-            let _ = crate::accounts::sync_failed_transcription_from_knowledge(
-                &state, &note_id, &meta, &error,
-            );
-            let _ =
-                emit_note_transcription_event(&app_handle, &note_id, "failed", false, Some(&error));
-            append_debug_log_state(
-                &state,
-                format!(
-                    "[RedBox note] background transcription failed: noteId={} error={}",
-                    note_id, error
-                ),
-            );
+            let outcome = (|| -> Result<(), String> {
+                let transcript = transcribe_note_media_source(&state, &note_id, &media_source)?;
+                persist_note_transcript(&app_handle, &state, &note_id, &transcript)?;
+                write_note_transcription_meta_status(
+                    &entry_dir,
+                    "completed",
+                    Some("transcript.md"),
+                    None,
+                )?;
+                Ok(())
+            })();
+
+            match outcome {
+                Ok(()) => {
+                    append_debug_log_state(
+                        &state,
+                        format!(
+                            "[RedBox note] background transcription completed: noteId={} attempt={}",
+                            note_id, attempt
+                        ),
+                    );
+                    return;
+                }
+                Err(error) => {
+                    append_debug_log_state(
+                        &state,
+                        format!(
+                            "[RedBox note] background transcription attempt failed: noteId={} attempt={}/{} error={}",
+                            note_id, attempt, NOTE_TRANSCRIPTION_MAX_ATTEMPTS, error
+                        ),
+                    );
+                    if attempt < NOTE_TRANSCRIPTION_MAX_ATTEMPTS
+                        && should_retry_note_transcription_error(&error)
+                    {
+                        last_error = Some(error);
+                        let delay = note_transcription_retry_delay(attempt);
+                        if !delay.is_zero() {
+                            std::thread::sleep(delay);
+                        }
+                        continue;
+                    }
+
+                    let final_error = if attempt >= NOTE_TRANSCRIPTION_MAX_ATTEMPTS {
+                        format!(
+                            "自动转录连续 {} 次失败：{}",
+                            NOTE_TRANSCRIPTION_MAX_ATTEMPTS, error
+                        )
+                    } else {
+                        error
+                    };
+                    let _ = write_note_transcription_attempt_meta_status(
+                        &entry_dir,
+                        "failed",
+                        attempt,
+                        Some(&final_error),
+                    );
+                    let meta =
+                        read_json_value_or(&entry_dir.join("meta.json"), json!({ "id": note_id }));
+                    let _ = crate::accounts::sync_failed_transcription_from_knowledge(
+                        &state,
+                        &note_id,
+                        &meta,
+                        &final_error,
+                    );
+                    let _ = emit_note_transcription_event(
+                        &app_handle,
+                        &note_id,
+                        "failed",
+                        false,
+                        Some(&final_error),
+                    );
+                    append_debug_log_state(
+                        &state,
+                        format!(
+                            "[RedBox note] background transcription failed: noteId={} attempts={} error={}",
+                            note_id, attempt, final_error
+                        ),
+                    );
+                    return;
+                }
+            }
         }
     });
+}
+
+pub(crate) fn resume_pending_note_transcriptions(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    reason: &str,
+) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_knowledge(state);
+    let candidates = with_store(state, |store| {
+        Ok(store
+            .knowledge_notes
+            .iter()
+            .filter_map(|note| {
+                let folder_path = note.folder_path.as_ref()?;
+                if note.transcript.as_deref().unwrap_or("").trim().is_empty() {
+                    let media_source = note
+                        .video
+                        .clone()
+                        .or(note.video_url.clone())
+                        .filter(|item| !item.trim().is_empty())?;
+                    Some((
+                        note.id.clone(),
+                        note.title.clone(),
+                        media_source,
+                        PathBuf::from(folder_path),
+                        note.transcription_status.clone(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>())
+    })?;
+
+    let mut scheduled = 0usize;
+    for (note_id, title, media_source, entry_dir, note_status) in candidates {
+        let meta = read_json_value_or(&entry_dir.join("meta.json"), json!({}));
+        let existing_transcript_file = note_transcript_file_from_meta(&meta);
+        if existing_transcript_file.is_some() {
+            continue;
+        }
+        let status = meta
+            .get("transcriptionStatus")
+            .or_else(|| meta.get("transcription_status"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .or(note_status)
+            .unwrap_or_default();
+        let retryable = meta
+            .get("transcriptionRetryable")
+            .and_then(Value::as_bool)
+            .unwrap_or(status == "processing");
+        let attempt = meta
+            .get("transcriptionAttempt")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        let should_resume = status == "processing" || (status == "failed" && retryable);
+        if !should_resume || attempt >= NOTE_TRANSCRIPTION_MAX_ATTEMPTS {
+            continue;
+        }
+        append_debug_log_state(
+            state,
+            format!(
+                "[RedBox note] resume pending transcription: noteId={} reason={} status={} attempt={}",
+                note_id, reason, status, attempt
+            ),
+        );
+        spawn_note_transcription_processing(app, note_id, title, media_source, entry_dir);
+        scheduled += 1;
+    }
+
+    Ok(json!({ "success": true, "scheduled": scheduled }))
 }
 
 fn spawn_youtube_subtitle_processing(
@@ -3219,9 +3457,10 @@ mod tests {
         extract_css_url_near, extract_html_attribute_near, extract_json_string_values,
         ingest_xhs_entry_v2_stub, is_supported_social_entry_kind, materialize_note_asset_source,
         maybe_backfill_xiaohongshu_assets, note_entry_id, note_transcript_file_from_meta,
-        should_auto_transcribe_knowledge_video, youtube_entry_id, zhihu_answer_to_entry_request,
-        zhihu_article_to_entry_request, KnowledgeEntryAssetsInput,
-        XhsKnowledgeEntryImportV2Request, ZhihuAnswerIngestRequest, ZhihuArticleIngestRequest,
+        should_auto_transcribe_knowledge_video, should_retry_note_transcription_error,
+        youtube_entry_id, zhihu_answer_to_entry_request, zhihu_article_to_entry_request,
+        KnowledgeEntryAssetsInput, XhsKnowledgeEntryImportV2Request, ZhihuAnswerIngestRequest,
+        ZhihuArticleIngestRequest,
     };
     use serde_json::json;
     use std::fs;
@@ -3340,6 +3579,23 @@ mod tests {
             None,
             false,
         ));
+    }
+
+    #[test]
+    fn note_transcription_worker_retries_transient_errors_only() {
+        assert!(should_retry_note_transcription_error(
+            "转写接口 HTTP 502: Bad Gateway"
+        ));
+        assert!(should_retry_note_transcription_error(
+            "转写接口返回了空结果：服务响应 stdout 为空"
+        ));
+        assert!(!should_retry_note_transcription_error(
+            "未配置音频转写接口，请先在设置中填写 transcription endpoint/model"
+        ));
+        assert!(!should_retry_note_transcription_error(
+            "未找到可用的视频源: missing.mp4"
+        ));
+        assert!(!should_retry_note_transcription_error("笔记不存在"));
     }
 
     #[test]

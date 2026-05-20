@@ -1319,13 +1319,21 @@ pub fn handle_library_channel(
     }
     Some((|| -> Result<Value, String> {
         match channel {
-            "knowledge:list" => knowledge_list_value(state),
+            "knowledge:list" => {
+                let _ = knowledge::resume_pending_note_transcriptions(app, state, "knowledge-list");
+                knowledge_list_value(state)
+            }
             "knowledge:list-youtube" => knowledge_list_youtube_value(state),
             "knowledge:docs:list" => knowledge_docs_list_value(state),
             "knowledge:glob" => knowledge_glob_value(state, payload),
             "knowledge:grep" => knowledge_grep_value(state, payload),
             "knowledge:read" => knowledge_read_value(state, payload),
             "knowledge:list-page" => {
+                let _ = knowledge::resume_pending_note_transcriptions(
+                    app,
+                    state,
+                    "knowledge-list-page",
+                );
                 let request: KnowledgeListPageRequest = serde_json::from_value(payload.clone())
                     .map_err(|error| format!("knowledge list page payload 无效: {error}"))?;
                 knowledge_list_page_value(state, &request)
