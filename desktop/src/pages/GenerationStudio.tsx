@@ -1820,11 +1820,6 @@ type VoiceListItem = {
     provider: string;
 };
 
-const KNOWN_AUDIO_TTS_MODELS: PickerOption[] = [
-    { value: 'speech-2.8-turbo', label: 'speech-2.8-turbo', description: 'MiniMax' },
-    { value: 'cosyvoice-v3.5-plus', label: 'cosyvoice-v3.5-plus', description: 'CosyVoice' },
-];
-
 function normalizedModelKey(value: string): string {
     return value.trim().toLowerCase();
 }
@@ -1903,7 +1898,6 @@ function buildImageModelOptions(settings: SettingsShape): PickerOption[] {
 function buildAudioModelOptions(settings: SettingsShape): PickerOption[] {
     const sources = parseAiSources(settings.ai_sources_json);
     const optionsByModel = new Map<string, { label: string; sourceLabels: string[] }>();
-    const fallbackModel = String(settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo').trim();
     const addModelOption = (modelId: string, sourceLabel: string) => {
         const id = String(modelId || '').trim();
         if (!id) return;
@@ -1932,13 +1926,6 @@ function buildAudioModelOptions(settings: SettingsShape): PickerOption[] {
         for (const model of audioModels) {
             addModelOption(model.id, sourceLabel);
         }
-    }
-
-    if (fallbackModel && !optionsByModel.has(fallbackModel)) {
-        optionsByModel.set(fallbackModel, { label: fallbackModel, sourceLabels: ['当前设置'] });
-    }
-    for (const option of KNOWN_AUDIO_TTS_MODELS) {
-        addModelOption(option.value, option.description || '内置模型');
     }
 
     return Array.from(optionsByModel.entries()).map(([value, option]) => ({
