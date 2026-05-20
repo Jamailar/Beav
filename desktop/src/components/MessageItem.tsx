@@ -944,6 +944,21 @@ export const MessageItem = memo(({
   const sanitizedAssistantContent = !isUser
     ? stripInternalProtocolMarkup(String(msg.content || ''))
     : String(msg.content || '');
+  const userCopyContent = useMemo(() => {
+    if (!isUser) return '';
+    const display = String(msg.displayContent || '').trim();
+    if (display) return display;
+    const content = stripInternalProtocolMarkup(String(msg.content || '')).trim();
+    if (content) return content;
+    const attachmentNames = (msg.attachments || [])
+      .map((attachment) => String(attachment.name || '').trim())
+      .filter(Boolean);
+    if (attachmentNames.length > 0) return attachmentNames.join('\n');
+    if (msg.attachment?.type === 'uploaded-file') {
+      return String(msg.attachment.name || '').trim();
+    }
+    return '';
+  }, [isUser, msg.attachment, msg.attachments, msg.content, msg.displayContent]);
   const aiContentRef = useRef<HTMLDivElement | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [imageMenu, setImageMenu] = useState<ImageContextMenuState>({
@@ -970,8 +985,15 @@ export const MessageItem = memo(({
     && !msg.suppressPendingIndicator
     && Boolean(msg.isStreaming && !hasAssistantResponseContent);
   const showProcessingTimer = !isUser && !isThinkingMessage && typeof msg.processingStartedAt === 'number' && Number.isFinite(msg.processingStartedAt);
+  const hasMessageAttachments = Boolean(
+    (msg.attachments && msg.attachments.length > 0)
+      || msg.attachment?.type === 'uploaded-file'
+      || msg.attachment?.type === 'youtube-video'
+      || msg.attachment?.type === 'wander-references'
+      || (msg.knowledgeReferences && msg.knowledgeReferences.length > 0),
+  );
   const hasRenderableMessageContent = isUser
-    ? Boolean(msg.displayContent || msg.content || (msg.isStreaming && !msg.thinking))
+    ? Boolean(msg.displayContent || msg.content || hasMessageAttachments || (msg.isStreaming && !msg.thinking))
     : hasAssistantResponseContent || showPendingThinkingIndicator;
   const shouldAutoHideWorkflow = workflowAutoHideWhenComplete && !msg.isStreaming && hasAssistantResponseContent;
   const showWorkflowOnTop = workflowPlacement === 'top';
@@ -1499,27 +1521,30 @@ export const MessageItem = memo(({
           (() => {
             const videoCardMatch = msg.content.match(/<!--VIDEO_CARD:(.*?)-->/);
             let videoCard: { title: string; thumbnailUrl?: string; videoId?: string } | null = null;
-            let displayText = msg.displayContent || stripInternalProtocolMarkup(msg.content);
+            const hasExplicitDisplayContent = typeof msg.displayContent === 'string';
+            let displayText = hasExplicitDisplayContent ? msg.displayContent || '' : stripInternalProtocolMarkup(msg.content);
 
             if (videoCardMatch) {
               try {
                 videoCard = JSON.parse(videoCardMatch[1]);
-                displayText = msg.displayContent || `总结视频「${videoCard?.title}」的内容`;
+                displayText = hasExplicitDisplayContent ? msg.displayContent || '' : `总结视频「${videoCard?.title}」的内容`;
               } catch (e) {
                 console.error('Failed to parse video card:', e);
               }
             }
 
             return (
-              <div className="flex w-full flex-col items-end">
-                <div className="chat-user-bubble max-w-full px-4 py-2.5 text-[15px] leading-relaxed text-white shadow-sm">
-                  {videoCard && (
-                    <div className="mb-3">
-                      {renderYoutubeCard(videoCard)}
-                    </div>
-                  )}
-                  <div className="whitespace-pre-wrap">{displayText}</div>
-                </div>
+              <div className="group/user flex w-full flex-col items-end">
+                {(videoCard || displayText) && (
+                  <div className="chat-user-bubble max-w-full px-4 py-2.5 text-[15px] leading-relaxed text-white shadow-sm">
+                    {videoCard && (
+                      <div className={displayText ? 'mb-3' : ''}>
+                        {renderYoutubeCard(videoCard)}
+                      </div>
+                    )}
+                    {displayText && <div className="whitespace-pre-wrap">{displayText}</div>}
+                  </div>
+                )}
                 {showAttachments && msg.attachment?.type === 'youtube-video' && !videoCard && (
                   <div className="mt-2 w-full max-w-[420px]">
                     {renderYoutubeCard(msg.attachment)}
@@ -1540,6 +1565,28 @@ export const MessageItem = memo(({
                   </div>
                 ) : null}
                 {showAttachments && (!msg.attachments || msg.attachments.length === 0) && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
+                {userCopyContent && (
+                  <div className="mt-1.5 flex justify-end opacity-0 transition-opacity group-hover/user:opacity-100 focus-within:opacity-100">
+                    <button
+                      type="button"
+                      onClick={() => onCopyMessage(msg.id, userCopyContent)}
+                      className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                      title="复制内容"
+                    >
+                      {copiedMessageId === msg.id ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 text-green-500" />
+                          <span className="text-green-500">已复制</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5" />
+                          <span>复制</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })()

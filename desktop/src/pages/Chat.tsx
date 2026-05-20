@@ -3660,15 +3660,19 @@ export function Chat({
     const missingInlineLabels = inlineLabels.filter((label) => !normalizedContent.includes(label));
     const knowledgeLabels = safeKnowledgeMentions.map((item) => `#${item.title || '知识库内容'}`);
     const normalizedDisplayOverride = String(displayContentOverride || '').trim();
-    const displayBody = normalizedDisplayOverride || normalizedContent || (attachments.length > 0 ? `请分析这些附件：${attachments.map((item) => item.name).join('、')}` : safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
+    const hasAttachments = attachments.length > 0;
+    const attachmentOnlyTitle = hasAttachments
+      ? `附件：${attachments.map((item) => item.name).filter(Boolean).join('、') || '未命名附件'}`
+      : '';
+    const displayBody = normalizedDisplayOverride || normalizedContent || (safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
     const displayText = [...missingInlineLabels, ...knowledgeLabels, displayBody].filter(Boolean).join(' ').trim();
-    if (!displayText) return;
+    if (!displayText && !hasAttachments) return;
     const attachmentBlockReason = attachmentsSendBlockReason(attachments);
     if (attachmentBlockReason) {
       setErrorNotice(attachmentBlockReason);
       return;
     }
-    const runtimeMessage = normalizedContent || displayBody || displayText;
+    const runtimeMessage = normalizedContent || displayBody || displayText || (hasAttachments ? '请分析这些附件。' : '');
     const assetReferencesForSend = assetMentions.map((item) => ({
       id: item.id,
       name: item.name,
@@ -3709,7 +3713,7 @@ export function Chat({
     let seededOptimisticMessages = false;
     if (!targetSessionId && onEnsureSessionForSend) {
       try {
-        targetSessionId = await onEnsureSessionForSend(defaultSessionTitleFromMessage(displayBody || displayText), {
+        targetSessionId = await onEnsureSessionForSend(defaultSessionTitleFromMessage(displayBody || displayText || attachmentOnlyTitle), {
           onCreated: (sessionId) => {
             currentSessionIdRef.current = sessionId;
             skipNextFixedSessionLoadRef.current = sessionId;
