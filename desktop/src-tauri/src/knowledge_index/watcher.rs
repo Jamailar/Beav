@@ -62,8 +62,12 @@ fn classify_event(app: &AppHandle, event: &Event) -> WatchDirtyKind {
     let Ok(knowledge_root) = workspace_root(&state).map(|root| root.join("knowledge")) else {
         return WatchDirtyKind::FullRebuild;
     };
-    let redbook_root = knowledge_root.join("redbook");
-    let youtube_root = knowledge_root.join("youtube");
+    let catalog_roots = [
+        knowledge_root.join("redbook"),
+        knowledge_root.join("zhihu"),
+        knowledge_root.join("wechat"),
+        knowledge_root.join("youtube"),
+    ];
     if event.paths.is_empty() {
         return WatchDirtyKind::FullRebuild;
     }
@@ -77,7 +81,7 @@ fn classify_event(app: &AppHandle, event: &Event) -> WatchDirtyKind {
     let all_catalog_paths = event
         .paths
         .iter()
-        .all(|path| path.starts_with(&redbook_root) || path.starts_with(&youtube_root));
+        .all(|path| catalog_roots.iter().any(|root| path.starts_with(root)));
     if all_catalog_paths {
         WatchDirtyKind::CatalogOnly
     } else {

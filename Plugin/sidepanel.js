@@ -411,9 +411,10 @@ function resolvePageIdentity(nextContext) {
   const tab = nextContext?.tab || {};
   const pageInfo = nextContext?.pageInfo || {};
   const identity = nextContext?.pageIdentity || {};
-  const platform = normalizePlatform(identity.platform || pageInfo.platform || tab.hostname || pageInfo.kind || tab.url);
+  const platform = normalizePlatform(pageInfo.platform || tab.hostname || tab.url || identity.platform || pageInfo.kind);
   const platformMeta = getPlatformMeta(platform);
-  const pageType = identity.pageType || inferPageType(pageInfo, tab);
+  const inferredPageType = inferPageType(pageInfo, tab);
+  const pageType = inferredPageType !== 'page' ? inferredPageType : (identity.pageType || inferredPageType);
   const fallbackTitle = cleanTitle(identity.title || tab.title || '');
   const hostname = tab.hostname || getHostname(tab.url);
 
@@ -803,8 +804,9 @@ function renderBloggerNotesPanel(nextContext) {
   const tab = nextContext?.tab || {};
   const pageInfo = nextContext?.pageInfo || {};
   const identity = nextContext?.pageIdentity || {};
-  const platform = normalizePlatform(identity.platform || pageInfo.platform || tab.hostname || pageInfo.kind || tab.url);
-  const pageType = identity.pageType || inferPageType(pageInfo, tab);
+  const platform = normalizePlatform(pageInfo.platform || tab.hostname || tab.url || identity.platform || pageInfo.kind);
+  const inferredPageType = inferPageType(pageInfo, tab);
+  const pageType = inferredPageType !== 'page' ? inferredPageType : (identity.pageType || inferredPageType);
   const visible = platform === 'xhs' && pageType === 'profile';
   elements.bloggerNotesPanel.classList.toggle('hidden', !visible);
   if (!visible) {
@@ -868,8 +870,9 @@ function getCaptureActionConfig(nextContext) {
   const tab = nextContext?.tab || {};
   const pageInfo = nextContext?.pageInfo || {};
   const identity = nextContext?.pageIdentity || {};
-  const platform = normalizePlatform(identity.platform || pageInfo.platform || tab.hostname || pageInfo.kind || tab.url);
-  const pageType = identity.pageType || inferPageType(pageInfo, tab);
+  const platform = normalizePlatform(pageInfo.platform || tab.hostname || tab.url || identity.platform || pageInfo.kind);
+  const inferredPageType = inferPageType(pageInfo, tab);
+  const pageType = inferredPageType !== 'page' ? inferredPageType : (identity.pageType || inferredPageType);
   if (!tab.url) {
     return {
       variant: 'empty',
@@ -1218,7 +1221,7 @@ function getPlatformMeta(platform) {
     x: { platform: 'x', name: 'X', logo: 'X', icon: 'assets/platforms/x.svg' },
     instagram: { platform: 'instagram', name: 'Instagram', logo: 'I', icon: 'assets/platforms/instagram.svg' },
     wechat: { platform: 'wechat', name: '微信公众号', logo: '微' },
-    zhihu: { platform: 'zhihu', name: '知乎', logo: '知' },
+    zhihu: { platform: 'zhihu', name: '知乎', logo: '知', icon: 'assets/platforms/zhihu.svg' },
     redbox: { platform: 'redbox', name: 'RedBox', logo: 'R' },
     web: { platform: 'web', name: '网页', logo: 'W' },
   };

@@ -887,10 +887,53 @@ pub(crate) fn load_cover_assets_from_fs(cover_root: &Path) -> Vec<CoverAssetReco
         .collect()
 }
 
-pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<KnowledgeNoteRecord> {
-    let mut notes = Vec::new();
+fn platform_note_root_name(kind: &str) -> Option<&'static str> {
+    match kind {
+        "zhihu-answer" | "zhihu-article" => Some("zhihu"),
+        "wechat-article" => Some("wechat"),
+        _ => None,
+    }
+}
+
+fn migrate_legacy_platform_notes_from_redbook(knowledge_root: &Path) {
     let redbook_root = knowledge_root.join("redbook");
-    if let Ok(entries) = fs::read_dir(&redbook_root) {
+    let Ok(entries) = fs::read_dir(&redbook_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(meta) = read_json_file(&path.join("meta.json")) else {
+            continue;
+        };
+        let kind = meta_string(&meta, &["captureKind", "capture_kind", "type"]).unwrap_or_default();
+        let Some(target_root_name) = platform_note_root_name(&kind) else {
+            continue;
+        };
+        let target_root = knowledge_root.join(target_root_name);
+        let target_path = target_root.join(entry.file_name());
+        if target_path.exists() {
+            continue;
+        }
+        if fs::create_dir_all(&target_root).is_ok() {
+            let _ = fs::rename(&path, target_path);
+        }
+    }
+}
+
+pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<KnowledgeNoteRecord> {
+    migrate_legacy_platform_notes_from_redbook(knowledge_root);
+    let mut notes = Vec::new();
+    for note_root in [
+        knowledge_root.join("redbook"),
+        knowledge_root.join("zhihu"),
+        knowledge_root.join("wechat"),
+    ] {
+        let Ok(entries) = fs::read_dir(&note_root) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
@@ -1892,6 +1935,84 @@ mod tests {
             .expect("youtube video should load");
         assert_eq!(video.thumbnail_url, file_url_for_path(&thumbnail));
         assert!(!video.thumbnail_url.contains("OldWorkspace"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn knowledge_notes_loader_reads_zhihu_and_wechat_roots() {
+        let root = temp_workspace_path("knowledge-platform-roots");
+        let knowledge_root = root.join("knowledge");
+        write_json(
+            &knowledge_root
+                .join("zhihu")
+                .join("zhihu-1")
+                .join("meta.json"),
+            &json!({
+                "id": "zhihu-1",
+                "type": "zhihu-article",
+                "captureKind": "zhihu-article",
+                "title": "知乎文章",
+                "sourceDomain": "zhuanlan.zhihu.com",
+                "createdAt": "2026-05-20T00:00:00Z"
+            }),
+        );
+        write_json(
+            &knowledge_root
+                .join("wechat")
+                .join("wechat-1")
+                .join("meta.json"),
+            &json!({
+                "id": "wechat-1",
+                "type": "wechat-article",
+                "captureKind": "wechat-article",
+                "title": "公众号文章",
+                "sourceDomain": "mp.weixin.qq.com",
+                "createdAt": "2026-05-19T00:00:00Z"
+            }),
+        );
+
+        let notes = load_knowledge_notes_from_fs(&knowledge_root);
+
+        assert!(notes
+            .iter()
+            .any(|item| item.id == "zhihu-1"
+                && item.capture_kind.as_deref() == Some("zhihu-article")));
+        assert!(notes
+            .iter()
+            .any(|item| item.id == "wechat-1"
+                && item.capture_kind.as_deref() == Some("wechat-article")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn knowledge_notes_loader_migrates_platform_notes_out_of_redbook() {
+        let root = temp_workspace_path("knowledge-platform-migration");
+        let knowledge_root = root.join("knowledge");
+        let legacy_path = knowledge_root.join("redbook").join("legacy-zhihu");
+        write_json(
+            &legacy_path.join("meta.json"),
+            &json!({
+                "id": "legacy-zhihu",
+                "type": "zhihu-article",
+                "captureKind": "zhihu-article",
+                "title": "旧知乎文章",
+                "sourceDomain": "zhuanlan.zhihu.com",
+                "createdAt": "2026-05-18T00:00:00Z"
+            }),
+        );
+
+        let notes = load_knowledge_notes_from_fs(&knowledge_root);
+
+        assert!(!legacy_path.exists());
+        assert!(knowledge_root
+            .join("zhihu")
+            .join("legacy-zhihu")
+            .join("meta.json")
+            .exists());
+        assert!(notes.iter().any(|item| item.id == "legacy-zhihu"
+            && item.capture_kind.as_deref() == Some("zhihu-article")));
 
         let _ = fs::remove_dir_all(&root);
     }

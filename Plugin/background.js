@@ -443,7 +443,10 @@ async function inspectPage(tabId) {
       )
     );
 
-    if (shouldTrustCache) {
+    const urlPageInfo = detectCaptureTargetFromUrl(currentUrl);
+    if (urlPageInfo?.detected) {
+      pageInfo = urlPageInfo;
+    } else if (shouldTrustCache) {
       pageInfo = cached.pageInfo;
     } else {
       const contentResponse = await chrome.tabs.sendMessage(tabId, { type: 'page-state:get' }).catch(() => null);
@@ -496,25 +499,6 @@ function detectCaptureTargetFromUrl(rawUrl) {
     };
   }
 
-  if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) {
-    const isAnswerPage = /^\/question\/\d+\/answer\/\d+/.test(pathname);
-    if (isAnswerPage) {
-      return {
-        kind: 'zhihu-answer',
-        platform: 'zhihu',
-        action: 'save-zhihu-answer',
-        label: '保存知乎回答到知识库',
-        description: '当前页面已识别为知乎回答页，将保存问题和最高赞回答。',
-        detected: true,
-      };
-    }
-    return createLinkFallbackPageInfo({
-      kind: 'zhihu-page',
-      platform: 'zhihu',
-      description: '当前页面还没有稳定识别到可保存的知乎回答。',
-    });
-  }
-
   if (hostname === 'zhuanlan.zhihu.com') {
     const isArticlePage = /^\/p\/\d+/.test(pathname);
     if (isArticlePage) {
@@ -531,6 +515,25 @@ function detectCaptureTargetFromUrl(rawUrl) {
       kind: 'zhihu-page',
       platform: 'zhihu',
       description: '当前页面还没有稳定识别到可保存的知乎文章。',
+    });
+  }
+
+  if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) {
+    const isAnswerPage = /^\/question\/\d+\/answer\/\d+/.test(pathname);
+    if (isAnswerPage) {
+      return {
+        kind: 'zhihu-answer',
+        platform: 'zhihu',
+        action: 'save-zhihu-answer',
+        label: '保存知乎回答到知识库',
+        description: '当前页面已识别为知乎回答页，将保存问题和最高赞回答。',
+        detected: true,
+      };
+    }
+    return createLinkFallbackPageInfo({
+      kind: 'zhihu-page',
+      platform: 'zhihu',
+      description: '当前页面还没有稳定识别到可保存的知乎回答。',
     });
   }
 
@@ -1192,6 +1195,28 @@ function extractSidePanelPageIdentity() {
       pageType: 'article',
       title: cleanTitle(text('#activity-name') || baseTitle),
       author: text('#js_name') || text('#js_author_name'),
+      url: href,
+      hostname,
+    };
+  }
+
+  if (hostname === 'zhuanlan.zhihu.com') {
+    return {
+      platform: 'zhihu',
+      pageType: /^\/p\/\d+/i.test(path) ? 'article' : 'page',
+      title: cleanTitle(text('.Post-Title') || text('h1.Post-Title') || meta('og:title') || baseTitle),
+      author: text('.Post-Author .AuthorInfo-name') || text('.Post-Author [class*="AuthorInfo-name"]'),
+      url: href,
+      hostname,
+    };
+  }
+
+  if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) {
+    return {
+      platform: 'zhihu',
+      pageType: /^\/question\/\d+\/answer\/\d+/i.test(path) ? 'article' : 'page',
+      title: cleanTitle(text('.QuestionHeader-title') || meta('og:title') || baseTitle),
+      author: text('.AnswerItem .AuthorInfo-name') || text('[itemtype="http://schema.org/Person"] [class*="AuthorInfo-name"]'),
       url: href,
       hostname,
     };

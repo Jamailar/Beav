@@ -49,6 +49,9 @@
     "https://mobile.twitter.com/*",
     "https://instagram.com/*",
     "https://www.instagram.com/*",
+    "https://zhihu.com/*",
+    "https://www.zhihu.com/*",
+    "https://zhuanlan.zhihu.com/*",
     "https://*.xhscdn.com/*",
     "https://*.rednotecdn.com/*",
     "https://redbox.ziz.hk/*"

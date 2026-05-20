@@ -68,9 +68,17 @@ fn summarize_note(item: KnowledgeNoteRecord) -> KnowledgeCatalogSummary {
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| preview_text(&item.content, 280));
+    let catalog_kind = match item.capture_kind.as_deref() {
+        Some("link-article") => "link-article",
+        Some("wechat-article") => "wechat-article",
+        Some("zhihu-answer") => "zhihu-answer",
+        Some("zhihu-article") => "zhihu-article",
+        _ => "redbook-note",
+    }
+    .to_string();
     KnowledgeCatalogSummary {
         item_id: item.id.clone(),
-        kind: "redbook-note".to_string(),
+        kind: catalog_kind.clone(),
         note_type: item.r#type.clone(),
         capture_kind: item.capture_kind.clone(),
         title: item.title,
@@ -85,7 +93,7 @@ fn summarize_note(item: KnowledgeNoteRecord) -> KnowledgeCatalogSummary {
         thumbnail_url: None,
         preview_text: preview.clone(),
         scope: "workspace-shared".to_string(),
-        owner_type: Some("redbook-note".to_string()),
+        owner_type: Some(catalog_kind),
         owner_id: Some(item.id.clone()),
         created_at: item.created_at.clone(),
         updated_at: item.created_at,
@@ -791,6 +799,8 @@ fn visual_candidates_missing_from_index(
     }
     for root in [
         knowledge_root.join("redbook"),
+        knowledge_root.join("zhihu"),
+        knowledge_root.join("wechat"),
         knowledge_root.join("youtube"),
     ] {
         if visual_candidate_missing_under(&root, indexed_paths)? {
