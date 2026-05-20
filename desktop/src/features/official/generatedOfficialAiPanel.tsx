@@ -159,7 +159,14 @@ const writePanelDisplaySnapshot = (snapshot: RedboxPanelDisplaySnapshot | null):
       window.localStorage.removeItem(PANEL_DISPLAY_SNAPSHOT_KEY);
       return;
     }
-    window.localStorage.setItem(PANEL_DISPLAY_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    const previous = readPanelDisplaySnapshot();
+    const nextSnapshot: RedboxPanelDisplaySnapshot = {
+      ...snapshot,
+      points: snapshot.points || previous?.points || null,
+      models: snapshot.models.length ? snapshot.models : previous?.models || [],
+      callRecords: snapshot.callRecords.length ? snapshot.callRecords : previous?.callRecords || [],
+    };
+    window.localStorage.setItem(PANEL_DISPLAY_SNAPSHOT_KEY, JSON.stringify(nextSnapshot));
   } catch {
     // ignore snapshot failures
   }
@@ -345,6 +352,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     traceAuthUi('session:committed', summarizeSessionForTrace(session));
 
     if (!session) {
+      if (!bootstrapped) return;
       confirmedWechatSessionRef.current = '';
       stopWechatPolling();
       setUser(null);
@@ -364,7 +372,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
       stopWechatPolling();
       setWechatStatusText('CONFIRMED');
     }
-  }, [session, stopWechatPolling]);
+  }, [bootstrapped, session, stopWechatPolling]);
 
   useEffect(() => {
     const nextRenderMode = !bootstrapped
@@ -383,6 +391,9 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, [bootstrapped, session]);
 
   useEffect(() => {
+    if (!user && !points && !models.length && !callRecords.length) {
+      return;
+    }
     writePanelDisplaySnapshot({
       user,
       points,
@@ -405,7 +416,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     if (!result?.success) {
       throw new Error(result?.error || '查询余额失败');
     }
-    setPoints(result.points || null);
+    setPoints((prev) => result.points || prev);
   }, []);
 
   const fetchModels = useCallback(async () => {
@@ -413,7 +424,8 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     if (!result?.success) {
       throw new Error(result?.error || '拉取模型失败');
     }
-    setModels((result.models || []).filter((item) => String(item?.id || '').trim()));
+    const nextModels = (result.models || []).filter((item) => String(item?.id || '').trim());
+    setModels((prev) => nextModels.length ? nextModels : prev);
   }, []);
 
   const fetchCallRecords = useCallback(async () => {
@@ -421,7 +433,8 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     if (!result?.success) {
       throw new Error(result?.error || '拉取调用记录失败');
     }
-    setCallRecords((result.records || []).filter((item) => String(item?.id || '').trim()));
+    const nextRecords = (result.records || []).filter((item) => String(item?.id || '').trim());
+    setCallRecords((prev) => nextRecords.length ? nextRecords : prev);
   }, []);
 
   const loadAuthenticatedData = useCallback(async (): Promise<AuthenticatedDataIssue[]> => {
@@ -781,18 +794,21 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, [stopWechatPolling]);
 
   useEffect(() => {
-    const handleDataUpdated = (_event: unknown, payload?: { points?: Record<string, unknown> | null; models?: ModelsResponseItem[]; callRecords?: RedboxCallRecordItem[] }) => {
+    const handleDataUpdated = (_event: unknown, payload?: { points?: Record<string, unknown> | null; models?: ModelsResponseItem[]; callRecords?: RedboxCallRecordItem[]; records?: RedboxCallRecordItem[] }) => {
+      const nextCallRecords = payload?.callRecords || payload?.records || [];
       traceAuthUi('auth:onDataChanged', {
         hasPoints: Boolean(payload?.points),
         modelCount: payload?.models?.length || 0,
-        recordCount: payload?.callRecords?.length || 0,
+        recordCount: nextCallRecords.length,
       });
       if (payload?.points) setPoints(payload.points);
       if (payload?.models) {
-        setModels((payload.models || []).filter((item) => String(item?.id || '').trim()));
+        const nextModels = (payload.models || []).filter((item) => String(item?.id || '').trim());
+        setModels((prev) => nextModels.length ? nextModels : prev);
       }
-      if (payload?.callRecords) {
-        setCallRecords((payload.callRecords || []).filter((item) => String(item?.id || '').trim()));
+      if (payload?.callRecords || payload?.records) {
+        const filteredCallRecords = nextCallRecords.filter((item) => String(item?.id || '').trim());
+        setCallRecords((prev) => filteredCallRecords.length ? filteredCallRecords : prev);
       }
     };
     window.ipcRenderer.auth.onDataChanged(handleDataUpdated);
