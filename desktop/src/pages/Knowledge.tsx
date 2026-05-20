@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -261,6 +261,7 @@ const INLINE_TAG_LIMIT = 8;
 const KNOWLEDGE_SEARCH_DEBOUNCE_MS = 500;
 const KNOWLEDGE_RENDER_BATCH_SIZE = 60;
 const VISUAL_INDEX_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'tif', 'tiff', 'heic', 'bmp', 'webp', 'pdf']);
+const BROWSER_PLUGIN_DOWNLOAD_URL = APP_BRAND.downloadUrl || 'https://redbox.ziz.hk/download';
 
 const isVisualIndexFilePath = (path: string) => {
     const extension = path.split('.').pop()?.toLowerCase() || '';
@@ -1234,6 +1235,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     }, [debouncedSearchQuery, selectedTypeFilter, selectedTag, sortOrder]);
 
     const hasMoreRenderedItems = visibleKnowledgeItems.length < filteredKnowledgeItems.length;
+    const isKnowledgeLibraryEmpty = knowledgeItems.length === 0;
     const isIndexingInProgress = indexStatus.isBuilding
         || indexStatus.pendingCount > 0
         || (typeof indexStatus.rebuildProgress === 'number' && indexStatus.rebuildProgress < 1)
@@ -1800,6 +1802,18 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             </div>
         );
     };
+
+    const handleOpenBrowserPluginDownload = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.openAppReleasePage(BROWSER_PLUGIN_DOWNLOAD_URL);
+            if (!result?.success) {
+                void appAlert(result?.error || '打开插件下载页面失败');
+            }
+        } catch (error) {
+            console.error('Failed to open browser plugin download page:', error);
+            void appAlert('打开插件下载页面失败');
+        }
+    }, []);
 
     const typeFilterControls = useMemo(() => (
         <div className="flex min-w-0 items-center gap-2 overflow-x-auto no-scrollbar">
@@ -2386,9 +2400,64 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 ) : (
                     <div className="space-y-4">
                         {filteredKnowledgeItems.length === 0 ? (
-                            <div className="text-center text-text-tertiary text-xs py-16">
-                                暂无内容，可使用插件保存小红书、YouTube、公众号文章和网页链接，也可添加文档源
-                            </div>
+                            isKnowledgeLibraryEmpty && !isEmbedded ? (
+                                <div className="mx-auto flex min-h-[360px] max-w-[560px] flex-col items-center justify-center px-4 py-12 text-center">
+                                    <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-accent-primary/15 bg-accent-primary/10 text-accent-primary">
+                                        <BookmarkPlus className="h-7 w-7" />
+                                    </div>
+                                    <h2 className="text-[18px] font-extrabold tracking-tight text-text-primary">
+                                        开始收集第一条知识
+                                    </h2>
+                                    <p className="mt-2 max-w-[440px] text-[13px] font-medium leading-6 text-text-tertiary">
+                                        安装浏览器插件后，可以把小红书、YouTube、网页、图片和选中文字直接保存到这里。
+                                    </p>
+                                    <div className="mt-5 grid w-full max-w-[480px] grid-cols-3 gap-2 text-left">
+                                        {[
+                                            ['1', '装插件'],
+                                            ['2', '网页上保存'],
+                                            ['3', '在知识库搜索引用'],
+                                        ].map(([step, label]) => (
+                                            <div key={step} className="rounded-xl border border-border/70 bg-surface-secondary/60 px-3 py-2.5">
+                                                <div className="text-[10px] font-black uppercase tracking-wider text-accent-primary">{step}</div>
+                                                <div className="mt-1 text-[12px] font-bold text-text-primary">{label}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleOpenBrowserPluginDownload()}
+                                            className="inline-flex h-10 items-center gap-2 rounded-xl bg-accent-primary px-4 text-[13px] font-bold text-white shadow-lg shadow-accent-primary/20 transition-all hover:bg-accent-hover active:scale-95"
+                                        >
+                                            <Download className="h-4 w-4" />
+                                            下载浏览器插件
+                                            <ExternalLink className="h-3.5 w-3.5 opacity-80" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleAddDocumentFiles}
+                                            className="inline-flex h-10 items-center gap-2 rounded-xl border border-border/80 bg-surface-elevated px-4 text-[13px] font-bold text-text-primary transition-all hover:bg-surface-secondary/80 active:scale-95"
+                                        >
+                                            <Plus className="h-4 w-4" />
+                                            添加文件
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleAddDocumentFolder}
+                                            className="inline-flex h-10 items-center gap-2 rounded-xl border border-border/80 bg-surface-elevated px-4 text-[13px] font-bold text-text-primary transition-all hover:bg-surface-secondary/80 active:scale-95"
+                                        >
+                                            <FolderPlus className="h-4 w-4" />
+                                            添加文件夹
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-center text-text-tertiary text-xs py-16">
+                                    {isKnowledgeLibraryEmpty
+                                        ? '暂无内容，可使用插件保存网页内容，也可添加文档源'
+                                        : '没有匹配到内容'}
+                                </div>
+                            )
                         ) : (
                             <div className={knowledgeColumnsClass} style={{ columnGap: '0.75rem' }}>
                                 {visibleKnowledgeItems.map((item) => {
