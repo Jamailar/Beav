@@ -30,6 +30,7 @@
 - 支持将本地文件直接拖入聊天窗口，快速作为附件加入当前对话
 - 拖入图片、视频等媒体文件后，会自动进入后续预览、分析和 Agent 工具调用链路
 - 浏览器插件支持拖拽网页图片保存到 RedBox 素材库，减少从网页素材到本地素材库的手动下载步骤
+- 演示视频：[redbox-2.1.0-drag-file-shortcut-demo.mp4](https://github.com/Jamailar/RedBox/releases/download/v2.1.0/redbox-2.1.0-drag-file-shortcut-demo.mp4)
 
 ### 修复
 - 修复聊天快捷提示词被显示到正式消息里的问题
