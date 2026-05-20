@@ -1064,6 +1064,7 @@ export function Settings({
   const [isSettingsSkillsLoading, setIsSettingsSkillsLoading] = useState(false);
   const [settingsSkillBusyName, setSettingsSkillBusyName] = useState('');
   const [settingsSkillStatusMessage, setSettingsSkillStatusMessage] = useState('');
+  const [areBuiltinSkillsExpanded, setAreBuiltinSkillsExpanded] = useState(false);
   const [isSkillMarketplaceOpen, setIsSkillMarketplaceOpen] = useState(false);
   const [skillMarketplaceItems, setSkillMarketplaceItems] = useState<ThriveSkillMarketplaceItem[]>([]);
   const [isSkillMarketplaceLoading, setIsSkillMarketplaceLoading] = useState(false);
@@ -1084,6 +1085,14 @@ export function Settings({
   const [aiPricingError, setAiPricingError] = useState('');
   const [aiPricingActiveGroup, setAiPricingActiveGroup] = useState('');
   const [aiPricingSearch, setAiPricingSearch] = useState('');
+  const builtinSettingsSkills = useMemo(
+    () => settingsSkills.filter((skill) => skill.isBuiltin),
+    [settingsSkills]
+  );
+  const editableSettingsSkills = useMemo(
+    () => settingsSkills.filter((skill) => !skill.isBuiltin),
+    [settingsSkills]
+  );
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
@@ -6715,6 +6724,65 @@ export function Settings({
     </div>
   );
 
+  const renderSettingsSkillRow = useCallback((skill: SettingsSkill) => {
+    const isBusy = settingsSkillBusyName === skill.name;
+    const enabled = skill.isBuiltin || !skill.disabled;
+    return (
+      <div key={skill.location || skill.name} className="flex items-center justify-between gap-4 px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-medium text-text-primary">{skill.name}</span>
+            <span className={clsx(
+              'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+              skill.isBuiltin
+                ? 'bg-accent-primary/10 text-accent-primary'
+                : 'bg-surface-secondary text-text-tertiary'
+            )}>
+              {formatSettingsSkillSource(skill.sourceScope)}
+            </span>
+          </div>
+          {skill.description && (
+            <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
+              {skill.description}
+            </div>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleToggleSettingsSkill(skill)}
+            disabled={skill.isBuiltin || isBusy}
+            role="switch"
+            aria-checked={enabled}
+            aria-label={`${enabled ? '关闭' : '打开'}技能 ${skill.name}`}
+            title={skill.isBuiltin ? '内置技能不可关闭' : (enabled ? '关闭技能' : '打开技能')}
+            className={clsx(
+              'ui-switch-track disabled:cursor-not-allowed',
+              skill.isBuiltin && 'opacity-70',
+              isBusy && 'opacity-60'
+            )}
+            data-size="sm"
+            data-state={enabled ? 'on' : 'off'}
+          >
+            <span className="ui-switch-thumb" />
+          </button>
+          {!skill.isBuiltin && (
+            <button
+              type="button"
+              onClick={() => void handleUninstallSettingsSkill(skill)}
+              disabled={isBusy}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-text-tertiary transition-colors hover:border-brand-red/30 hover:bg-brand-red/10 hover:text-brand-red disabled:opacity-50"
+              aria-label={`删除技能 ${skill.name}`}
+              title="删除技能"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }, [handleToggleSettingsSkill, handleUninstallSettingsSkill, settingsSkillBusyName]);
+
   const tabs: Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }> = [
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
     { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
@@ -7735,64 +7803,38 @@ export function Settings({
                     <div className="px-4 py-5 text-sm text-text-tertiary">暂无技能</div>
                   ) : (
                     <div className="divide-y divide-border">
-                      {settingsSkills.map((skill) => {
-                        const isBusy = settingsSkillBusyName === skill.name;
-                        const enabled = skill.isBuiltin || !skill.disabled;
-                        return (
-                          <div key={skill.location || skill.name} className="flex items-center justify-between gap-4 px-4 py-3">
+                      {builtinSettingsSkills.length > 0 && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => setAreBuiltinSkillsExpanded((value) => !value)}
+                            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-secondary/40"
+                            aria-expanded={areBuiltinSkillsExpanded}
+                          >
                             <div className="min-w-0">
                               <div className="flex min-w-0 items-center gap-2">
-                                <span className="truncate text-sm font-medium text-text-primary">{skill.name}</span>
-                                <span className={clsx(
-                                  'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
-                                  skill.isBuiltin
-                                    ? 'bg-accent-primary/10 text-accent-primary'
-                                    : 'bg-surface-secondary text-text-tertiary'
-                                )}>
-                                  {formatSettingsSkillSource(skill.sourceScope)}
+                                <ChevronDown className={clsx(
+                                  'h-4 w-4 shrink-0 text-text-tertiary transition-transform',
+                                  !areBuiltinSkillsExpanded && '-rotate-90'
+                                )} />
+                                <span className="text-sm font-medium text-text-primary">内置技能</span>
+                                <span className="rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-medium text-accent-primary">
+                                  {builtinSettingsSkills.length}
                                 </span>
                               </div>
-                              {skill.description && (
-                                <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
-                                  {skill.description}
-                                </div>
-                              )}
                             </div>
-                            <div className="flex shrink-0 items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void handleToggleSettingsSkill(skill)}
-                                disabled={skill.isBuiltin || isBusy}
-                                role="switch"
-                                aria-checked={enabled}
-                                aria-label={`${enabled ? '关闭' : '打开'}技能 ${skill.name}`}
-                                title={skill.isBuiltin ? '内置技能不可关闭' : (enabled ? '关闭技能' : '打开技能')}
-                                className={clsx(
-                                  'ui-switch-track disabled:cursor-not-allowed',
-                                  skill.isBuiltin && 'opacity-70',
-                                  isBusy && 'opacity-60'
-                                )}
-                                data-size="sm"
-                                data-state={enabled ? 'on' : 'off'}
-                              >
-                                <span className="ui-switch-thumb" />
-                              </button>
-                              {!skill.isBuiltin && (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleUninstallSettingsSkill(skill)}
-                                  disabled={isBusy}
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-text-tertiary transition-colors hover:border-brand-red/30 hover:bg-brand-red/10 hover:text-brand-red disabled:opacity-50"
-                                  aria-label={`删除技能 ${skill.name}`}
-                                  title="删除技能"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
+                            <span className="shrink-0 text-xs text-text-tertiary">
+                              {areBuiltinSkillsExpanded ? '收起' : '展开'}
+                            </span>
+                          </button>
+                          {areBuiltinSkillsExpanded && (
+                            <div className="divide-y divide-border border-t border-border bg-surface-secondary/10">
+                              {builtinSettingsSkills.map(renderSettingsSkillRow)}
                             </div>
-                          </div>
-                        );
-                      })}
+                          )}
+                        </div>
+                      )}
+                      {editableSettingsSkills.map(renderSettingsSkillRow)}
                     </div>
                   )}
                 </section>
