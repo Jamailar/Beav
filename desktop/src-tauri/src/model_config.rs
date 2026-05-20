@@ -8,6 +8,9 @@ use crate::{now_iso, payload_string};
 
 const MODEL_CONFIG_FILE: &str = "model-config.json";
 const MODEL_CONFIG_VERSION: u64 = 1;
+const DEFAULT_MODELS_INITIALIZED_AT_KEY: &str = "ai_model_defaults_initialized_at";
+const DEFAULT_VOICE_CLONE_MODEL: &str = "cosyvoice-v3.5-plus-voice-clone";
+const MINIMAX_VOICE_CLONE_MODEL: &str = "minimax-voice-clone";
 
 const ROUTE_SCOPES: &[&str] = &[
     "chat",
@@ -55,6 +58,25 @@ fn value_string(value: &Value, keys: &[&str]) -> String {
         }
     }
     String::new()
+}
+
+fn normalized_model_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn clone_model_for_voice_tts_model(tts_model: &str, fallback: &str) -> String {
+    let key = normalized_model_key(tts_model);
+    if key.contains("cosyvoice") {
+        return DEFAULT_VOICE_CLONE_MODEL.to_string();
+    }
+    if key.starts_with("speech-") || key.starts_with("speech_") || key.contains("minimax") {
+        return MINIMAX_VOICE_CLONE_MODEL.to_string();
+    }
+    if fallback.trim().is_empty() {
+        DEFAULT_VOICE_CLONE_MODEL.to_string()
+    } else {
+        fallback.trim().to_string()
+    }
 }
 
 fn provider_id(provider: &Value) -> String {
@@ -125,6 +147,52 @@ fn route_source_id(routes: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn normalize_voice_model_routes(routes: &mut Value, settings: &Value) {
+    normalize_voice_model_routes_with_priority(routes, settings, false);
+}
+
+fn normalize_voice_model_routes_with_priority(
+    routes: &mut Value,
+    settings: &Value,
+    prefer_route_model: bool,
+) {
+    let voice_tts_model = if prefer_route_model {
+        route_model(routes, "voiceTts")
+            .or_else(|| payload_string(settings, "voice_tts_model"))
+            .or_else(|| payload_string(settings, "tts_model"))
+    } else {
+        payload_string(settings, "voice_tts_model")
+            .or_else(|| route_model(routes, "voiceTts"))
+            .or_else(|| payload_string(settings, "tts_model"))
+    }
+    .unwrap_or_default();
+    if voice_tts_model.trim().is_empty() {
+        return;
+    }
+    let fallback_clone_model = if prefer_route_model {
+        route_model(routes, "voiceClone").or_else(|| payload_string(settings, "voice_clone_model"))
+    } else {
+        payload_string(settings, "voice_clone_model").or_else(|| route_model(routes, "voiceClone"))
+    }
+    .unwrap_or_default();
+    let voice_clone_model =
+        clone_model_for_voice_tts_model(&voice_tts_model, &fallback_clone_model);
+    if let Some(object) = routes.as_object_mut() {
+        let voice_tts_route = object
+            .entry("voiceTts".to_string())
+            .or_insert_with(|| default_route("", ""));
+        if let Some(route) = voice_tts_route.as_object_mut() {
+            route.insert("model".to_string(), json!(voice_tts_model));
+        }
+        let voice_clone_route = object
+            .entry("voiceClone".to_string())
+            .or_insert_with(|| default_route("", ""));
+        if let Some(route) = voice_clone_route.as_object_mut() {
+            route.insert("model".to_string(), json!(voice_clone_model));
+        }
+    }
 }
 
 fn source_by_id<'a>(sources: &'a [Value], id: &str) -> Option<&'a Value> {
@@ -221,14 +289,20 @@ pub(crate) fn settings_to_model_config(settings: &Value) -> Value {
         }
     }
 
+    let mut routes = default_routes(settings, &default_source_id);
+    normalize_voice_model_routes(&mut routes, settings);
+
     json!({
         "version": MODEL_CONFIG_VERSION,
         "updatedAt": now_iso(),
+        "metadata": {
+            "defaultModelsInitializedAt": payload_string(settings, DEFAULT_MODELS_INITIALIZED_AT_KEY).unwrap_or_default(),
+        },
         "defaults": {
             "sourceId": default_source_id,
         },
         "providers": providers.iter().map(provider_without_secrets).collect::<Vec<_>>(),
-        "routes": default_routes(settings, &default_source_id),
+        "routes": routes,
         "modelOverrides": {},
     })
 }
@@ -255,12 +329,13 @@ pub(crate) fn sync_model_config_file(store_path: &Path, settings: &Value) -> Res
     )
 }
 
-pub(crate) fn read_model_config_file(store_path: &Path, settings: &Value) -> Result<Value, String> {
+pub(crate) fn read_model_config_file(
+    store_path: &Path,
+    _settings: &Value,
+) -> Result<Value, String> {
     let path = model_config_path(store_path);
     if !path.exists() {
-        let config = settings_to_model_config(settings);
-        write_json_if_changed(&path, &config)?;
-        return Ok(config);
+        return Err(format!("{} does not exist", path.display()));
     }
     let raw = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let config = serde_json::from_str::<Value>(&raw).map_err(|error| error.to_string())?;
@@ -292,7 +367,8 @@ pub(crate) fn apply_model_config_to_settings(config: &Value, settings: &mut Valu
         .cloned()
         .unwrap_or_default();
     let providers = merge_provider_secrets(&providers, settings);
-    let routes = config.get("routes").cloned().unwrap_or_else(|| json!({}));
+    let mut routes = config.get("routes").cloned().unwrap_or_else(|| json!({}));
+    normalize_voice_model_routes_with_priority(&mut routes, settings, true);
     let default_source_id = config
         .get("defaults")
         .and_then(|value| value.get("sourceId"))
@@ -319,6 +395,18 @@ pub(crate) fn apply_model_config_to_settings(config: &Value, settings: &mut Valu
         "default_ai_source_id".to_string(),
         json!(default_source_id.clone()),
     );
+    if let Some(initialized_at) = config
+        .get("metadata")
+        .and_then(|value| value.get("defaultModelsInitializedAt"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            DEFAULT_MODELS_INITIALIZED_AT_KEY.to_string(),
+            json!(initialized_at),
+        );
+    }
 
     if let Some(source) = source_by_id(&providers, &default_source_id).or_else(|| providers.first())
     {
@@ -348,6 +436,34 @@ pub(crate) fn apply_model_config_to_settings(config: &Value, settings: &mut Valu
         if let Some(model) = route_model(&routes, route_key) {
             object.insert(setting_key.to_string(), json!(model));
         }
+    }
+    let voice_tts_model = object
+        .get("voice_tts_model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            object
+                .get("tts_model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_default()
+        .to_string();
+    if !voice_tts_model.is_empty() {
+        let fallback_clone_model = object
+            .get("voice_clone_model")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let voice_clone_model =
+            clone_model_for_voice_tts_model(&voice_tts_model, fallback_clone_model);
+        object.insert(
+            "voice_tts_model".to_string(),
+            json!(voice_tts_model.clone()),
+        );
+        object.insert("tts_model".to_string(), json!(voice_tts_model));
+        object.insert("voice_clone_model".to_string(), json!(voice_clone_model));
     }
 }
 
@@ -477,6 +593,7 @@ mod tests {
     #[test]
     fn settings_to_model_config_strips_provider_secrets() {
         let settings = json!({
+            "ai_model_defaults_initialized_at": "2026-05-19T00:00:00Z",
             "default_ai_source_id": "source-1",
             "ai_sources_json": serde_json::to_string(&vec![json!({
                 "id": "source-1",
@@ -497,6 +614,10 @@ mod tests {
         assert_eq!(provider["id"], json!("source-1"));
         assert!(provider.get("apiKey").is_none());
         assert_eq!(provider["credentialRef"], json!("settings:source-1"));
+        assert_eq!(
+            config["metadata"]["defaultModelsInitializedAt"],
+            json!("2026-05-19T00:00:00Z")
+        );
     }
 
     #[test]
@@ -509,6 +630,7 @@ mod tests {
         });
         let config = json!({
             "version": 1,
+            "metadata": { "defaultModelsInitializedAt": "2026-05-19T00:00:00Z" },
             "defaults": { "sourceId": "source-1" },
             "providers": [{
                 "id": "source-1",
@@ -527,8 +649,79 @@ mod tests {
         assert_eq!(settings["api_endpoint"], json!("https://example.test/v1"));
         assert_eq!(settings["model_name"], json!("model-b"));
         assert_eq!(settings["api_key"], json!("sk-secret"));
+        assert_eq!(
+            settings["ai_model_defaults_initialized_at"],
+            json!("2026-05-19T00:00:00Z")
+        );
         let sources = parse_json_array_setting(&settings, "ai_sources_json");
         assert_eq!(sources[0]["apiKey"], json!("sk-secret"));
+    }
+
+    #[test]
+    fn model_config_pairs_voice_clone_model_with_tts_model() {
+        let settings = json!({
+            "default_ai_source_id": "redbox_official_auto",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "redbox_official_auto",
+                "name": "RedBox Official",
+                "baseURL": "https://api.ziz.hk/redbox/v1",
+                "model": "qwen3.5-plus"
+            })]).unwrap(),
+            "voice_tts_model": "cosyvoice-v3.5-plus",
+            "voice_clone_model": "minimax-voice-clone",
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "voiceTts": { "mode": "official", "sourceId": "redbox_official_auto", "model": "cosyvoice-v3.5-plus" },
+                "voiceClone": { "mode": "official", "sourceId": "redbox_official_auto", "model": "minimax-voice-clone" }
+            })).unwrap()
+        });
+
+        let config = settings_to_model_config(&settings);
+
+        assert_eq!(
+            config["routes"]["voiceTts"]["model"],
+            json!("cosyvoice-v3.5-plus")
+        );
+        assert_eq!(
+            config["routes"]["voiceClone"]["model"],
+            json!("cosyvoice-v3.5-plus-voice-clone")
+        );
+    }
+
+    #[test]
+    fn apply_model_config_pairs_voice_routes_from_config_tts_model() {
+        let mut settings = json!({
+            "voice_tts_model": "speech-2.8-turbo",
+            "tts_model": "speech-2.8-turbo",
+            "voice_clone_model": "minimax-voice-clone"
+        });
+        let config = json!({
+            "version": 1,
+            "defaults": { "sourceId": "redbox_official_auto" },
+            "providers": [{
+                "id": "redbox_official_auto",
+                "name": "RedBox Official",
+                "baseURL": "https://api.ziz.hk/redbox/v1",
+                "model": "qwen3.5-plus"
+            }],
+            "routes": {
+                "voiceTts": { "mode": "official", "sourceId": "redbox_official_auto", "model": "cosyvoice-v3.5-plus" },
+                "voiceClone": { "mode": "official", "sourceId": "redbox_official_auto", "model": "minimax-voice-clone" }
+            }
+        });
+
+        apply_model_config_to_settings(&config, &mut settings);
+        let routes = parse_json_object_setting(&settings, "ai_model_routes_json");
+
+        assert_eq!(settings["voice_tts_model"], json!("cosyvoice-v3.5-plus"));
+        assert_eq!(settings["tts_model"], json!("cosyvoice-v3.5-plus"));
+        assert_eq!(
+            settings["voice_clone_model"],
+            json!("cosyvoice-v3.5-plus-voice-clone")
+        );
+        assert_eq!(
+            routes["voiceClone"]["model"],
+            json!("cosyvoice-v3.5-plus-voice-clone")
+        );
     }
 
     #[test]

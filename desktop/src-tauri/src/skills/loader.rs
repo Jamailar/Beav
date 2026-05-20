@@ -25,6 +25,7 @@ pub struct SkillMetadataRecord {
     pub context_note: Option<String>,
     pub activation_hint: Option<String>,
     pub max_prompt_chars: Option<usize>,
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -141,6 +142,9 @@ fn parse_frontmatter_metadata(frontmatter: &str) -> SkillMetadataRecord {
             }
             "maxpromptchars" | "max_prompt_chars" | "max-prompt-chars" => {
                 metadata.max_prompt_chars = value.parse::<usize>().ok();
+            }
+            "hidden" | "internal" | "hidefromlist" | "hide-from-list" | "hide_from_list" => {
+                metadata.hidden = parse_bool(value);
             }
             _ => {}
         }

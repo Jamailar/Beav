@@ -21,7 +21,9 @@ mod tests {
             std::collections::BTreeSet::from([
                 "image-director",
                 "image-prompt-optimizer",
+                "cosyvoice-ssml",
                 "member-skill-distiller",
+                "redclaw-style-definition",
                 "skill-creator",
                 "tts-director",
                 "video-director",

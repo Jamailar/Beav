@@ -21,6 +21,7 @@ export interface RedClawComposerShortcutInput {
 export type RedClawComposerShortcutScene =
     | 'uploaded_file'
     | 'uploaded_image'
+    | 'uploaded_video'
     | 'empty_new_chat'
     | 'member_mention'
     | 'knowledge_context';
@@ -40,8 +41,15 @@ export const REDCLAW_COMPOSER_SHORTCUT_INPUTS_BY_SCENE: Record<RedClawComposerSh
         { label: '改写成文案', text: '请把我上传的文件改写成适合社媒发布的文案。请保留核心信息，压缩冗余表达，强化开头钩子、读者收益、行动号召和平台语气，并给出 3 个标题备选。' },
     ],
     uploaded_image: [
-        { label: '做电商套图', text: '请基于我上传的图片，设计一套电商套图。请先分析图片里的主体、卖点、适用人群和视觉风格，再输出主图、卖点图、场景图、对比图、细节图的画面方案、文案和生成提示词。' },
-        { label: '做封面图', text: '请基于我上传的图片，设计一张适合社媒或内容封面的封面图。请给出封面定位、标题文案、构图方案、字体和色彩建议、需要保留/弱化的画面元素，以及可直接用于生成封面的提示词。' },
+        { label: '生成电商套图', text: '请基于我上传的图片，生成一套电商套图方案。先分析图片主体、卖点、适用人群和视觉风格，再输出主图、卖点图、场景图、细节图、对比图的画面方案、标题文案、辅助文案和可执行生成提示词。', action: 'send' },
+        { label: '生成封面图', text: '请基于我上传的图片，生成一张适合社媒内容的封面图方案。请明确封面定位、主标题、视觉钩子、构图方式、字体和色彩建议，并给出可直接用于生成封面的提示词。', action: 'send' },
+        { label: '生成同款图', text: '请分析我上传图片的视觉风格、构图、光线、材质、色彩和主体表达，然后生成一组同款视觉提示词。要求保留核心风格，但不要直接复制原图内容。', action: 'send' },
+        { label: '提取卖点文案', text: '请从我上传的图片中提取可用于商业转化的卖点、场景、情绪价值和视觉亮点，并改写成一组适合详情页或社媒投放的标题和短文案。', action: 'send' },
+    ],
+    uploaded_video: [
+        { label: '爆款分析', text: '请先调用视频分析能力完整分析我上传的视频，再从爆款内容角度输出：核心主题、前 3 秒钩子、情绪节奏、内容结构、亮点片段、可复用金句、传播风险和优化建议。最后给出一版更容易出爆款的改造方案。', action: 'send' },
+        { label: '字幕提取', text: '请提取我上传视频里的字幕或语音内容，输出可编辑字幕文本，并尽量保留时间顺序。如果能生成字幕文件，请输出字幕文件路径；如果有听不清或需要人工确认的片段，请单独标出来。', action: 'send' },
+        { label: '剪辑切片', text: '请先调用视频分析能力分析我上传的视频，找出最精彩、最适合单独发布的切片片段。然后把这些精彩片段剪辑成独立的视频片段，并输出每个片段的主题、时间范围、推荐标题、用途和生成后的文件路径。', action: 'send' },
     ],
     empty_new_chat: REDCLAW_DEFAULT_COMPOSER_SHORTCUT_INPUTS,
     member_mention: [
@@ -75,8 +83,26 @@ function isImageShortcutAttachment(context: ChatShortcutContext): boolean {
         || /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i.test(name);
 }
 
+function isVideoShortcutAttachment(context: ChatShortcutContext): boolean {
+    const attachment = context.attachment;
+    if (!attachment) return false;
+    const kind = String(attachment.kind || '').trim().toLowerCase();
+    const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+    const name = String(
+        attachment.name
+        || attachment.localUrl
+        || attachment.absolutePath
+        || attachment.originalAbsolutePath
+        || '',
+    ).trim();
+    return kind === 'video'
+        || mimeType.startsWith('video/')
+        || /\.(mp4|mov|m4v|webm|mkv|avi)(?:[?#].*)?$/i.test(name);
+}
+
 export function resolveRedClawComposerShortcutScene(context: ChatShortcutContext): RedClawComposerShortcutScene {
     if (context.attachment) {
+        if (isVideoShortcutAttachment(context)) return 'uploaded_video';
         return isImageShortcutAttachment(context) ? 'uploaded_image' : 'uploaded_file';
     }
     if (context.selectedMemberMention) return 'member_mention';

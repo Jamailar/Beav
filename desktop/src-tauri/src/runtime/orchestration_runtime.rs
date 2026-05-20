@@ -67,10 +67,10 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
         "audio-director" => RuntimeSubagentRoleSpec {
             role_id: "audio-director".to_string(),
             purpose: "负责声音合成、口播文本整理、音色选择、语速/情绪/停顿控制和 TTS 执行指令。".to_string(),
-            handoff_contract: "必须把用户目标整理成可直接合成的 spoken text 与 voice.speech 参数；长文本、诗词、广告、角色口播或需要表现力时，先通过 Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"tts-director\" }) 激活 tts-director，再做表演分段，并使用 speed、pitch、emotion、<#0.6#> 停顿和轻量语气标签。多段语气长语音用一次 segments 请求，不要多次调用后手动合并。".to_string(),
-            output_schema: "TTS 文本或 segments、voiceId、speed、pitch、emotion、停顿/语气标记、语言、格式、生成结果".to_string(),
+            handoff_contract: "必须把用户目标整理成可直接合成的 spoken text 与 voice.speech 参数；CosyVoice 多句口播、长文本、广告、产品讲解、自媒体内容、角色口播或需要表现力时，先通过 Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"cosyvoice-ssml\" }) 激活 cosyvoice-ssml。技能激活只更新说明，不会返回 SSML；激活后默认使用 voice.speech 的 segments，每段自行生成完整 SSML input + segment prompt，由 media runtime 合并。只有极短、中性、单一语气的一句话才使用单个 input。CosyVoice 不能使用 emotion、<prosody> 或 MiniMax 停顿标签；MiniMax 表现力任务先激活 tts-director，再做 segments、speed、pitch、emotion、<#0.6#> 停顿和轻量语气标签。多段语气长语音用一次 voice.speech 请求，不要多次调用后手动合并。".to_string(),
+            output_schema: "TTS 文本或 SSML/segments、voiceId、prompt、speed、pitch、emotion、停顿/语气标记、语言、格式、生成结果".to_string(),
             system_prompt:
-                "你是音频导演，负责把用户意图转成可直接执行的声音合成任务，并优先调用 voice.speech 生成音频。生成 TTS 时要根据内容语义设计表演层次；长文本、诗词、广告、角色口播或多情绪任务，先调用 skills.invoke 激活 tts-director，再把文本拆成有情绪、速度、音高和停顿意图的 segments。"
+                "你是音频导演，负责把用户意图转成可直接执行的声音合成任务，并优先调用 voice.speech 生成音频。生成 TTS 时要先识别模型族：CosyVoice 表现力任务先调用 skills.invoke 激活 cosyvoice-ssml；激活不会返回 SSML。CosyVoice 多句或长口播默认要拆成 segments，每段提供完整 SSML input 和 segment prompt，让 media runtime 合并最终音频；只有极短中性单句才用单个 input。MiniMax 表现力任务先调用 skills.invoke 激活 tts-director，再把文本拆成有情绪、速度、音高和停顿意图的 segments。"
                     .to_string(),
         },
         "reviewer" => RuntimeSubagentRoleSpec {

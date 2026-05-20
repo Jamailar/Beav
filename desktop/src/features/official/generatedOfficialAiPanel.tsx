@@ -953,7 +953,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
             </div>
             <ul className="mt-3 text-xs text-text-secondary space-y-1">
               <li>1. 自动绑定官方 API Key</li>
-              <li>2. 自动同步模型与推荐配置</li>
+              <li>2. 自动同步模型配置</li>
               <li>3. 查看积分余额与调用记录</li>
             </ul>
           </div>

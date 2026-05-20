@@ -12,7 +12,6 @@ import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import { useOfficialAuthState } from './hooks/useOfficialAuthState';
 import { NotificationsHost } from './notifications/NotificationsHost';
 import { REDBOX_NAVIGATE_EVENT } from './notifications/types';
-import { RedClawOnboardingFlowHost } from './pages/redclaw/RedClawOnboardingFlowHost';
 import { useI18n } from './i18n';
 import { APP_BRAND } from './config/brand';
 import { AI_SOURCE_PRESETS, DEFAULT_AI_PRESET_ID } from './config/aiSources';
@@ -359,7 +358,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
 
   const [currentView, setCurrentView] = useState<ViewType>('home');
   const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
-  const [redclawOnboardingOpen, setRedclawOnboardingOpen] = useState(false);
   const [redclawOnboardingVersion, setRedclawOnboardingVersion] = useState(0);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
@@ -580,15 +578,42 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     captureStatusRef.current = captureStatus;
   }, [captureStatus]);
 
-  const openRedClawOnboarding = useCallback(() => {
-    setRedclawOnboardingOpen(true);
-  }, []);
-
   const navigateToRedClaw = (message: PendingChatMessage) => {
     uiTraceInteraction('app', 'nav_to_redclaw', { to: 'redclaw' });
     setPendingRedClawMessage(message);
     setCurrentView('redclaw');
   };
+
+  const openRedClawOnboarding = useCallback(() => {
+    void (async () => {
+      try {
+        await window.ipcRenderer.redclawProfile.startStyleDefinition({
+          forceRestart: true,
+          source: 'manual-redefine',
+        });
+        setRedclawOnboardingVersion((value) => value + 1);
+      } catch (error) {
+        console.error('Failed to start RedClaw style definition:', error);
+      }
+      navigateToRedClaw({
+        content: '我想重新定义这个空间的自媒体定位和写作风格。请先通过对话帮我梳理，不要直接写稿。',
+        displayContent: '重新定义这个空间的风格',
+        sessionRouting: 'new',
+        deliveryMode: 'send',
+        taskHints: {
+          activeSkills: ['redclaw-style-definition'],
+          requiredSkill: 'redclaw-style-definition',
+          allowedOperateActions: [
+            'redclaw.profile.bundle',
+            'redclaw.profile.read',
+            'redclaw.profile.update',
+            'redclaw.profile.completeStyleDefinition',
+          ],
+          initialContext: '用户从界面入口手动请求重新定义当前 RedClaw 空间风格。',
+        } as AuthoringTaskHints,
+      });
+    })();
+  }, []);
 
   const clearPendingRedClawMessage = () => {
     setPendingRedClawMessage(null);
@@ -1185,14 +1210,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
         busy={startupMigrationBusy}
         onStart={() => void handleStartStartupMigration()}
         onClose={handleCloseStartupMigration}
-      />
-      <RedClawOnboardingFlowHost
-        open={redclawOnboardingOpen}
-        onClose={() => setRedclawOnboardingOpen(false)}
-        onCompleted={() => {
-          setRedclawOnboardingOpen(false);
-          setRedclawOnboardingVersion((value) => value + 1);
-        }}
       />
       <NotificationsHost currentView={currentView} />
       <AppDialogsHost />

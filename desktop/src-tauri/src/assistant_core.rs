@@ -702,6 +702,17 @@ fn handle_knowledge_http_request(
             let response = knowledge::ingest_entry(Some(app), &state, &request)?;
             Ok((200, "OK", response))
         }
+        ("POST", "xhs/v2/entries") => {
+            let request: knowledge::XhsKnowledgeEntryImportV2Request =
+                match serde_json::from_str(body) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return Err(format!("xhs knowledge import v2 request 无法解析: {error}"));
+                    }
+                };
+            let response = knowledge::ingest_xhs_entry_v2_stub(&request)?;
+            Ok((200, "OK", response))
+        }
         ("POST", "zhihu/answers") => {
             let request: knowledge::ZhihuAnswerIngestRequest = serde_json::from_str(body)
                 .map_err(|error| format!("zhihu answer request 无法解析: {error}"))?;

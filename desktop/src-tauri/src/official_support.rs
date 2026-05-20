@@ -14,6 +14,7 @@ const REDBOX_OFFICIAL_GLOBAL_GATEWAY_ROOT: &str = "https://api.thrivingos.com";
 pub(crate) const REDBOX_OFFICIAL_DEFAULT_REALM: &str = "cn";
 pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-updated";
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
+pub(crate) const AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY: &str = "ai_model_defaults_initialized_at";
 const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
 
 fn log_non_200_http(scope: &str, method: &str, url: &str, status: u16, body: &Value) {
@@ -1177,7 +1178,17 @@ pub(crate) fn choose_preferred_official_chat_model(
         .unwrap_or_else(|| preserve_non_empty_model(current, fallback))
 }
 
-pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &[Value]) {
+fn model_defaults_initialized(settings: &Value) -> bool {
+    payload_string(settings, AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+pub(crate) fn official_sync_source_into_settings(
+    settings: &mut Value,
+    models: &[Value],
+    seed_default_routes: bool,
+) {
     let api_key = official_ai_api_key_from_settings(settings).unwrap_or_default();
     let mut sources = payload_string(settings, "ai_sources_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
@@ -1191,9 +1202,12 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
                 .map(|value| value.trim() == current_default_source_id.trim())
                 .unwrap_or(false)
         });
-    let should_sync_official_route = current_default_source_id.trim().is_empty()
-        || current_default_source_id.trim() == "redbox_official_auto"
-        || !current_default_source_exists;
+    let defaults_initialized = model_defaults_initialized(settings);
+    let current_default_is_official = current_default_source_id.trim() == "redbox_official_auto";
+    let should_sync_official_route = seed_default_routes
+        && (current_default_source_id.trim().is_empty()
+            || (current_default_is_official && !defaults_initialized)
+            || !current_default_source_exists);
     let existing_source = sources
         .iter()
         .find(|item| {
@@ -1252,15 +1266,20 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
         .iter()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    let preserved_official_model = existing_source
-        .as_ref()
-        .and_then(|item| payload_string(item, "model"))
-        .filter(|value| official_model_id_set.contains(value.trim()))
-        .or_else(|| {
-            current_text_model
-                .clone()
+    let preserved_official_model =
+        if !seed_default_routes || (defaults_initialized && current_default_is_official) {
+            existing_source
+                .as_ref()
+                .and_then(|item| payload_string(item, "model"))
                 .filter(|value| official_model_id_set.contains(value.trim()))
-        });
+                .or_else(|| {
+                    current_text_model
+                        .clone()
+                        .filter(|value| official_model_id_set.contains(value.trim()))
+                })
+        } else {
+            None
+        };
     let chat_model = preserved_official_model.unwrap_or_else(|| {
         choose_preferred_official_chat_model(
             &available_chat_models,
@@ -1350,6 +1369,9 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
                 "model_name_redclaw".to_string(),
                 json!(next_model_name_redclaw),
             );
+            object
+                .entry(AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY.to_string())
+                .or_insert_with(|| json!(now_ms().to_string()));
         }
         object.insert("video_endpoint".to_string(), json!(official_base_url));
         object.insert("video_api_key".to_string(), json!(official_video_api_key));
@@ -1366,7 +1388,7 @@ pub(crate) fn sync_official_cached_models_into_settings(settings: &mut Value) ->
     if models.is_empty() {
         return false;
     }
-    official_sync_source_into_settings(settings, &models);
+    official_sync_source_into_settings(settings, &models, false);
     true
 }
 
@@ -1374,6 +1396,159 @@ pub(crate) fn fetch_official_models_for_settings(settings: &Value) -> Vec<Value>
     run_official_ai_json_request(settings, "GET", "/models", None)
         .map(|remote| official_response_items(&remote))
         .unwrap_or_else(|_| official_settings_models(settings))
+}
+
+pub(crate) fn fetch_official_default_model_slots_for_settings(
+    settings: &Value,
+) -> Result<Vec<Value>, String> {
+    run_official_json_request(settings, "GET", "/ai/default-models", None)
+        .map(|remote| official_response_items(&remote))
+}
+
+fn value_text<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    })
+}
+
+fn default_slot_model(slot: &Value) -> Option<Value> {
+    for key in [
+        "effective_model",
+        "effectiveModel",
+        "primary_model",
+        "primaryModel",
+    ] {
+        if let Some(model) = slot.get(key).filter(|value| value.is_object()) {
+            let model_key = value_text(model, &["model_key", "modelKey", "model", "id"])?;
+            let capability = value_text(model, &["capability"]).unwrap_or("chat");
+            return Some(json!({
+                "id": model_key,
+                "capability": capability,
+                "capabilities": [capability],
+            }));
+        }
+    }
+    let model_key = value_text(
+        slot,
+        &[
+            "model_key",
+            "modelKey",
+            "model",
+            "model_name",
+            "modelName",
+            "id",
+        ],
+    )?;
+    let capability = value_text(slot, &["capability"]).unwrap_or("chat");
+    Some(json!({
+        "id": model_key,
+        "capability": capability,
+        "capabilities": [capability],
+    }))
+}
+
+fn default_slot_key(slot: &Value) -> Option<String> {
+    value_text(slot, &["slot_key", "slotKey", "slot", "key"]).map(|value| value.replace('-', "_"))
+}
+
+fn default_slot_route_scopes(slot_key: &str) -> &'static [&'static str] {
+    match slot_key {
+        "reasoning" => &["chat", "wander", "team", "knowledge", "redclaw"],
+        "visual_index" => &["visualIndex"],
+        "visual_analysis" => &["videoAnalysis"],
+        "tts" => &["voiceTts"],
+        "embedding" => &["embedding"],
+        "transcription" => &["transcription"],
+        "image_generation" => &["image"],
+        "video_text_to_video" | "video_image_to_video" | "video_reference_to_video" => &["video"],
+        _ => &[],
+    }
+}
+
+fn default_slot_setting_key(route_scope: &str) -> Option<&'static str> {
+    match route_scope {
+        "chat" => Some("model_name"),
+        "wander" => Some("model_name_wander"),
+        "team" => Some("model_name_chatroom"),
+        "knowledge" => Some("model_name_knowledge"),
+        "redclaw" => Some("model_name_redclaw"),
+        "transcription" => Some("transcription_model"),
+        "embedding" => Some("embedding_model"),
+        "image" => Some("image_model"),
+        "video" => Some("video_model"),
+        "visualIndex" => Some("visual_index_model"),
+        "videoAnalysis" => Some("video_analysis_model"),
+        "voiceTts" => Some("voice_tts_model"),
+        "voiceClone" => Some("voice_clone_model"),
+        _ => None,
+    }
+}
+
+pub(crate) fn seed_official_default_models_into_settings(
+    settings: &mut Value,
+    default_slots: &[Value],
+    catalog_models: &[Value],
+) -> bool {
+    let mut default_models = Vec::<Value>::new();
+    let mut routes = serde_json::Map::new();
+    for slot in default_slots {
+        let Some(slot_key) = default_slot_key(slot) else {
+            continue;
+        };
+        let Some(model) = default_slot_model(slot) else {
+            continue;
+        };
+        let Some(model_id) = value_text(&model, &["id"]).map(ToString::to_string) else {
+            continue;
+        };
+        default_models.push(model);
+        for scope in default_slot_route_scopes(&slot_key) {
+            routes.insert(
+                (*scope).to_string(),
+                json!({
+                    "mode": "official",
+                    "sourceId": "redbox_official_auto",
+                    "model": model_id,
+                }),
+            );
+        }
+    }
+    if routes.is_empty() {
+        return false;
+    }
+
+    let mut models_for_source = Vec::<Value>::new();
+    models_for_source.extend(catalog_models.iter().cloned());
+    models_for_source.extend(default_models);
+    official_sync_source_into_settings(settings, &models_for_source, true);
+
+    if let Some(object) = settings.as_object_mut() {
+        object.insert(
+            "default_ai_source_id".to_string(),
+            json!("redbox_official_auto"),
+        );
+        object
+            .entry(AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY.to_string())
+            .or_insert_with(|| json!(now_ms().to_string()));
+        for (scope, route) in &routes {
+            if let Some(model) = route.get("model").and_then(Value::as_str) {
+                if let Some(setting_key) = default_slot_setting_key(scope) {
+                    object.insert(setting_key.to_string(), json!(model));
+                }
+            }
+        }
+        object.insert(
+            "ai_model_routes_json".to_string(),
+            json!(
+                serde_json::to_string(&Value::Object(routes)).unwrap_or_else(|_| "{}".to_string())
+            ),
+        );
+    }
+    true
 }
 
 #[cfg(test)]
@@ -1424,7 +1599,7 @@ mod tests {
             "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
         });
 
-        official_sync_source_into_settings(&mut settings, &official_models_fixture());
+        official_sync_source_into_settings(&mut settings, &official_models_fixture(), true);
 
         assert_eq!(
             payload_string(&settings, "default_ai_source_id").as_deref(),
@@ -1528,7 +1703,7 @@ mod tests {
             "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
         });
 
-        official_sync_source_into_settings(&mut settings, &official_models_fixture());
+        official_sync_source_into_settings(&mut settings, &official_models_fixture(), true);
 
         assert_eq!(
             payload_string(&settings, "default_ai_source_id").as_deref(),
@@ -1549,6 +1724,138 @@ mod tests {
         assert_eq!(
             payload_string(&settings, "model_name_wander").as_deref(),
             None
+        );
+        assert!(
+            payload_string(&settings, AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY)
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn official_sync_preserves_initialized_official_default_model_when_still_available() {
+        let official_cn_base_url = official_base_url_for_realm("cn");
+        let official_sources = vec![json!({
+            "id": "redbox_official_auto",
+            "name": format!("{} Official", app_brand_display_name()),
+            "presetId": "redbox-official",
+            "baseURL": official_cn_base_url.clone(),
+            "apiKey": "old-official-key",
+            "model": "gpt-5.5",
+            "models": ["gpt-5.5", "stale-tts-model"],
+            "modelsMeta": [{ "id": "stale-tts-model", "capabilities": ["tts"] }],
+            "protocol": "openai"
+        })];
+        let mut settings = json!({
+            "default_ai_source_id": "redbox_official_auto",
+            "api_endpoint": official_cn_base_url,
+            "api_key": "official-key",
+            "model_name": "gpt-5.5",
+            "model_name_wander": "user-wander-model",
+            "ai_sources_json": serde_json::to_string(&official_sources).unwrap(),
+            "ai_model_defaults_initialized_at": "2026-05-19T00:00:00Z",
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
+        });
+
+        official_sync_source_into_settings(&mut settings, &official_models_fixture(), true);
+
+        assert_eq!(
+            payload_string(&settings, "model_name").as_deref(),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name_wander").as_deref(),
+            Some("user-wander-model")
+        );
+        let sources = payload_string(&settings, "ai_sources_json")
+            .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+            .unwrap_or_default();
+        assert_eq!(
+            sources
+                .iter()
+                .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
+                .and_then(|item| payload_string(item, "model"))
+                .as_deref(),
+            Some("gpt-5.5")
+        );
+        let official_source = sources
+            .iter()
+            .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
+            .expect("official source");
+        let source_models = official_source
+            .get("models")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!source_models
+            .iter()
+            .any(|item| item.as_str() == Some("stale-tts-model")));
+        let source_models_meta = official_source
+            .get("modelsMeta")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!source_models_meta
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some("stale-tts-model")));
+    }
+
+    #[test]
+    fn seed_official_default_models_writes_route_config_from_slots() {
+        let mut settings = json!({
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
+        });
+        let default_slots = vec![
+            json!({
+                "slot_key": "reasoning",
+                "effective_model": { "model_key": "qwen3.5-plus", "capability": "chat", "is_active": true }
+            }),
+            json!({
+                "slot_key": "embedding",
+                "effective_model": { "model_key": "text-embedding-3-small", "capability": "embedding", "is_active": true }
+            }),
+            json!({
+                "slot_key": "image_generation",
+                "effective_model": { "model_key": "gpt-image-2", "capability": "image", "is_active": true }
+            }),
+            json!({
+                "slot_key": "visual_analysis",
+                "effective_model": { "model_key": "qwen3.5-omni-flash", "capability": "chat", "is_active": true }
+            }),
+        ];
+
+        assert!(seed_official_default_models_into_settings(
+            &mut settings,
+            &default_slots,
+            &[]
+        ));
+
+        let routes = payload_string(&settings, "ai_model_routes_json")
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .unwrap_or_else(|| json!({}));
+        assert_eq!(routes["chat"]["model"], json!("qwen3.5-plus"));
+        assert_eq!(routes["wander"]["model"], json!("qwen3.5-plus"));
+        assert_eq!(
+            routes["embedding"]["model"],
+            json!("text-embedding-3-small")
+        );
+        assert_eq!(routes["image"]["model"], json!("gpt-image-2"));
+        assert_eq!(
+            routes["videoAnalysis"]["model"],
+            json!("qwen3.5-omni-flash")
+        );
+        assert_eq!(
+            payload_string(&settings, "default_ai_source_id").as_deref(),
+            Some("redbox_official_auto")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name").as_deref(),
+            Some("qwen3.5-plus")
+        );
+        assert!(
+            payload_string(&settings, AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY)
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
         );
     }
 }

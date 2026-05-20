@@ -78,6 +78,7 @@ pub fn skills_catalog_list_value(
         json!(skills
             .iter()
             .zip(state.catalog.iter())
+            .filter(|(_, skill)| !skill.metadata.hidden)
             .map(|(record, skill)| {
                 let mut item = json!({
                     "name": skill.name,

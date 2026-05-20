@@ -819,6 +819,36 @@ function MessageLinkPreviewCard({
     handleOpen();
   };
 
+  if (target.kind === 'audio') {
+    return (
+      <span className="my-2 block w-full max-w-[760px] rounded-2xl border border-border/80 bg-surface-primary/85 px-4 py-3 shadow-sm">
+        <span className="mb-2 flex items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-secondary/80 text-text-tertiary">
+            <Music className="h-5 w-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-semibold leading-5 text-text-primary">
+              {target.label}
+            </span>
+            <span className="mt-0.5 block truncate text-xs font-medium text-text-tertiary">
+              {meta}
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={handleOpen}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border/70 bg-surface-primary/90 text-text-secondary transition-colors hover:text-accent-primary"
+            aria-label="打开音频文件"
+            title="打开音频文件"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </button>
+        </span>
+        <audio controls src={target.resolvedUrl} className="w-full" preload="metadata" />
+      </span>
+    );
+  }
+
   return (
     <span
       role="button"
@@ -1495,7 +1525,7 @@ export const MessageItem = memo(({
                     {renderYoutubeCard(msg.attachment)}
                   </div>
                 )}
-                {showAttachments && renderKnowledgeReferenceCards(msg.knowledgeReferences)}
+                {showAttachments && msg.attachment?.type !== 'wander-references' && renderKnowledgeReferenceCards(msg.knowledgeReferences)}
                 {showAttachments && msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
                 {showAttachments && msg.attachments && msg.attachments.length > 0 ? (
                   <div className="mt-2 flex w-full max-w-[520px] flex-col items-end gap-2">

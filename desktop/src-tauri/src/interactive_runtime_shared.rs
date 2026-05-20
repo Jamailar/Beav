@@ -405,6 +405,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                     .unwrap_or("");
                 if !onboarding_completed
                     && onboarding_flow_mode != "screen-flow"
+                    && onboarding_flow_mode != "style-definition-chat"
                     && !bundle.bootstrap.trim().is_empty()
                 {
                     rendered.push_str(&format!("## {} 首次设定引导状态\n", app_ai_display_name()));

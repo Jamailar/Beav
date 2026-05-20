@@ -108,6 +108,9 @@ const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
 const FILE_INDEX_DASHBOARD_CACHE_KEY = 'redbox:file-index-dashboard:v1';
+const DEFAULT_VOICE_TTS_MODEL = 'cosyvoice-v3.5-plus';
+const DEFAULT_VOICE_CLONE_MODEL = 'cosyvoice-v3.5-plus-voice-clone';
+const MINIMAX_VOICE_CLONE_MODEL = 'minimax-voice-clone';
 const FILE_INDEX_DASHBOARD_CACHE_TTL_MS = 60_000;
 const FILE_INDEX_DASHBOARD_POLL_MS = 30_000;
 const DEFAULT_VISUAL_INDEX_PROMPT_VERSION = 'visual-manifest-v2-zh';
@@ -359,8 +362,17 @@ const DEFAULT_AI_MODEL_ROUTES: AiModelRoutes = {
   image: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
   visualIndex: { mode: 'disabled', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
   videoAnalysis: { mode: 'disabled', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
-  voiceTts: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: 'speech-2.8-turbo' },
-  voiceClone: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: 'minimax-voice-clone' },
+  voiceTts: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: DEFAULT_VOICE_TTS_MODEL },
+  voiceClone: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: DEFAULT_VOICE_CLONE_MODEL },
+};
+
+const normalizeModelKey = (value: string) => String(value || '').trim().toLowerCase();
+
+const cloneModelForVoiceTtsModel = (ttsModel: string, fallback = DEFAULT_VOICE_CLONE_MODEL) => {
+  const key = normalizeModelKey(ttsModel);
+  if (key.includes('cosyvoice')) return DEFAULT_VOICE_CLONE_MODEL;
+  if (key.startsWith('speech-') || key.startsWith('speech_') || key.includes('minimax')) return MINIMAX_VOICE_CLONE_MODEL;
+  return fallback || DEFAULT_VOICE_CLONE_MODEL;
 };
 
 type SettingsSkill = {
@@ -1137,9 +1149,9 @@ export function Settings({
     image_model: 'gpt-image-1',
     voice_endpoint: '',
     voice_api_key: '',
-    voice_tts_model: 'speech-2.8-turbo',
-    tts_model: 'speech-2.8-turbo',
-    voice_clone_model: 'minimax-voice-clone',
+    voice_tts_model: DEFAULT_VOICE_TTS_MODEL,
+    tts_model: DEFAULT_VOICE_TTS_MODEL,
+    voice_clone_model: DEFAULT_VOICE_CLONE_MODEL,
     video_endpoint: '',
     video_api_key: '',
     video_model: String(REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video']),
@@ -1188,7 +1200,7 @@ export function Settings({
   const [visualIndexSourceId, setVisualIndexSourceId] = useState('');
   const [videoAnalysisSourceId, setVideoAnalysisSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
-  const [, setVoiceSourceId] = useState('');
+  const [voiceSourceId, setVoiceSourceId] = useState('');
   const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
   const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -1734,12 +1746,15 @@ export function Settings({
       if (feature === 'voice') {
         const ttsModel = pickBestModelForSource(source, prev.voice_tts_model || prev.tts_model, 'tts')
           || pickBestModelForSource(source, prev.voice_tts_model || prev.tts_model, 'audio');
+        const nextTtsModel = ttsModel || prev.voice_tts_model || DEFAULT_VOICE_TTS_MODEL;
+        const nextCloneModel = cloneModelForVoiceTtsModel(nextTtsModel, prev.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL);
         return {
           ...prev,
           voice_endpoint: String(source.baseURL || '').trim(),
           voice_api_key: String(source.apiKey || '').trim(),
-          voice_tts_model: ttsModel || prev.voice_tts_model || 'speech-2.8-turbo',
-          tts_model: ttsModel || prev.tts_model || 'speech-2.8-turbo',
+          voice_tts_model: nextTtsModel,
+          tts_model: nextTtsModel,
+          voice_clone_model: nextCloneModel,
         };
       }
 
@@ -1780,6 +1795,10 @@ export function Settings({
     return getAiSourceById(imageSourceId);
   }, [getAiSourceById, imageSourceId]);
 
+  const selectedVoiceSource = useMemo(() => {
+    return getAiSourceById(voiceSourceId);
+  }, [getAiSourceById, voiceSourceId]);
+
   const transcriptionSourceModels = useMemo(() => {
     return selectedTranscriptionSource ? filterAiModelsByCapability(getSourceModelList(selectedTranscriptionSource), 'transcription') : [];
   }, [getSourceModelList, selectedTranscriptionSource]);
@@ -1805,6 +1824,12 @@ export function Settings({
     const descriptor = toAiModelDescriptor({ id: currentModel, capabilities: ['image'] });
     return descriptor ? [descriptor, ...models] : models;
   }, [formData.image_model, getSourceModelList, selectedImageSource]);
+
+  const voiceTtsSourceModels = useMemo(() => {
+    const sourceModels = selectedVoiceSource ? getSourceModelList(selectedVoiceSource) : [];
+    const ttsModels = filterAiModelsByCapability(sourceModels, 'tts');
+    return ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(sourceModels, 'audio');
+  }, [getSourceModelList, selectedVoiceSource]);
 
   const addModelModalRemoteModels = useMemo(() => {
     if (!addModelModalSource) return [];
@@ -2566,6 +2591,7 @@ export function Settings({
     if (scope === 'transcription') handleLinkedSourceChange('transcription', source.id);
     if (scope === 'embedding') handleLinkedSourceChange('embedding', source.id);
     if (scope === 'image') handleLinkedSourceChange('image', source.id);
+    if (scope === 'voiceTts') handleLinkedSourceChange('voice', source.id);
     if (scope === 'visualIndex') {
       setFormData((prev) => ({ ...prev, visual_index_enabled: mode !== 'disabled' }));
       handleLinkedSourceChange('visual', source.id);
@@ -2600,11 +2626,13 @@ export function Settings({
     } else if (scope === 'videoAnalysis') {
       setFormData((prev) => ({ ...prev, video_analysis_model: normalizedModel }));
     } else if (scope === 'voiceTts') {
-      setFormData((prev) => ({ ...prev, voice_tts_model: normalizedModel, tts_model: normalizedModel }));
+      const nextCloneModel = cloneModelForVoiceTtsModel(normalizedModel, formData.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL);
+      updateAiModelRoute('voiceClone', { model: nextCloneModel });
+      setFormData((prev) => ({ ...prev, voice_tts_model: normalizedModel, tts_model: normalizedModel, voice_clone_model: nextCloneModel }));
     } else if (scope === 'voiceClone') {
       setFormData((prev) => ({ ...prev, voice_clone_model: normalizedModel }));
     }
-  }, [aiModelRoutes.chat.mode, defaultAiSource, updateAiModelRoute]);
+  }, [aiModelRoutes.chat.mode, defaultAiSource, formData.voice_clone_model, updateAiModelRoute]);
 
   const handleRemoveSourceModel = (sourceId: string, modelId: string) => {
     const normalizedModel = String(modelId || '').trim();
@@ -4203,6 +4231,11 @@ export function Settings({
           if (fallback === 'disabled') return 'disabled';
           return normalizedSourceId ? 'custom' : fallback;
         };
+        const loadedVoiceTtsModel = String(settings.voice_tts_model || settings.tts_model || loadedModelRoutes.voiceTts.model || DEFAULT_VOICE_TTS_MODEL).trim();
+        const loadedVoiceCloneModel = cloneModelForVoiceTtsModel(
+          loadedVoiceTtsModel,
+          String(settings.voice_clone_model || loadedModelRoutes.voiceClone.model || DEFAULT_VOICE_CLONE_MODEL).trim(),
+        );
         const nextModelRoutes: AiModelRoutes = {
           ...loadedModelRoutes,
           chat: {
@@ -4263,15 +4296,15 @@ export function Settings({
           },
           voiceTts: {
             ...loadedModelRoutes.voiceTts,
-            mode: 'official',
-            sourceId: OFFICIAL_AUTO_SOURCE_ID,
-            model: String(settings.voice_tts_model || settings.tts_model || loadedModelRoutes.voiceTts.model || 'speech-2.8-turbo').trim(),
+            mode: routeSourceMode(resolvedVoiceSourceId, loadedModelRoutes.voiceTts.mode),
+            sourceId: resolvedVoiceSourceId,
+            model: loadedVoiceTtsModel,
           },
           voiceClone: {
             ...loadedModelRoutes.voiceClone,
             mode: 'official',
             sourceId: OFFICIAL_AUTO_SOURCE_ID,
-            model: String(settings.voice_clone_model || loadedModelRoutes.voiceClone.model || 'minimax-voice-clone').trim(),
+            model: loadedVoiceCloneModel,
           },
         };
 
@@ -4397,9 +4430,9 @@ export function Settings({
           })(),
           voice_endpoint: settings.voice_endpoint || settings.tts_endpoint || '',
           voice_api_key: settings.voice_api_key || settings.tts_api_key || '',
-          voice_tts_model: settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo',
-          tts_model: settings.tts_model || settings.voice_tts_model || 'speech-2.8-turbo',
-          voice_clone_model: settings.voice_clone_model || 'minimax-voice-clone',
+          voice_tts_model: loadedVoiceTtsModel,
+          tts_model: loadedVoiceTtsModel,
+          voice_clone_model: loadedVoiceCloneModel,
           video_endpoint: REDBOX_OFFICIAL_VIDEO_BASE_URL,
           video_api_key: settings.video_api_key || '',
           video_model: settings.video_model || REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'],
@@ -5992,14 +6025,17 @@ export function Settings({
       const resolvedVisualIndexSource = getAiSourceById(visualIndexSourceId) || defaultSource || null;
       const resolvedVideoAnalysisSource = getAiSourceById(videoAnalysisSourceId) || defaultSource || null;
       const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
-      const resolvedVoiceSource = officialAiSource || null;
+      const resolvedVoiceSource = getAiSourceById(voiceSourceId) || officialAiSource || defaultSource || null;
       const resolvedTranscriptionModel = String(formData.transcription_model || pickBestModelForSource(resolvedTranscriptionSource) || '').trim();
       const resolvedEmbeddingModel = String(formData.embedding_model || pickBestModelForSource(resolvedEmbeddingSource) || '').trim();
       const resolvedVisualIndexModel = String(formData.visual_index_model || pickBestVisualIndexModelForSource(resolvedVisualIndexSource) || '').trim();
       const resolvedVideoAnalysisModel = String(formData.video_analysis_model || pickBestVideoAnalysisModelForSource(resolvedVideoAnalysisSource) || '').trim();
       const resolvedImageModel = String(formData.image_model || pickBestModelForSource(resolvedImageSource) || '').trim();
-      const resolvedVoiceTtsModel = 'speech-2.8-turbo';
-      const resolvedVoiceCloneModel = 'minimax-voice-clone';
+      const resolvedVoiceTtsModel = String(formData.voice_tts_model || aiModelRoutes.voiceTts.model || formData.tts_model || DEFAULT_VOICE_TTS_MODEL).trim();
+      const resolvedVoiceCloneModel = cloneModelForVoiceTtsModel(
+        resolvedVoiceTtsModel,
+        String(formData.voice_clone_model || aiModelRoutes.voiceClone.model || DEFAULT_VOICE_CLONE_MODEL).trim(),
+      );
       const resolvedVideoModel = REDBOX_OFFICIAL_VIDEO_MODEL_LIST.includes(String(formData.video_model || '').trim() as typeof REDBOX_OFFICIAL_VIDEO_MODEL_LIST[number])
         ? String(formData.video_model || '').trim()
         : REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'];
@@ -6125,14 +6161,9 @@ export function Settings({
         'voiceTts',
         resolvedVoiceTtsModel,
         resolvedVoiceSource,
-        (source) => pickBestModelForSource(source, '', 'tts') || pickBestModelForSource(source, '', 'audio') || 'speech-2.8-turbo',
-      ) || 'speech-2.8-turbo';
-      const routeVoiceCloneModel = routeModel(
-        'voiceClone',
-        resolvedVoiceCloneModel,
-        resolvedVoiceSource,
-        (source) => pickBestModelForSource(source, '', 'voice_clone') || pickBestModelForSource(source, '', 'audio') || 'minimax-voice-clone',
-      ) || 'minimax-voice-clone';
+        (source) => pickBestModelForSource(source, '', 'tts') || pickBestModelForSource(source, '', 'audio') || DEFAULT_VOICE_TTS_MODEL,
+      ) || DEFAULT_VOICE_TTS_MODEL;
+      const routeVoiceCloneModel = resolvedVoiceCloneModel;
       const normalizedModelRoutes: AiModelRoutes = {
         ...aiModelRoutes,
         chat: normalizeRouteForSource({
@@ -6180,7 +6211,10 @@ export function Settings({
           sourceId: resolvedVideoAnalysisSource?.id || '',
           model: routeVideoAnalysisModel,
         }, resolvedVideoAnalysisSource?.id || ''),
-        voiceTts: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: routeVoiceTtsModel },
+        voiceTts: normalizeRouteForSource(
+          { ...aiModelRoutes.voiceTts, sourceId: resolvedVoiceSource?.id || '', model: routeVoiceTtsModel },
+          resolvedVoiceSource?.id || '',
+        ),
         voiceClone: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: routeVoiceCloneModel },
       };
       const parsedParserTimeoutSeconds = Number(formData.parser_timeout_seconds);
@@ -6339,8 +6373,8 @@ export function Settings({
     if (scope === 'image') return String(aiModelRoutes.image.model || formData.image_model || '').trim();
     if (scope === 'visualIndex') return String(aiModelRoutes.visualIndex.model || formData.visual_index_model || '').trim();
     if (scope === 'videoAnalysis') return String(aiModelRoutes.videoAnalysis.model || formData.video_analysis_model || '').trim();
-    if (scope === 'voiceTts') return String(aiModelRoutes.voiceTts.model || formData.voice_tts_model || formData.tts_model || 'speech-2.8-turbo').trim();
-    if (scope === 'voiceClone') return String(aiModelRoutes.voiceClone.model || formData.voice_clone_model || 'minimax-voice-clone').trim();
+    if (scope === 'voiceTts') return String(aiModelRoutes.voiceTts.model || formData.voice_tts_model || formData.tts_model || DEFAULT_VOICE_TTS_MODEL).trim();
+    if (scope === 'voiceClone') return String(aiModelRoutes.voiceClone.model || formData.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL).trim();
     return '';
   }, [
     aiModelRoutes,
@@ -6376,9 +6410,9 @@ export function Settings({
       const videoModels = filterVideoAnalysisModels(sourceModels);
       return String(videoModels[0]?.id || sourceModels[0]?.id || '').trim();
     };
-    if (scope === 'voiceTts') return 'speech-2.8-turbo';
-    if (scope === 'voiceClone') return 'minimax-voice-clone';
-    if (scope === 'transcription') return pickBestModelForSource(officialAiSource, preferredModel, 'transcription') || pickFirstOfficialModel('transcription') || 'step-asr';
+    if (scope === 'voiceTts') return pickBestModelForSource(officialAiSource, preferredModel, 'tts') || pickBestModelForSource(officialAiSource, preferredModel, 'audio') || pickFirstOfficialModel('tts') || DEFAULT_VOICE_TTS_MODEL;
+    if (scope === 'voiceClone') return pickBestModelForSource(officialAiSource, preferredModel, 'voice_clone') || pickBestModelForSource(officialAiSource, preferredModel, 'audio') || pickFirstOfficialModel('voice_clone') || DEFAULT_VOICE_CLONE_MODEL;
+    if (scope === 'transcription') return pickBestModelForSource(officialAiSource, preferredModel, 'transcription') || pickFirstOfficialModel('transcription');
     if (scope === 'embedding') return pickBestModelForSource(officialAiSource, preferredModel, 'embedding') || pickFirstOfficialModel('embedding') || 'text-embedding-3-small';
     if (scope === 'image') return pickBestModelForSource(officialAiSource, preferredModel, 'image') || pickFirstOfficialModel('image') || 'gpt-image-1';
     if (scope === 'visualIndex') return preferredModel || pickFirstOfficialVisualModel();
@@ -7355,15 +7389,12 @@ export function Settings({
                         <AiModelSelect
                           value={formData.transcription_model}
                           onChange={(modelId) => setFormData((d) => ({ ...d, transcription_model: modelId }))}
-                          options={transcriptionSourceModels.map((model) => {
-                            const isRecommended = String(model.id).trim().toLowerCase() === 'step-asr';
-                            return {
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities, { recommended: isRecommended }),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            };
-                          })}
+                          options={transcriptionSourceModels.map((model) => ({
+                            id: model.id,
+                            label: model.id,
+                            badges: buildModelCapabilityBadges(model.capabilities),
+                            inputIcons: buildModelInputIcons(model.inputCapabilities),
+                          }))}
                           disabled={!transcriptionSourceModels.length}
                           placeholder="请先在该供应商中添加模型"
                           className="w-full"
@@ -7442,6 +7473,41 @@ export function Settings({
                             />
                           </div>
                         </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border space-y-3">
+                    <h3 className="text-sm font-medium text-text-primary">TTS 模型设置</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="group">
+                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                          供应商
+                        </label>
+                        <AiSourceSelect
+                          value={voiceSourceId}
+                          sources={displayedAiSources}
+                          onChange={(nextSourceId) => handleLinkedSourceChange('voice', nextSourceId)}
+                          className="w-full"
+                        />
+                      </div>
+                      <div className="group">
+                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                          模型
+                        </label>
+                        <AiModelSelect
+                          value={formData.voice_tts_model}
+                          onChange={(modelId) => applyRouteModel('voiceTts', modelId)}
+                          className="w-full"
+                          disabled={!voiceTtsSourceModels.length}
+                          placeholder="请先在该供应商中添加 TTS 模型"
+                          options={voiceTtsSourceModels.map((model) => ({
+                            id: model.id,
+                            label: model.id,
+                            badges: buildModelCapabilityBadges(model.capabilities),
+                            inputIcons: buildModelInputIcons(model.inputCapabilities),
+                          }))}
+                        />
+                      </div>
+                    </div>
                   </div>
 
                   <div className="pt-4 border-t border-border">

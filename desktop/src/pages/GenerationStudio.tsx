@@ -31,10 +31,10 @@ import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, normalizeMediaJobProjection, type MediaJobProjection } from '../features/media-jobs/types';
-import { Chat } from './Chat';
+import { Chat, clearFixedSessionWarmSnapshot } from './Chat';
 import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources } from './settings/shared';
 import { resolveAssetUrl } from '../utils/pathManager';
-import { appAlert } from '../utils/appDialogs';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 
 type StudioMode = 'image' | 'video' | 'audio' | 'cover' | 'digital-human';
 type ImageGenerationMode = 'text-to-image' | 'reference-guided' | 'image-to-image';
@@ -1158,10 +1158,12 @@ type DeletedFeedState = {
     entryIds: string[];
     jobIds: string[];
     clientRequestIds: string[];
+    agentSessionIds: string[];
+    agentContextIds: string[];
 };
 
 function emptyDeletedFeedState(): DeletedFeedState {
-    return { entryIds: [], jobIds: [], clientRequestIds: [] };
+    return { entryIds: [], jobIds: [], clientRequestIds: [], agentSessionIds: [], agentContextIds: [] };
 }
 
 function normalizeDeletedFeedState(value: unknown): DeletedFeedState {
@@ -1176,6 +1178,8 @@ function normalizeDeletedFeedState(value: unknown): DeletedFeedState {
         entryIds: normalizeList(record.entryIds),
         jobIds: normalizeList(record.jobIds),
         clientRequestIds: normalizeList(record.clientRequestIds),
+        agentSessionIds: normalizeList(record.agentSessionIds),
+        agentContextIds: normalizeList(record.agentContextIds),
     };
 }
 
@@ -1195,6 +1199,8 @@ function persistDeletedFeedState(state: DeletedFeedState): void {
             entryIds: state.entryIds.slice(-500),
             jobIds: state.jobIds.slice(-500),
             clientRequestIds: state.clientRequestIds.slice(-500),
+            agentSessionIds: state.agentSessionIds.slice(-500),
+            agentContextIds: state.agentContextIds.slice(-500),
         }));
     } catch {
         // ignore persistence errors
@@ -1209,6 +1215,10 @@ function clientRequestIdFromJob(job: MediaJobProjection | null | undefined): str
 
 function isFeedEntryDeleted(entry: FeedEntry, deleted: DeletedFeedState): boolean {
     if (deleted.entryIds.includes(entry.id)) return true;
+    if (isAgentSessionFeedEntry(entry)) {
+        return deleted.agentSessionIds.includes(entry.sessionId)
+            || deleted.agentContextIds.includes(entry.contextId);
+    }
     if (isGenerationFeedEntry(entry)) {
         if (entry.jobId && deleted.jobIds.includes(entry.jobId)) return true;
         const requestClientId = String(
@@ -1727,6 +1737,8 @@ function buildGenerationAgentRuntimeContext(params: {
     sourceTitle?: string;
     recentAssets: GenerationAgentAssetSummary[];
     attachmentNote?: string;
+    audioVoices?: VoiceListItem[];
+    audioLanguageBoost?: string;
 }): string {
     const latest = {
         image: latestAssetOfKind(params.recentAssets, 'image') || null,
@@ -1744,18 +1756,22 @@ function buildGenerationAgentRuntimeContext(params: {
             source: params.source || 'standalone',
             sourceTitle: params.sourceTitle || '',
             currentRequest: sanitizeGenerationRequestForAgent(params.request),
+            availableVoicesForAgent: params.mode === 'audio'
+                ? summarizeAudioVoicesForAgent(
+                    params.audioVoices || [],
+                    params.audioLanguageBoost || '',
+                    params.request.type === 'audio' ? params.request.voiceId : '',
+                )
+                : undefined,
+            audioVoicePolicy: params.mode === 'audio'
+                ? 'Use currentRequest.model and currentRequest.voiceId unless the task or available voices require a deliberate change. Voices are model-bound; each availableVoicesForAgent item includes targetTtsModel when known.'
+                : undefined,
             recentAssets: params.recentAssets,
             latestAssets: latest,
             fuzzyReferencePolicy: 'When the user says 上一张图/刚才那张/之前的图片, use latestAssets.image by default; for video/audio use the matching latest asset.',
             imageSizingPolicy: 'In Agent mode, image aspectRatio and size are selected by the agent from the user goal. Ignore composer defaults unless the user explicitly asks for a ratio or pixel size.',
             attachmentNote: params.attachmentNote || '',
-            toolIntent: params.mode === 'image'
-                ? 'Call image.generate after refining the prompt.'
-                : params.mode === 'cover'
-                    ? 'Create a social cover. Use the uploaded reference cover for style and the base image as the subject/background when available, then call the image generation tool or cover generation capability with structured cover intent.'
-                : params.mode === 'video'
-                    ? 'Call video.generate after refining storyboard, mode and references. If the video needs expressive TTS, first invoke the tts-director skill, then call voice.speech and use the completed audio.'
-                    : 'Call voice.speech after refining the literal spoken text. For expressive, long-form, poetic, ad, character, or multi-emotion speech, first invoke the tts-director skill and submit one segments request.',
+            executionExpectation: 'Use the current mode, request fields, available tools, and skill catalog to decide the next executable steps. Complete the requested generation without asking for a second confirmation unless a required field is genuinely missing.',
         }, null, 2),
         '[/GenerationAgentContext]',
     ].join('\n');
@@ -1801,6 +1817,9 @@ type PickerOption = {
     value: string;
     label: string;
     description?: string;
+    disabled?: boolean;
+    disabledReason?: string;
+    tone?: 'danger';
 };
 
 type VoiceListItem = {
@@ -1819,6 +1838,8 @@ type VoiceListItem = {
     cloneModel: string;
     provider: string;
 };
+
+const DEFAULT_AUDIO_TTS_MODEL = 'cosyvoice-v3.5-plus';
 
 function normalizedModelKey(value: string): string {
     return value.trim().toLowerCase();
@@ -2207,6 +2228,32 @@ function buildAudioVoiceOptions(voices: VoiceListItem[], languageBoost: string):
         }));
 }
 
+function summarizeAudioVoicesForAgent(voices: VoiceListItem[], languageBoost: string, selectedVoiceId: string) {
+    const selected = selectedVoiceId.trim();
+    return voices
+        .filter((voice) => voice.id === selected || voiceLanguageMatches(voice, languageBoost) || voice.source === 'subject')
+        .sort((left, right) => {
+            if (left.id === selected) return -1;
+            if (right.id === selected) return 1;
+            if (left.source === 'subject' && right.source !== 'subject') return -1;
+            if (right.source === 'subject' && left.source !== 'subject') return 1;
+            if (left.systemVoice !== right.systemVoice) return left.systemVoice ? 1 : -1;
+            return left.name.localeCompare(right.name);
+        })
+        .slice(0, 40)
+        .map((voice) => ({
+            voiceId: voice.id,
+            name: voice.name || shortVoiceId(voice.id),
+            languageBoost: voice.languageBoost || voice.language || '',
+            language: voice.languageZh || voice.languageEn || voice.language || '',
+            genderHint: voice.genderHint || '',
+            source: voice.source || (voice.systemVoice ? 'system' : 'custom'),
+            targetTtsModel: voice.targetTtsModel || '',
+            cloneModel: voice.cloneModel || '',
+            selected: voice.id === selected,
+        }));
+}
+
 function useDismissiblePopover(open: boolean, onClose: () => void) {
     const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -2237,6 +2284,7 @@ function useDismissiblePopover(open: boolean, onClose: () => void) {
 function PopoverSelect({
     value,
     onChange,
+    onDisabledOptionClick,
     options,
     className,
     title,
@@ -2248,6 +2296,7 @@ function PopoverSelect({
 }: {
     value: string;
     onChange: (value: string) => void;
+    onDisabledOptionClick?: (option: PickerOption) => void;
     options: readonly PickerOption[];
     className?: string;
     title?: string;
@@ -2297,11 +2346,16 @@ function PopoverSelect({
                     )}>
                         {options.map((option) => {
                             const selected = option.value === active?.value;
+                            const disabledOption = option.disabled === true;
                             return (
                                 <button
                                     key={option.value}
                                     type="button"
                                     onClick={() => {
+                                        if (disabledOption) {
+                                            onDisabledOptionClick?.(option);
+                                            return;
+                                        }
                                         onChange(option.value);
                                         setOpen(false);
                                     }}
@@ -2309,16 +2363,23 @@ function PopoverSelect({
                                         'rounded-[14px] border px-3 py-2.5 text-[12px] font-semibold transition-colors',
                                         layout === 'column' ? 'w-full' : 'min-w-[92px] flex-1',
                                         optionAlign === 'center' ? 'text-center' : 'text-left',
-                                        selected
+                                        disabledOption
+                                            ? 'cursor-not-allowed border-brand-red/25 bg-brand-red/10 text-brand-red hover:bg-brand-red/15'
+                                        : selected
                                             ? 'border-brand-red/50 bg-brand-red text-white'
                                             : 'border-transparent bg-surface-tertiary text-text-secondary hover:bg-accent-muted',
                                     )}
                                 >
-                                    <div className="truncate">{option.label}</div>
+                                    <div className="flex min-w-0 items-center gap-2">
+                                        {option.tone === 'danger' && (
+                                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-red" />
+                                        )}
+                                        <span className="truncate">{option.label}</span>
+                                    </div>
                                     {option.description && (
                                         <div className={clsx(
                                             'mt-1 truncate text-[11px] font-normal',
-                                            selected ? 'text-white/75' : 'text-text-tertiary',
+                                            disabledOption ? 'text-brand-red/75' : selected ? 'text-white/75' : 'text-text-tertiary',
                                         )}>
                                             {option.description}
                                         </div>
@@ -3071,8 +3132,10 @@ export function GenerationStudio({
     const [assetContextMenu, setAssetContextMenu] = useState<AssetContextMenuState | null>(null);
     const feedScrollRef = useRef<HTMLElement | null>(null);
     const feedBottomRef = useRef<HTMLDivElement | null>(null);
+    const shouldScrollFeedToBottomRef = useRef(false);
     const lastFeedCountRef = useRef(feedEntries.length);
     const agentSessionRequestIdRef = useRef(0);
+    const lastSettingsVoiceTtsModelRef = useRef('');
 
     const [imagePrompt, setImagePrompt] = useState('');
     const [imageTitle, setImageTitle] = useState('');
@@ -3093,6 +3156,8 @@ export function GenerationStudio({
     const [agentExecutionActive, setAgentExecutionActive] = useState(false);
     const [agentPendingMessage, setAgentPendingMessage] = useState<PendingChatMessage | null>(null);
     const [agentAttachment, setAgentAttachment] = useState<UploadedFileAttachment | null>(null);
+    const [agentSendNonce, setAgentSendNonce] = useState(0);
+    const [agentClearNonce, setAgentClearNonce] = useState(0);
 
     const [videoPrompt, setVideoPrompt] = useState('');
     const [videoTitle, setVideoTitle] = useState('');
@@ -3198,7 +3263,24 @@ export function GenerationStudio({
         },
         [],
     );
-    const ensureAgentFeedEntry = useCallback((sessionId: string, createdAt = Date.now()) => {
+    const ensureAgentFeedEntry = useCallback((sessionId: string, createdAt = Date.now(), options?: { bump?: boolean; reviveDeleted?: boolean }) => {
+        const agentEntryId = `agent-feed:${generationAgentContextId}`;
+        const isDeletedAgentEntry = deletedFeedStateRef.current.entryIds.includes(agentEntryId)
+            || deletedFeedStateRef.current.agentSessionIds.includes(sessionId)
+            || deletedFeedStateRef.current.agentContextIds.includes(generationAgentContextId);
+        if (isDeletedAgentEntry && !options?.reviveDeleted) {
+            return;
+        }
+        if (options?.reviveDeleted && isDeletedAgentEntry) {
+            const nextDeleted = {
+                ...deletedFeedStateRef.current,
+                entryIds: deletedFeedStateRef.current.entryIds.filter((id) => id !== agentEntryId),
+                agentSessionIds: deletedFeedStateRef.current.agentSessionIds.filter((id) => id !== sessionId),
+                agentContextIds: deletedFeedStateRef.current.agentContextIds.filter((id) => id !== generationAgentContextId),
+            };
+            deletedFeedStateRef.current = nextDeleted;
+            persistDeletedFeedState(nextDeleted);
+        }
         updateFeedEntries((prev) => {
             const existingIndex = prev.findIndex((entry) => (
                 isAgentSessionFeedEntry(entry)
@@ -3206,17 +3288,17 @@ export function GenerationStudio({
             ));
             const nextEntry: AgentSessionFeedEntry = {
                 kind: 'agent-session',
-                id: existingIndex >= 0 ? prev[existingIndex].id : `agent-feed:${generationAgentContextId}`,
-                createdAt: existingIndex >= 0 ? prev[existingIndex].createdAt : createdAt,
+                id: existingIndex >= 0 ? prev[existingIndex].id : agentEntryId,
+                createdAt: existingIndex >= 0 && !options?.bump ? prev[existingIndex].createdAt : createdAt,
                 source: contextIntent?.source || 'standalone',
                 sourceTitle: contextIntent?.sourceTitle,
                 sessionId,
                 contextId: generationAgentContextId,
                 title: generationAgentTitle,
             };
-	            if (existingIndex < 0) {
-	                return sortFeedEntries([...prev, nextEntry]);
-	            }
+            if (existingIndex < 0) {
+                return sortFeedEntries([...prev, nextEntry]);
+            }
             const existing = prev[existingIndex] as AgentSessionFeedEntry;
             if (
                 existing.sessionId === nextEntry.sessionId
@@ -3224,6 +3306,7 @@ export function GenerationStudio({
                 && existing.title === nextEntry.title
                 && existing.source === nextEntry.source
                 && existing.sourceTitle === nextEntry.sourceTitle
+                && existing.createdAt === nextEntry.createdAt
             ) {
                 return prev;
             }
@@ -3251,7 +3334,21 @@ export function GenerationStudio({
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
             setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? normalizeImageQuality(normalizedSettings.image_quality) : prev));
             setCoverQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? normalizeImageQuality(normalizedSettings.image_quality) : prev));
-            setAudioModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.voice_tts_model || normalizedSettings.tts_model || 'speech-2.8-turbo') : prev));
+            const nextSettingsVoiceTtsModel = String(normalizedSettings.voice_tts_model || normalizedSettings.tts_model || DEFAULT_AUDIO_TTS_MODEL).trim();
+            const previousSettingsVoiceTtsModel = lastSettingsVoiceTtsModelRef.current;
+            setAudioModel((prev) => {
+                const current = prev.trim();
+                if (
+                    overwriteDraftDefaults
+                    || !current
+                    || current === previousSettingsVoiceTtsModel
+                    || (!previousSettingsVoiceTtsModel && current === DEFAULT_AUDIO_TTS_MODEL)
+                ) {
+                    return nextSettingsVoiceTtsModel;
+                }
+                return prev;
+            });
+            lastSettingsVoiceTtsModelRef.current = nextSettingsVoiceTtsModel;
         } catch (error) {
             console.error('Failed to load generation studio context:', error);
         }
@@ -3259,6 +3356,17 @@ export function GenerationStudio({
 
     useEffect(() => {
         void loadContext(false);
+    }, [isActive, loadContext]);
+
+    useEffect(() => {
+        if (!isActive) return;
+        const handleSettingsUpdated = () => {
+            void loadContext(false);
+        };
+        window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+        return () => {
+            window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+        };
     }, [isActive, loadContext]);
 
     useEffect(() => {
@@ -3316,7 +3424,6 @@ export function GenerationStudio({
                 const sessionCreatedAt = Number.isFinite(numericSessionTimestamp)
                     ? numericSessionTimestamp
                     : Date.parse(String(rawSessionTimestamp));
-                ensureAgentFeedEntry(session.id, Number.isFinite(sessionCreatedAt) ? sessionCreatedAt : Date.now());
                 const existingMessages = await window.ipcRenderer.chat.getMessages(session.id);
                 if (requestId !== agentSessionRequestIdRef.current) return;
                 const hasExistingMessages = Array.isArray(existingMessages) && existingMessages.length > 0;
@@ -3332,6 +3439,8 @@ export function GenerationStudio({
                         ? numericTimestamp
                         : Date.parse(String(rawFirstTimestamp));
                     ensureAgentFeedEntry(session.id, Number.isFinite(firstTimestamp) ? firstTimestamp : Date.now());
+                } else {
+                    ensureAgentFeedEntry(session.id, Number.isFinite(sessionCreatedAt) ? sessionCreatedAt : Date.now());
                 }
             } catch (error) {
                 if (requestId !== agentSessionRequestIdRef.current) return;
@@ -3416,6 +3525,17 @@ export function GenerationStudio({
         return () => window.cancelAnimationFrame(frame);
     }, [feedEntries.length]);
 
+    useEffect(() => {
+        if (!isActive || !shouldScrollFeedToBottomRef.current) return;
+        shouldScrollFeedToBottomRef.current = false;
+        const frame = window.requestAnimationFrame(() => {
+            const container = feedScrollRef.current;
+            if (!container) return;
+            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [feedEntries, isActive]);
+
     const resolvedImageEndpoint = (settings.image_endpoint || settings.api_endpoint || '').trim();
     const resolvedImageApiKey = (settings.image_api_key || settings.api_key || '').trim();
     const hasImageConfig = Boolean(resolvedImageEndpoint) && Boolean(resolvedImageApiKey);
@@ -3429,7 +3549,7 @@ export function GenerationStudio({
     const resolvedVoiceApiKey = (settings.voice_api_key || settings.tts_api_key || settings.api_key || '').trim();
     const hasVoiceConfig = Boolean(resolvedVoiceEndpoint) && Boolean(resolvedVoiceApiKey);
     const audioModelOptions = useMemo<PickerOption[]>(() => buildAudioModelOptions(settings), [settings]);
-    const effectiveAudioModel = (audioModel || settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo').trim();
+    const effectiveAudioModel = (audioModel || settings.voice_tts_model || settings.tts_model || DEFAULT_AUDIO_TTS_MODEL).trim();
     const audioVoicesForModel = useMemo(
         () => audioVoices.filter((voice) => voiceMatchesAudioModel(voice, effectiveAudioModel)),
         [audioVoices, effectiveAudioModel],
@@ -3583,7 +3703,10 @@ export function GenerationStudio({
         });
     }, [digitalHumanRoleCategoryIds, digitalHumanSubjects]);
     const selectedDigitalHumanRole = useMemo(
-        () => digitalHumanRoles.find((role) => role.id === digitalHumanRoleId) || digitalHumanRoles[0] || null,
+        () => digitalHumanRoles.find((role) => role.id === digitalHumanRoleId)
+            || digitalHumanRoles.find((role) => digitalHumanReadiness(role).ok)
+            || digitalHumanRoles[0]
+            || null,
         [digitalHumanRoleId, digitalHumanRoles],
     );
     const selectedDigitalHumanReadiness = useMemo(() => digitalHumanReadiness(selectedDigitalHumanRole), [selectedDigitalHumanRole]);
@@ -3593,8 +3716,16 @@ export function GenerationStudio({
             value: role.id,
             label: readiness.ok ? role.name : `${role.name} · 不可用`,
             description: readiness.ok ? shortVoiceId(readiness.voiceId) : readiness.issue,
+            disabled: !readiness.ok,
+            disabledReason: readiness.ok ? undefined : `请先在资产库为「${role.name}」上传参考视频，并录制或绑定可用的音色克隆。缺少：${readiness.issue}`,
+            tone: readiness.ok ? undefined : 'danger',
         };
     }), [digitalHumanRoles]);
+    const handleDisabledDigitalHumanRoleClick = useCallback((option: PickerOption) => {
+        void appAlert(option.disabledReason || '请先在资产库补齐角色的参考视频和音色克隆。', {
+            title: '角色还不能用于数字人',
+        });
+    }, []);
 
     const createFeedEntry = useCallback((request: GenerationRequest): GenerationFeedEntry => ({
         kind: 'generation',
@@ -4278,6 +4409,10 @@ export function GenerationStudio({
     }, []);
 
     const handleDeleteEntry = useCallback((entryId: string) => {
+        const entryToDelete = feedEntries.find((item) => item.id === entryId);
+        const agentSessionIdToClear = entryToDelete && isAgentSessionFeedEntry(entryToDelete)
+            ? entryToDelete.sessionId
+            : '';
         updateFeedEntries((prev) => {
             const entry = prev.find((item) => item.id === entryId);
             if (entry) {
@@ -4288,6 +4423,9 @@ export function GenerationStudio({
                         deleted.jobIds = Array.from(new Set([...deleted.jobIds, entry.jobId]));
                     }
                     deleted.clientRequestIds = Array.from(new Set([...deleted.clientRequestIds, entry.id]));
+                } else if (isAgentSessionFeedEntry(entry)) {
+                    deleted.agentSessionIds = Array.from(new Set([...deleted.agentSessionIds, entry.sessionId]));
+                    deleted.agentContextIds = Array.from(new Set([...deleted.agentContextIds, entry.contextId]));
                 }
                 deletedFeedStateRef.current = deleted;
                 persistDeletedFeedState(deleted);
@@ -4295,7 +4433,16 @@ export function GenerationStudio({
             return prev.filter((entry) => entry.id !== entryId);
         });
         setAssetContextMenu((current) => (current?.entryId === entryId ? null : current));
-    }, [updateFeedEntries]);
+        if (agentSessionIdToClear) {
+            if (agentSessionIdToClear === agentSessionId) {
+                setAgentPendingMessage(null);
+                setAgentExecutionActive(false);
+            }
+            void window.ipcRenderer.chat.clearMessages(agentSessionIdToClear).catch((error) => {
+                console.error('Failed to clear generation agent session:', error);
+            });
+        }
+    }, [agentSessionId, feedEntries, generationAgentContextId, updateFeedEntries]);
 
     const resolveAssetSource = useCallback((asset: GeneratedAsset) => (
         asset.previewUrl || asset.relativePath || ''
@@ -4603,6 +4750,85 @@ export function GenerationStudio({
         && !isAgentSessionLoading
         && !agentExecutionActive
         && (currentAgentRequest.prompt.trim().length > 0 || Boolean(agentAttachment));
+    const handleClearGenerationRecords = useCallback(async () => {
+        if (feedEntries.length === 0) return;
+        const confirmed = await appConfirm('只清空本页生成记录；已经入库的媒体文件会保留。', {
+            title: '清空生成记录',
+            confirmLabel: '清空',
+            tone: 'danger',
+        });
+        if (!confirmed) return;
+        try {
+            const deleted = normalizeDeletedFeedState(deletedFeedStateRef.current);
+            const nextEntryIds = new Set(deleted.entryIds);
+            const nextJobIds = new Set(deleted.jobIds);
+            const nextClientRequestIds = new Set(deleted.clientRequestIds);
+            const nextAgentSessionIds = new Set(deleted.agentSessionIds);
+            const nextAgentContextIds = new Set(deleted.agentContextIds);
+            const agentSessionIds = new Set<string>();
+            if (agentSessionId) {
+                agentSessionIds.add(agentSessionId);
+                nextAgentSessionIds.add(agentSessionId);
+                nextAgentContextIds.add(generationAgentContextId);
+            }
+            for (const entry of feedEntries) {
+                nextEntryIds.add(entry.id);
+                if (isGenerationFeedEntry(entry)) {
+                    if (entry.jobId) nextJobIds.add(entry.jobId);
+                    const requestClientId = String(
+                        (entry.request as unknown as Record<string, unknown>).clientRequestId
+                        || (entry.request as unknown as Record<string, unknown>).clientFeedEntryId
+                        || '',
+                    ).trim();
+                    if (requestClientId) nextClientRequestIds.add(requestClientId);
+                } else if (isAgentSessionFeedEntry(entry)) {
+                    agentSessionIds.add(entry.sessionId);
+                    nextAgentSessionIds.add(entry.sessionId);
+                    nextAgentContextIds.add(entry.contextId);
+                }
+            }
+            try {
+                const result = await window.ipcRenderer.generation.listJobs({ limit: 100 }) as { items?: unknown[] };
+                const jobs = Array.isArray(result?.items)
+                    ? result.items
+                        .map(normalizeMediaJobProjection)
+                        .filter((item): item is MediaJobProjection => Boolean(item && isGenerationStudioMediaJob(item)))
+                    : [];
+                for (const job of jobs) {
+                    nextJobIds.add(job.jobId);
+                    nextEntryIds.add(`job:${job.jobId}`);
+                    const clientRequestId = clientRequestIdFromJob(job);
+                    if (clientRequestId) nextClientRequestIds.add(clientRequestId);
+                }
+            } catch (error) {
+                console.error('Failed to list generation jobs before clearing records:', error);
+            }
+            const nextDeleted = normalizeDeletedFeedState({
+                entryIds: Array.from(nextEntryIds),
+                jobIds: Array.from(nextJobIds),
+                clientRequestIds: Array.from(nextClientRequestIds),
+                agentSessionIds: Array.from(nextAgentSessionIds),
+                agentContextIds: Array.from(nextAgentContextIds),
+            });
+            deletedFeedStateRef.current = nextDeleted;
+            persistDeletedFeedState(nextDeleted);
+            for (const sessionId of agentSessionIds) {
+                clearFixedSessionWarmSnapshot(sessionId);
+            }
+            updateFeedEntries([]);
+            setAssetContextMenu(null);
+            setPreviewAsset(null);
+            setAgentPendingMessage(null);
+            setAgentExecutionActive(false);
+            setAgentClearNonce((value) => value + 1);
+            await Promise.all(
+                Array.from(agentSessionIds).map((sessionId) => window.ipcRenderer.chat.clearMessages(sessionId)),
+            );
+        } catch (error) {
+            console.error('Failed to clear generation records:', error);
+            void appAlert(error instanceof Error ? error.message : '清空生成记录失败');
+        }
+    }, [agentSessionId, feedEntries, updateFeedEntries]);
     const handlePickAgentAttachment = useCallback(async () => {
         if (!agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
         try {
@@ -4719,7 +4945,9 @@ export function GenerationStudio({
                 return;
             }
         }
-        ensureAgentFeedEntry(agentSessionId);
+        shouldScrollFeedToBottomRef.current = true;
+        setAgentSendNonce((value) => value + 1);
+        ensureAgentFeedEntry(agentSessionId, Date.now(), { bump: true, reviveDeleted: true });
         const runtimeContext = buildGenerationAgentRuntimeContext({
             mode: studioMode,
             request: currentAgentRequest,
@@ -4727,6 +4955,8 @@ export function GenerationStudio({
             sourceTitle: contextIntent?.sourceTitle,
             recentAssets: recentAgentAssets,
             attachmentNote: attachmentContextNotes.join('\n'),
+            audioVoices: audioVoicesForModel,
+            audioLanguageBoost,
         });
         const messageContent = [content, runtimeContext, attachmentContextNotes.join('\n')].filter(Boolean).join('\n\n').trim();
         setAgentPendingMessage({
@@ -4752,6 +4982,8 @@ export function GenerationStudio({
         agentAttachment,
         agentExecutionActive,
         agentSessionId,
+        audioLanguageBoost,
+        audioVoicesForModel,
         contextIntent?.source,
         contextIntent?.sourceTitle,
         currentAgentRequest,
@@ -4857,6 +5089,17 @@ export function GenerationStudio({
                 </span>
             </button>
             )}
+            {feedEntries.length > 0 && (
+                <button
+                    type="button"
+                    onClick={() => void handleClearGenerationRecords()}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-surface-primary text-text-tertiary transition-colors hover:border-brand-red/30 hover:bg-brand-red/10 hover:text-brand-red disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="清空生成记录"
+                    title="清空生成记录"
+                >
+                    <Trash2 className="h-4 w-4" />
+                </button>
+            )}
         </div>
     );
 
@@ -4910,6 +5153,7 @@ export function GenerationStudio({
                                             </button>
                                         </div>
                                         <Chat
+                                            key={`${entry.sessionId}:${entry.sessionId === agentSessionId ? agentSendNonce : 0}`}
                                             isActive={isActive}
                                             fixedSessionId={entry.sessionId}
                                             pendingMessage={entry.sessionId === agentSessionId ? agentPendingMessage : null}
@@ -4935,6 +5179,12 @@ export function GenerationStudio({
                                             messageWorkflowEmphasis="thoughts-first"
                                             messageWorkflowDisplayMode="all"
                                             onExecutionStateChange={entry.sessionId === agentSessionId ? setAgentExecutionActive : undefined}
+                                            clearSignal={entry.sessionId === agentSessionId ? agentClearNonce : 0}
+                                            onSessionActivity={(sessionId, updatedAt) => {
+                                                if (entry.sessionId !== agentSessionId || sessionId !== agentSessionId) return;
+                                                const nextCreatedAt = feedTime(updatedAt);
+                                                ensureAgentFeedEntry(agentSessionId, nextCreatedAt || Date.now(), { bump: true });
+                                            }}
                                         />
                                     </article>
                                 )
@@ -5234,7 +5484,7 @@ export function GenerationStudio({
                                                         emptyText={isLoadingAudioVoices ? '加载音色' : '暂无音色'}
                                                     />
                                                     <PopoverSelect
-                                                        value={audioSpeedTouched ? audioSpeed : ''}
+                                                        value={audioSpeed}
                                                         onChange={(value) => {
                                                             setAudioSpeed(value || '1');
                                                             setAudioSpeedTouched(true);
@@ -5313,6 +5563,7 @@ export function GenerationStudio({
                                                     <PopoverSelect
                                                         value={selectedDigitalHumanRole?.id || ''}
                                                         onChange={setDigitalHumanRoleId}
+                                                        onDisabledOptionClick={handleDisabledDigitalHumanRoleClick}
                                                         options={digitalHumanRoleOptions}
                                                         className="min-w-[180px]"
                                                         title="角色"
