@@ -29,3 +29,5 @@ artifacts/
 src-tauri/target/
 src-tauri/gen/
 .omx/
+desktop/src-tauri/binaries/ffmpeg*
+desktop/src-tauri/binaries/ffprobe*
