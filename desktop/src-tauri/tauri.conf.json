@@ -35,6 +35,17 @@
           "$HOME/.redconvert/**",
           "$HOME/.redconvert.migrated-*/**",
           "$APPDATA/RedBox/**",
+          "$LOCALDATA/RedBox/**",
+          "$DOCUMENT/RedBox/**",
+          "$DOCUMENT/RedConvert/**",
+          "$DOCUMENT/**/RedBox/**",
+          "$DOCUMENT/**/RedConvert/**",
+          "$DOWNLOAD/RedBox/**",
+          "$DOWNLOAD/RedConvert/**",
+          "$PICTURE/RedBox/**",
+          "$PICTURE/RedConvert/**",
+          "$DESKTOP/RedBox/**",
+          "$DESKTOP/RedConvert/**",
           "$HOME/Library/Application Support/RedBox/**"
         ]
       }
