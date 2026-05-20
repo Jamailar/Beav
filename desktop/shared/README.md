@@ -6,7 +6,7 @@
 
 - `localAsset.ts`: 本地资产 URL 与路径转换
 - `manuscriptFiles.ts`: 稿件扩展名和 package 类型
-- `modelCapabilities.ts`: 模型能力识别与输入能力；未命中自定义规则的 chat 模型默认开放图片/视频输入
+- `modelCapabilities.ts`: 模型能力识别与输入能力；未命中自定义规则的 chat 模型默认开放图片/文件输入，只有名称含 `omni` 的模型保留视频输入
 - `modelProfiles.json`: 模型能力规则数据
 - `redboxVideo.ts`: 官方视频模式和模型映射
 

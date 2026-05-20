@@ -25,7 +25,7 @@ export const MODEL_INPUT_CAPABILITY_ORDER: ModelInputCapability[] = [
 
 export const DEFAULT_UNKNOWN_CHAT_MODEL_INPUT_CAPABILITIES: ModelInputCapability[] = [
     'image',
-    'video',
+    'file',
 ];
 
 export const MODEL_CAPABILITY_ORDER: ModelCapability[] = [
@@ -88,6 +88,21 @@ const normalizeModelInputCapabilities = (values: unknown): ModelInputCapability[
         if (allowed.has(text as ModelInputCapability)) {
             normalized.add(text as ModelInputCapability);
         }
+    }
+    return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => normalized.has(capability));
+};
+
+const modelNameAllowsVideoInput = (modelId: string): boolean => {
+    return /\bomni\b/i.test(String(modelId || '').trim());
+};
+
+const enforceModelInputCapabilityPolicy = (
+    modelId: string,
+    capabilities: Iterable<ModelInputCapability>,
+): ModelInputCapability[] => {
+    const normalized = new Set(capabilities);
+    if (!modelNameAllowsVideoInput(modelId)) {
+        normalized.delete('video');
     }
     return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => normalized.has(capability));
 };
@@ -201,14 +216,14 @@ export const getModelInputCapabilities = (modelId: string): ModelInputCapability
         }
     }
     if (detected.size > 0) {
-        return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
+        return enforceModelInputCapabilityPolicy(normalized, detected);
     }
 
     if (inferModelCapabilities(normalized).includes('chat')) {
-        return DEFAULT_UNKNOWN_CHAT_MODEL_INPUT_CAPABILITIES;
+        return enforceModelInputCapabilityPolicy(normalized, DEFAULT_UNKNOWN_CHAT_MODEL_INPUT_CAPABILITIES);
     }
 
-    return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
+    return enforceModelInputCapabilityPolicy(normalized, detected);
 };
 
 export const hasModelInputCapability = (modelId: string, capability: ModelInputCapability): boolean => {
