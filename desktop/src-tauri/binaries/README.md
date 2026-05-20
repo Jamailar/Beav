@@ -1,8 +1,8 @@
-# Bundled FFmpeg Binaries
+# Local FFmpeg Binaries
 
-Tauri bundles sidecar binaries from this directory through `bundle.externalBin`.
+Tauri bundles sidecar binaries from this directory through `bundle.externalBin`, but the FFmpeg and FFprobe binary files are local packaging assets and are not tracked by Git.
 
-Current checked-in macOS arm64 binaries are FFmpeg 8.1 static Apple Silicon builds from OSXExperts:
+Prepare macOS arm64 binaries from FFmpeg 8.1 static Apple Silicon builds from OSXExperts:
 
 - `ffmpeg-aarch64-apple-darwin`
   - source: `https://www.osxexperts.net/ffmpeg81arm.zip`
@@ -11,7 +11,7 @@ Current checked-in macOS arm64 binaries are FFmpeg 8.1 static Apple Silicon buil
   - source: `https://www.osxexperts.net/ffprobe81arm.zip`
   - sha256: `aab17ac7379c1178aaf400c3ef36cdb67db0b75b1a23eeef2cb9f658be8844e6`
 
-Current checked-in macOS x64 binaries are FFmpeg 8.0 static Intel builds from OSXExperts:
+Prepare macOS x64 binaries from FFmpeg 8.0 static Intel builds from OSXExperts:
 
 - `ffmpeg-x86_64-apple-darwin`
   - source: `https://www.osxexperts.net/ffmpeg80intel.zip`
@@ -24,7 +24,7 @@ They are resolved by `src/ffmpeg_runtime.rs`. Runtime code must call that resolv
 
 Release packaging should add equivalent reviewed binaries for each packaged target triple before enabling that platform.
 
-Current checked-in Windows x64 binaries are FFmpeg 8.1.1 essentials builds from Gyan.dev:
+Prepare Windows x64 binaries from FFmpeg 8.1.1 essentials builds from Gyan.dev:
 
 - `ffmpeg-x86_64-pc-windows-msvc.exe`
   - archive source: `https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.1-essentials_build.7z`
@@ -35,7 +35,7 @@ Current checked-in Windows x64 binaries are FFmpeg 8.1.1 essentials builds from 
   - archive sha256: `23ad8969fbe701d44e6e7e2b97c5fae4a71224fc33a2560a9034e5110d029d15`
   - binary sha256: `0fde260f5abd35c9cafd96f594cc76365a780c1b73a90e35b6a3409ea1db1bf0`
 
-Current checked-in Windows arm64 binaries are FFmpeg 8.1 GPL builds from BtbN:
+Prepare Windows arm64 binaries from FFmpeg 8.1 GPL builds from BtbN:
 
 - `ffmpeg-aarch64-pc-windows-msvc.exe`
   - archive source: `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-05-15-13-34/ffmpeg-n8.1.1-2-gfb216b5fac-winarm64-gpl-8.1.zip`
@@ -46,7 +46,7 @@ Current checked-in Windows arm64 binaries are FFmpeg 8.1 GPL builds from BtbN:
   - archive sha256: `adb8d1e22b2b23a68daa048ccfdbc0f01913f575709ec4ec5f06204343b790db`
   - binary sha256: `8e21555763024d0f6d714a4523e4a12e34933b713dd59443be77a4ca2d3aff2a`
 
-Current checked-in Windows x86 binaries are FFmpeg GPL builds from sudo-nautilus:
+Prepare Windows x86 binaries from FFmpeg GPL builds from sudo-nautilus:
 
 - `ffmpeg-i686-pc-windows-msvc.exe`
   - archive source: `https://github.com/sudo-nautilus/FFmpeg-Builds-Win32/releases/download/latest/ffmpeg-master-latest-win32-gpl.zip`
