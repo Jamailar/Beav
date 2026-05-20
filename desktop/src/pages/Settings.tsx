@@ -6562,11 +6562,13 @@ export function Settings({
     </div>
   );
 
-  const loadAiPricingCatalog = useCallback(async () => {
+  const loadAiPricingCatalog = useCallback(async (options?: { refreshRemote?: boolean }) => {
     setAiPricingLoading(true);
     setAiPricingError('');
     try {
-      const result = await window.ipcRenderer.officialAuth.getPricing();
+      const result = options?.refreshRemote
+        ? await window.ipcRenderer.officialAuth.refreshPricing()
+        : await window.ipcRenderer.officialAuth.getPricing();
       const catalog = parseAiPricingCatalog(result?.pricing);
       setAiPricingCatalog(catalog);
       setAiPricingActiveGroup((prev) => {
@@ -6678,13 +6680,25 @@ export function Settings({
             </p>
           </div>
         </div>
-        <input
-          type="search"
-          value={aiPricingSearch}
-          onChange={(event) => setAiPricingSearch(event.target.value)}
-          placeholder="搜索模型或供应商"
-          className="w-64 rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-sm outline-none transition-colors focus:border-accent-primary"
-        />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void loadAiPricingCatalog({ refreshRemote: true })}
+            disabled={aiPricingLoading}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface-secondary/30 text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+            title="刷新价格表"
+            aria-label="刷新价格表"
+          >
+            <RefreshCw className={clsx('h-4 w-4', aiPricingLoading && 'animate-spin')} />
+          </button>
+          <input
+            type="search"
+            value={aiPricingSearch}
+            onChange={(event) => setAiPricingSearch(event.target.value)}
+            placeholder="搜索模型或供应商"
+            className="w-64 rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-sm outline-none transition-colors focus:border-accent-primary"
+          />
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1">

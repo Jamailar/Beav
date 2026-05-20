@@ -596,7 +596,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
         console.error('Failed to start RedClaw style definition:', error);
       }
       navigateToRedClaw({
-        content: '我想重新定义这个空间的自媒体定位和写作风格。请先通过对话帮我梳理，不要直接写稿。',
+        content: '我想重新定义这个空间的自媒体定位和写作风格。请先让我上传账号主页截图来确认账号定位，可以让我发 1 到 3 张主页相关截图一起分析；确认后，再让我上传一篇自己的文章截图或对标账号文章截图来学习创作风格。不要直接写稿。',
         displayContent: '重新定义这个空间的风格',
         sessionRouting: 'new',
         deliveryMode: 'send',

@@ -1,0 +1,163 @@
+diff --git a/desktop/src/pages/Knowledge.tsx b/desktop/src/pages/Knowledge.tsx
+index 5e7ede873..a6b99e9c1 100644
+--- a/desktop/src/pages/Knowledge.tsx
++++ b/desktop/src/pages/Knowledge.tsx
+@@ -395,6 +395,35 @@ const hashContent = (content: string): string => {
+     return hash.toString(16);
+ };
+ 
++// 获取不同类型文章的卡片头部渐变样式与配色
++const getHeaderStyles = (kind: string) => {
++    switch (kind) {
++        case 'wechat-article':
++            return {
++                gradient: 'bg-gradient-to-br from-emerald-500/[0.06] via-teal-500/[0.02] to-transparent',
++                iconBg: 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20',
++                watermarkColor: 'text-emerald-500/[0.04]',
++                borderAccent: 'border-emerald-500/10',
++            };
++        case 'zhihu-answer':
++        case 'zhihu-article':
++            return {
++                gradient: 'bg-gradient-to-br from-blue-500/[0.06] via-indigo-500/[0.02] to-transparent',
++                iconBg: 'bg-blue-500/10 text-blue-600 border border-blue-500/20',
++                watermarkColor: 'text-blue-500/[0.04]',
++                borderAccent: 'border-blue-500/10',
++            };
++        case 'link-article':
++        default:
++            return {
++                gradient: 'bg-gradient-to-br from-sky-500/[0.06] via-cyan-500/[0.02] to-transparent',
++                iconBg: 'bg-sky-500/10 text-sky-600 border border-sky-500/20',
++                watermarkColor: 'text-sky-500/[0.04]',
++                borderAccent: 'border-sky-500/10',
++            };
++    }
++};
++
+ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = true, onTitleBarContentChange, referenceContent }: KnowledgeProps) {
+     const [notes, setNotes] = useState<Note[]>([]);
+     const [youtubeVideos, setYoutubeVideos] = useState<YouTubeVideo[]>([]);
+@@ -1171,7 +1200,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive =
+             counts[item.kind] += 1;
+         });
+         return [
+-            { key: 'all' as const, label: '全部', count: knowledgeItems.length },
++            { key: 'all' as const, label: '全部', count: Number(kindCounts['redbook-note'] || 0) + counts.youtube + counts.docs },
+             { key: 'xhs-image' as const, label: '小红书图文', count: counts['xhs-image'] },
+             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
+             { key: 'xhs-blogger' as const, label: '小红书博主', count: counts['xhs-blogger'] },
+@@ -2732,40 +2761,96 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive =
+                                     const isNoteTranscribing = Boolean(note.video && !note.transcript && note.transcriptionStatus === 'processing');
+                                     const canExpandToWechat = SHOW_WECHAT_KNOWLEDGE_ACTIONS && isExpandableXiaohongshuNote(note) && Boolean(onNavigateToRedClaw);
+ 
++                                    const getHeaderStyles = (kind: string) => {
++                                        switch (kind) {
++                                            case 'wechat-article':
++                                                return {
++                                                    gradient: 'bg-gradient-to-br from-emerald-500/[0.06] via-teal-500/[0.02] to-transparent',
++                                                    iconBg: 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20',
++                                                    watermarkColor: 'text-emerald-500/[0.04]',
++                                                    borderAccent: 'border-emerald-500/10',
++                                                };
++                                            case 'zhihu-answer':
++                                            case 'zhihu-article':
++                                                return {
++                                                    gradient: 'bg-gradient-to-br from-blue-500/[0.06] via-indigo-500/[0.02] to-transparent',
++                                                    iconBg: 'bg-blue-500/10 text-blue-600 border border-blue-500/20',
++                                                    watermarkColor: 'text-blue-500/[0.04]',
++                                                    borderAccent: 'border-blue-500/10',
++                                                };
++                                            case 'link-article':
++                                            default:
++                                                return {
++                                                    gradient: 'bg-gradient-to-br from-sky-500/[0.06] via-cyan-500/[0.02] to-transparent',
++                                                    iconBg: 'bg-sky-500/10 text-sky-600 border border-sky-500/20',
++                                                    watermarkColor: 'text-sky-500/[0.04]',
++                                                    borderAccent: 'border-sky-500/10',
++                                                };
++                                        }
++                                    };
++                                    const headerStyles = getHeaderStyles(item.kind);
++
+                                     return (
+                                         <button
+                                             key={item.id}
+                                             onClick={() => void openNoteDetail(note)}
+                                             className={clsx(
+-                                                'relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] shadow-sm transition-all duration-300',
++                                                'group relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] shadow-sm transform-gpu transition-[transform,box-shadow] duration-300 ease-out hover:shadow-md hover:-translate-y-0.5 active:scale-[0.99]',
+                                                 isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : 'border-black/[0.04]',
+-                                                isTextArticleCard ? 'overflow-visible p-5' : 'overflow-hidden'
++                                                'overflow-hidden'
+                                             )}
+                                         >
+                                             {selectionButton}
+                                             {isTextArticleCard ? (
+-                                                <div className={clsx('flex gap-4', embeddedUsesCompactCard ? 'flex-col' : 'items-start')}>
++                                                <div className="flex flex-col w-full">
++                                                    {/* Header Banner */}
+                                                     <div className={clsx(
+-                                                        'flex shrink-0 items-center justify-center rounded-[14px] bg-sky-500/10 text-sky-600 border border-sky-100',
+-                                                        embeddedUsesCompactCard ? 'h-9 w-9' : 'h-11 w-11',
++                                                        'relative overflow-hidden p-5 pb-3 border-b border-black/[0.02] flex items-center justify-between gap-3',
++                                                        headerStyles.gradient
+                                                     )}>
+-                                                        <FileText className="w-5 h-5" />
+-                                                    </div>
+-                                                    <div className="min-w-0 flex-1">
+-                                                        <div className="flex items-start justify-between gap-3">
++                                                        {/* Watermark Quote */}
++                                                        <span className={clsx("absolute -right-3 -bottom-8 text-[100px] font-serif leading-none select-none pointer-events-none font-bold", headerStyles.watermarkColor)}>
++                                                            ”
++                                                        </span>
++
++                                                        <div className="flex items-center gap-3 relative z-10">
+                                                             <div className={clsx(
+-                                                                'font-extrabold text-text-primary tracking-tight group-hover:text-accent-primary transition-colors',
+-                                                                embeddedUsesCompactCard ? 'text-[14px] line-clamp-3' : 'text-[15px] line-clamp-2',
++                                                                'flex shrink-0 items-center justify-center rounded-xl shadow-inner transition-transform group-hover:scale-105 duration-300',
++                                                                embeddedUsesCompactCard ? 'h-8 w-8' : 'h-10 w-10',
++                                                                headerStyles.iconBg
+                                                             )}>
+-                                                                {note.title}
++                                                                <FileText className={clsx(embeddedUsesCompactCard ? 'w-4 h-4' : 'w-5 h-5')} />
++                                                            </div>
++                                                            <div className="min-w-0">
++                                                                <div className="text-[10px] font-bold text-text-tertiary/60 tracking-wider uppercase font-sans">
++                                                                    {renderAuthorInline(note, 'truncate max-w-[120px]')}
++                                                                </div>
++                                                                {note.sourceUrl && (
++                                                                    <div className="text-[9px] font-medium text-text-tertiary/40 truncate max-w-[140px] flex items-center gap-0.5 mt-0.5">
++                                                                        <ExternalLink className="w-2.5 h-2.5 opacity-60" />
++                                                                        <span>{note.siteName || '查看原文'}</span>
++                                                                    </div>
++                                                                )}
+                                                             </div>
+-                                                            <span className={clsx('shrink-0 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm border border-black/[0.02]', getKnowledgeKindBadgeClass(item.kind))}>
+-                                                                {getKnowledgeKindLabel(item.kind)}
+-                                                            </span>
+                                                         </div>
++
++                                                        <span className={clsx(
++                                                            'relative z-10 shrink-0 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm border border-black/[0.02]',
++                                                            getKnowledgeKindBadgeClass(item.kind)
++                                                        )}>
++                                                            {getKnowledgeKindLabel(item.kind)}
++                                                        </span>
++                                                    </div>
++
++                                                    {/* Content Body */}
++                                                    <div className="p-5 pt-4 flex flex-col flex-1">
++                                                        <div className="font-extrabold text-[15px] leading-snug text-text-primary group-hover:text-accent-primary transition-colors line-clamp-2 tracking-tight">
++                                                            {note.title}
++                                                        </div>
++
+                                                         <div className={clsx(
+-                                                            'mt-2.5 text-text-tertiary leading-relaxed font-medium',
+-                                                            embeddedUsesCompactCard ? 'text-[12px] line-clamp-6' : 'text-[12px] line-clamp-5',
++                                                            'mt-2.5 text-text-secondary leading-relaxed font-medium text-[12px] opacity-90',
++                                                            embeddedUsesCompactCard ? 'line-clamp-6' : 'line-clamp-5'
+                                                         )}>
+                                                             {notePreviewText}
+                                                         </div>

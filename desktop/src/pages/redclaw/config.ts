@@ -1,6 +1,14 @@
 import type { ChatShortcut, ChatShortcutContext } from '../Chat';
 import { APP_BRAND } from '../../config/brand';
 import type { ScheduleDraft, ScheduleTemplate } from './types';
+import {
+    REDCLAW_ATTACHMENT_ACTIONS_BY_SCENE,
+    resolveRedClawAttachmentShortcutScene,
+    type RedClawAttachmentShortcutScene,
+    type RedClawComposerShortcutInput,
+} from '../chat/attachment-actions/redclawAttachmentActions';
+
+export type { RedClawComposerShortcutInput } from '../chat/attachment-actions/redclawAttachmentActions';
 
 export const REDCLAW_CONTEXT_ID = 'redclaw-singleton';
 export const REDCLAW_CONTEXT_TYPE = 'redclaw';
@@ -12,16 +20,8 @@ export const REDCLAW_CONTEXT = [
     '当产出、保存或更新可交付文件时，必须用 Markdown 链接报告路径，优先使用 workspace://、media://、manuscripts://、knowledge://、cover:// 或 redclaw:// 这类 app 内虚拟路径。',
 ].join('\n');
 
-export interface RedClawComposerShortcutInput {
-    label: string;
-    text: string;
-    action?: ChatShortcut['action'];
-}
-
 export type RedClawComposerShortcutScene =
-    | 'uploaded_file'
-    | 'uploaded_image'
-    | 'uploaded_video'
+    | RedClawAttachmentShortcutScene
     | 'empty_new_chat'
     | 'member_mention'
     | 'knowledge_context';
@@ -34,23 +34,7 @@ export const REDCLAW_DEFAULT_COMPOSER_SHORTCUT_INPUTS: RedClawComposerShortcutIn
 ];
 
 export const REDCLAW_COMPOSER_SHORTCUT_INPUTS_BY_SCENE: Record<RedClawComposerShortcutScene, RedClawComposerShortcutInput[]> = {
-    uploaded_file: [
-        { label: '总结文档内容', text: '请阅读我上传的文件，先判断文件类型和主要用途，再总结核心内容、关键结论、重要数据、可复用素材和潜在创作角度。最后给出一版适合我快速决策的结构化摘要。' },
-        { label: '做成文章卡片', text: '请基于我上传的文件内容，提炼最适合对外传播的主题，并设计一组文章卡片。请输出卡片标题、每张卡片的正文要点、视觉建议、适合平台的发布文案和需要补充的信息。' },
-        { label: '做成图解卡片', text: '请把我上传的文件内容整理成图解卡片。请先找出最适合图解表达的流程、结构、对比或方法论，再输出每张卡片的图解形式、标题、关键文案、版式建议和生成提示词。' },
-        { label: '改写成文案', text: '请把我上传的文件改写成适合社媒发布的文案。请保留核心信息，压缩冗余表达，强化开头钩子、读者收益、行动号召和平台语气，并给出 3 个标题备选。' },
-    ],
-    uploaded_image: [
-        { label: '生成电商套图', text: '请基于我上传的图片，生成一套电商套图方案。先分析图片主体、卖点、适用人群和视觉风格，再输出主图、卖点图、场景图、细节图、对比图的画面方案、标题文案、辅助文案和可执行生成提示词。', action: 'send' },
-        { label: '生成封面图', text: '请基于我上传的图片，生成一张适合社媒内容的封面图方案。请明确封面定位、主标题、视觉钩子、构图方式、字体和色彩建议，并给出可直接用于生成封面的提示词。', action: 'send' },
-        { label: '生成同款图', text: '请分析我上传图片的视觉风格、构图、光线、材质、色彩和主体表达，然后生成一组同款视觉提示词。要求保留核心风格，但不要直接复制原图内容。', action: 'send' },
-        { label: '提取卖点文案', text: '请从我上传的图片中提取可用于商业转化的卖点、场景、情绪价值和视觉亮点，并改写成一组适合详情页或社媒投放的标题和短文案。', action: 'send' },
-    ],
-    uploaded_video: [
-        { label: '爆款分析', text: '请先调用视频分析能力完整分析我上传的视频，再从爆款内容角度输出：核心主题、前 3 秒钩子、情绪节奏、内容结构、亮点片段、可复用金句、传播风险和优化建议。最后给出一版更容易出爆款的改造方案。', action: 'send' },
-        { label: '字幕提取', text: '请提取我上传视频里的字幕或语音内容，输出可编辑字幕文本，并尽量保留时间顺序。如果能生成字幕文件，请输出字幕文件路径；如果有听不清或需要人工确认的片段，请单独标出来。', action: 'send' },
-        { label: '剪辑切片', text: '请先调用视频分析能力分析我上传的视频，找出最精彩、最适合单独发布的切片片段。然后把这些精彩片段剪辑成独立的视频片段，并输出每个片段的主题、时间范围、推荐标题、用途和生成后的文件路径。', action: 'send' },
-    ],
+    ...REDCLAW_ATTACHMENT_ACTIONS_BY_SCENE,
     empty_new_chat: REDCLAW_DEFAULT_COMPOSER_SHORTCUT_INPUTS,
     member_mention: [
         { label: '请TA提建议', text: '请这位成员以自己的专业视角，针对当前内容、方案或目标提出建议。请重点指出最值得优化的 3-5 个问题、原因、优先级和具体修改方向。' },
@@ -66,44 +50,9 @@ export const REDCLAW_COMPOSER_SHORTCUT_INPUTS_BY_SCENE: Record<RedClawComposerSh
     ],
 };
 
-function isImageShortcutAttachment(context: ChatShortcutContext): boolean {
-    const attachment = context.attachment;
-    if (!attachment) return false;
-    const kind = String(attachment.kind || '').trim().toLowerCase();
-    const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
-    const name = String(
-        attachment.name
-        || attachment.localUrl
-        || attachment.absolutePath
-        || attachment.originalAbsolutePath
-        || '',
-    ).trim();
-    return kind === 'image'
-        || mimeType.startsWith('image/')
-        || /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i.test(name);
-}
-
-function isVideoShortcutAttachment(context: ChatShortcutContext): boolean {
-    const attachment = context.attachment;
-    if (!attachment) return false;
-    const kind = String(attachment.kind || '').trim().toLowerCase();
-    const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
-    const name = String(
-        attachment.name
-        || attachment.localUrl
-        || attachment.absolutePath
-        || attachment.originalAbsolutePath
-        || '',
-    ).trim();
-    return kind === 'video'
-        || mimeType.startsWith('video/')
-        || /\.(mp4|mov|m4v|webm|mkv|avi)(?:[?#].*)?$/i.test(name);
-}
-
 export function resolveRedClawComposerShortcutScene(context: ChatShortcutContext): RedClawComposerShortcutScene {
     if (context.attachment) {
-        if (isVideoShortcutAttachment(context)) return 'uploaded_video';
-        return isImageShortcutAttachment(context) ? 'uploaded_image' : 'uploaded_file';
+        return resolveRedClawAttachmentShortcutScene(context);
     }
     if (context.selectedMemberMention) return 'member_mention';
     if (context.selectedKnowledgeMentions.length > 0) return 'knowledge_context';
@@ -117,6 +66,7 @@ export function createRedClawComposerShortcuts(
         .map((item) => ({
             label: String(item.label || '').trim(),
             text: String(item.text || '').trim(),
+            displayContent: item.displayContent ? String(item.displayContent).trim() : undefined,
             action: item.action || 'inject' as const,
         }))
         .filter((item) => item.label && item.text);

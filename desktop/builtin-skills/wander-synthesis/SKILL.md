@@ -6,9 +6,9 @@ autoActivate: false
 activationScope: session
 activationHint: 当 runtime_mode 为 wander，或任务是从漫步随机素材生成灵感选题时，加载本技能。
 contextNote: 漫步阶段只处理本轮随机素材和宿主预读素材包；不要引入长期记忆、用户档案或其他未提供素材。
-promptPrefix: 你当前已加载 wander-synthesis。漫步不是素材摘要任务，也不是把三条素材串成一个大主题；它是先选出点赞最高的素材作为母版，拆解母版的内容公式，再从三条素材中挖一个足够小、足够细、可继续创作的选题。输出严格 JSON。
-promptSuffix: 完成前执行 wander-synthesis 自检：结果必须只基于本轮素材；点赞最高素材是否作为母版；另外两条是否只提供细节灵感；选题是否足够小；标题和方向不能是模板句；connections 只能引用实际参与最终小选题的素材序号。
-maxPromptChars: 2600
+promptPrefix: 你当前已加载 wander-synthesis。漫步不是素材摘要任务，也不是把三条素材串成一个大主题；它是先选出点赞最高的素材作为母版，拆解母版的内容公式，再从三条素材中挖一个足够小、足够细、可继续创作的选题。最终只能输出严格 JSON。
+promptSuffix: 完成前执行 wander-synthesis 输出自检：只能输出一个 JSON 对象，不要 Markdown、代码块或解释；thinking_process 必须是字符串数组；topic.title、content_direction、direction_frame 四字段必须完整；connections 只能引用实际参与最终小选题的素材序号。
+maxPromptChars: 3200
 ---
 # Wander Synthesis
 
@@ -64,6 +64,41 @@ maxPromptChars: 2600
 - 选题是否还太大。如果是，继续缩小到一个具体人群、具体状态、具体动作或具体瞬间。
 - 标题是否太像 AI 占位句。如果是，重写。
 - 方向是否具体到目标读者、冲突和切口。如果不是，补齐。
+
+## 最终输出标准
+
+最终只输出一个 JSON 对象。不要输出 Markdown、不要用 ```json 代码块、不要输出字段说明、不要把中间分析对象塞进结果。
+
+single_choice 必须严格使用这个结构：
+
+```json
+{
+  "content_direction": "一句话说明母版是谁、借了什么公式、哪个素材提供细节、最终小切口是什么",
+  "thinking_process": [
+    "母版选择：素材 X，因为互动数据和内容价值最强",
+    "细节灵感：素材 Y 提供了具体场景/反差/动作",
+    "收敛判断：最终选题足够小，能一篇笔记讲透"
+  ],
+  "topic": {
+    "title": "20字以内的真实内容标题",
+    "connections": [1, 2]
+  },
+  "direction_frame": {
+    "target_reader": "具体目标读者",
+    "core_tension": "具体核心矛盾",
+    "angle": "具体叙事角度",
+    "material_entry": "母版公式和细节来源"
+  }
+}
+```
+
+输出前按顺序检查：
+
+1. 顶层字段只能是 `content_direction`、`thinking_process`、`topic`、`direction_frame`；多选模式才允许 `options` 和 `selected_index`。
+2. `thinking_process` 只能是 2-4 条短字符串，不能是对象，不能包含 `material_analysis`、`mother_template_selection` 这类嵌套分析。
+3. `topic.title`、`content_direction`、`direction_frame.target_reader`、`direction_frame.core_tension`、`direction_frame.angle`、`direction_frame.material_entry` 都不能为空。
+4. `topic.connections` 只能是 1-3 的数字数组，只放实际参与最终小选题的素材。
+5. 如果 JSON 会超过输出预算，删减 `thinking_process`，不能删最终结构字段。
 
 ## 进入创作时
 

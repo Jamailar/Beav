@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
-import type { SyntheticEvent } from 'react';
 import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
@@ -213,6 +212,7 @@ interface KnowledgeCardItem {
     updatedAt: string;
     searchText: string;
     cover?: string;
+    coverImage?: string;
     tags: string[];
     note?: Note;
     video?: YouTubeVideo;
@@ -384,6 +384,26 @@ const calculateChangeRate = (oldKeywords: Set<string>, newKeywords: Set<string>)
     return (added + removed) / avgSize;
 };
 
+const orderImages = (images: string[]) => {
+    return [...images].sort((a, b) => {
+        const extractIndex = (value: string) => {
+            const clean = value.split('?')[0];
+            const filename = clean.split('/').pop() || '';
+            const match = filename.match(/(\d+)(?=\.[a-zA-Z0-9]+$)/);
+            if (!match) return 999998;
+            const num = Number(match[1]);
+            if (Number.isNaN(num)) return 999998;
+            return num === 0 ? 999999 : num;
+        };
+        return extractIndex(a) - extractIndex(b);
+    });
+};
+
+const getNoteCoverImage = (note: Note) => {
+    const orderedImages = orderImages(note.images || []);
+    return note.cover || orderedImages[0] || '';
+};
+
 // 计算内容哈希（简单版）
 const hashContent = (content: string): string => {
     let hash = 0;
@@ -415,7 +435,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const [visibleItemCount, setVisibleItemCount] = useState(KNOWLEDGE_RENDER_BATCH_SIZE);
     const [isAllTagsDrawerOpen, setIsAllTagsDrawerOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
-    const [imageAspectMap, setImageAspectMap] = useState<Record<string, 'portrait' | 'landscape'>>({});
     const [showSubtitle, setShowSubtitle] = useState(false);
     const [showTranscript, setShowTranscript] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
@@ -454,6 +473,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const youtubeVideosRef = useRef<YouTubeVideo[]>([]);
     const documentSourcesRef = useRef<DocumentKnowledgeSource[]>([]);
     const nextCursorRef = useRef<string | null>(null);
+    const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
     const hasKnowledgeSnapshotRef = useRef(false);
     const loadAllKnowledgeRequestRef = useRef(0);
     const loadDetailRequestRef = useRef(0);
@@ -625,9 +645,8 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             return;
         }
 
-        // 内容变化了，立即清空旧排序，显示加载状态
-        console.log('[Knowledge] Content changed, clearing old order');
-        setSimilarityOrder(new Map());
+        // 内容变化了，保持旧排序，仅显示加载状态，防止渲染闪烁与列表突变
+        console.log('[Knowledge] Content changed, recalculating similarity order...');
         setIsSimilarityLoading(true);
 
         // 清除之前的定时器
@@ -1061,26 +1080,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
 
     const hasHiddenTags = allTags.length > inlineTagItems.length;
 
-    const orderImages = (images: string[]) => {
-        return [...images].sort((a, b) => {
-            const extractIndex = (value: string) => {
-                const clean = value.split('?')[0];
-                const filename = clean.split('/').pop() || '';
-                const match = filename.match(/(\d+)(?=\.[a-zA-Z0-9]+$)/);
-                if (!match) return 999998;
-                const num = Number(match[1]);
-                if (Number.isNaN(num)) return 999998;
-                return num === 0 ? 999999 : num;
-            };
-            return extractIndex(a) - extractIndex(b);
-        });
-    };
-
-    const getNoteCoverImage = (note: Note) => {
-        const orderedImages = orderImages(note.images || []);
-        return note.cover || orderedImages[0] || '';
-    };
-
     const knowledgeItems = useMemo<KnowledgeCardItem[]>(() => {
         const noteItems: KnowledgeCardItem[] = notes.map((note) => {
             const orderedImages = orderImages(note.images || []);
@@ -1103,6 +1102,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                     ...(note.tags || []),
                 ].join('\n').toLowerCase(),
                 cover: note.cover || orderedImages[0] || note.video || '',
+                coverImage: note.cover || orderedImages[0] || '',
                 tags: Array.isArray(note.tags) ? note.tags : [],
                 note,
             };
@@ -1117,6 +1117,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             updatedAt: video.updatedAt || video.createdAt,
             searchText: [video.title, video.originalTitle, video.summary, video.description, video.videoUrl].join('\n').toLowerCase(),
             cover: video.thumbnailUrl || '',
+            coverImage: video.thumbnailUrl || '',
             tags: [],
             video,
         }));
@@ -1129,6 +1130,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             createdAt: doc.updatedAt || doc.createdAt,
             updatedAt: doc.updatedAt || doc.createdAt,
             searchText: [doc.name, doc.rootPath, ...doc.sampleFiles].join('\n').toLowerCase(),
+            coverImage: '',
             tags: [],
             doc,
         }));
@@ -1256,9 +1258,34 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         || Boolean(indexStatus.migrationStatus)
         || Boolean(indexStatus.pendingRebuildReason);
 
-    const resolveAspectClass = (key: string) => {
-        const aspect = imageAspectMap[key] || 'portrait';
-        return aspect === 'landscape' ? 'aspect-[4/3]' : 'aspect-[3/4]';
+    useEffect(() => {
+        const trigger = loadMoreTriggerRef.current;
+        const root = embeddedViewportRef.current;
+        if (!trigger || !root || (!hasMoreRenderedItems && !nextCursor) || isLoadingMore) return;
+        if (typeof IntersectionObserver === 'undefined') return;
+
+        const observer = new IntersectionObserver((entries) => {
+            if (!entries.some((entry) => entry.isIntersecting)) return;
+            if (hasMoreRenderedItems) {
+                setVisibleItemCount((prev) => prev + KNOWLEDGE_RENDER_BATCH_SIZE);
+                return;
+            }
+            void loadMoreKnowledge();
+        }, {
+            root,
+            rootMargin: '720px 0px',
+            threshold: 0,
+        });
+
+        observer.observe(trigger);
+        return () => observer.disconnect();
+    }, [hasMoreRenderedItems, isLoadingMore, loadMoreKnowledge, nextCursor, visibleKnowledgeItems.length]);
+
+    const resolveCoverAspectClass = (kind: KnowledgeCardItem['kind']) => {
+        if (kind === 'link-article' || kind === 'wechat-article' || kind === 'zhihu-answer' || kind === 'zhihu-article') {
+            return 'aspect-[4/3]';
+        }
+        return 'aspect-[3/4]';
     };
 
     const handleAllTagsClick = useCallback(() => {
@@ -1277,12 +1304,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         setSelectedTag((prev) => prev === tag ? null : tag);
         setIsAllTagsDrawerOpen(false);
     }, []);
-
-    const handleImageLoad = (key: string, event: SyntheticEvent<HTMLImageElement>) => {
-        const img = event.currentTarget;
-        const aspect = img.naturalWidth > img.naturalHeight ? 'landscape' : 'portrait';
-        setImageAspectMap((prev) => (prev[key] === aspect ? prev : { ...prev, [key]: aspect }));
-    };
 
     useEffect(() => {
         if (selectedNote) {
@@ -2789,7 +2810,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                 <div
                                                     className={clsx(
                                                         'relative w-full bg-black/[0.02] overflow-hidden',
-                                                        (item.kind === 'link-article' || item.kind === 'wechat-article' || item.kind === 'zhihu-answer' || item.kind === 'zhihu-article') ? 'aspect-[4/3]' : resolveAspectClass(note.id)
+                                                        resolveCoverAspectClass(item.kind)
                                                     )}
                                                 >
                                                     <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>
@@ -2801,8 +2822,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                         className="w-full h-full object-cover transition-transform duration-500"
                                                         loading="lazy"
                                                         decoding="async"
-
-                                                        onLoad={(event) => handleImageLoad(note.id, event)}
                                                     />
                                                     {isNoteTranscribing && (
                                                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/40 text-white backdrop-blur-sm">
@@ -2920,6 +2939,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
 
                         {(hasMoreRenderedItems || nextCursor) && filteredKnowledgeItems.length > 0 && (
                             <div className="flex justify-center pt-2">
+                                <div ref={loadMoreTriggerRef} className="h-px w-px" aria-hidden="true" />
                                 <button
                                     onClick={() => {
                                         if (hasMoreRenderedItems) {

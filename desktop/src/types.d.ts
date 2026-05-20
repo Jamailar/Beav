@@ -1139,6 +1139,12 @@ declare global {
           stale?: boolean;
           error?: string;
         }>;
+        refreshPricing: () => Promise<{
+          success: boolean;
+          pricing?: Record<string, unknown> | null;
+          stale?: boolean;
+          error?: string;
+        }>;
       };
       llmReadiness: {
         getState: () => Promise<{
