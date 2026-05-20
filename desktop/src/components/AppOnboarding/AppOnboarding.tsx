@@ -45,6 +45,11 @@ interface OnboardingStepContent {
     src: string;
     alt: string;
   };
+  video?: {
+    src: string;
+    title: string;
+    desc: string;
+  };
 }
 
 const STEP_CONTENT: OnboardingStepContent[] = [
@@ -122,6 +127,16 @@ const STEP_CONTENT: OnboardingStepContent[] = [
         tone: 'bg-emerald-100 text-emerald-600',
       },
     ],
+  },
+  {
+    eyebrow: '文件拖动快捷键',
+    title: '拖入文件时，按住快捷键切换处理方式。',
+    desc: '视频里展示了完整手势；拖动过程中按住快捷键，直接选择文件要交给哪个入口处理。',
+    video: {
+      src: '/onboarding/file-drag-shortcuts-demo.mp4',
+      title: '文件拖动快捷键',
+      desc: '拖动文件时按住快捷键，快速切换文件处理入口。',
+    },
   },
   {
     eyebrow: '角色数字分身',
@@ -253,6 +268,29 @@ function VisualCard({ card }: { card: VisualCard }) {
   );
 }
 
+function VideoShortcutPreview({ video }: { video: { src: string; title: string; desc: string } }) {
+  return (
+    <div className="relative z-10 flex w-full flex-1 flex-col items-center justify-center px-[6vw] pb-[4vh] pt-[2vh]">
+      <div className="flex w-full max-w-[980px] justify-center overflow-hidden rounded-[28px] bg-zinc-950 shadow-[0_30px_90px_rgba(120,75,45,0.2)]">
+        <video
+          src={video.src}
+          className="block h-auto max-h-[54vh] w-full bg-zinc-950 object-contain"
+          controls
+          autoPlay
+          muted
+          loop
+          playsInline
+          aria-label={video.title}
+        />
+      </div>
+      <div className="mt-[3vh] max-w-[860px] text-center">
+        <div className="text-[clamp(28px,2.6vw,48px)] font-semibold leading-tight text-zinc-950">{video.title}</div>
+        <p className="mt-3 text-[clamp(18px,1.45vw,26px)] font-medium leading-[1.5] text-zinc-500">{video.desc}</p>
+      </div>
+    </div>
+  );
+}
+
 function CharacterAssetPreview({ image }: { image: { src: string; alt: string } }) {
   return (
     <div className="relative z-10 flex w-full justify-center">
@@ -281,6 +319,7 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
   if (!open) return null;
 
   const isLast = step === STEPS.length - 1;
+  const isVideoStep = Boolean(content.video);
 
   const handleClose = () => {
     markAppOnboardingSeen();
@@ -301,81 +340,130 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[10030] grid h-screen w-screen overflow-hidden bg-white text-zinc-950"
-      style={{ display: 'grid', gridTemplateColumns: '49.6% 50.4%' }}
+      className={`fixed inset-0 z-[10030] h-screen w-screen overflow-hidden bg-white text-zinc-950 ${
+        isVideoStep ? 'flex flex-col' : 'grid'
+      }`}
+      style={isVideoStep ? undefined : { display: 'grid', gridTemplateColumns: '49.6% 50.4%' }}
       role="dialog"
       aria-modal="true"
       aria-label={`${APP_BRAND.displayName} Onboarding`}
     >
-      <section className="relative flex h-screen min-w-0 flex-col px-[4vw] pb-[9vh] pt-[12vh]">
-        <div className="flex flex-1 items-center">
-          <div className="max-w-[760px]">
-            <div className="text-[clamp(18px,1.55vw,30px)] font-medium leading-none text-accent-primary">{content.eyebrow}</div>
-            <h1 className="mt-[4vh] text-[clamp(42px,4.1vw,82px)] font-bold leading-[1.12] tracking-normal text-zinc-950">
-              {content.title}
-            </h1>
-            <p className="mt-[4vh] max-w-[720px] text-[clamp(22px,1.75vw,36px)] font-medium leading-[1.55] tracking-normal text-zinc-500">
-              {content.desc}
-            </p>
+      {isVideoStep && content.video ? (
+        <section className="relative flex h-screen min-w-0 flex-col overflow-hidden bg-[#ffe7d8] px-[4vw] py-[6vh]">
+          <div
+            className="absolute inset-0 opacity-70"
+            aria-hidden="true"
+            style={{
+              backgroundImage:
+                'linear-gradient(0deg, rgba(255,145,83,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,145,83,0.12) 1px, transparent 1px)',
+              backgroundSize: '100% 190px, 320px 100%',
+            }}
+          />
+          <div
+            className="absolute left-1/2 top-1/2 h-[980px] w-[980px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#ffb88d]/25"
+            aria-hidden="true"
+          />
+          <VideoShortcutPreview video={content.video} />
+          <div className="relative z-10 flex items-center justify-between gap-6">
+            <div className="flex items-center gap-5">
+              {step > 0 ? (
+                <button
+                  type="button"
+                  onClick={handlePrevious}
+                  className="inline-flex h-10 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-zinc-500 transition-colors hover:bg-white/60 hover:text-zinc-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+                >
+                  <ChevronLeft className="h-4 w-4" strokeWidth={1.8} />
+                  上一步
+                </button>
+              ) : null}
+              <div className="flex items-center gap-3" aria-label={`第 ${step + 1} 步，共 ${STEPS.length} 步`}>
+                {STEPS.map((_, index) => (
+                  <StepDot key={index} index={index} current={step} />
+                ))}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleNext}
+              className="inline-flex h-[clamp(58px,6vh,76px)] min-w-[clamp(124px,8vw,160px)] items-center justify-center rounded-xl bg-white/70 px-7 text-[clamp(20px,1.5vw,30px)] font-semibold text-zinc-500 transition-colors hover:bg-white hover:text-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+            >
+              {isLast ? '开始' : 'Next'}
+            </button>
           </div>
-        </div>
+        </section>
+      ) : (
+        <>
+          <section className="relative flex h-screen min-w-0 flex-col px-[4vw] pb-[9vh] pt-[12vh]">
+            <div className="flex flex-1 items-center">
+              <div className="max-w-[760px]">
+                <div className="text-[clamp(18px,1.55vw,30px)] font-medium leading-none text-accent-primary">{content.eyebrow}</div>
+                <h1 className="mt-[4vh] text-[clamp(42px,4.1vw,82px)] font-bold leading-[1.12] tracking-normal text-zinc-950">
+                  {content.title}
+                </h1>
+                <p className="mt-[4vh] max-w-[720px] text-[clamp(22px,1.75vw,36px)] font-medium leading-[1.55] tracking-normal text-zinc-500">
+                  {content.desc}
+                </p>
+              </div>
+            </div>
 
-        <div className="flex items-center justify-between gap-6">
-          <div className="flex items-center gap-5">
-            {step > 0 ? (
+            <div className="flex items-center justify-between gap-6">
+              <div className="flex items-center gap-5">
+                {step > 0 ? (
+                  <button
+                    type="button"
+                    onClick={handlePrevious}
+                    className="inline-flex h-10 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+                  >
+                    <ChevronLeft className="h-4 w-4" strokeWidth={1.8} />
+                    上一步
+                  </button>
+                ) : null}
+                <div className="flex items-center gap-3" aria-label={`第 ${step + 1} 步，共 ${STEPS.length} 步`}>
+                  {STEPS.map((_, index) => (
+                    <StepDot key={index} index={index} current={step} />
+                  ))}
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={handlePrevious}
-                className="inline-flex h-10 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+                onClick={handleNext}
+                className="inline-flex h-[clamp(58px,6vh,76px)] min-w-[clamp(124px,8vw,160px)] items-center justify-center rounded-xl bg-zinc-100 px-7 text-[clamp(20px,1.5vw,30px)] font-semibold text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
               >
-                <ChevronLeft className="h-4 w-4" strokeWidth={1.8} />
-                上一步
+                {isLast ? '开始' : 'Next'}
               </button>
-            ) : null}
-            <div className="flex items-center gap-3" aria-label={`第 ${step + 1} 步，共 ${STEPS.length} 步`}>
-              {STEPS.map((_, index) => (
-                <StepDot key={index} index={index} current={step} />
-              ))}
             </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleNext}
-            className="inline-flex h-[clamp(58px,6vh,76px)] min-w-[clamp(124px,8vw,160px)] items-center justify-center rounded-xl bg-zinc-100 px-7 text-[clamp(20px,1.5vw,30px)] font-semibold text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
-          >
-            {isLast ? '开始' : 'Next'}
-          </button>
-        </div>
-      </section>
+          </section>
 
-      <section className="relative flex h-screen min-w-0 items-center overflow-hidden bg-[#ffe7d8] px-[3.2vw] py-[8vh]">
-        <div
-          className="absolute inset-0 opacity-70"
-          aria-hidden="true"
-          style={{
-            backgroundImage:
-              'linear-gradient(0deg, rgba(255,145,83,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,145,83,0.12) 1px, transparent 1px)',
-            backgroundSize: '100% 190px, 320px 100%',
-          }}
-        />
-        <div
-          className="absolute -left-28 top-1/2 h-[680px] w-[680px] -translate-y-1/2 rounded-full border border-[#ffb88d]/35"
-          aria-hidden="true"
-        />
-        <div
-          className="absolute left-1/4 top-1/2 h-[980px] w-[980px] -translate-y-1/2 rounded-full border border-[#ffb88d]/25"
-          aria-hidden="true"
-        />
-        {content.image ? (
-          <CharacterAssetPreview image={content.image} />
-        ) : (
-          <div className="relative z-10 flex w-full flex-col gap-[4vh]">
-            {(content.cards || []).map((card) => (
-              <VisualCard key={card.title} card={card} />
-            ))}
-          </div>
-        )}
-      </section>
+          <section className="relative flex h-screen min-w-0 items-center overflow-hidden bg-[#ffe7d8] px-[3.2vw] py-[8vh]">
+            <div
+              className="absolute inset-0 opacity-70"
+              aria-hidden="true"
+              style={{
+                backgroundImage:
+                  'linear-gradient(0deg, rgba(255,145,83,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,145,83,0.12) 1px, transparent 1px)',
+                backgroundSize: '100% 190px, 320px 100%',
+              }}
+            />
+            <div
+              className="absolute -left-28 top-1/2 h-[680px] w-[680px] -translate-y-1/2 rounded-full border border-[#ffb88d]/35"
+              aria-hidden="true"
+            />
+            <div
+              className="absolute left-1/4 top-1/2 h-[980px] w-[980px] -translate-y-1/2 rounded-full border border-[#ffb88d]/25"
+              aria-hidden="true"
+            />
+            {content.image ? (
+              <CharacterAssetPreview image={content.image} />
+            ) : (
+              <div className="relative z-10 flex w-full flex-col gap-[4vh]">
+                {(content.cards || []).map((card) => (
+                  <VisualCard key={card.title} card={card} />
+                ))}
+              </div>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }
