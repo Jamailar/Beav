@@ -367,6 +367,8 @@ const DEFAULT_COVER_PROMPT_SWITCHES: CoverPromptSwitches = {
     beautifyFace: false,
     replaceBackground: false,
 };
+const DIGITAL_HUMAN_AGENT_TTS_TIMEOUT_MS = 10 * 60 * 1000;
+const DIGITAL_HUMAN_AGENT_TTS_POLL_INTERVAL_MS = 1500;
 
 const SOURCE_LABELS: Record<string, string> = {
     standalone: '独立创作',
@@ -474,6 +476,71 @@ function digitalHumanReadiness(subject: SubjectRecord | null): { ok: boolean; vo
 
 function extractFinalAudio(value: Record<string, unknown>): Record<string, unknown> {
     return valueRecord(value.finalAudio);
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> {
+    if (typeof value !== 'string' || !value.trim()) return {};
+    try {
+        return valueRecord(JSON.parse(value));
+    } catch {
+        return {};
+    }
+}
+
+function extractFinalAudioResult(value: unknown): { path: string; mimeType: string } | null {
+    const record = valueRecord(value);
+    const data = valueRecord(record.data);
+    const finalAudio = extractFinalAudio(data);
+    const fallbackFinalAudio = Object.keys(finalAudio).length > 0 ? finalAudio : extractFinalAudio(record);
+    const asset = valueRecord(fallbackFinalAudio.asset);
+    const path = firstString(fallbackFinalAudio.path, asset.absolutePath, fallbackFinalAudio.previewUrl);
+    if (!path) return null;
+    return {
+        path,
+        mimeType: firstString(fallbackFinalAudio.mimeType, asset.mimeType) || 'audio/mpeg',
+    };
+}
+
+function extractAgentTtsAudioFromMessages(messages: unknown[]): { path: string; mimeType: string } | null {
+    for (const message of [...messages].reverse()) {
+        const record = valueRecord(message);
+        const payload = parseJsonRecord(record.content);
+        if (payload.action !== 'voice.speech') continue;
+        const audio = extractFinalAudioResult(payload);
+        if (audio) return audio;
+    }
+    return null;
+}
+
+function extractAgentTtsErrorFromMessages(messages: unknown[]): string {
+    for (const message of [...messages].reverse()) {
+        const record = valueRecord(message);
+        const payload = parseJsonRecord(record.content);
+        if (payload.action !== 'voice.speech') continue;
+        const data = valueRecord(payload.data);
+        if (payload.ok === false || data.success === false) {
+            return firstString(payload.error, data.error, data.message);
+        }
+    }
+    return '';
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForAgentTtsAudio(sessionId: string): Promise<{ path: string; mimeType: string }> {
+    const deadline = Date.now() + DIGITAL_HUMAN_AGENT_TTS_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        const messages = await window.ipcRenderer.chat.getMessages(sessionId);
+        const safeMessages = Array.isArray(messages) ? messages : [];
+        const audio = extractAgentTtsAudioFromMessages(safeMessages);
+        if (audio) return audio;
+        const error = extractAgentTtsErrorFromMessages(safeMessages);
+        if (error) throw new Error(error);
+        await sleep(DIGITAL_HUMAN_AGENT_TTS_POLL_INTERVAL_MS);
+    }
+    throw new Error('声音 Agent 生成超时，请稍后重试');
 }
 
 function referenceNameFromSource(source: string, index: number): string {
@@ -3799,25 +3866,64 @@ export function GenerationStudio({
                     throw new Error(preparedVideo?.error || '参考视频不符合数字人生成要求');
                 }
                 const videoUrl = await uploadDigitalHumanMedia(String(preparedVideo.path), 'video/mp4', 'ai/digital-human/video');
-                const voiceResult = await window.ipcRenderer.voice.speech({
-                    input: request.prompt.trim(),
-                    text: request.prompt.trim(),
-                    voiceId: request.voiceId,
-                    waitForCompletion: true,
+                updateFeedEntries((prev) => prev.map((item) => item.id === entry.id ? { ...item, jobStatus: 'generating_audio' } : item));
+                const ttsProjectId = request.projectId.trim();
+                const audioRequest = {
+                    type: 'audio',
+                    prompt: request.prompt.trim(),
                     title: request.title.trim() || `${request.roleName} 数字人口播声音`,
+                    projectId: ttsProjectId,
+                    model: effectiveAudioModel,
+                    voiceId: request.voiceId,
+                    languageBoost: audioLanguageBoost,
+                    speed: audioSpeed,
+                    emotion: audioEmotion,
+                    responseFormat: 'mp3',
+                } satisfies AudioGenerationRequest;
+                const ttsContextId = `${buildGenerationAgentContextId(ttsProjectId || request.roleId, contextIntent?.source, contextIntent?.sourceTitle)}:digital-human-tts:${entry.id}`;
+                const ttsSession = await window.ipcRenderer.chat.getOrCreateContextSession({
+                    contextId: ttsContextId,
+                    contextType: GENERATION_AGENT_CONTEXT_TYPE,
+                    title: `${request.roleName} 数字人声音`,
+                    initialContext: buildGenerationAgentInitialContext(ttsProjectId, contextIntent?.sourceTitle),
                     metadata: {
+                        ...buildGenerationAgentSessionMetadata('audio', ttsProjectId, contextIntent?.sourceTitle),
                         surface: 'digital-human',
                         subjectId: request.roleId,
                     },
                 });
-                if (voiceResult?.success === false) {
-                    throw new Error(firstString(voiceResult.error) || '声音生成失败');
-                }
-                const finalAudio = extractFinalAudio(valueRecord(voiceResult));
-                const finalAsset = valueRecord(finalAudio.asset);
-                const audioPath = firstString(finalAudio.path, finalAsset.absolutePath, finalAudio.previewUrl);
-                if (!audioPath) throw new Error('声音生成完成，但没有返回可上传的音频文件');
-                const audioUrl = await uploadDigitalHumanMedia(audioPath, firstString(finalAudio.mimeType) || 'audio/wav', 'ai/digital-human/audio');
+                const runtimeContext = buildGenerationAgentRuntimeContext({
+                    mode: 'audio',
+                    request: audioRequest,
+                    source: contextIntent?.source || 'standalone',
+                    sourceTitle: contextIntent?.sourceTitle,
+                    recentAssets: buildRecentGenerationAssetSummaries(feedEntries, ttsProjectId, contextIntent?.source || 'standalone'),
+                });
+                const ttsInstruction = [
+                    request.prompt.trim(),
+                    runtimeContext,
+                    [
+                        '这是数字人口播视频的声音前置步骤。',
+                        `必须使用角色声音 ID: ${request.voiceId}`,
+                        '请按音频 Agent 规则优化口播文本、节奏和分段；如当前 TTS 模型需要 skill，请先激活对应 skill。',
+                        '最终必须调用 voice.speech 生成一个可用于 retalk 的最终音频文件，不要提交视频或 retalk 任务。',
+                    ].join('\n'),
+                ].join('\n\n');
+                await window.ipcRenderer.chat.send({
+                    sessionId: ttsSession.id,
+                    message: ttsInstruction,
+                    displayContent: request.prompt.trim(),
+                    taskHints: {
+                        requireVoiceSpeech: true,
+                        digitalHuman: {
+                            subjectId: request.roleId,
+                            voiceId: request.voiceId,
+                        },
+                    },
+                });
+                const agentAudio = await waitForAgentTtsAudio(ttsSession.id);
+                const audioUrl = await uploadDigitalHumanMedia(agentAudio.path, agentAudio.mimeType, 'ai/digital-human/audio');
+                updateFeedEntries((prev) => prev.map((item) => item.id === entry.id ? { ...item, jobStatus: 'submitting' } : item));
                 const result = await window.ipcRenderer.generation.submitVideo({
                     clientRequestId: entry.id,
                     model: 'videoretalk',
@@ -3858,7 +3964,18 @@ export function GenerationStudio({
             }
         })();
         return true;
-    }, [createFeedEntry, updateFeedEntries, uploadDigitalHumanMedia]);
+    }, [
+        audioEmotion,
+        audioLanguageBoost,
+        audioSpeed,
+        contextIntent?.source,
+        contextIntent?.sourceTitle,
+        createFeedEntry,
+        effectiveAudioModel,
+        feedEntries,
+        updateFeedEntries,
+        uploadDigitalHumanMedia,
+    ]);
 
     const runCoverRequest = useCallback((request: CoverGenerationRequest): boolean => {
         if (!request.prompt.trim()) {
