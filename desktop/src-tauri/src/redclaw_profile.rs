@@ -339,21 +339,19 @@ fn save_redclaw_onboarding_state(state: &State<'_, AppState>, data: &Value) -> R
     fs::write(redclaw_onboarding_state_path(state)?, raw).map_err(|error| error.to_string())
 }
 
-fn onboarding_completed(value: &Value) -> bool {
-    value
-        .get("completedAt")
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-}
-
-fn style_definition_activated(value: &Value) -> bool {
+pub(crate) fn redclaw_style_definition_already_handled(value: &Value) -> bool {
     value
         .get("styleDefinitionSkill")
         .and_then(Value::as_object)
-        .and_then(|object| object.get("activatedAt"))
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
+        .map(|object| {
+            ["activatedAt", "completedAt"].iter().any(|field| {
+                object
+                    .get(*field)
+                    .and_then(Value::as_str)
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false)
+            })
+        })
         .unwrap_or(false)
 }
 
@@ -365,9 +363,7 @@ pub(crate) fn mark_redclaw_style_definition_started(
 ) -> Result<Value, String> {
     ensure_redclaw_profile_files(state)?;
     let mut onboarding = load_redclaw_onboarding_state(state)?;
-    if !force_restart
-        && (onboarding_completed(&onboarding) || style_definition_activated(&onboarding))
-    {
+    if !force_restart && redclaw_style_definition_already_handled(&onboarding) {
         return Ok(onboarding);
     }
     if let Some(object) = onboarding.as_object_mut() {
@@ -376,9 +372,7 @@ pub(crate) fn mark_redclaw_style_definition_started(
             "flowMode".to_string(),
             json!(REDCLAW_ONBOARDING_FLOW_MODE_STYLE_DEFINITION),
         );
-        if force_restart {
-            object.remove("completedAt");
-        }
+        object.remove("completedAt");
         if object
             .get("startedAt")
             .and_then(Value::as_str)
