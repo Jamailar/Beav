@@ -53,7 +53,7 @@ const elements = {
   taskLogList: document.getElementById('task-log-list'),
 };
 
-const USER_PROFILE_FEATURE_ENABLED = false;
+const USER_PROFILE_FEATURE_ENABLED = true;
 let context = null;
 let refreshing = false;
 let capturePendingAction = '';
