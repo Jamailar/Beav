@@ -1,6 +1,7 @@
 import type { NotificationSettings, NotificationSound } from './types';
+import runtimeCompleteSoundUrl from '../assets/notifications/runtime-complete.wav?inline';
 
-export const RUNTIME_SUCCESS_SOUND_ASSET_URL = '/sounds/notifications/runtime-complete.wav';
+export const RUNTIME_SUCCESS_SOUND_ASSET_URL = runtimeCompleteSoundUrl;
 
 let audioContextPromise: Promise<AudioContext> | null = null;
 let lastPlayedAtByKind: Partial<Record<NotificationSound, number>> = {};
@@ -96,7 +97,12 @@ export async function playNotificationSound(
   lastPlayedAtByKind[kind] = now;
   try {
     if (options?.assetUrl) {
-      await playAudioAsset(options.assetUrl, settings.sound.volume);
+      try {
+        await playAudioAsset(options.assetUrl, settings.sound.volume);
+      } catch (assetError) {
+        console.warn('[notifications] failed to play sound asset; falling back to generated tone', assetError);
+        await playPattern(kind, settings.sound.volume);
+      }
       return;
     }
     await playPattern(kind, settings.sound.volume);
