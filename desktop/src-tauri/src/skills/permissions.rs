@@ -93,6 +93,7 @@ mod tests {
                 context_note: None,
                 activation_hint: None,
                 max_prompt_chars: None,
+                hidden: false,
             },
             body: "# Skill".to_string(),
             fingerprint: "fp".to_string(),

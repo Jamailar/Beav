@@ -749,6 +749,10 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["profile-update".to_string()];
                 self.handle_redclaw(&tokens, payload)
             }
+            "redclawprofilecompletestyledefinition" => {
+                let tokens = vec!["profile-complete-style-definition".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
             "redclawrunnerstatus" => {
                 let tokens = vec!["runner-status".to_string()];
                 self.handle_redclaw(&tokens, payload)
@@ -2516,6 +2520,9 @@ impl<'a> AppCliExecutor<'a> {
                     "reason": args.string(&["reason"])
                 }),
             ),
+            "profile-complete-style-definition" => {
+                self.call_channel("redclaw:profile:complete-style-definition", payload.clone())
+            }
             "profile-onboarding" => {
                 let bundle = self.call_channel("redclaw:profile:get-bundle", json!({}))?;
                 let onboarding = bundle
@@ -6274,6 +6281,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "redclaw profile-bundle",
             "redclaw profile-read --doc-type user",
             "redclaw profile-update --doc-type user [payload.markdown]",
+            "redclaw profile-complete-style-definition [payload]",
             "redclaw profile-onboarding",
         ],
         "runtime" => vec![

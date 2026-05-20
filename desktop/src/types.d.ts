@@ -2387,6 +2387,22 @@ declare global {
           };
           onboardingState?: Record<string, unknown>;
         }>;
+        startStyleDefinition: (payload?: { forceRestart?: boolean; source?: string; sessionId?: string }) => Promise<{
+          success?: boolean;
+          state?: Record<string, unknown>;
+          error?: string;
+        }>;
+        completeStyleDefinition: (payload: Record<string, unknown>) => Promise<{
+          success?: boolean;
+          summary?: unknown;
+          styleProfile?: Record<string, unknown>;
+          skill?: {
+            name?: string;
+            path?: string;
+          };
+          onboardingState?: Record<string, unknown>;
+          error?: string;
+        }>;
       };
       assistantDaemon: {
         getStatus: () => Promise<{

@@ -1433,6 +1433,10 @@ function createIpcRenderer() {
         invokeChannel('redclaw:profile:save-initialization-progress', payload),
       completeInitialization: (payload: { answers: Record<string, unknown> }) =>
         invokeChannel('redclaw:profile:complete-initialization', payload),
+      startStyleDefinition: (payload?: { forceRestart?: boolean; source?: string; sessionId?: string }) =>
+        invokeChannel('redclaw:profile:start-style-definition', payload || {}),
+      completeStyleDefinition: (payload: Record<string, unknown>) =>
+        invokeChannel('redclaw:profile:complete-style-definition', payload),
     },
     assistantDaemon: {
       getStatus: () => invokeChannel('assistant:daemon-status'),

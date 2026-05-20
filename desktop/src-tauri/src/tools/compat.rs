@@ -628,11 +628,23 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 )
             }
         }
-        ("profile" | "profiles", "update") => app_cli_action_call(
+        (
+            "profile" | "profiles" | "redclaw.profile" | "redclaw_profiles" | "redclaw-profiles",
+            "update",
+        ) => app_cli_action_call(
             "redclaw.profile.update",
             payload,
             Some("Operate"),
             Some("profile.update"),
+        ),
+        (
+            "profile" | "profiles" | "redclaw.profile" | "redclaw_profiles" | "redclaw-profiles",
+            "complete" | "complete-style-definition" | "completestyledefinition",
+        ) => app_cli_action_call(
+            "redclaw.profile.completeStyleDefinition",
+            payload,
+            Some("Operate"),
+            Some("profile.completeStyleDefinition"),
         ),
         ("memory", "list") => {
             app_cli_action_call("memory.list", payload, Some("Operate"), Some("memory.list"))
@@ -1570,6 +1582,12 @@ fn app_cli_action_or_legacy_call(
             Some(legacy_tool_name),
             Some(operation),
         ),
+        "redclaw.profile.completeStyleDefinition" => app_cli_action_call(
+            "redclaw.profile.completeStyleDefinition",
+            payload,
+            Some(legacy_tool_name),
+            Some(operation),
+        ),
         _ => {
             let command = match operation {
                 "spaces.list" => "spaces list",
@@ -2376,6 +2394,26 @@ mod tests {
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("redclaw.profile.bundle"))
+        );
+    }
+
+    #[test]
+    fn normalizes_operate_redclaw_profile_complete_style_definition_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "redclaw.profile",
+                "operation": "completeStyleDefinition",
+                "input": {
+                    "summary": "done"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("redclaw.profile.completeStyleDefinition"))
         );
     }
 

@@ -99,7 +99,8 @@ const normalizeModelCapabilitiesList = (values: unknown): ModelCapability[] => {
         return [];
     }
     for (const value of values) {
-        const text = String(value || '').trim().toLowerCase();
+        const raw = String(value || '').trim().toLowerCase();
+        const text = raw === 'stt' ? 'transcription' : raw;
         if (allowed.has(text as ModelCapability)) {
             normalized.add(text as ModelCapability);
         }
@@ -223,7 +224,8 @@ export const supportsAttachmentKindDirectInput = (modelId: string, attachmentKin
 export const normalizeModelCapabilities = (values: Array<ModelCapability | string | null | undefined>): ModelCapability[] => {
     const normalized = new Set<ModelCapability>();
     for (const value of values) {
-        const text = String(value || '').trim().toLowerCase();
+        const raw = String(value || '').trim().toLowerCase();
+        const text = raw === 'stt' ? 'transcription' : raw;
         if (!text) continue;
         if (MODEL_CAPABILITY_ORDER.includes(text as ModelCapability)) {
             normalized.add(text as ModelCapability);

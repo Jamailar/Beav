@@ -1176,18 +1176,44 @@ fn apply_official_settings_update(
             return Err("auth generation changed; stale update dropped".to_string());
         }
     }
+    let mut next_settings = settings.clone();
+    let model_config_exists = crate::model_config::model_config_path(&state.store_path).exists();
+    let mut should_sync_model_config = model_config_exists;
+    if !model_config_exists {
+        match crate::fetch_official_default_model_slots_for_settings(&next_settings) {
+            Ok(default_slots) => {
+                let catalog_models = official_settings_models(&next_settings);
+                should_sync_model_config = crate::seed_official_default_models_into_settings(
+                    &mut next_settings,
+                    &default_slots,
+                    &catalog_models,
+                );
+            }
+            Err(error) => {
+                log_official_auth(
+                    state,
+                    "default-models-fetch-failed",
+                    format!("source={source} error={error}"),
+                );
+            }
+        }
+    }
     with_store_mut(state, |store| {
-        merge_official_settings(&mut store.settings, settings);
+        merge_official_settings(&mut store.settings, &next_settings);
         Ok(())
     })?;
-    if let Err(error) = crate::model_config::sync_model_config_file(&state.store_path, settings) {
-        log_official_auth(
-            state,
-            "model-config-sync-failed",
-            format!("source={source} error={error}"),
-        );
+    if should_sync_model_config {
+        if let Err(error) =
+            crate::model_config::sync_model_config_file(&state.store_path, &next_settings)
+        {
+            log_official_auth(
+                state,
+                "model-config-sync-failed",
+                format!("source={source} error={error}"),
+            );
+        }
     }
-    let _ = auth::sync_auth_runtime_from_settings(Some(app), state, settings);
+    let _ = auth::sync_auth_runtime_from_settings(Some(app), state, &next_settings);
     let _ = app.emit(
         "settings:updated",
         json!({
@@ -1195,7 +1221,7 @@ fn apply_official_settings_update(
             "source": source,
         }),
     );
-    emit_redbox_auth_session_updated(app, official_settings_session(settings));
+    emit_redbox_auth_session_updated(app, official_settings_session(&next_settings));
     if let Some(payload) = data_payload {
         emit_redbox_auth_data_updated(app, payload);
     }
@@ -1459,7 +1485,7 @@ fn seed_official_models_from_cache(settings: &mut Value) {
     let models = official_settings_models(settings);
     write_settings_json_array(settings, "redbox_official_models_json", &models);
     if !models.is_empty() {
-        official_sync_source_into_settings(settings, &models);
+        official_sync_source_into_settings(settings, &models, false);
     }
 }
 
@@ -1643,7 +1669,7 @@ fn refresh_official_cached_data_into_settings(
     let models = fetch_official_models_with_recovery(app, state, settings, expected_generation);
     if !models.is_empty() {
         write_settings_json_array(settings, "redbox_official_models_json", &models);
-        official_sync_source_into_settings(settings, &models);
+        official_sync_source_into_settings(settings, &models, false);
         refreshed = true;
     }
 
@@ -2409,7 +2435,7 @@ pub fn handle_official_channel(
                     );
                     sync_official_route_credentials(&mut settings);
                     if !models.is_empty() {
-                        official_sync_source_into_settings(&mut settings, &models);
+                        official_sync_source_into_settings(&mut settings, &models, false);
                     }
                     apply_official_settings_update(
                         app,
@@ -2471,7 +2497,7 @@ pub fn handle_official_channel(
                             upsert_official_settings_session(&mut settings, Some(session_value));
                             sync_official_route_credentials(&mut settings);
                             if !models.is_empty() {
-                                official_sync_source_into_settings(&mut settings, &models);
+                                official_sync_source_into_settings(&mut settings, &models, false);
                             }
                         }
                         apply_official_settings_update(
@@ -2763,7 +2789,7 @@ pub fn handle_official_channel(
                     sync_official_route_credentials(&mut settings);
                     let models = official_settings_models(&settings);
                     if !models.is_empty() {
-                        official_sync_source_into_settings(&mut settings, &models);
+                        official_sync_source_into_settings(&mut settings, &models, false);
                     }
                     let generation =
                         auth::bump_auth_generation(state, "official-auth-set-session")?;
@@ -2814,7 +2840,7 @@ pub fn handle_official_channel(
                         );
                     }
                     if !models.is_empty() {
-                        official_sync_source_into_settings(&mut settings, &models);
+                        official_sync_source_into_settings(&mut settings, &models, false);
                     }
                     apply_official_settings_update(
                         app,

@@ -558,7 +558,6 @@ export function RedClaw({
     const [automationLoading, setAutomationLoading] = useState(false);
     const [automationMessage, setAutomationMessage] = useState('');
     const [onboardingState, setOnboardingState] = useState<RedclawOnboardingState | undefined>(undefined);
-    const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
     const [resolvedPendingMessage, setResolvedPendingMessage] = useState<PendingChatMessage | null>(null);
     const trackedImageJobs = useMediaJobsStore(useCallback((state) => (
         Object.values(state.jobsById)
@@ -1209,7 +1208,6 @@ export function RedClaw({
         if (!redclawOnboardingVersion) return;
         void loadOnboardingBundle();
         void loadSkills();
-        setHideOnboardingPrompt(true);
         setChatActionMessage('已完成这个空间的风格定义');
     }, [loadOnboardingBundle, loadSkills, redclawOnboardingVersion]);
 
@@ -1223,7 +1221,6 @@ export function RedClaw({
                 void loadSkills();
                 void loadOnboardingBundle();
             }
-            setHideOnboardingPrompt(false);
         };
         window.ipcRenderer.on('space:changed', onSpaceChanged);
         return () => {
@@ -1233,7 +1230,6 @@ export function RedClaw({
 
     useEffect(() => {
         setOnboardingState(undefined);
-        setHideOnboardingPrompt(false);
     }, [activeSpaceId]);
 
     useEffect(() => {
@@ -2246,42 +2242,6 @@ export function RedClaw({
                 ) : (
                     <div className="h-full min-h-0 flex flex-col">
                         <div className="relative min-h-0 flex-1 overflow-hidden">
-                            {onboardingKnown && !onboardingCompleted && !hideOnboardingPrompt && (
-                                <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center px-4">
-                                    <div className="pointer-events-auto w-full max-w-2xl rounded-[28px] border border-amber-300/20 bg-[linear-gradient(135deg,rgba(24,18,14,0.96),rgba(17,13,15,0.94))] p-5 text-white shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl">
-                                        <div className="flex items-start justify-between gap-4">
-                                            <div className="space-y-3">
-                                                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/6 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/58">
-                                                    <Sparkles className="h-3.5 w-3.5 text-amber-300" />
-                                                    来自 {REDCLAW_DISPLAY_NAME}
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <div className="text-lg font-semibold">先定义这个空间的经营方向和写作风格</div>
-                                                    <p className="max-w-xl text-sm leading-6 text-white/68">
-                                                        这会影响我后续怎么帮你定调性、写内容、安排转化。先做完这组 10 题，再开始长期创作会更准。
-                                                    </p>
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onOpenRedClawOnboarding?.()}
-                                                    className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:scale-[0.99]"
-                                                >
-                                                    <SlidersHorizontal className="h-4 w-4" />
-                                                    开始定义这个空间
-                                                </button>
-                                            </div>
-                                            <button
-                                                type="button"
-                                                onClick={() => setHideOnboardingPrompt(true)}
-                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/6 text-white/65 transition hover:bg-white/10"
-                                                aria-label="稍后再说"
-                                            >
-                                                <X className="h-4 w-4" />
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
                             <div className="h-full min-h-0 w-full overflow-hidden">
                                 {activeAiSurface === 'room' ? (
                                     selectedRoom?.session ? (

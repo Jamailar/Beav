@@ -119,6 +119,16 @@ pub(crate) struct KnowledgeBatchIngestRequest {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
+pub(crate) struct XhsKnowledgeEntryImportV2Request {
+    pub space_id: Option<String>,
+    pub source: KnowledgeSourceInput,
+    pub note: Value,
+    pub comments: Value,
+    pub options: KnowledgeIngestOptionsInput,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 pub(crate) struct ZhihuQuestionInput {
     pub id: Option<String>,
     pub url: Option<String>,
@@ -2531,6 +2541,33 @@ pub(crate) fn batch_ingest(
     }))
 }
 
+pub(crate) fn ingest_xhs_entry_v2_stub(
+    request: &XhsKnowledgeEntryImportV2Request,
+) -> Result<Value, String> {
+    let has_note_payload = !request.note.is_null();
+    let has_comments_payload = !request.comments.is_null();
+    if !has_note_payload && !has_comments_payload {
+        return Err("xhs knowledge import v2 payload 不能为空".to_string());
+    }
+
+    Ok(json!({
+        "success": true,
+        "platform": "xiaohongshu",
+        "apiVersion": 2,
+        "stub": true,
+        "persisted": false,
+        "entryId": Value::Null,
+        "received": {
+            "spaceId": request.space_id,
+            "sourceLink": source_link_from_input(&request.source),
+            "sourceDomain": source_domain_from_input(&request.source),
+            "hasNote": has_note_payload,
+            "hasComments": has_comments_payload,
+            "allowUpdate": request.options.allow_update,
+        },
+    }))
+}
+
 pub(crate) fn knowledge_http_health(
     state: &State<'_, AppState>,
     body_limit_bytes: usize,
@@ -2583,6 +2620,7 @@ pub(crate) fn knowledge_http_health(
             },
             "routes": {
                 "entries": "/api/knowledge/entries",
+                "xhsEntryV2": "/api/knowledge/xhs/v2/entries",
                 "zhihuAnswers": "/api/knowledge/zhihu/answers",
                 "zhihuArticles": "/api/knowledge/zhihu/articles",
                 "documentSources": "/api/knowledge/document-sources",
@@ -2592,6 +2630,7 @@ pub(crate) fn knowledge_http_health(
             "capabilities": {
                 "importApiVersions": {
                     "entries": [1],
+                    "xhs": [1, 2],
                     "zhihu": [1]
                 },
                 "sourceFields": ["sourceDomain", "sourceLink", "sourceUrl"],
@@ -3142,11 +3181,11 @@ mod tests {
     use super::{
         author_entry_id, decode_embedded_js_string, existing_entry_id_from_record,
         extract_css_url_near, extract_html_attribute_near, extract_json_string_values,
-        is_supported_social_entry_kind, materialize_note_asset_source,
+        ingest_xhs_entry_v2_stub, is_supported_social_entry_kind, materialize_note_asset_source,
         maybe_backfill_xiaohongshu_assets, note_entry_id, note_transcript_file_from_meta,
         should_auto_transcribe_knowledge_video, youtube_entry_id, zhihu_answer_to_entry_request,
         zhihu_article_to_entry_request, KnowledgeEntryAssetsInput,
-        ZhihuAnswerIngestRequest, ZhihuArticleIngestRequest,
+        XhsKnowledgeEntryImportV2Request, ZhihuAnswerIngestRequest, ZhihuArticleIngestRequest,
     };
     use serde_json::json;
     use std::fs;
@@ -3406,6 +3445,56 @@ mod tests {
             Some("https://pic2.zhimg.com/demo.jpg")
         );
     }
+
+    #[test]
+    fn xhs_entry_v2_stub_accepts_note_and_comments_without_persisting() {
+        let request: XhsKnowledgeEntryImportV2Request = serde_json::from_value(json!({
+            "source": {
+                "sourceLink": "https://www.xiaohongshu.com/explore/demo"
+            },
+            "note": {
+                "title": "demo"
+            },
+            "comments": [
+                { "text": "comment" }
+            ]
+        }))
+        .expect("request should parse");
+
+        let response = ingest_xhs_entry_v2_stub(&request).expect("stub should accept payload");
+
+        assert_eq!(
+            response.get("success").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            response.get("apiVersion").and_then(|value| value.as_i64()),
+            Some(2)
+        );
+        assert_eq!(
+            response.get("stub").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            response.get("persisted").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            response
+                .pointer("/received/hasComments")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn xhs_entry_v2_stub_rejects_empty_payload() {
+        let request = XhsKnowledgeEntryImportV2Request::default();
+        let error =
+            ingest_xhs_entry_v2_stub(&request).expect_err("empty v2 payload should be rejected");
+        assert!(error.contains("不能为空"));
+    }
+
     #[test]
     fn entry_ids_are_safe_for_windows_directories() {
         let note_id =

@@ -26,6 +26,8 @@ pub(crate) struct RedclawProfilePromptBundle {
     pub(crate) onboarding_state: Value,
 }
 
+pub(crate) const REDCLAW_STYLE_DEFINITION_SKILL_NAME: &str = "redclaw-style-definition";
+const REDCLAW_ONBOARDING_FLOW_MODE_STYLE_DEFINITION: &str = "style-definition-chat";
 const REDCLAW_ONBOARDING_FLOW_MODE_SCREEN: &str = "screen-flow";
 const REDCLAW_ONBOARDING_SCREEN_STEP_COUNT: i64 = 10;
 
@@ -266,7 +268,7 @@ fn build_default_space_writing_style_skill_doc() -> String {
 fn default_onboarding_state_value() -> Value {
     json!({
         "version": 2,
-        "flowMode": REDCLAW_ONBOARDING_FLOW_MODE_SCREEN,
+        "flowMode": REDCLAW_ONBOARDING_FLOW_MODE_STYLE_DEFINITION,
         "startedAt": Value::Null,
         "updatedAt": now_iso(),
         "askedFirstQuestion": false,
@@ -335,6 +337,79 @@ fn save_redclaw_onboarding_state(state: &State<'_, AppState>, data: &Value) -> R
     }
     let raw = serde_json::to_string_pretty(&next).map_err(|error| error.to_string())?;
     fs::write(redclaw_onboarding_state_path(state)?, raw).map_err(|error| error.to_string())
+}
+
+fn onboarding_completed(value: &Value) -> bool {
+    value
+        .get("completedAt")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn style_definition_activated(value: &Value) -> bool {
+    value
+        .get("styleDefinitionSkill")
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("activatedAt"))
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+pub(crate) fn mark_redclaw_style_definition_started(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    source: &str,
+    force_restart: bool,
+) -> Result<Value, String> {
+    ensure_redclaw_profile_files(state)?;
+    let mut onboarding = load_redclaw_onboarding_state(state)?;
+    if !force_restart
+        && (onboarding_completed(&onboarding) || style_definition_activated(&onboarding))
+    {
+        return Ok(onboarding);
+    }
+    if let Some(object) = onboarding.as_object_mut() {
+        object.insert("version".to_string(), json!(3));
+        object.insert(
+            "flowMode".to_string(),
+            json!(REDCLAW_ONBOARDING_FLOW_MODE_STYLE_DEFINITION),
+        );
+        if force_restart {
+            object.remove("completedAt");
+        }
+        if object
+            .get("startedAt")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+            || force_restart
+        {
+            object.insert("startedAt".to_string(), json!(now_iso()));
+        }
+        object.insert("askedFirstQuestion".to_string(), json!(true));
+        object.insert(
+            "styleDefinitionSkill".to_string(),
+            json!({
+                "skillName": REDCLAW_STYLE_DEFINITION_SKILL_NAME,
+                "status": "interviewing",
+                "source": source,
+                "sessionId": session_id,
+                "activatedAt": now_iso()
+            }),
+        );
+        let ui_flow = object
+            .entry("uiFlow".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(ui_flow_object) = ui_flow.as_object_mut() {
+            ui_flow_object.insert("version".to_string(), json!("style-definition-chat-v1"));
+            ui_flow_object.insert("draft".to_string(), json!({ "updatedAt": now_iso() }));
+        }
+    }
+    save_redclaw_onboarding_state(state, &onboarding)?;
+    Ok(onboarding)
 }
 
 pub(crate) fn load_redclaw_style_profile(state: &State<'_, AppState>) -> Result<Value, String> {
@@ -1478,6 +1553,142 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
                 }),
             );
             ui_flow_obj.insert("summary".to_string(), summary.clone());
+        }
+    }
+    save_redclaw_onboarding_state(state, &onboarding)?;
+
+    Ok(json!({
+        "success": true,
+        "summary": summary,
+        "styleProfile": style_profile,
+        "skill": {
+            "name": "writing-style",
+            "path": skill_path.display().to_string()
+        },
+        "onboardingState": onboarding
+    }))
+}
+
+fn payload_markdown_field(payload: &Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(strip_optional_code_fence)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn complete_redclaw_style_definition_from_interview(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    ensure_redclaw_profile_files(state)?;
+    let profile_root = redclaw_profile_root(state)?;
+    let existing_bundle = load_redclaw_profile_prompt_bundle(state)?;
+    let summary = payload.get("summary").cloned().unwrap_or_else(|| {
+        json!({
+            "headline": "已完成当前空间的风格定义",
+            "lines": []
+        })
+    });
+    let mut style_profile = payload
+        .get("styleProfile")
+        .cloned()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    if let Some(object) = style_profile.as_object_mut() {
+        object
+            .entry("metadata".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
+            metadata.insert("version".to_string(), json!("style-definition-chat-v1"));
+            metadata.insert("updatedAt".to_string(), json!(now_iso()));
+            metadata.insert(
+                "generationStrategy".to_string(),
+                json!("redclaw-style-definition-skill-interview"),
+            );
+            metadata.insert(
+                "generatedSkill".to_string(),
+                json!({
+                    "name": "writing-style",
+                    "relativePath": "skills/writing-style/SKILL.md",
+                    "sourceScope": "workspace"
+                }),
+            );
+        }
+    }
+
+    if let Some(identity_markdown) = payload_markdown_field(payload, "identityMarkdown") {
+        fs::write(
+            profile_root.join("identity.md"),
+            normalize_profile_doc_markdown("identity.md", &identity_markdown)?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let soul_markdown = payload_markdown_field(payload, "soulMarkdown")
+        .ok_or_else(|| "soulMarkdown is required".to_string())?;
+    let user_markdown = payload_markdown_field(payload, "userMarkdown")
+        .ok_or_else(|| "userMarkdown is required".to_string())?;
+    let creator_profile_markdown = payload_markdown_field(payload, "creatorProfileMarkdown")
+        .ok_or_else(|| "creatorProfileMarkdown is required".to_string())?;
+    let writing_style_skill = payload_markdown_field(payload, "writingStyleSkillMarkdown")
+        .ok_or_else(|| "writingStyleSkillMarkdown is required".to_string())
+        .and_then(|markdown| normalize_generated_skill_markdown(&markdown))?;
+
+    fs::write(
+        profile_root.join("Soul.md"),
+        normalize_profile_doc_markdown("Soul.md", &soul_markdown)?,
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(
+        profile_root.join("user.md"),
+        normalize_profile_doc_markdown("user.md", &user_markdown)?,
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(
+        profile_root.join("CreatorProfile.md"),
+        normalize_profile_doc_markdown("CreatorProfile.md", &creator_profile_markdown)?,
+    )
+    .map_err(|error| error.to_string())?;
+    save_redclaw_style_profile(state, &style_profile)?;
+
+    let workspace = workspace_root(state).ok();
+    let mut skill_record = build_workspace_skill_record("writing-style");
+    skill_record.description = "当前空间自动生成的写作风格指导".to_string();
+    skill_record.body = writing_style_skill;
+    let skill_path = resolve_skill_file_path(&skill_record, workspace.as_deref())
+        .ok_or_else(|| "无法解析当前空间 writing-style 技能路径".to_string())?;
+    write_skill_record_to_path(&skill_record, &skill_path)?;
+    let _ = refresh_skill_store_catalog(state);
+    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
+    let _ = fs::remove_file(profile_root.join("BOOTSTRAP.md"));
+
+    let mut onboarding = existing_bundle.onboarding_state;
+    if let Some(object) = onboarding.as_object_mut() {
+        object.insert("version".to_string(), json!(3));
+        object.insert(
+            "flowMode".to_string(),
+            json!(REDCLAW_ONBOARDING_FLOW_MODE_STYLE_DEFINITION),
+        );
+        object.insert("askedFirstQuestion".to_string(), json!(true));
+        object.insert("completedAt".to_string(), json!(now_iso()));
+        object.insert(
+            "styleDefinitionSkill".to_string(),
+            json!({
+                "skillName": REDCLAW_STYLE_DEFINITION_SKILL_NAME,
+                "status": "completed",
+                "completedAt": now_iso()
+            }),
+        );
+        let ui_flow = object
+            .entry("uiFlow".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(ui_flow_object) = ui_flow.as_object_mut() {
+            ui_flow_object.insert("version".to_string(), json!("style-definition-chat-v1"));
+            ui_flow_object.insert("summary".to_string(), summary.clone());
+            if let Some(evidence_notes) = payload.get("evidenceNotes") {
+                ui_flow_object.insert("evidenceNotes".to_string(), evidence_notes.clone());
+            }
         }
     }
     save_redclaw_onboarding_state(state, &onboarding)?;

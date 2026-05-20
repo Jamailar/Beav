@@ -846,10 +846,10 @@ export interface AiModelOption {
   id: string;
   label?: string;
   badgeText?: string;
-  badgeTone?: 'neutral' | 'recommended';
+  badgeTone?: 'neutral';
   badges?: Array<{
     text: string;
-    tone?: 'neutral' | 'recommended';
+    tone?: 'neutral';
     className?: string;
   }>;
   inputIcons?: Array<{
@@ -881,14 +881,14 @@ export const AiModelSelect = ({
     return options.find((item) => item.id === value) || null;
   }, [options, value]);
   const resolveBadges = (option: AiModelOption | null | undefined) => {
-    if (!option) return [] as Array<{ text: string; tone?: 'neutral' | 'recommended'; className?: string }>;
+    if (!option) return [] as Array<{ text: string; tone?: 'neutral'; className?: string }>;
     if (Array.isArray(option.badges) && option.badges.length > 0) {
       return option.badges;
     }
     if (option.badgeText) {
       return [{ text: option.badgeText, tone: option.badgeTone }];
     }
-    return [] as Array<{ text: string; tone?: 'neutral' | 'recommended'; className?: string }>;
+    return [] as Array<{ text: string; tone?: 'neutral'; className?: string }>;
   };
   const renderInputIcons = (option: AiModelOption | null | undefined) => {
     const icons = Array.isArray(option?.inputIcons) ? option?.inputIcons || [] : [];
@@ -957,9 +957,7 @@ export const AiModelSelect = ({
               key={`${selectedOption?.id || 'selected'}-${badge.text}`}
               className={clsx(
                 'px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap font-medium',
-                badge.tone === 'recommended'
-                  ? 'text-emerald-700'
-                  : badge.className || 'text-text-tertiary'
+                badge.className || 'text-text-tertiary'
               )}
             >
               {badge.text}
@@ -997,9 +995,7 @@ export const AiModelSelect = ({
                         key={`${option.id}-${badge.text}`}
                         className={clsx(
                           'px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap font-medium',
-                          badge.tone === 'recommended'
-                            ? 'text-emerald-700'
-                            : badge.className || 'text-text-tertiary'
+                          badge.className || 'text-text-tertiary'
                         )}
                       >
                         {badge.text}
@@ -1551,17 +1547,12 @@ export const filterAiModelsByCapability = (
 
 export const buildModelCapabilityBadges = (
   capabilities: ModelCapability[],
-  options?: { recommended?: boolean },
-): Array<{ text: string; tone?: 'neutral' | 'recommended'; className?: string }> => {
-  const badges: Array<{ text: string; tone?: 'neutral' | 'recommended'; className?: string }> = capabilities.map((capability) => ({
+): Array<{ text: string; tone?: 'neutral'; className?: string }> => {
+  return capabilities.map((capability) => ({
     text: MODEL_CAPABILITY_META[capability]?.shortLabel || capability,
     tone: 'neutral' as const,
     className: MODEL_CAPABILITY_BADGE_META[capability],
   }));
-  if (options?.recommended) {
-    badges.unshift({ text: '推荐', tone: 'recommended', className: 'text-emerald-700' });
-  }
-  return badges;
 };
 
 export const buildModelInputIcons = (

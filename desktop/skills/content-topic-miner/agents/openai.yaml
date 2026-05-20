@@ -1,0 +1,4 @@
+interface:
+  display_name: "自媒体选题"
+  short_description: "Mine user-facing content topics from raw materials"
+  default_prompt: "Use $content-topic-miner to extract strong self-media topic angles from these source materials."

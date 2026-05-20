@@ -1726,7 +1726,7 @@ mod tests {
         interactive_skill_activations, interactive_tool_panic_message,
         is_authoring_project_link_target, json_value_to_path_list,
         looks_like_authoring_status_summary, manuscript_save_result_path,
-        message_is_successful_manuscript_write_tool_result,
+        message_is_successful_manuscript_write_tool_result, metadata_requires_voice_speech,
         normalized_structured_payload_arguments, persist_subjects_workspace,
         redbox_fs_profile_read_completed, resolve_local_path, structured_tool_error_code,
         validate_runtime_tool_message_sequence, workspace_read_directory_response,
@@ -2187,6 +2187,53 @@ mod tests {
     }
 
     #[test]
+    fn generation_agent_audio_metadata_requires_voice_speech() {
+        assert!(metadata_requires_voice_speech(&json!({
+            "contextType": "generation-agent",
+            "generationTarget": "audio"
+        })));
+        assert!(!metadata_requires_voice_speech(&json!({
+            "contextType": "generation-agent",
+            "generationTarget": "image"
+        })));
+        assert!(!metadata_requires_voice_speech(&json!({
+            "contextType": "redclaw",
+            "generationTarget": "audio"
+        })));
+    }
+
+    #[test]
+    fn interactive_execution_progress_counts_voice_speech_as_audio_completion() {
+        let mut progress = InteractiveExecutionProgress::default();
+        let contract = InteractiveExecutionContract {
+            require_voice_speech: true,
+            ..Default::default()
+        };
+        interactive_execution_progress_observe_success(
+            &mut progress,
+            &contract,
+            "workflow",
+            &json!({
+                "action": "voice.speech",
+                "payload": {
+                    "model": "cosyvoice-v3.5-plus",
+                    "voiceId": "voice_demo"
+                }
+            }),
+            &json!({
+                "ok": true,
+                "action": "voice.speech",
+                "data": {
+                    "relativePath": "generated/tts/demo.mp3"
+                }
+            }),
+        );
+
+        assert!(progress.voice_speech_completed);
+        assert!(contract.missing_steps(&progress).is_empty());
+    }
+
+    #[test]
     fn authoring_status_summary_is_not_auto_save_content() {
         assert!(looks_like_authoring_status_summary(
             "稿件已保存成功。\n\n**运行总结：**\n- 已保存\n\n**稿件链接：**\n[demo](workspace://wander/demo/content.md)"
@@ -2276,6 +2323,7 @@ mod tests {
                 require_profile_read: true,
                 require_save: true,
                 save_artifact: Some("folder".to_string()),
+                ..Default::default()
             })
             .expect("instruction should be generated");
 
@@ -6039,7 +6087,7 @@ fn interactive_skill_activation_continuation(
         (true, true) => return None,
     };
     Some(format!(
-        "系统状态更新：{}。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。",
+        "系统状态更新：{}。技能激活只会更新当前上下文，不会返回加工结果、中间产物或额外工具输出；你必须基于已激活技能的规则自行完成下一步内容构造。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。",
         scope_text
     ))
 }
@@ -6049,12 +6097,16 @@ struct InteractiveExecutionContract {
     require_source_read: bool,
     require_profile_read: bool,
     require_save: bool,
+    require_voice_speech: bool,
     save_artifact: Option<String>,
 }
 
 impl InteractiveExecutionContract {
     fn requires_tool_turn(&self) -> bool {
-        self.require_source_read || self.require_profile_read || self.require_save
+        self.require_source_read
+            || self.require_profile_read
+            || self.require_save
+            || self.require_voice_speech
     }
 
     fn missing_steps(&self, progress: &InteractiveExecutionProgress) -> Vec<&'static str> {
@@ -6068,6 +6120,9 @@ impl InteractiveExecutionContract {
         if self.require_save && !progress.save_completed {
             missing.push("调用 Write(manuscripts://current) 保存稿件");
         }
+        if self.require_voice_speech && !progress.voice_speech_completed {
+            missing.push("调用 voice.speech 生成音频");
+        }
         missing
     }
 }
@@ -6077,6 +6132,7 @@ struct InteractiveExecutionProgress {
     source_read_completed: bool,
     profile_read_completed: bool,
     save_completed: bool,
+    voice_speech_completed: bool,
     saved_project_path: Option<String>,
     saved_content: Option<String>,
 }
@@ -6164,6 +6220,18 @@ fn normalized_app_cli_action_key(arguments: &Value) -> String {
         .collect()
 }
 
+fn metadata_requires_voice_speech(metadata: &Value) -> bool {
+    let context_type = metadata
+        .get("contextType")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let generation_target = metadata
+        .get("generationTarget")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    context_type == "generation-agent" && generation_target == "audio"
+}
+
 fn interactive_execution_contract(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -6178,6 +6246,11 @@ fn interactive_execution_contract(
             .find(|item| item.id == session_id)
             .and_then(|session| session.metadata.as_ref())
             .and_then(|metadata| metadata.get("taskHints"));
+        let metadata = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|session| session.metadata.as_ref());
         Ok(InteractiveExecutionContract {
             require_source_read: task_hints
                 .and_then(|value| value.get("requireSourceRead"))
@@ -6191,6 +6264,13 @@ fn interactive_execution_contract(
                 .and_then(|value| value.get("requireSave"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            require_voice_speech: task_hints
+                .and_then(|value| value.get("requireVoiceSpeech"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || metadata
+                    .map(metadata_requires_voice_speech)
+                    .unwrap_or(false),
             save_artifact: task_hints
                 .and_then(|value| value.get("saveArtifact"))
                 .and_then(Value::as_str)
@@ -6264,6 +6344,9 @@ fn clear_completed_interactive_execution_contract(
         else {
             return Ok(());
         };
+        if !metadata_object.contains_key("taskHints") {
+            return Ok(());
+        }
         if clear_interactive_execution_contract_metadata(&mut metadata_object) {
             session.metadata = Some(Value::Object(metadata_object));
             session.updated_at = now_iso();
@@ -6286,6 +6369,11 @@ fn metadata_has_interactive_execution_contract(metadata: &Value) -> bool {
             .and_then(|value| value.get("requireSave"))
             .and_then(Value::as_bool)
             .unwrap_or(false)
+        || task_hints
+            .and_then(|value| value.get("requireVoiceSpeech"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || metadata_requires_voice_speech(metadata)
 }
 
 fn message_is_successful_manuscript_write_tool_result(message: &Value) -> bool {
@@ -6399,6 +6487,12 @@ fn interactive_execution_contract_instruction(
                 .to_string(),
         );
     }
+    if contract.require_voice_speech {
+        lines.push(
+            "当前是音频生成任务，最终必须调用 `voice.speech` 并确认成功生成音频后再给最终回复。若当前模型、语气设计或输入格式需要技能、资源或配置，请先调用相应工具完成准备，再调用 `voice.speech`。"
+                .to_string(),
+        );
+    }
     Some(lines.join(" "))
 }
 
@@ -6423,6 +6517,10 @@ fn interactive_execution_progress_observe_success(
     arguments: &Value,
     result: &Value,
 ) {
+    if contract.require_voice_speech && voice_speech_completed(tool_name, arguments, result) {
+        progress.voice_speech_completed = true;
+    }
+
     if contract.require_save && manuscript_write_current_completed(tool_name, arguments, result) {
         progress.save_completed = true;
         progress.saved_project_path = manuscript_save_result_path(result)
@@ -6498,6 +6596,19 @@ fn interactive_execution_progress_observe_success(
         }
         _ => {}
     }
+}
+
+fn voice_speech_completed(tool_name: &str, arguments: &Value, result: &Value) -> bool {
+    if result.get("ok").and_then(Value::as_bool) != Some(true) {
+        return false;
+    }
+    if normalized_app_cli_action_key(arguments) == "voicespeech" {
+        return true;
+    }
+    if payload_string(result, "action").as_deref() == Some("voice.speech") {
+        return true;
+    }
+    tool_name == "voice.speech"
 }
 
 fn manuscript_write_current_completed(tool_name: &str, arguments: &Value, result: &Value) -> bool {
@@ -10253,6 +10364,45 @@ fn main() {
             None,
         );
     }
+    let model_config_existed_at_startup = model_config::model_config_path(&store_path).exists();
+    if !model_config_existed_at_startup {
+        match official_support::fetch_official_default_model_slots_for_settings(&store.settings) {
+            Ok(default_slots) => {
+                let catalog_models =
+                    official_support::fetch_official_models_for_settings(&store.settings);
+                if official_support::seed_official_default_models_into_settings(
+                    &mut store.settings,
+                    &default_slots,
+                    &catalog_models,
+                ) {
+                    if let Err(error) =
+                        model_config::sync_model_config_file(&store_path, &store.settings)
+                    {
+                        logging::emit_legacy_line(
+                            logging::event::LogSource::Host,
+                            logging::event::LogLevel::Warn,
+                            "model_config",
+                            "startup.model_config_first_run_seed_failed",
+                            format!("[{} model config] {error}", app_brand_display_name()),
+                            json!({ "error": error }),
+                            None,
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "model_config",
+                    "startup.model_config_default_models_fetch_failed",
+                    format!("[{} model config] {error}", app_brand_display_name()),
+                    json!({ "error": error }),
+                    None,
+                );
+            }
+        }
+    }
     if let Err(error) =
         model_config::load_model_config_into_settings(&store_path, &mut store.settings)
     {
@@ -10281,7 +10431,7 @@ fn main() {
             None,
         );
     }
-    if synced_cached_official_models {
+    if synced_cached_official_models && model_config::model_config_path(&store_path).exists() {
         if let Err(error) = model_config::sync_model_config_file(&store_path, &store.settings) {
             logging::emit_legacy_line(
                 logging::event::LogSource::Host,

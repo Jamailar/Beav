@@ -51,7 +51,7 @@ fn resolve_active_skills(
 fn visible_catalog(catalog: &[LoadedSkillRecord], runtime_mode: &str) -> Vec<LoadedSkillRecord> {
     catalog
         .iter()
-        .filter(|skill| skill_allows_runtime_mode(skill, runtime_mode))
+        .filter(|skill| !skill.metadata.hidden && skill_allows_runtime_mode(skill, runtime_mode))
         .cloned()
         .collect()
 }
@@ -134,6 +134,30 @@ mod tests {
         );
         assert_eq!(resolved.active_skills.len(), 1);
         assert_eq!(resolved.visible_skills.len(), 1);
+    }
+
+    #[test]
+    fn resolve_skill_set_hides_internal_skills_but_can_activate_them_by_name() {
+        let resolved = resolve_skill_set(
+            &[SkillRecord {
+                name: "redclaw-style-definition".to_string(),
+                description: "desc".to_string(),
+                location: "skills://redclaw-style-definition".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nautoActivate: false\nactivationScope: session\nhidden: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "redclaw",
+            Some(&serde_json::json!({
+                "activeSkills": ["redclaw-style-definition"]
+            })),
+            &[],
+        );
+
+        assert!(resolved.visible_skills.is_empty());
+        assert_eq!(resolved.active_skills.len(), 1);
+        assert_eq!(resolved.active_skills[0].name, "redclaw-style-definition");
     }
 
     #[test]

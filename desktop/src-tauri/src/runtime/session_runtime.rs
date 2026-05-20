@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 pub const SESSION_CONTEXT_TAIL_MESSAGES: usize = 8;
@@ -1857,7 +1858,14 @@ fn load_session_runtime_bundle_index(
         }
         Err(error) => return Err(error.to_string()),
     };
-    serde_json::from_str::<SessionRuntimeBundleIndex>(&content).map_err(|error| error.to_string())
+    match serde_json::from_str::<SessionRuntimeBundleIndex>(&content) {
+        Ok(index) => Ok(index),
+        Err(_error) => {
+            let dir = session_runtime_bundle_dir(state)?;
+            quarantine_corrupt_json_file(&session_runtime_bundle_index_path(state)?)?;
+            Ok(rebuild_session_runtime_bundle_index_from_dir(&dir))
+        }
+    }
 }
 
 fn persist_session_runtime_bundle_index(
@@ -1867,6 +1875,46 @@ fn persist_session_runtime_bundle_index(
     let path = session_runtime_bundle_index_path(state)?;
     let serialized = serde_json::to_string_pretty(index).map_err(|error| error.to_string())?;
     fs::write(path, serialized).map_err(|error| error.to_string())
+}
+
+fn quarantine_corrupt_json_file(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("index.json");
+    let backup_path = path.with_file_name(format!("{file_name}.corrupt-{timestamp}"));
+    fs::rename(path, backup_path).map_err(|error| error.to_string())
+}
+
+fn rebuild_session_runtime_bundle_index_from_dir(dir: &Path) -> SessionRuntimeBundleIndex {
+    let mut index = SessionRuntimeBundleIndex::default();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return index;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.file_name().and_then(|value| value.to_str()) == Some("index.json") {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(bundle) = serde_json::from_str::<SessionRuntimeBundle>(&content) else {
+            continue;
+        };
+        let _removed = update_session_bundle_index(&mut index, &bundle);
+    }
+    index
 }
 
 fn update_session_bundle_index(
@@ -2957,6 +3005,45 @@ mod tests {
             index.sessions.last().map(|item| item.summary.as_str()),
             Some("hello 201")
         );
+    }
+
+    #[test]
+    fn session_bundle_index_rebuilds_from_valid_bundle_files() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("redbox-session-bundle-index-rebuild-{timestamp}"));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+
+        let bundle = SessionRuntimeBundle {
+            session_id: "session-valid".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "2".to_string(),
+            protocol: "openai".to_string(),
+            runtime_mode: "image-generation".to_string(),
+            model_name: Some("qwen".to_string()),
+            message_count: 2,
+            messages: vec![
+                json!({ "role": "user", "content": "hello" }),
+                json!({ "role": "assistant", "content": "ok" }),
+            ],
+        };
+        std::fs::write(
+            dir.join("session-valid.json"),
+            serde_json::to_string_pretty(&bundle).expect("bundle should serialize"),
+        )
+        .expect("bundle should be written");
+        std::fs::write(dir.join("session-corrupt.json"), "{\"sessionId\":").unwrap();
+        std::fs::write(dir.join("index.json"), "{\"sessions\": []}trailing").unwrap();
+
+        let index = rebuild_session_runtime_bundle_index_from_dir(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(index.sessions.len(), 1);
+        assert_eq!(index.sessions[0].session_id, "session-valid");
+        assert_eq!(index.sessions[0].summary, "hello");
     }
 
     #[test]

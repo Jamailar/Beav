@@ -403,6 +403,32 @@ fn normalize_default_ai_route_settings(settings: &mut Value) {
     }
 }
 
+fn payload_updates_ai_model_selection(payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+    object.keys().any(|key| {
+        matches!(
+            key.as_str(),
+            "ai_model_routes_json"
+                | "ai_sources_json"
+                | "default_ai_source_id"
+                | "model_name"
+                | "model_name_wander"
+                | "model_name_chatroom"
+                | "model_name_knowledge"
+                | "model_name_redclaw"
+                | "transcription_model"
+                | "embedding_model"
+                | "image_model"
+                | "visual_index_model"
+                | "video_analysis_model"
+                | "voice_tts_model"
+                | "voice_clone_model"
+        )
+    })
+}
+
 fn merged_settings_payload(current: &Value, payload: &Value) -> Value {
     let mut next =
         if let (Some(current), Some(payload)) = (current.as_object(), payload.as_object()) {
@@ -418,6 +444,13 @@ fn merged_settings_payload(current: &Value, payload: &Value) -> Value {
             payload.clone()
         };
     normalize_default_ai_route_settings(&mut next);
+    if payload_updates_ai_model_selection(payload) {
+        if let Some(object) = next.as_object_mut() {
+            object
+                .entry(crate::official_support::AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY.to_string())
+                .or_insert_with(|| json!(now_iso()));
+        }
+    }
     next
 }
 
@@ -928,6 +961,28 @@ mod tests {
             Some("/Volumes/RedBox Workspace")
         );
         assert_eq!(merged.get("theme").and_then(Value::as_str), Some("light"));
+    }
+
+    #[test]
+    fn merged_settings_payload_marks_model_defaults_initialized_on_model_save() {
+        let current = json!({
+            "theme": "dark"
+        });
+        let payload = json!({
+            "model_name": "user-model"
+        });
+
+        let merged = merged_settings_payload(&current, &payload);
+
+        assert_eq!(
+            merged.get("model_name").and_then(Value::as_str),
+            Some("user-model")
+        );
+        assert!(merged
+            .get(crate::official_support::AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY)
+            .and_then(Value::as_str)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false));
     }
 
     #[test]

@@ -29,12 +29,12 @@ use crate::scheduler::{
     run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
 use crate::{
-    complete_redclaw_mvp_onboarding, ffmpeg_executable, handle_redclaw_onboarding_turn,
-    load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
-    load_redclaw_profile_prompt_bundle, load_redclaw_style_profile, now_i64, now_iso,
-    parse_json_value_from_text, payload_field, payload_string, redclaw_state_value,
-    save_redclaw_mvp_onboarding_progress, update_redclaw_profile_doc, workspace_root,
-    write_text_file, AppState,
+    complete_redclaw_mvp_onboarding, complete_redclaw_style_definition_from_interview,
+    ffmpeg_executable, handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded,
+    load_redclaw_onboarding_state, load_redclaw_profile_prompt_bundle, load_redclaw_style_profile,
+    mark_redclaw_style_definition_started, now_i64, now_iso, parse_json_value_from_text,
+    payload_field, payload_string, redclaw_state_value, save_redclaw_mvp_onboarding_progress,
+    update_redclaw_profile_doc, workspace_root, write_text_file, AppState,
 };
 use redclaw_task_control::{
     create_confirmed_task_from_intent, handle_task_cancel, handle_task_confirm, handle_task_create,
@@ -250,6 +250,26 @@ pub fn handle_redclaw_channel(
                 .unwrap_or_else(|| json!({}));
             complete_redclaw_mvp_onboarding(app, state, &answers)
         })(),
+        "redclaw:profile:start-style-definition" => (|| {
+            let force_restart = payload_field(payload, "forceRestart")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let source = payload_string(payload, "source").unwrap_or_else(|| "manual".to_string());
+            let session_id = payload_string(payload, "sessionId");
+            let onboarding_state = mark_redclaw_style_definition_started(
+                state,
+                session_id.as_deref(),
+                &source,
+                force_restart,
+            )?;
+            Ok(json!({
+                "success": true,
+                "state": onboarding_state
+            }))
+        })(),
+        "redclaw:profile:complete-style-definition" => {
+            complete_redclaw_style_definition_from_interview(state, payload)
+        }
         "redclaw:runner-start" => (|| {
             let status = with_store_mut(state, |store| {
                 store.redclaw_state.enabled = true;

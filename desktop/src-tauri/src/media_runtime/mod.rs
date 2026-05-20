@@ -1248,6 +1248,12 @@ fn retry_policy_for_stage(stage: &str) -> Option<(&'static str, &'static str, us
     }
 }
 
+fn is_non_retryable_voice_clone_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("http 404")
+        || normalized.contains("no active source available for this model")
+}
+
 fn schedule_stage_retry_or_dead_letter(
     app: &AppHandle,
     job_id: &str,
@@ -1255,6 +1261,9 @@ fn schedule_stage_retry_or_dead_letter(
     message: &str,
     result_json: Option<&Value>,
 ) -> Result<(), String> {
+    if stage == "voice-clone-submit" && is_non_retryable_voice_clone_error(message) {
+        return fail_job(app, job_id, message, result_json);
+    }
     let Some((next_status, retry_event_type, retry_limit, base_delay_ms)) =
         retry_policy_for_stage(stage)
     else {
@@ -3985,10 +3994,47 @@ fn run_voice_clone_submit_worker(
             object.insert("source".to_string(), json!(loaded.job.source.clone()));
             object.insert("jobId".to_string(), json!(loaded.job.job_id.clone()));
         }
+        let clone_model =
+            payload_string(&payload, "model").or_else(|| loaded.job.provider_model.clone());
+        let target_tts_model = payload_string(&payload, "targetTtsModel")
+            .or_else(|| payload_string(&payload, "target_tts_model"))
+            .or_else(|| payload_string(&payload, "ttsModel"))
+            .or_else(|| payload_string(&payload, "tts_model"));
+        {
+            let conn = open_media_runtime_connection(&state)?;
+            let current = load_job_with_current_attempt(&conn, &loaded.job.job_id)?;
+            append_event_with_connection(
+                &conn,
+                &loaded.job.job_id,
+                current
+                    .as_ref()
+                    .map(|item| item.attempt.attempt_id.as_str()),
+                "voice_clone_request",
+                "Voice clone request started",
+                Some(&json!({
+                    "model": clone_model,
+                    "targetTtsModel": target_tts_model,
+                    "providerModel": loaded.job.provider_model,
+                    "providerKey": loaded.job.provider_key,
+                    "ownerAssetId": payload_string(&payload, "ownerAssetId")
+                        .or_else(|| payload_string(&payload, "assetId"))
+                        .or_else(|| payload_string(&payload, "subjectId")),
+                    "sampleFileKey": payload_string(&payload, "sampleFileKey")
+                        .or_else(|| payload_string(&payload, "sample_file_key")),
+                    "samplePath": payload_string(&payload, "samplePath"),
+                })),
+            )?;
+        }
         let result = crate::voice_service::clone_voice(Some(&app), &state, &payload)?;
         complete_voice_clone_job(&app, &loaded, &result)
     })();
     if let Err(error) = result {
+        let clone_model = payload_string(&loaded.job.request_json, "model")
+            .or_else(|| loaded.job.provider_model.clone());
+        let target_tts_model = payload_string(&loaded.job.request_json, "targetTtsModel")
+            .or_else(|| payload_string(&loaded.job.request_json, "target_tts_model"))
+            .or_else(|| payload_string(&loaded.job.request_json, "ttsModel"))
+            .or_else(|| payload_string(&loaded.job.request_json, "tts_model"));
         if let Some(subject_id) = loaded
             .job
             .request_json
@@ -4002,18 +4048,25 @@ fn run_voice_clone_submit_worker(
                 error.clone(),
             );
         }
+        let error_payload = json!({
+            "model": clone_model.clone(),
+            "targetTtsModel": target_tts_model.clone(),
+            "providerModel": loaded.job.provider_model.clone(),
+            "providerKey": loaded.job.provider_key.clone(),
+            "upstreamError": error.clone(),
+        });
         let _ = schedule_stage_retry_or_dead_letter(
             &app,
             &loaded.job.job_id,
             "voice-clone-submit",
             &error,
-            None,
+            Some(&error_payload),
         );
         emit_job_log(
             &app,
             &loaded.job.job_id,
             &format!("voice clone submit failed: {error}"),
-            None,
+            Some(error_payload),
         );
     }
     release_slot(&slots, &loaded, "voice-clone-submit");

@@ -81,6 +81,11 @@ const getInspectableSource = (target: ChatMessageLinkTarget): string => (
     target.localPathCandidate || target.href
 );
 
+const canCopyPreviewText = (target: ChatMessageLinkTarget): boolean => (
+    (target.kind === 'text' || target.kind === 'html' || target.kind === 'manuscript')
+    && typeof target.previewText === 'string'
+);
+
 export function RedClawFilePreviewPane({
     target,
     onClose,
@@ -92,6 +97,7 @@ export function RedClawFilePreviewPane({
     const [copied, setCopied] = useState(false);
     const Icon = getKindIcon(target.kind);
     const sourceLabel = getInspectableSource(target);
+    const copyLabel = canCopyPreviewText(target) ? '复制全文' : '复制路径';
     const canInlinePreview = useMemo(() => (
         target.kind === 'image'
         || target.kind === 'video'
@@ -109,13 +115,14 @@ export function RedClawFilePreviewPane({
     }, [target.href]);
 
     const copySource = async () => {
-        if (!sourceLabel) return;
+        const copyText = canCopyPreviewText(target) ? target.previewText || '' : sourceLabel;
+        if (!copyText) return;
         try {
-            await navigator.clipboard.writeText(sourceLabel);
+            await navigator.clipboard.writeText(copyText);
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1200);
         } catch (error) {
-            console.error('Failed to copy AI preview path:', error);
+            console.error('Failed to copy AI preview content:', error);
         }
     };
 
@@ -136,7 +143,7 @@ export function RedClawFilePreviewPane({
                         className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface-primary px-3 py-2 text-sm font-semibold text-text-secondary transition hover:bg-surface-secondary"
                     >
                         <Copy className="h-4 w-4" />
-                        复制路径
+                        {copyLabel}
                     </button>
                 </div>
             );
@@ -257,7 +264,7 @@ export function RedClawFilePreviewPane({
                             'inline-flex items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary',
                             sidebarVariant ? 'h-8 w-8' : 'h-9 w-9'
                         )}
-                        title="复制路径"
+                        title={copyLabel}
                     >
                         {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                     </button>

@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: not_started
-last_updated: 2026-05-16
+last_updated: 2026-05-19
 owner: ai-runtime
 scope: desktop
 target_files:
@@ -47,7 +47,7 @@ success_metrics:
 
 - 普通用户只看到“处理中”“已生成产物”“可预览/可保存/可重试”。
 - 用户可以让 agent 持续完善一个 workspace 专属功能，例如数据看板、批处理工具、素材整理页、稿件质检页、视频工作流助手或自定义导出器。
-- agent 可以稳定使用 Python、Node、ffmpeg、ffprobe、sharp、Remotion 等能力，也可以通过 SDK 调用 RedConvert 已有 app 能力。
+- agent 可以稳定使用用户电脑里的 Python / Node / pip / npm、Node 生态里的 sharp / Remotion，以及 RedConvert app 内置的 ffmpeg / ffprobe 媒体能力，也可以通过 SDK 调用 RedConvert 已有 app 能力。
 - RedConvert 能完整记录每次脚本、长期功能、依赖、输入、输出、日志、权限和产物 lineage。
 - 用户 workspace 根目录不被 `package.json`、`requirements.txt`、`.venv`、`node_modules` 或临时脚本污染。
 
@@ -59,7 +59,7 @@ success_metrics:
 
 ## 2. Baseline
 
-当前仓库已经有三类相关能力：
+当前仓库已经有四类相关能力：
 
 1. CLI Runtime Control Plane
 
@@ -82,6 +82,19 @@ success_metrics:
 - 这条线适合 marketplace / 外部插件 / 安装包级扩展。
 - Workspace Runtime 不应复制完整插件市场，而应提供更轻的 workspace-local feature 模型；后续可以把成熟 workspace feature 提升为插件。
 
+### 2.1 Codex 0.131 Direction Applied
+
+本计划应吸收 Codex 0.131 已经验证的几个底层方向，但不照搬它的 CLI 产品形态：
+
+- SDK 要 protocol-first：RedConvert SDK 的 Python / Node 包都从同一份 JSON schema / typed protocol 生成类型，公共 API 固定，内部 IPC / Tauri command 可以继续演进。
+- SDK 要有 run handle：脚本、feature action、媒体 job 和 SDK 长任务都返回 `RunHandle` / `ActionHandle`，事件流按 `runId` 路由，允许同一 workspace 内多个 run 并发。
+- 审批模式要显式：使用 `ApprovalMode` 这类结构化枚举表达 `deny_all`、`on_request`、`auto_review`，不要在 SDK 参数里散落多个布尔值。
+- 诊断要产品化：提供 `workspace-runtime:doctor` 和 Settings 里的同源诊断报告，覆盖编程环境、项目 runtime、SDK schema、feature registry、app 内置媒体工具、网络和权限。
+- 状态面要数据驱动：Chat / Wander / RedClaw 的过程卡和状态栏只显示 workspace root、runtime ready 状态、审批模式、有效 capability、当前 run 进度，不用解释性 UI 堆满页面。
+- app-server 思路要转成 host bridge：内部热路径使用 typed request / event，不在 Rust host、renderer、SDK 之间反复拼自由文本 JSON；JSON 只作为 SDK 外部边界和持久化格式。
+- feature 分享要走 registry：workspace feature 先是本地能力，成熟后可以导出为 share package，再进入插件市场或团队共享；不要把所有 feature 默认升级成全局插件。
+- 后台生命周期要机器可读：未来若加入 feature daemon / remote runner，启动、停止、启用远程控制、状态查询都必须输出结构化 JSON，并按 runtime root 串行化。
+
 本计划应该补齐的是：一个 workspace-scoped 的真实 Python + Node runtime、workspace feature model 和 RedConvert App SDK bridge，并把它纳入现有 CLI runtime、tool router、runtime events、session transcript、artifact registry、plugin/capability 思路。
 
 ## 3. Architecture Decision
@@ -94,7 +107,7 @@ success_metrics:
 
 核心形态：
 
-- 所有 workspace 共用一套受管 Python / Node runtime 内核。
+- 所有 workspace 共用一套项目级 Python / Node runtime 内核。
 - runtime 默认放在 RedConvert 控制的项目工作目录：`<project-working-dir>/.redbox-runtime/`。
 - Python `.venv`、Node `node_modules`、SDK、模板、公共脚本和公共 feature library 都属于共享层。
 - 每个 workspace 在共享 runtime 内有独立 namespace。
@@ -664,10 +677,38 @@ Promotion path:
 one-off script
   -> saved workspace feature
   -> reusable local feature
+  -> exported share package
   -> packaged plugin candidate
 ```
 
 This avoids forcing every user-specific need into the full plugin system while keeping the architecture compatible with plugin v2 capability concepts.
+
+### 9.5 Feature Share Package
+
+Feature sharing should follow the Codex marketplace direction but stay workspace-first in V1.
+
+Share package structure:
+
+```text
+feature-share/
+  feature.json
+  sdk.schema.json
+  package-lock.json or requirements.lock.txt when relevant
+  src/
+  view/
+  templates/
+  README.md
+  screenshots/
+  checksums.json
+```
+
+Rules:
+
+- Stable id should be `<feature-name>@<source>`, where source is `workspace`, `team`, `local-marketplace` or future marketplace name.
+- Exporting a feature does not automatically install it globally.
+- Importing a feature creates a draft in the target workspace and re-runs manifest validation, SDK compatibility checks and smoke checks.
+- Shared packages cannot carry workspace-private artifacts, run logs, credentials or capability grants.
+- Version metadata should include SDK version, required capabilities, dependency summary and origin workspace id hash.
 
 ## 10. App SDK Bridge
 
@@ -679,7 +720,42 @@ Workspace code must not import internal Tauri modules, mutate SQLite directly, o
 
 The SDK is not a new agent. It is a typed host API for code written by the agent or user.
 
-### 10.2 SDK Surfaces
+### 10.2 Protocol And Generated Types
+
+The SDK should follow the Codex-style generated-contract direction:
+
+- A single `redbox-sdk-protocol` schema defines requests, responses, notifications, errors, approval modes and run handles.
+- TypeScript and Python SDK packages are generated from the same schema.
+- Rust host modules use typed structs on the hot path; JSON serialization is reserved for SDK process boundaries, persisted manifests and diagnostics export.
+- SDK method names stay stable even when internal Tauri commands, stores or IPC channels move.
+- Schema compatibility is checked at feature enable time and at run start.
+
+Core protocol records:
+
+```ts
+export type ApprovalMode = "deny_all" | "on_request" | "auto_review";
+
+export interface SdkContext {
+  workspaceId: string;
+  featureId?: string;
+  runId?: string;
+  sdkVersion: string;
+  approvalMode: ApprovalMode;
+  capabilities: string[];
+}
+
+export interface RunHandle {
+  runId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stream(): AsyncIterable<RuntimeEvent>;
+  cancel(reason?: string): Promise<void>;
+  result(): Promise<RunResult>;
+}
+```
+
+This keeps agent-written code predictable: long-running work is identified by handle, approval is explicit, and stream consumers only receive events for their own `runId`.
+
+### 10.3 SDK Surfaces
 
 Initial SDK namespaces:
 
@@ -703,6 +779,7 @@ Example TypeScript shape:
 
 ```ts
 export interface RedboxSdk {
+  getContext(): Promise<SdkContext>;
   workspace: {
     files: {
       list(query: FileListQuery): Promise<FileListResult>;
@@ -737,10 +814,14 @@ export interface RedboxSdk {
   approvals: {
     request(input: ApprovalRequest): Promise<ApprovalResult>;
   };
+  runtime: {
+    runScript(input: ScriptRunInput): Promise<RunHandle>;
+    getRun(runId: string): Promise<RunResult>;
+  };
 }
 ```
 
-### 10.3 SDK Capability Inventory
+### 10.4 SDK Capability Inventory
 
 The SDK must expose a typed capability inventory. Each capability should have:
 
@@ -914,7 +995,7 @@ Rules:
 - V1 is read-only.
 - No API keys, raw tokens or secrets through SDK.
 
-### 10.4 Capability Mapping
+### 10.5 Capability Mapping
 
 SDK calls require explicit capabilities:
 
@@ -937,7 +1018,7 @@ SDK calls require explicit capabilities:
 
 The host enforces capabilities and approval. The agent guidance can recommend which SDK call to use, but the SDK does not encode business heuristics.
 
-### 10.5 SDK Runtime Access
+### 10.6 SDK Runtime Access
 
 Feature code gets SDK access through a host-injected bridge:
 
@@ -955,13 +1036,15 @@ redbox = RedboxSdk.from_env()
 files = redbox.workspace.files.list({"root": "workspace://", "limit": 50})
 ```
 
-Implementation options:
+Implementation direction:
 
 - Node SDK calls a local IPC bridge controlled by the host.
 - Python SDK calls the same bridge through a small local HTTP/stdio adapter.
 - Both SDKs use the same JSON schema contracts.
+- Both SDKs expose sync convenience methods and async/event-stream methods where the underlying host action can be long-running.
+- SDK bridge queues are bounded. Backpressure returns structured overload errors instead of hanging approval or run events behind saturated queues.
 
-### 10.6 SDK Versioning
+### 10.7 SDK Versioning
 
 SDK must be versioned:
 
@@ -995,13 +1078,18 @@ desktop/src-tauri/src/workspace_runtime/
   scripts.rs
   features.rs
   feature_registry.rs
+  feature_share.rs
   sdk.rs
+  sdk_protocol.rs
   sdk_schema.rs
+  event_router.rs
   ui_slots.rs
   dependencies.rs
   runs.rs
   artifacts.rs
   policy.rs
+  doctor.rs
+  status.rs
   cleanup.rs
 ```
 
@@ -1017,13 +1105,18 @@ desktop/src-tauri/src/workspace_runtime/
 - `scripts.rs`：脚本保存、校验、entrypoint 生成。
 - `features.rs`：feature manifest、文件写入、更新和 smoke check。
 - `feature_registry.rs`：当前 workspace enabled/draft feature 快照。
+- `feature_share.rs`：workspace feature 导出、导入、版本元数据和插件候选包生成。
 - `sdk.rs`：App SDK bridge 调用分发、权限校验、结果包装。
+- `sdk_protocol.rs`：SDK typed request / response / notification / error / approval mode。
 - `sdk_schema.rs`：SDK JSON schema、版本、兼容性检查。
+- `event_router.rs`：按 `workspaceId`、`runId`、`featureId` 路由 runtime events，隔离并发 run。
 - `ui_slots.rs`：workspace feature view slot 注册和 sandbox 参数。
 - `dependencies.rs`：依赖请求去重、安装锁、版本记录。
 - `runs.rs`：run manifest、stdout/stderr、状态变更。
 - `artifacts.rs`：产物登记、预览索引、发布到 workspace。
 - `policy.rs`：网络、写入、命令、超时、大小限制。
+- `doctor.rs`：被动诊断编程环境、runtime、SDK、feature registry、内置媒体工具和权限状态。
+- `status.rs`：给 renderer / process card / diagnostics 使用的 compact status snapshot。
 - `cleanup.rs`：缓存清理、过期 run 清理、损坏 runtime 修复。
 
 ### 11.2 Commands
@@ -1032,6 +1125,8 @@ desktop/src-tauri/src/workspace_runtime/
 
 ```text
 workspace-runtime:inspect
+workspace-runtime:status
+workspace-runtime:doctor
 workspace-runtime:bootstrap
 workspace-runtime:repair
 workspace-runtime:install-dependency
@@ -1049,6 +1144,9 @@ workspace-runtime:get-feature
 workspace-runtime:enable-feature
 workspace-runtime:disable-feature
 workspace-runtime:run-feature-action
+workspace-runtime:share-feature
+workspace-runtime:import-feature
+workspace-runtime:upgrade-feature
 workspace-runtime:list-sdk-capabilities
 workspace-runtime:invoke-sdk
 workspace-runtime:list-ui-slots
@@ -1090,6 +1188,8 @@ desktop/src/bridge/ipcRenderer.ts
 Action 分组：
 
 - `workspace_runtime.inspect`
+- `workspace_runtime.status`
+- `workspace_runtime.doctor`
 - `workspace_runtime.bootstrap`
 - `workspace_runtime.install_dependency`
 - `workspace_runtime.create_script`
@@ -1099,6 +1199,8 @@ Action 分组：
 - `workspace_runtime.create_feature`
 - `workspace_runtime.update_feature`
 - `workspace_runtime.run_feature_action`
+- `workspace_runtime.share_feature`
+- `workspace_runtime.import_feature`
 - `workspace_runtime.list_features`
 - `workspace_runtime.expose_feature_view`
 - `workspace_runtime.list_sdk_capabilities`
@@ -1113,6 +1215,10 @@ Action 分组：
 runtime:workspace-runtime-bootstrap-started
 runtime:workspace-runtime-bootstrap-completed
 runtime:workspace-runtime-bootstrap-failed
+runtime:workspace-runtime-status-updated
+runtime:workspace-runtime-doctor-started
+runtime:workspace-runtime-doctor-completed
+runtime:workspace-runtime-doctor-failed
 runtime:script-created
 runtime:script-run-started
 runtime:script-run-output
@@ -1129,12 +1235,18 @@ runtime:feature-updated
 runtime:feature-enabled
 runtime:feature-disabled
 runtime:feature-action-started
+runtime:feature-action-output
 runtime:feature-action-completed
 runtime:feature-action-failed
+runtime:feature-shared
+runtime:feature-imported
+runtime:feature-upgraded
 runtime:feature-view-registered
 runtime:sdk-call-started
 runtime:sdk-call-completed
 runtime:sdk-call-failed
+runtime:sdk-protocol-mismatch
+runtime:event-router-lagged
 ```
 
 UI 不需要展示全部事件，只消费摘要和状态。
@@ -2194,6 +2306,10 @@ Deliverables:
 - smoke tests.
 - feature folder and manifest validation.
 - App SDK schema registry.
+- App SDK generated protocol records for TypeScript / Python.
+- run handle and event router.
+- passive doctor diagnostics.
+- compact runtime status snapshot.
 - shared runtime root and workspace namespace resolver.
 - system Python/pip and Node/npm detection plus CLI install flow.
 - runtime kernel repair command.
@@ -2205,7 +2321,9 @@ Acceptance:
 - Broken runtime can be detected and repaired.
 - Feature manifest validation works without starting feature code.
 - Multiple workspaces resolve into separate namespaces under one shared runtime root.
-- A machine without system Python/Node can bootstrap managed runtime.
+- A machine without system Python/Node enters an agent-assisted install flow with approval and keeps non-code app capabilities usable.
+- Doctor reports environment, runtime, SDK, feature registry and app-bundled media status without mutating local state.
+- Two concurrent runs route output and completion events by `runId`.
 
 ### 26.2 Script Execution
 
@@ -2252,7 +2370,9 @@ Deliverables:
 - feature view sandbox slot.
 - App SDK bridge for Node and Python.
 - SDK capability registry.
+- SDK approval mode mapping.
 - feature smoke check.
+- feature share package export/import.
 
 Acceptance:
 
@@ -2261,6 +2381,7 @@ Acceptance:
 - denied SDK capability returns structured permission error.
 - feature view can load in a sandboxed slot with context.
 - enabling a feature does not expose new capabilities without grant.
+- exported feature package can be imported as draft in another workspace without carrying private data or grants.
 
 ### 26.5 Tool Plane Integration
 
@@ -2276,6 +2397,8 @@ Deliverables:
 - verification taxonomy actions.
 - feature create/update/run actions.
 - app SDK capability discovery/invoke actions.
+- status and doctor actions.
+- feature share/import actions.
 
 Acceptance:
 
@@ -2285,6 +2408,7 @@ Acceptance:
 - simple manuscript editing does not expose workspace runtime by default.
 - deferred template discovery works without injecting all templates into prompt.
 - reusable feature creation is available without adding new top-level tools.
+- doctor output is available as structured JSON for support and compact human-readable diagnostics for Settings.
 
 ### 26.6 UI Integration
 
@@ -2295,6 +2419,7 @@ Deliverables:
 - compact process cards.
 - artifact preview links.
 - Settings diagnostics page.
+- compact runtime status surface in process cards/status areas.
 - workspace feature registry view.
 - sandboxed feature view slot.
 
@@ -2305,12 +2430,13 @@ Acceptance:
 - Logs are available on demand.
 - Existing page refresh behavior is not replaced by full-page loading.
 - Feature views are opt-in/pinned and do not add noisy default UI.
+- Status UI shows runtime root, readiness, approval mode and current run state without adding broad explanatory text.
 
 ### 26.7 Media Workflow Integration
 
 Deliverables:
 
-- ffmpeg / ffprobe verification helpers.
+- app-bundled ffmpeg / ffprobe verification helpers.
 - image processing template.
 - video frame extraction template.
 - Remotion project generation path.
@@ -2330,10 +2456,13 @@ Deliverables:
 - user-facing diagnostic copy.
 - troubleshooting runbook.
 - runtime reset procedure.
+- SDK protocol compatibility notes.
+- feature share package format.
 
 Acceptance:
 
 - Support can answer where scripts ran, what dependencies were installed, what feature code changed, which SDK capabilities were granted, what files were produced and why a run failed.
+- Support can ask for one doctor report instead of reconstructing Python/Node/SDK/media status from separate logs.
 
 ## 27. Testing Matrix
 
@@ -2350,6 +2479,11 @@ Rust tests:
 - template schema validation.
 - feature manifest validation.
 - SDK capability guard.
+- SDK protocol schema compatibility.
+- ApprovalMode mapping.
+- event routing by `runId`.
+- doctor report JSON and compact UI model.
+- feature share package export/import.
 - shared runtime workspace namespace isolation.
 
 Integration tests:
@@ -2370,6 +2504,8 @@ Integration tests:
 - SDK allowed and denied calls.
 - sandboxed feature view context.
 - two workspaces share dependencies but cannot read each other's artifacts.
+- concurrent script and feature action events do not cross streams.
+- SDK backpressure returns structured overload errors.
 
 Renderer tests:
 
@@ -2377,6 +2513,7 @@ Renderer tests:
 - logs collapsed by default.
 - artifact preview action.
 - settings diagnostics state.
+- compact runtime status state.
 - manuscript editor does not show script runtime controls by default.
 - feature registry renders enabled/draft/failed states.
 - feature view slot loads with minimal bridge.
@@ -2395,27 +2532,29 @@ Manual verification:
 - video task can discover and use a video template.
 - user asks for a reusable dashboard and agent creates a draft workspace feature.
 - feature can call asset SDK without direct store access.
+- doctor report shows app-bundled ffmpeg/ffprobe status separately from Python/Node programming environment.
 
-## 28. Open Questions
+## 28. Resolved Product Decisions
 
-1. Runtime storage should be app-data only in V1, or allow `.redbox/runtime` opt-in?
-2. Should baseline Python / Node dependencies be installed on first bootstrap, or lazy installed on first use?
-3. Which dependency classes can install without confirmation?
-4. Should scripts generated by agent ever be saved automatically, or only run manifests are persisted?
-5. Should Remotion be part of baseline Node deps, or video-only lazy install?
-6. How much script content should be visible to normal users by default?
-7. Should workspace runtime be included in export / backup flows?
-8. Should RedConvert offer a built-in script template library for common tasks?
-9. Should template authoring be exposed to users, or remain internal in V1?
-10. Should verification checks be selectable by users in diagnostics, or only visible as run evidence?
-11. Which UI slots are safe enough for V1 feature views?
-12. Should feature code be editable by users, or only by agent/developer diagnostics?
-13. When should a workspace feature be promoted into the plugin system?
-14. Should SDK capability grants be per feature, per workspace, or both?
-15. Which dependency conflicts require isolated per-feature environments?
-16. How should cleanup decide whether a shared dependency is still reachable?
-17. Which runtime binaries should ship in the installer versus download on first use?
-18. How should Windows/macOS installer permission, quarantine and admin elevation be handled for agent-assisted installs?
+The plan is intentionally converged. These are product decisions, not parallel options:
+
+1. Runtime storage: V1 uses the RedConvert project working directory shared runtime root. User workspace root pointers stay metadata-only.
+2. Dependency timing: install the smallest Python / Node baseline at bootstrap, then lazy-install heavier libraries such as Remotion or data-science packages when a run or feature declares them.
+3. Dependency approval: known baseline packages can install through policy; unknown, network-heavy, native-build, global, or executable packages require approval.
+4. Script persistence: run manifests are always persisted; script source is persisted inside runtime runs and saved as a feature only when the agent or user intentionally creates a workspace feature.
+5. Remotion: video-only lazy install in V1, not a universal baseline dependency.
+6. Normal UI visibility: show compact run status, artifacts and failures; show source code, logs and dependency details only in diagnostics or explicit developer views.
+7. Backup/export: V1 can export feature share packages and run evidence, but does not bundle the full shared `.venv` or `node_modules`.
+8. Templates: ship a built-in template library for common media, data and feature scaffolds; authoring remains internal/developer-only in V1.
+9. Verification: verification checks are run evidence by default; diagnostics can display them, normal users should not configure them in V1.
+10. UI slots: V1 allows `workspace.tools`, `asset.inspector`, `redclaw.artifactInspector` and `diagnostics.featureDev` only.
+11. Feature editing: agent/developer diagnostics can edit feature code; normal users enable, disable, run, pin, import and remove features.
+12. Plugin promotion: a feature becomes a plugin candidate only after export as share package, SDK compatibility check, smoke check and explicit user/developer action.
+13. Capability grants: grants are per feature and per workspace; share packages can declare requested capabilities but cannot carry grants.
+14. Dependency conflicts: V1 records conflicts and can mark a feature incompatible; isolated per-feature environments are reserved for later high-risk cases.
+15. Cleanup: cleanup removes unreachable runs, caches and artifacts by manifest reachability; feature manifests and user-enabled feature data survive unless explicitly deleted.
+16. Agent-assisted install: Python / Node / pip / npm installation uses visible CLI runtime commands with approval, platform-specific instructions and no silent shell profile edits.
+17. App media tools: ffmpeg / ffprobe are shipped and updated as app-bundled media tools, diagnosed separately from the user's programming environment.
 
 ## 29. Recommended V1 Scope
 
@@ -2429,6 +2568,8 @@ V1 should include:
 - run manifest and artifact registry.
 - compact UI events.
 - Settings diagnostics.
+- passive doctor diagnostics with JSON and compact UI output.
+- compact runtime status snapshot.
 - ffmpeg/ffprobe verification integration.
 - simple media templates.
 - agent usage contract.
@@ -2439,6 +2580,10 @@ V1 should include:
 - feature action runner.
 - one sandboxed feature view slot.
 - App SDK V1 for files, artifacts, assets, manuscripts, media probe and approvals.
+- generated SDK protocol types for TypeScript and Python.
+- run handles and `runId`-scoped event routing.
+- explicit ApprovalMode mapping.
+- local feature share package export/import as draft.
 - shared runtime root with per-workspace namespace isolation.
 - system programming environment detection and agent-assisted install for Python, pip, Node and npm.
 
@@ -2452,6 +2597,7 @@ V1 should not include:
 - hardcoded natural-language routing based on task keywords.
 - automatic script use for simple manuscript editing.
 - full marketplace plugin packaging.
+- remote feature daemon or remote runner lifecycle.
 - arbitrary full-app UI injection.
 - unrestricted SDK access to internal stores.
 - per-workspace duplicate `.venv` / `node_modules` as the default runtime model.

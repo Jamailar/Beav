@@ -3,8 +3,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{build_chat_send_turn, run_chat_send_turn, PreparedSessionAgentTurn};
 use crate::commands::chat_state::{
-    ensure_chat_session_record, latest_session_id, request_chat_runtime_cancel,
-    resolve_runtime_mode_for_session,
+    ensure_chat_session_record, is_first_assistant_turn_for_session, latest_session_id,
+    request_chat_runtime_cancel, resolve_runtime_mode_for_session,
 };
 use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_tool_result};
 use crate::member_skill::advisor_member_skill_ref;
@@ -19,9 +19,10 @@ use crate::skills::{
     requested_skill_names_from_task_hints, SkillActivationSource,
 };
 use crate::{
-    append_debug_log_state, append_debug_trace_state, append_session_transcript, log_timing_event,
-    make_id, now_i64, now_iso, now_ms, payload_field, payload_string, session_title_from_message,
-    AppState, ChatMessageRecord,
+    append_debug_log_state, append_debug_trace_state, append_session_transcript,
+    load_redclaw_onboarding_state, log_timing_event, make_id,
+    mark_redclaw_style_definition_started, now_i64, now_iso, now_ms, payload_field, payload_string,
+    session_title_from_message, AppState, ChatMessageRecord, REDCLAW_STYLE_DEFINITION_SKILL_NAME,
 };
 
 const TASK_SCOPED_METADATA_FIELDS: &[&str] = &[
@@ -559,6 +560,100 @@ fn merge_task_hints_into_session_metadata(
     Ok(requested_skills)
 }
 
+fn maybe_activate_redclaw_style_definition_for_first_turn(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<bool, String> {
+    let should_activate = with_store(state, |store| {
+        Ok(
+            resolve_runtime_mode_for_session(&store, session_id) == "redclaw"
+                && is_first_assistant_turn_for_session(&store, session_id),
+        )
+    })?;
+    if !should_activate {
+        return Ok(false);
+    }
+    let current_onboarding_state = load_redclaw_onboarding_state(state)?;
+    let already_completed = current_onboarding_state
+        .get("completedAt")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let already_activated = current_onboarding_state
+        .get("styleDefinitionSkill")
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("activatedAt"))
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if already_completed || already_activated {
+        return Ok(false);
+    }
+    let onboarding_state = mark_redclaw_style_definition_started(
+        state,
+        Some(session_id),
+        "first-redclaw-chat",
+        false,
+    )?;
+    let activated_at = onboarding_state
+        .get("styleDefinitionSkill")
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("activatedAt"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    let completed = onboarding_state
+        .get("completedAt")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !activated_at || completed {
+        return Ok(false);
+    }
+    with_store_mut(state, |store| {
+        let Some(session) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
+        else {
+            return Ok(false);
+        };
+        let active_skills = merge_requested_skills_into_session(
+            session,
+            &[REDCLAW_STYLE_DEFINITION_SKILL_NAME.to_string()],
+            SkillActivationSource::RoutePolicy,
+            "redclaw.first_turn_style_definition",
+        );
+        let mut metadata = session
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        metadata.insert("activeSkills".to_string(), json!(active_skills));
+        metadata.insert(
+            "allowedOperateActions".to_string(),
+            json!([
+                "redclaw.profile.bundle",
+                "redclaw.profile.read",
+                "redclaw.profile.update",
+                "redclaw.profile.completeStyleDefinition"
+            ]),
+        );
+        metadata.insert(
+            "redclawStyleDefinition".to_string(),
+            json!({
+                "status": "interviewing",
+                "source": "first-redclaw-chat",
+                "skillName": REDCLAW_STYLE_DEFINITION_SKILL_NAME
+            }),
+        );
+        session.metadata = Some(Value::Object(metadata));
+        session.updated_at = now_iso();
+        Ok(true)
+    })
+}
+
 fn clear_stale_task_hints_from_metadata(metadata: &Value) -> Option<Value> {
     let mut metadata_object = metadata.as_object()?.clone();
     let mut changed = false;
@@ -687,6 +782,18 @@ pub fn handle_send_channel(
                         requested_skills.join(",")
                     ),
                 );
+            }
+            if let Some(active_session_id) = session_id.as_deref() {
+                if maybe_activate_redclaw_style_definition_for_first_turn(state, active_session_id)?
+                {
+                    append_debug_log_state(
+                        state,
+                        format!(
+                            "[runtime][skills][chat][{}] auto_activated={}",
+                            active_session_id, REDCLAW_STYLE_DEFINITION_SKILL_NAME
+                        ),
+                    );
+                }
             }
             if let Some(active_session_id) = session_id.as_deref() {
                 let (runtime_mode, activated_skills) =

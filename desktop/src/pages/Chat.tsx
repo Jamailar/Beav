@@ -41,6 +41,7 @@ import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
 import { ChatDropOverlay } from './chat/ChatDropOverlay';
+import { ChatAttachmentActionOverlay } from './chat/ChatAttachmentActionOverlay';
 import { useChatAttachments } from './chat/useChatAttachments';
 
 interface AdvisorMentionRecord {
@@ -336,6 +337,7 @@ interface ChatProps {
   placeholder?: string;
   fixedMemberMention?: ChatMemberMentionOption | null;
   onSessionActivity?: (sessionId: string, updatedAt: string) => void;
+  clearSignal?: number;
 }
 
 interface ChatContextUsage {
@@ -580,23 +582,41 @@ function attachmentShortcutKind(attachment: UploadedFileAttachment | null): 'ima
   return 'file';
 }
 
+function attachmentActionIdentity(attachment: UploadedFileAttachment): string {
+  return String(
+    attachment.attachmentId
+    || attachment.workspaceRelativePath
+    || attachment.toolPath
+    || attachment.absolutePath
+    || attachment.originalAbsolutePath
+    || attachment.inlineDataUrl
+    || attachment.name
+  ).trim();
+}
+
+function attachmentActionKey(attachments: UploadedFileAttachment[]): string {
+  return attachments
+    .map((attachment) => attachmentActionIdentity(attachment))
+    .filter(Boolean)
+    .join('|');
+}
+
 function defaultComposerShortcuts(context: ChatShortcutContext): ChatShortcut[] {
   const attachmentKind = attachmentShortcutKind(context.attachment);
   const attachment = context.attachment || undefined;
   if (attachmentKind === 'image' && attachmentCapability(attachment, 'imageVision')) {
     return [
-      { label: '🖼️ 分析图片', text: '请分析这张图片的内容、风格和可用于创作的亮点。' },
-      { label: '✨ 生成同款', text: '请基于这张图片生成同款视觉方案，保留核心风格并给出可执行提示词。' },
-      { label: '📝 提取文案', text: '请从这张图片中提取可用文案，并改写成适合发布的内容。' },
-      { label: '🎬 做成视频', text: '请把这张图片设计成一条 AI 视频方案，包括画面运动、镜头节奏和口播文案。' },
+      { label: '生成电商套图', text: '请基于我上传的图片，生成一套电商套图方案。先分析图片主体、卖点、适用人群和视觉风格，再输出主图、卖点图、场景图、细节图、对比图的画面方案、标题文案、辅助文案和可执行生成提示词。' },
+      { label: '生成封面图', text: '请基于我上传的图片，生成一张适合社媒内容的封面图方案。请明确封面定位、主标题、视觉钩子、构图方式、字体和色彩建议，并给出可直接用于生成封面的提示词。' },
+      { label: '生成同款图', text: '请分析我上传图片的视觉风格、构图、光线、材质、色彩和主体表达，然后生成一组同款视觉提示词。要求保留核心风格，但不要直接复制原图内容。' },
+      { label: '提取卖点文案', text: '请从我上传的图片中提取可用于商业转化的卖点、场景、情绪价值和视觉亮点，并改写成一组适合详情页或社媒投放的标题和短文案。' },
     ];
   }
   if (attachmentKind === 'video' && (attachmentCapability(attachment, 'videoAnalyze') || attachmentCapability(attachment, 'videoEdit'))) {
     return [
-      { label: '识别字幕', text: '请调用 Operate(resource="media", operation="transcribe", input={"sourcePath":"该视频附件路径","format":"srt"}) 识别这个视频的字幕，输出 SRT，并告诉我生成的字幕文件路径。不要调用 video.analyze 或 speech_extract。' },
-      { label: '剪口播', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，然后把它剪成一条口播短视频，保留核心观点和最有传播力的表达。' },
-      { label: '智能剪辑', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，并给出智能剪辑方案，包括结构、节奏、删减点和成片脚本。' },
-      { label: '提取精彩切片', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，提取最精彩的短切片，按传播潜力排序并说明每段用途。' },
+      { label: '爆款分析', text: '请先调用视频分析能力完整分析我上传的视频，再从爆款内容角度输出：核心主题、前 3 秒钩子、情绪节奏、内容结构、亮点片段、可复用金句、传播风险和优化建议。最后给出一版更容易出爆款的改造方案。' },
+      { label: '字幕提取', text: '请提取我上传视频里的字幕或语音内容，输出可编辑字幕文本，并尽量保留时间顺序。如果能生成字幕文件，请输出字幕文件路径；如果有听不清或需要人工确认的片段，请单独标出来。' },
+      { label: '剪辑切片', text: '请先调用视频分析能力分析我上传的视频，找出最精彩、最适合单独发布的切片片段。然后把这些精彩片段剪辑成独立的视频片段，并输出每个片段的主题、时间范围、推荐标题、用途和生成后的文件路径。' },
     ];
   }
   if (attachmentKind === 'file' && (
@@ -643,6 +663,13 @@ function writeFixedSessionWarmSnapshot(
     contextUsage: next.contextUsage ?? previous?.contextUsage ?? null,
     capturedAt: Date.now(),
   });
+}
+
+export function clearFixedSessionWarmSnapshot(sessionId: string | null | undefined): void {
+  const key = String(sessionId || '').trim();
+  if (!key) return;
+  fixedSessionWarmSnapshots.delete(key);
+  fixedSessionInflightLoads.delete(key);
 }
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
@@ -948,6 +975,7 @@ export function Chat({
   placeholder,
   fixedMemberMention = null,
   onSessionActivity,
+  clearSignal = 0,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => fixedSessionId ?? null);
@@ -973,6 +1001,7 @@ export function Chat({
   const [selectedAssetMentions, setSelectedAssetMentions] = useState<ChatAssetMentionOption[]>([]);
   const [knowledgeMentionOptions, setKnowledgeMentionOptions] = useState<ChatKnowledgeMentionOption[]>([]);
   const [selectedKnowledgeMentions, setSelectedKnowledgeMentions] = useState<ChatKnowledgeMentionOption[]>([]);
+  const [dismissedAttachmentActionKey, setDismissedAttachmentActionKey] = useState('');
   const documentThemeMode = useDocumentThemeMode();
   const fixedSessionMode = Boolean(fixedSessionId) || fixedSessionDraft;
   const attachmentDraftScopeId = fixedSessionId || currentSessionId || (fixedSessionDraft ? '__fixed_draft__' : '__new__');
@@ -980,6 +1009,20 @@ export function Chat({
   useEffect(() => {
     onExecutionStateChange?.(isProcessing);
   }, [isProcessing, onExecutionStateChange]);
+
+  useEffect(() => {
+    if (!clearSignal || !fixedSessionId) return;
+    clearFixedSessionWarmSnapshot(fixedSessionId);
+    localMessageMutationRef.current += 1;
+    missedChunksRef.current = '';
+    flushPendingStreamingUpdates();
+    setIsProcessing(false);
+    setConfirmRequest(null);
+    setCliEscalationRequest(null);
+    setErrorNotice(null);
+    setMessages([]);
+    setContextUsage(null);
+  }, [clearSignal, fixedSessionId]);
 
   useEffect(() => {
     if (!errorNotice) return undefined;
@@ -1032,6 +1075,11 @@ export function Chat({
     isProcessing,
     setErrorNotice,
   });
+
+  useEffect(() => {
+    if (pendingAttachments.length > 0) return;
+    setDismissedAttachmentActionKey('');
+  }, [pendingAttachments.length]);
   
   // Throttle buffer for streaming updates
   const pendingUpdateRef = useRef<{ content: string } | null>(null);
@@ -1749,8 +1797,16 @@ export function Chat({
 
       if (shouldAppendToCurrentSession) {
         localMessageMutationRef.current += 1;
-        setMessages(prev => [...prev, userMsg, aiPlaceholder]);
+        setMessages(prev => {
+          const nextMessages = [...prev, userMsg, aiPlaceholder];
+          writeFixedSessionWarmSnapshot(sessionId, { messages: nextMessages });
+          return nextMessages;
+        });
       } else {
+        if (fixedSessionId) {
+          skipNextFixedSessionLoadRef.current = fixedSessionId;
+          writeFixedSessionWarmSnapshot(sessionId, { messages: [userMsg, aiPlaceholder] });
+        }
         localMessageMutationRef.current += 1;
         setMessages([userMsg, aiPlaceholder]);
       }
@@ -1884,7 +1940,7 @@ export function Chat({
           role, // Simplified mapping
           messageType: role === 'ai' ? 'reply' : undefined,
           content: msg.content,
-          displayContent: msg.display_content || undefined,
+          displayContent: msg.displayContent || msg.display_content || undefined,
           attachment: attachment,
           attachments,
           knowledgeReferences: role === 'user' ? knowledgeReferences : [],
@@ -3678,6 +3734,35 @@ export function Chat({
     void sendMessage(shortcut.text);
   }, [activateComposerInput, sendMessage]);
 
+  const currentAttachmentActionKey = attachmentActionKey(pendingAttachments);
+  const attachmentActionKindValue = attachmentShortcutKind(pendingAttachment);
+  const showAttachmentActionOverlay = Boolean(
+    showComposerShortcuts &&
+    showComposer &&
+    allowFileUpload &&
+    pendingAttachment &&
+    attachmentActionKindValue &&
+    currentAttachmentActionKey &&
+    dismissedAttachmentActionKey !== currentAttachmentActionKey &&
+    !isAttachmentUploading &&
+    shortcuts.length > 0
+  );
+  const dismissAttachmentActionOverlay = useCallback(() => {
+    if (!currentAttachmentActionKey) return;
+    setDismissedAttachmentActionKey(currentAttachmentActionKey);
+  }, [currentAttachmentActionKey]);
+  const applyAttachmentAction = useCallback((shortcut: ChatShortcut) => {
+    if (currentAttachmentActionKey) {
+      setDismissedAttachmentActionKey(currentAttachmentActionKey);
+    }
+    void sendMessage(shortcut.text);
+  }, [currentAttachmentActionKey, sendMessage]);
+  const showInlineShortcutChips = Boolean(
+    showComposerShortcuts &&
+    shortcuts.length > 0 &&
+    !pendingAttachment
+  );
+
   const formatTokenLabel = (value?: number) => {
     const safe = Math.max(0, Math.round(Number(value || 0)));
     if (safe >= 1000) {
@@ -3741,9 +3826,8 @@ export function Chat({
   );
   const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedEffectiveTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
-  const showNewConversationDropOverlay = Boolean(
+  const showChatDropOverlay = Boolean(
     allowFileUpload &&
-    isEmptySession &&
     isFileDragActive &&
     showComposer
   );
@@ -3751,6 +3835,8 @@ export function Chat({
     collapseEmptyFixedSession &&
     fixedSessionMode &&
     isEmptySession &&
+    !pendingMessage &&
+    !isProcessing &&
     !showComposer &&
     !showWelcomeHeader &&
     !showWelcomeShortcuts &&
@@ -3982,6 +4068,18 @@ export function Chat({
     placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...',
     { showContextUsage: true, showCancelWhenBusy: false },
   );
+  const attachmentActionOverlay = showAttachmentActionOverlay && pendingAttachment && attachmentActionKindValue ? (
+    <ChatAttachmentActionOverlay
+      attachment={pendingAttachment}
+      attachmentCount={pendingAttachments.length}
+      actions={shortcuts}
+      darkEmbedded={darkEmbedded}
+      kind={attachmentActionKindValue}
+      disabled={isProcessing}
+      onAction={applyAttachmentAction}
+      onDismiss={dismissAttachmentActionOverlay}
+    />
+  ) : null;
 
   if (shouldCollapseEmptyFixedSession) {
     return null;
@@ -3994,7 +4092,7 @@ export function Chat({
     >
       {/* Main Chat Area */}
       <div className="flex-1 min-w-0 flex flex-col h-full relative overflow-hidden">
-        {showNewConversationDropOverlay ? (
+        {showChatDropOverlay ? (
           <ChatDropOverlay darkEmbedded={darkEmbedded} />
         ) : null}
         {/* Linked Session Indicator */}
@@ -4056,10 +4154,15 @@ export function Chat({
                   )}
 
                   {/* 居中的输入框 (Codex Style) */}
-                  {showComposer ? renderComposer('empty', 'empty', placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
-                    className: 'mt-10',
-                    showCancelWhenBusy: false,
-                  }) : null}
+                  {showComposer ? (
+                    <>
+                      {attachmentActionOverlay}
+                      {renderComposer('empty', 'empty', placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+                        className: attachmentActionOverlay ? 'mt-4' : 'mt-10',
+                        showCancelWhenBusy: false,
+                      })}
+                    </>
+                  ) : null}
                 </div>
                 {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
                 <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
@@ -4126,7 +4229,10 @@ export function Chat({
                 <div className={clsx('shrink-0', inputAreaShellClass, splitOuterPaddingClass)}>
                   <div className={clsx('mx-auto space-y-3.5', composerMaxWidthClass, contentWidthClass)}>
                     {dockedEmptyState ? (
-                      emptyComposerForm
+                      <>
+                        {attachmentActionOverlay}
+                        {emptyComposerForm}
+                      </>
                     ) : (
                       <>
                     {errorNotice && (() => {
@@ -4189,7 +4295,7 @@ export function Chat({
                         </div>
                       );
                     })()}
-                    {showComposerShortcuts && shortcuts.length > 0 && (
+                    {showInlineShortcutChips && (
                       <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
                         {shortcuts.map((shortcut) => (
                           <button key={shortcut.label} type="button" onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
@@ -4198,6 +4304,7 @@ export function Chat({
                         ))}
                       </div>
                     )}
+                    {attachmentActionOverlay}
 
                     {renderComposer('composer', 'main', placeholder || '发送消息...', {
                       showContextUsage: true,
