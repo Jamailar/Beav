@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use dirs::home_dir;
 use serde_json::{json, Value};
 
 use crate::cli_runtime::{CliEnvironmentRecord, CliRuntimeInventory};
-use crate::process_utils::configure_background_command;
+use crate::process_utils::background_command;
 
 fn path_separator() -> char {
     if cfg!(windows) {
@@ -117,9 +116,8 @@ pub fn load_host_shell_snapshot() -> CliHostShellSnapshot {
         };
     };
 
-    let mut command = Command::new(&program);
+    let mut command = background_command(&program);
     command.args(args);
-    configure_background_command(&mut command);
     match command.output() {
         Ok(output) if output.status.success() => {
             let parsed = parse_env_output(&String::from_utf8_lossy(&output.stdout));

@@ -1,4 +1,5 @@
 use crate::persistence::with_store;
+use crate::process_utils::background_command;
 use crate::runtime::{
     append_session_checkpoint, SessionCheckpointRecord, SessionToolResultRecord,
     SessionTranscriptRecord,
@@ -1816,7 +1817,7 @@ fn update_session_transcript_index(
 
 fn current_git_branch(state: &State<'_, AppState>) -> Result<String, String> {
     let cwd = crate::workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
-    let output = std::process::Command::new("git")
+    let output = background_command("git")
         .arg("rev-parse")
         .arg("--abbrev-ref")
         .arg("HEAD")

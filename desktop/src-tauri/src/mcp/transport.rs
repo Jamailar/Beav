@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 
 use crate::cli_runtime::{build_effective_environment, load_host_shell_snapshot};
-use crate::process_utils::configure_background_command;
+use crate::process_utils::background_command;
 
 use super::resources::McpCapabilitySnapshot;
 
@@ -95,7 +95,7 @@ impl StdioMcpTransport {
         let custom_env = mcp_server_env(&server);
         let host = load_host_shell_snapshot();
         let effective = build_effective_environment(&host, None, Some(&custom_env));
-        let mut process = std::process::Command::new(command);
+        let mut process = background_command(command);
         process.args(server.args.clone().unwrap_or_default());
         if let Some(cwd) = server
             .cwd
@@ -106,7 +106,6 @@ impl StdioMcpTransport {
         }
         process.env_clear();
         process.envs(&effective.env);
-        configure_background_command(&mut process);
         let mut child = process
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

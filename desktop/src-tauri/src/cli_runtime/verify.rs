@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::{json, Value};
 use tauri::State;
@@ -11,7 +10,7 @@ use crate::cli_runtime::{
     CliExecutionRecord, CliExecutionStatus, CliVerificationRecord, CliVerificationStatus,
     CliVerifierKind, CliVerifyRule,
 };
-use crate::process_utils::configure_background_command;
+use crate::process_utils::background_command;
 use crate::{make_id, now_i64, AppState};
 
 #[derive(Debug, Clone)]
@@ -37,11 +36,10 @@ fn run_local_command_capture(
         .first()
         .cloned()
         .ok_or_else(|| "custom verification command requires argv[0]".to_string())?;
-    let mut command = Command::new(program);
+    let mut command = background_command(program);
     command.args(&argv[1..]);
     command.current_dir(cwd);
     command.envs(env);
-    configure_background_command(&mut command);
     let output = command.output().map_err(|error| error.to_string())?;
     Ok(LocalCliCommandOutput {
         exit_code: output.status.code(),

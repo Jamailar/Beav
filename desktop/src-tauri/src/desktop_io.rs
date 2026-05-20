@@ -6,9 +6,7 @@ use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{
-    configure_background_command, normalize_base_url, now_iso, payload_string, AdvisorVideoRecord,
-};
+use crate::{background_command, normalize_base_url, now_iso, payload_string, AdvisorVideoRecord};
 
 pub(crate) fn write_base64_payload_to_file(
     encoded: &str,
@@ -132,8 +130,7 @@ fn run_curl_transcription_request(
     response_format: Option<&str>,
 ) -> Result<String, String> {
     const HTTP_STATUS_MARKER: &str = "\n__redbox_http_status__:";
-    let mut command = std::process::Command::new("curl");
-    configure_background_command(&mut command);
+    let mut command = background_command("curl");
     command
         .arg("-sS")
         .arg("-X")
@@ -655,8 +652,7 @@ pub(crate) fn copy_image_to_clipboard(path: &Path) -> Result<(), String> {
             format!("{:?}", path.display().to_string()),
             image_class
         );
-        let mut command = std::process::Command::new("osascript");
-        configure_background_command(&mut command);
+        let mut command = background_command("osascript");
         let output = command
             .arg("-e")
             .arg(script)

@@ -10,7 +10,8 @@ import zlib from 'node:zlib';
 const BRAND_CONFIG_RELATIVE_PATH = 'branding/brand.config.json';
 const GENERATED_LOGO_RELATIVE_PATH = 'public/branding/logo.png';
 const GENERATED_BRAND_CONFIG_RELATIVE_PATH = 'src/config/brand.generated.json';
-const execFile = promisify(execFileCallback);
+const execFileRaw = promisify(execFileCallback);
+const execFile = (file, args = [], options = {}) => execFileRaw(file, args, { windowsHide: true, ...options });
 const inflate = promisify(zlib.inflate);
 const deflate = promisify(zlib.deflate);
 

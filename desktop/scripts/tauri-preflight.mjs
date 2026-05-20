@@ -22,7 +22,8 @@ const staleMarkers = [
   '\\LexBox\\src-tauri',
 ];
 const textFileExtensions = new Set(['.d', '.json', '.toml', '.txt', '.log']);
-const execFile = promisify(execFileCallback);
+const execFileRaw = promisify(execFileCallback);
+const execFile = (file, args = [], options = {}) => execFileRaw(file, args, { windowsHide: true, ...options });
 
 async function pathExists(targetPath) {
   try {

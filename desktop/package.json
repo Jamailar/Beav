@@ -15,6 +15,7 @@
     "tauri:dev:thrive": "node ./scripts/run-with-brand.mjs thrive pnpm tauri:dev",
     "tauri:build": "pnpm tauri:preflight && pnpm exec tauri build",
     "tauri:build:thrive": "node ./scripts/run-with-brand.mjs thrive pnpm tauri:build",
+    "check:headless-processes": "node ./scripts/check-headless-processes.mjs",
     "version:sync": "node ./scripts/sync-version.mjs",
     "brand:sync": "node ./scripts/sync-brand.mjs",
     "brand:sync:thrive": "node ./scripts/sync-brand.mjs --variant thrive",

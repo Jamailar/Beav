@@ -1661,7 +1661,7 @@ pub(crate) fn ensure_video_thumbnail_for_path(
         normalized.display(),
         thumbnail_path.display()
     );
-    let output = match std::process::Command::new(&ffmpeg_path)
+    let output = match background_command(&ffmpeg_path)
         .args(["-v", "error", "-nostdin", "-y", "-ss", "00:00:00.5", "-i"])
         .arg(&normalized)
         .args([
@@ -2582,7 +2582,7 @@ mod tests {
 
 #[cfg(target_os = "macos")]
 fn run_osascript_json(script: &str) -> Result<Value, String> {
-    let output = std::process::Command::new("osascript")
+    let output = background_command("osascript")
         .arg("-l")
         .arg("JavaScript")
         .arg("-e")
@@ -2606,8 +2606,7 @@ fn run_osascript_json(script: &str) -> Result<Value, String> {
 
 #[cfg(target_os = "windows")]
 fn run_powershell_json(script: &str) -> Result<Value, String> {
-    let mut command = std::process::Command::new("powershell");
-    configure_background_command(&mut command);
+    let mut command = background_command("powershell");
     let output = command
         .arg("-NoProfile")
         .arg("-NonInteractive")
@@ -7381,8 +7380,7 @@ fn run_anthropic_interactive_chat_runtime(
             }
         }
 
-        let mut command = std::process::Command::new("curl");
-        configure_background_command(&mut command);
+        let mut command = background_command("curl");
         command
             .arg("-sS")
             .arg("-N")
@@ -8026,8 +8024,7 @@ fn run_gemini_interactive_chat_runtime(
         } else {
             endpoint.push_str("?alt=sse");
         }
-        let mut command = std::process::Command::new("curl");
-        configure_background_command(&mut command);
+        let mut command = background_command("curl");
         command
             .arg("-sS")
             .arg("-N")

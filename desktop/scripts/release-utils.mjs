@@ -446,6 +446,7 @@ export async function runCommand(command, args = [], options = {}) {
       env,
       stdio,
       shell: false,
+      windowsHide: true,
     });
 
     let stdout = '';

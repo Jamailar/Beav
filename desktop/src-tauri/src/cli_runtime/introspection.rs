@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
 
 use regex::Regex;
 
@@ -8,7 +7,7 @@ use crate::cli_runtime::{
     CliManifestCommand, CliOutputParser, CliToolHealth, CliToolManifestRecord, CliToolRecord,
 };
 use crate::now_i64;
-use crate::process_utils::configure_background_command;
+use crate::process_utils::background_command;
 
 const HELP_FLAGS: [(&str, &[&str]); 4] = [
     ("--help", &["--help"]),
@@ -109,9 +108,8 @@ fn parse_help_commands(content: &str) -> Vec<CliManifestCommand> {
 }
 
 fn run_probe(path: &Path, argv: &[&str]) -> Option<String> {
-    let mut command = Command::new(path);
+    let mut command = background_command(path);
     command.args(argv);
-    configure_background_command(&mut command);
     let output = command.output().ok()?;
     if !output.status.success() && output.stdout.is_empty() && output.stderr.is_empty() {
         return None;

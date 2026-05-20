@@ -128,7 +128,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 fn current_os_version() -> String {
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = std::process::Command::new("sw_vers")
+        if let Ok(output) = crate::background_command("sw_vers")
             .arg("-productVersion")
             .output()
         {

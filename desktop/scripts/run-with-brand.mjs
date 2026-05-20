@@ -11,6 +11,7 @@ if (!variant || !command) {
 const child = spawn(command, args, {
   stdio: 'inherit',
   shell: process.platform === 'win32',
+  windowsHide: true,
   env: {
     ...process.env,
     REDBOX_BRAND: variant,

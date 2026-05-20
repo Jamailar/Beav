@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::Serialize;
 use serde_json::json;
@@ -11,7 +10,7 @@ use crate::cli_runtime::{
     CliToolRecord, CliToolSource,
 };
 use crate::now_i64;
-use crate::process_utils::configure_background_command;
+use crate::process_utils::background_command;
 
 const VERSION_FLAGS: [&str; 3] = ["--version", "version", "-V"];
 
@@ -127,9 +126,8 @@ fn first_non_empty_line(content: &str) -> Option<String> {
 
 fn probe_version(path: &Path) -> Option<String> {
     for flag in VERSION_FLAGS {
-        let mut command = Command::new(path);
+        let mut command = background_command(path);
         command.arg(flag);
-        configure_background_command(&mut command);
         let Ok(output) = command.output() else {
             continue;
         };
@@ -381,11 +379,10 @@ pub fn probe_shell_command_resolution(
     #[cfg(not(target_os = "windows"))]
     {
         let script = r#"candidate=$(type -p -- "$1" 2>/dev/null || command -v -- "$1" 2>/dev/null); if [ -n "$candidate" ]; then printf '%s\n' "$candidate"; fi"#;
-        let mut process = Command::new(&shell_path);
+        let mut process = background_command(&shell_path);
         process.args(["-lc", script, "_", &command]);
         process.env_clear();
         process.envs(env);
-        configure_background_command(&mut process);
         match process.output() {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
