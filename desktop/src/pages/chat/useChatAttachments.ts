@@ -452,6 +452,13 @@ export function useChatAttachments({
     }
   }, [allowFileUpload, appendPendingAttachment, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
 
+  const attachFiles = useCallback(async (files: File[]) => {
+    if (!allowFileUpload || isProcessing || files.length === 0) return;
+    for (const file of files) {
+      await attachFile(file);
+    }
+  }, [allowFileUpload, attachFile, isProcessing]);
+
   const attachFilePath = useCallback(async (path: string) => {
     if (!allowFileUpload || isProcessing) return;
     const normalizedPath = String(path || '').trim();
@@ -491,12 +498,8 @@ export function useChatAttachments({
   const handleDroppedFiles = useCallback((files: FileList | null | undefined) => {
     const items = droppedFiles(files);
     if (!items.length) return;
-    void (async () => {
-      for (const file of items) {
-        await attachFile(file);
-      }
-    })();
-  }, [attachFile]);
+    void attachFiles(items);
+  }, [attachFiles]);
 
   const handleDroppedPaths = useCallback((paths: string[] | null | undefined) => {
     const items = droppedPaths(paths);
@@ -590,9 +593,7 @@ export function useChatAttachments({
     try {
       const pickedFiles = await pickFilesFromBrowserInput();
       if (pickedFiles.length === 0) return;
-      for (const file of pickedFiles) {
-        await attachFile(file);
-      }
+      await attachFiles(pickedFiles);
       return;
     } catch (error) {
       setErrorNotice(error instanceof Error ? error.message : String(error || '选择文件失败'));
@@ -619,9 +620,10 @@ export function useChatAttachments({
     } finally {
       setIsAttachmentUploading(false);
     }
-  }, [allowFileUpload, appendPendingAttachment, attachFile, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
+  }, [allowFileUpload, appendPendingAttachment, attachFiles, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
 
   return {
+    attachFiles,
     clearPendingAttachment,
     dragHandlers: {
       onDragEnter: handleFileDragEnter,

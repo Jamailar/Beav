@@ -177,6 +177,7 @@ export interface ChatComposerProps {
   attachmentStatus?: ChatComposerAttachmentStatus | null;
   attachmentPreviewMode?: 'default' | 'compact-status';
   onPickAttachment?: (() => void | Promise<void>) | null;
+  onPasteImageFiles?: ((files: File[]) => void | Promise<void>) | null;
   onClearAttachment?: (() => void) | null;
   onRemoveAttachment?: ((attachment: UploadedFileAttachment) => void) | null;
   modelOptions?: ChatModelOption[];
@@ -337,6 +338,23 @@ function getAttachmentKindIcon(kind: ComposerAttachmentVisualKind, className: st
     default:
       return <FileIcon className={className} />;
   }
+}
+
+function getClipboardImageFiles(dataTransfer: DataTransfer | null): File[] {
+  if (!dataTransfer) return [];
+  const bySignature = new Map<string, File>();
+  const addFile = (file: File | null | undefined) => {
+    if (!file || !file.type.toLowerCase().startsWith('image/')) return;
+    const key = `${file.name || 'clipboard-image'}:${file.type}:${file.size}:${file.lastModified}`;
+    bySignature.set(key, file);
+  };
+
+  Array.from(dataTransfer.items || []).forEach((item) => {
+    if (item.kind !== 'file' || !item.type.toLowerCase().startsWith('image/')) return;
+    addFile(item.getAsFile());
+  });
+  Array.from(dataTransfer.files || []).forEach(addFile);
+  return Array.from(bySignature.values());
 }
 
 function getActiveMemberMentionTrigger(value: string, caretIndex: number): { start: number; end: number; query: string } | null {
@@ -1176,6 +1194,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   attachmentStatus,
   attachmentPreviewMode = 'default',
   onPickAttachment,
+  onPasteImageFiles,
   onClearAttachment,
   onRemoveAttachment,
   modelOptions = [],
@@ -1832,6 +1851,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         }}
         onKeyUp={(event) => updateMentionTrigger(readEditorText(event.currentTarget), editorCaretTextOffset(event.currentTarget))}
         onPaste={(event) => {
+          const imageFiles = getClipboardImageFiles(event.clipboardData);
+          if (imageFiles.length > 0 && onPasteImageFiles && !disabled && !readOnly && !isBusy) {
+            event.preventDefault();
+            void onPasteImageFiles?.(imageFiles);
+            return;
+          }
           event.preventDefault();
           const text = event.clipboardData.getData('text/plain');
           document.execCommand('insertText', false, text);
