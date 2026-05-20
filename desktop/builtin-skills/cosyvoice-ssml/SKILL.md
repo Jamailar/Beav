@@ -1,27 +1,30 @@
 ---
 name: cosyvoice-ssml
-description: 当 CosyVoice 系列 TTS 需要短视频带货、自媒体口播、产品讲解、种草测评、直播切片、逐句语气设计、停顿控制、多音字/数字/日期读法、长文本分段、或 SSML input/segments 时使用。激活后，当前 assistant 必须自己把最终可朗读文本加工成 CosyVoice 兼容的 SSML；除极短中性单句外，尽量拆成多个 voice.speech segments，让 media runtime 合并最终音频。
+description: 内部技能，仅用于数字人 / VideoRetalk / 资产库角色口播视频链路中的 CosyVoice TTS 子步骤。普通 AI 聊天、普通音频、普通短视频、产品视频或广告视频请求不得直接调用本技能；这些视频请求必须先走 video-director。只有 video-director 已确认这是数字人口播，且需要把已批准的台词合成为角色驱动音频时，才可激活本技能。
 allowedRuntimeModes: [chatroom, redclaw, image-generation, audio-editor]
 allowedTools: [workflow]
 activationScope: turn
 autoActivate: false
-activationHint: 当 TTS 模型是 CosyVoice 系列，例如 `cosyvoice-v3.5-plus`、`cosyvoice-v3.5-flash`、`cosyvoice-v3-plus`、`cosyvoice-v3-flash`、`cosyvoice-v2`，并且用户需要短视频带货、自媒体口播、种草测评、产品讲解、广告口播、直播切片、知识分享、语气、停顿、SSML、精确读法、拼音、多音字或数字读法时，可调用 `Operate(resource="skills", operation="invoke", input={ "name": "cosyvoice-ssml" })`。激活后不要等待技能返回 SSML；当前 assistant 必须立即按本技能规则自行产出 CosyVoice 兼容的 SSML。除极短中性单句外，尽量生成 voice.speech segments，每段都有自己的 SSML input 和 prompt，由 media runtime 合并；不要把多句口播塞进一个巨大 input。不生成 MiniMax emotion。
-contextNote: 这是 CosyVoice 短视频口播导演技能。技能激活不是文本转换工具，不会返回加工结果；你要先理解文本的商业目标、目标听众、产品卖点、信任点和转化动作，再把文本拆成可表演的口播片段。每个片段用 CosyVoice 支持的 SSML 标签表达语气、节奏和读法，并作为 voice.speech.segments 的一个 item。只能使用 `<speak>`、`<break/>`、`<sub>`、`<phoneme>`、`<soundEvent/>`、`<say-as>`；不要使用 `<prosody>`、MiniMax `<#0.6#>` 或 emotion 字段。
+activationHint: 内部技能。仅当当前轮已经由 `video-director` 判定为资产库角色数字人 / VideoRetalk / talking-head 口播视频，并且已确认台词、角色 voiceId 与参考视频，且 TTS 模型是 CosyVoice 系列时，才可调用 `Operate(resource="skills", operation="invoke", input={ "name": "cosyvoice-ssml" })`。如果用户在普通 AI 聊天里要求“做口播视频 / 生成视频 / 产品视频 / 广告片 / 短视频”，不要调用本技能，必须先调用 `video-director`。如果只是普通音频或旁白，不要把本技能当成入口。
+contextNote: 这是数字人口播视频链路里的 CosyVoice SSML 子技能，不是通用短视频口播导演。技能激活不是文本转换工具，不会返回加工结果；只能在 video-director 的数字人 / VideoRetalk 子流程中，把已批准的角色台词拆成可表演的 CosyVoice TTS 片段。每个片段用 CosyVoice 支持的 SSML 标签表达语气、节奏和读法，并作为 voice.speech.segments 的一个 item。只能使用 `<speak>`、`<break/>`、`<sub>`、`<phoneme>`、`<soundEvent/>`、`<say-as>`；不要使用 `<prosody>`、MiniMax `<#0.6#>` 或 emotion 字段。
 maxPromptChars: 32000
 hookMode: inline
+hidden: true
 ---
 
 # CosyVoice SSML 表演导演
 
-当选中的 TTS 模型是 CosyVoice，并且用户要的不是“平读”，而是自然、有语气、有停顿、有重点的音频时，使用这个技能。
+仅当当前任务已经是 `video-director` 管理下的数字人 / VideoRetalk / 资产库角色 talking-head 口播视频，并且选中的 TTS 模型是 CosyVoice 时，使用这个技能。
+
+普通 AI 聊天里的“做一个口播视频 / 生成视频 / 短视频 / 产品视频 / 广告片”不能直接进入本技能。必须先激活 `video-director`，由它完成视频脚本、分镜、确认、角色与音频驱动链路。普通音频、普通旁白、普通 TTS 也不能用本技能作为入口。
 
 ## 技能激活语义
 
 `skills.invoke` 只会把本技能说明加入当前轮上下文，不会替你转换文本，也不会返回 SSML。
 
-激活后你必须自己完成这三步：
+只有在数字人口播视频链路中激活后，你必须自己完成这三步：
 
-1. 根据用户文本拆出口播片段：开头抓注意力、痛点/场景、产品卖点、证据/信任、价格/优惠、行动号召等。
+1. 根据已经批准的数字人口播台词拆出角色表演片段：开头、场景、信息推进、重点、收束等。
 2. 为每个片段写出一个完整 `<speak rate="..." pitch="..." volume="...">...</speak>` SSML，并给这个片段写一个简短 `prompt`。
 3. 立即调用一次 `voice.speech` 生成音频。
 

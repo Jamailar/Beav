@@ -1,15 +1,17 @@
 ---
 name: video-director
-description: Use when the user asks for a promotional film, ad film, short video, product video, reference-image video, image-to-video, first/last-frame transition, storyboard/keyframes, or character talking-head video. This includes Chinese requests such as 宣传片, 广告片, 短片, 短视频, 视频, 分镜, 分镜图, 参考图生成视频, 图片转视频, 包包/商品/产品宣传片. Produces a detailed script and shot table first, then generates storyboard contact-sheet preview images through image.generate using four/six/nine-panel grids, includes any product or visual reference images, asks the user to confirm, and only then calls the correct video model. For asset-library character talking-head / 口播 videos, it must synthesize the approved spoken script with the character voice through TTS before calling video generation.
+description: Use as the canonical entrypoint for every AI chat request that asks to make, generate, plan, or edit a video: promotional film, ad film, short video, product video, reference-image video, image-to-video, first/last-frame transition, storyboard/keyframes, or character talking-head / 口播 video. This includes Chinese requests such as 宣传片, 广告片, 短片, 短视频, 视频, 口播视频, 分镜, 分镜图, 参考图生成视频, 图片转视频, 包包/商品/产品宣传片. Do not invoke `cosyvoice-ssml` or `tts-director` as the first response to a video request. This skill produces a detailed script and shot table first, then generates storyboard contact-sheet preview images through image.generate using four/six/nine-panel grids, includes any product or visual reference images, asks the user to confirm, and only then calls the correct video model. For asset-library character talking-head / 数字人口播 videos, it must synthesize the approved spoken script with the character voice through TTS before calling video generation.
 allowedRuntimeModes: [chatroom, redclaw]
 allowedTools: [workflow]
 activationScope: session
-activationHint: Invoke this before any media generation when the user asks for 宣传片, 广告片, 短片, 短视频, 视频, 分镜, 分镜图, 图片转视频, reference-image video, product promotional video, or an attached/reference image to become a video. Do not call image.generate or video.generate first; load this skill and follow its staged workflow.
+activationHint: Invoke this before any media generation when the user asks for 宣传片, 广告片, 短片, 短视频, 视频, 口播视频, 数字人视频, 分镜, 分镜图, 图片转视频, reference-image video, product promotional video, character talking-head video, or an attached/reference image to become a video. In AI chat, all video-generation requests must enter this skill first. Do not call `cosyvoice-ssml`, `tts-director`, image.generate, voice.speech, or video.generate first; load this skill and follow its staged workflow.
 ---
 
 # Video Director
 
 Use this skill before calling `Operate(resource="video", operation="generate", input={ ... })` for video work.
+
+For AI chat, this skill is the single entrypoint for video generation. If the user says "做一个口播视频", "生成一个视频", "产品宣传片", "广告片", "数字人视频", or any similar video request, invoke `video-director` first. Do not start from `cosyvoice-ssml`; that skill is an internal digital-human TTS substep and must not drive the video workflow.
 
 If this skill was loaded because the user attached an image and asked for a promotional film / 宣传片 / 视频, treat the attached image as a product or visual reference for the video workflow. Do not generate a replacement product image as an "analysis" step.
 
@@ -65,7 +67,8 @@ Use this exact order:
 3. **Generate the complete voice track with TTS**
    - Call `Operate(resource="voice", operation="speech", input={ ... })` with the full approved spoken script and the resolved `voiceId`.
    - Prefer one complete audio asset for the whole talking-head segment unless the user explicitly wants separate clips.
-   - For expressive narration, long scripts, poetry, ads, or any multi-emotion performance, activate `tts-director` first with `Operate(resource="skills", operation="invoke", input={ "name": "tts-director" })`, then use its guidance to split the approved script into semantic beats and assign intentional `emotion`, `speed`, `pitch`, punctuation, and pauses.
+   - For expressive narration, long scripts, poetry, ads, or any multi-emotion performance inside this confirmed digital-human / VideoRetalk flow, activate `tts-director` first with `Operate(resource="skills", operation="invoke", input={ "name": "tts-director" })`, then use its guidance to split the approved script into semantic beats and assign model-appropriate delivery controls.
+   - If the selected TTS model is CosyVoice, `tts-director` may activate `cosyvoice-ssml` only here, after the video-director workflow has confirmed this is a digital-human / VideoRetalk / asset-library talking-head video and the script plus role voice are resolved.
    - Add restrained delivery controls when they improve the approved performance: use `speed` for pace, `pitch` for tone, `emotion` for mood, expressive punctuation such as `～`, `？`, `！`, `……`, and MiniMax text markers such as `<#0.6#>`, `(laughs)`, `(sighs)`, or `(breath)` inside `input` only where the spoken rhythm needs them.
    - Do not write control instructions into the spoken text. For example, pass `"emotion":"happy"` and `speed:1.08` instead of making the character say “用开心快速的语气”.
    - If the approved voice track needs multiple emotional beats, submit one `voice.speech` call with ordered `segments`; the media runtime will generate each segment and merge the final audio. Do not make repeated `voice.speech` calls and then manually merge.
