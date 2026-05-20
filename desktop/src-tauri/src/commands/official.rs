@@ -1867,6 +1867,7 @@ pub fn handle_official_channel(
         | "redbox-auth:points"
         | "redbox-auth:models"
         | "redbox-auth:pricing"
+        | "redbox-auth:pricing-refresh"
         | "redbox-auth:api-keys:list"
         | "redbox-auth:api-keys:create"
         | "redbox-auth:api-keys:set-current"
@@ -2323,6 +2324,14 @@ pub fn handle_official_channel(
                         "stale": true,
                     }))
                 }),
+                "redbox-auth:pricing-refresh" => {
+                    let pricing = refresh_official_pricing_cache(app, state)?;
+                    Ok(json!({
+                        "success": true,
+                        "pricing": pricing,
+                        "stale": false,
+                    }))
+                }
                 "redbox-auth:api-keys:list" => with_store(state, |store| {
                     let mut settings = store.settings.clone();
                     let remote = crate::run_official_json_request(

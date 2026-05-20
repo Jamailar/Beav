@@ -292,10 +292,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   const message = error instanceof Error ? error.message : String(error);
 
   if (channel === 'spaces:list') {
-    return {
-      activeSpaceId: 'default',
-      spaces: [{ id: 'default', name: '默认空间' }],
-    };
+    return {};
   }
   if (channel === 'media:list') {
     return { success: true, assets: [] };
@@ -709,8 +706,8 @@ function createIpcRenderer() {
               spaces?: unknown;
             } : {};
             return {
-              activeSpaceId: typeof raw.activeSpaceId === 'string' ? raw.activeSpaceId : 'default',
-              spaces: Array.isArray(raw.spaces) ? raw.spaces as Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }> : [],
+              activeSpaceId: typeof raw.activeSpaceId === 'string' ? raw.activeSpaceId : undefined,
+              spaces: Array.isArray(raw.spaces) ? raw.spaces as Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }> : undefined,
             };
           },
         },
@@ -1005,7 +1002,8 @@ function createIpcRenderer() {
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh'),
-      getPricing: () => invokeChannel('redbox-auth:pricing')
+      getPricing: () => invokeChannel('redbox-auth:pricing'),
+      refreshPricing: () => invokeChannel('redbox-auth:pricing-refresh')
     },
     llmReadiness: {
       getState: () => invokeChannel('llm-readiness:get-state'),

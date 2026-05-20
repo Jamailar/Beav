@@ -1848,6 +1848,29 @@ select {
   background-color: var(--redbox-sidebar-active) !important;
 }
 
+[data-brand='redbox'] .app-sidebar-shell .app-space-menu {
+  background-color: rgb(var(--color-surface-primary) / 1);
+  border-color: rgb(var(--color-border) / 1);
+  color: rgb(var(--color-text-primary) / 1);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+}
+
+[data-brand='redbox'] .app-sidebar-shell .app-space-menu .text-text-primary {
+  color: rgb(var(--color-text-primary) / 1) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .app-space-menu .text-text-tertiary {
+  color: rgb(var(--color-text-tertiary) / 1) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .app-space-menu .hover\:bg-surface-secondary:hover {
+  background-color: rgb(var(--color-surface-secondary) / 1) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .app-space-menu .bg-accent-primary\/10 {
+  background-color: rgb(var(--color-accent-primary) / 0.1) !important;
+}
+
 [data-brand='redbox'] .app-sidebar-shell .app-sidebar-nav-item[data-guide-id='nav-new-chat'] {
   background: transparent;
   color: var(--app-sidebar-item-color);

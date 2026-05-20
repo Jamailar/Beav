@@ -1417,24 +1417,35 @@ fn build_wander_task_prompt(
 ) -> String {
     let output_requirement = if multi_choice {
         [
-            "输出合同：仅输出 JSON，不要 Markdown 或解释。",
+            "输出合同：仅输出一个 JSON 对象，不要 Markdown、不要 ```json 代码块、不要解释。",
             "模式：multi_choice。",
             "顶层字段：thinking_process, options。",
+            "thinking_process 必须是 2-4 条短字符串数组，不能是对象，不能包含 material_analysis 等嵌套中间分析。",
             "options 长度必须为 3。",
             "每个 option 必须包含 content_direction, topic, direction_frame。",
+            "每个 option 的 content_direction 必须是字符串，不能塞完整 JSON。",
             "topic 必须包含 title 和 connections；connections 只能包含 1-3。",
             "direction_frame 必须包含 target_reader, core_tension, angle, material_entry。",
+            "输出前自检：如果 JSON 过长，只删减 thinking_process，不得删字段或截断 JSON。",
         ]
         .join("\n")
     } else {
         [
-            "输出合同：仅输出 JSON，不要 Markdown 或解释。",
+            "输出合同：仅输出一个 JSON 对象，不要 Markdown、不要 ```json 代码块、不要解释。",
             "模式：single_choice。",
             "顶层字段：content_direction, thinking_process, topic, direction_frame。",
+            "thinking_process 必须是 2-4 条短字符串数组，不能是对象，不能包含 material_analysis 等嵌套中间分析。",
+            "content_direction 必须是字符串，不能塞完整 JSON。",
             "topic 必须包含 title 和 connections；connections 只能包含 1-3。",
             "direction_frame 必须包含 target_reader, core_tension, angle, material_entry。",
+            "输出前自检：如果 JSON 过长，只删减 thinking_process，不得删字段或截断 JSON。",
         ]
         .join("\n")
+    };
+    let output_template = if multi_choice {
+        r#"{"thinking_process":["母版选择：...","细节灵感：...","收敛判断：..."],"options":[{"content_direction":"...","topic":{"title":"...","connections":[1]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}},{"content_direction":"...","topic":{"title":"...","connections":[2]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}},{"content_direction":"...","topic":{"title":"...","connections":[1,2]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}}]}"#
+    } else {
+        r#"{"content_direction":"...","thinking_process":["母版选择：...","细节灵感：...","收敛判断：..."],"topic":{"title":"...","connections":[1]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}}"#
     };
 
     vec![
@@ -1445,6 +1456,9 @@ fn build_wander_task_prompt(
         "工具：预读素材包足够时不要调用工具；确实缺信息时，只补读下面列出的素材路径。".to_string(),
         String::new(),
         output_requirement,
+        String::new(),
+        "JSON 模板：".to_string(),
+        output_template.to_string(),
         String::new(),
         "随机素材：".to_string(),
         items_text.to_string(),
@@ -3750,6 +3764,11 @@ mod tests {
         assert!(prompt.contains("wander-synthesis"));
         assert!(prompt.contains("xhs-title"));
         assert!(prompt.contains("topic.title 必须先按 `xhs-title`"));
+        assert!(prompt.contains("仅输出一个 JSON 对象"));
+        assert!(prompt.contains("不要 ```json 代码块"));
+        assert!(prompt.contains("thinking_process 必须是 2-4 条短字符串数组"));
+        assert!(prompt.contains("不能包含 material_analysis"));
+        assert!(prompt.contains("\"content_direction\":\"...\""));
         assert!(prompt.contains("likes 最高的素材作为母版"));
         assert!(prompt.contains("不要把三条素材硬串成一个大主题"));
         assert!(prompt.contains("越细、越小、越具体"));

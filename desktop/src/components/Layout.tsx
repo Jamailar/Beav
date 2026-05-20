@@ -375,12 +375,14 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       const result = await uiMeasure('layout', 'load_spaces', async () => (
         window.ipcRenderer.spaces.list() as Promise<{ spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null>
       )) as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
-      setSpaces(result?.spaces || []);
-      setActiveSpaceId(result?.activeSpaceId || '');
+      if (Array.isArray(result?.spaces)) {
+        setSpaces(result.spaces);
+      }
+      if (typeof result?.activeSpaceId === 'string' && result.activeSpaceId.trim()) {
+        setActiveSpaceId(result.activeSpaceId);
+      }
     } catch (error) {
       console.error('Failed to load spaces:', error);
-      setSpaces([]);
-      setActiveSpaceId('');
     }
   }, []);
 
@@ -596,14 +598,15 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [isOpeningReleasePage, updateNotice?.htmlUrl]);
 
   const handleSwitchSpace = useCallback(async (nextSpaceId: string) => {
-    if (!nextSpaceId || nextSpaceId === activeSpaceId) return;
+    if (!nextSpaceId) return;
     setIsSwitchingSpace(true);
     try {
-      const result = await window.ipcRenderer.spaces.switch(nextSpaceId) as { success?: boolean; error?: string } | null;
+      const result = await window.ipcRenderer.spaces.switch(nextSpaceId) as { success?: boolean; activeSpaceId?: string; error?: string } | null;
       if (!result?.success) {
         void appAlert(result?.error || t('layout.switchSpaceFailed'));
         return;
       }
+      setActiveSpaceId(result.activeSpaceId || nextSpaceId);
       setIsSpaceMenuOpen(false);
       window.location.reload();
     } catch (error) {
@@ -612,7 +615,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     } finally {
       setIsSwitchingSpace(false);
     }
-  }, [activeSpaceId, t]);
+  }, [t]);
 
   const openRenameSpaceDialog = useCallback((space: WorkspaceSpace) => {
     setIsSpaceMenuOpen(false);
@@ -1024,7 +1027,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
                 {isSpaceMenuOpen && (
                   <div
-                    className="absolute right-0 bottom-full mb-1.5 w-[172px] rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden"
+                    className="app-space-menu absolute right-0 bottom-full mb-1.5 w-[172px] rounded-lg border border-border shadow-lg z-50 overflow-hidden"
                   >
                     <div className="max-h-44 overflow-y-auto">
                       {spaces.length === 0 ? (

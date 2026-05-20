@@ -3828,6 +3828,7 @@ export function Chat({
     showComposerShortcuts &&
     showComposer &&
     allowFileUpload &&
+    isEmptySession &&
     pendingAttachment &&
     attachmentActionKindValue &&
     currentAttachmentActionKey &&
@@ -4201,6 +4202,7 @@ export function Chat({
         {showChatDropOverlay ? (
           <ChatDropOverlay darkEmbedded={darkEmbedded} />
         ) : null}
+        {attachmentActionOverlay}
         {/* Linked Session Indicator */}
         {fixedSessionId && currentSessionId && fixedSessionBannerText && fixedSessionContextIndicatorMode === 'top' && (
           <div className="absolute top-0 left-0 right-0 z-10 flex flex-col items-center gap-1 pointer-events-none">
@@ -4261,13 +4263,10 @@ export function Chat({
 
                   {/* 居中的输入框 (Codex Style) */}
                   {showComposer ? (
-                    <>
-                      {attachmentActionOverlay}
-                      {renderComposer('empty', 'empty', placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
-                        className: attachmentActionOverlay ? 'mt-4' : 'mt-10',
-                        showCancelWhenBusy: false,
-                      })}
-                    </>
+                    renderComposer('empty', 'empty', placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+                      className: 'mt-10',
+                      showCancelWhenBusy: false,
+                    })
                   ) : null}
                 </div>
                 {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
@@ -4335,10 +4334,7 @@ export function Chat({
                 <div className={clsx('shrink-0', inputAreaShellClass, splitOuterPaddingClass)}>
                   <div className={clsx('mx-auto space-y-3.5', composerMaxWidthClass, contentWidthClass)}>
                     {dockedEmptyState ? (
-                      <>
-                        {attachmentActionOverlay}
-                        {emptyComposerForm}
-                      </>
+                      emptyComposerForm
                     ) : (
                       <>
                     {errorNotice && (() => {
@@ -4410,8 +4406,6 @@ export function Chat({
                         ))}
                       </div>
                     )}
-                    {attachmentActionOverlay}
-
                     {renderComposer('composer', 'main', placeholder || '发送消息...', {
                       showContextUsage: true,
                       showCancelWhenBusy: true,
