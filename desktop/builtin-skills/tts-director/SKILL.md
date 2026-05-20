@@ -1,12 +1,12 @@
 ---
 name: tts-director
-description: Use when generating expressive TTS, short-video voiceover, self-media narration, product explanation, ads, livestream clips, character speech, podcast-style voiceover, or any speech request that needs tone, speed, pitch, rhythm, pauses, SSML, or multi-segment delivery. Branch by TTS model family: CosyVoice uses ordered SSML segments with per-segment prompts; MiniMax uses ordered segments with emotion controls. Do not call TTS repeatedly or hand-merge audio.
+description: Use when generating expressive TTS, short-video voiceover, self-media narration, product explanation, ads, livestream clips, character speech, podcast-style voiceover, or any speech request that needs tone, speed, pitch, rhythm, pauses, or multi-segment delivery. For ordinary chat/audio work this skill is the TTS entrypoint. CosyVoice SSML is not a general entrypoint: only activate `cosyvoice-ssml` inside a video-director managed digital-human / VideoRetalk / asset-library talking-head video flow. MiniMax uses ordered segments with emotion controls. Do not call TTS repeatedly or hand-merge audio.
 allowedRuntimeModes: [chatroom, redclaw, image-generation, audio-editor]
 allowedTools: [workflow]
 activationScope: turn
 autoActivate: false
-activationHint: 当用户要生成短视频口播、自媒体口播、带货口播、产品讲解、种草测评、直播切片、朗读、有节奏的 TTS，或明确要求语气/情绪/语速/停顿/SSML 时，可调用 `Operate(resource="skills", operation="invoke", input={ "name": "tts-director" })`。本技能负责先识别 TTS 模型族：CosyVoice 分支必须激活 `cosyvoice-ssml`，除极短中性单句外都按该技能规则生成一次 `voice.speech` 请求的 SSML `segments`，每段有独立 prompt；MiniMax 分支生成一次 `voice.speech` 请求的 `segments`，再由媒体队列合并最终音频。
-contextNote: 这是 TTS 表演设计技能。它不负责重写文章主题，不负责视频画面设计；它只把已确认或可直接朗读的文本转成有节奏、有情绪层次、可执行的模型专用 TTS payload。CosyVoice 复杂 SSML 规则由 `cosyvoice-ssml` 负责；MiniMax 不使用 prompt/SSML。
+activationHint: 当用户要生成短视频口播、自媒体口播、带货口播、产品讲解、种草测评、直播切片、朗读、有节奏的 TTS，或明确要求语气/情绪/语速/停顿时，可调用 `Operate(resource="skills", operation="invoke", input={ "name": "tts-director" })`。如果用户要的是视频或口播视频，必须先调用 `video-director`，不要用本技能直接接管视频任务。只有在 `video-director` 已确认这是数字人 / VideoRetalk / 资产库角色 talking-head 视频，并进入 TTS 子步骤时，CosyVoice 分支才允许激活 `cosyvoice-ssml`；普通聊天、普通音频和普通视频请求不得激活 `cosyvoice-ssml`。
+contextNote: 这是 TTS 表演设计技能。它不负责重写文章主题，不负责视频画面设计；它只把已确认或可直接朗读的文本转成有节奏、有情绪层次、可执行的模型专用 TTS payload。视频任务入口始终是 `video-director`。`cosyvoice-ssml` 只属于数字人 / VideoRetalk / 资产库角色口播视频的内部 TTS 子流程；MiniMax 不使用 prompt/SSML。
 maxPromptChars: 18000
 hookMode: inline
 ---
@@ -22,7 +22,7 @@ Turn the final spoken script into one executable TTS request:
 - Preserve the user's words unless they asked for rewriting.
 - For dialogue or role audio, first identify the speaker/role count and choose a distinct `voiceId` for each role before segmenting. Use `availableVoicesForAgent` from the generation context when present; call `voice.list` if the context does not provide enough voices.
 - Identify the selected TTS model before designing controls. Use `model` from the request/context when present.
-- For CosyVoice-family models such as `cosyvoice-v3.5-plus`, invoke `cosyvoice-ssml` once to activate its rules. Only very short neutral one-beat text may use one SSML `input`; almost all multi-sentence or expressive text must use ordered `segments`, each with its own SSML `input` and `prompt`.
+- For CosyVoice-family models such as `cosyvoice-v3.5-plus`, only invoke `cosyvoice-ssml` when the current task is already a `video-director` managed digital-human / VideoRetalk / asset-library talking-head video and the TTS is the approved character speech track. Outside that narrow flow, do not activate `cosyvoice-ssml`.
 - For MiniMax-family models such as `speech-2.8-turbo`, split the script into meaningful performance beats and speaker turns, then assign each beat `emotion`, `speed`, `pitch`, punctuation, and pause markers.
 - Submit one `voice.speech` call. Do not synthesize each segment manually.
 - In the final user-facing response, present the merged `finalAudio` only. Do not list segment files as the result.
@@ -31,7 +31,7 @@ Turn the final spoken script into one executable TTS request:
 
 Before creating the final payload, classify the TTS model:
 
-- CosyVoice branch: model name contains `cosyvoice`, especially `cosyvoice-v3.5-plus`.
+- CosyVoice branch: model name contains `cosyvoice`, especially `cosyvoice-v3.5-plus`; this branch may use `cosyvoice-ssml` only inside a digital-human / VideoRetalk video flow already owned by `video-director`.
 - MiniMax branch: model name starts with `speech-` or contains `minimax`.
 - Unknown model: keep controls conservative; prefer plain `input` plus `prompt` only if the provider is known to accept it.
 
@@ -39,9 +39,9 @@ This distinction is mandatory because the models support different controls:
 
 - CosyVoice supports `prompt` and a limited SSML tag set. It does not support the MiniMax `emotion` field.
 - MiniMax supports `emotion`, `speed`, `pitch`, MiniMax pause markers, and `segments`. It does not support CosyVoice `prompt`.
-- The `segments` array is a media-runtime sequence feature, not a MiniMax-only capability. CosyVoice uses it for long-form delivery with per-segment `prompt`; MiniMax uses it for emotion/speed/pitch segment controls.
+- The `segments` array is a media-runtime sequence feature, not a MiniMax-only capability. MiniMax uses it for emotion/speed/pitch segment controls. CosyVoice SSML segments are reserved for the digital-human / VideoRetalk flow.
 
-If the selected model is CosyVoice, invoke `cosyvoice-ssml` once before building the final request. `skills.invoke` only activates instructions; it does not return SSML. After activation, build CosyVoice-supported SSML yourself. Use `segments` for long or expressive text so the media runtime can merge multiple performances. Do not output `emotion`, `voice_setting.emotion`, MiniMax `<#0.6#>` markers, `(laughs)`, `(sighs)`, `(breath)` tags, or generic W3C SSML tags such as `<prosody>`.
+If the selected model is CosyVoice and the task is not a `video-director` digital-human / VideoRetalk TTS substep, do not invoke `cosyvoice-ssml`. Keep the TTS payload conservative, or ask the user to move into the数字人 workflow if they need a character talking-head video. If the selected model is CosyVoice inside the approved digital-human flow, invoke `cosyvoice-ssml` once before building the final request. `skills.invoke` only activates instructions; it does not return SSML.
 
 If the selected model is MiniMax, do not output SSML or `prompt`. Use the existing `segments` workflow.
 
@@ -65,7 +65,7 @@ Choose the payload shape from the selected TTS model.
 
 ### CosyVoice Payload
 
-For `cosyvoice-v3.5-plus`, activate `cosyvoice-ssml` before constructing SSML:
+For `cosyvoice-v3.5-plus`, activate `cosyvoice-ssml` before constructing SSML only when this TTS request is part of a `video-director` managed digital-human / VideoRetalk / asset-library talking-head video:
 
 ```json
 {
@@ -115,7 +115,7 @@ Long-text payload shape:
 }
 ```
 
-CosyVoice SSML construction rules live in `cosyvoice-ssml`. The short version:
+CosyVoice SSML construction rules live in `cosyvoice-ssml`, but that skill is reserved for digital-human / VideoRetalk video speech tracks. The short version for that narrow flow:
 
 - Use only CosyVoice-supported tags: `<speak>`, `<break/>`, `<sub>`, `<phoneme>`, `<soundEvent/>`, `<say-as>`.
 - Do not use `<prosody>`; CosyVoice rate, pitch, and volume are `<speak>` attributes.
@@ -124,7 +124,7 @@ CosyVoice SSML construction rules live in `cosyvoice-ssml`. The short version:
 - CosyVoice `volume` is a `0-100` scale, not `0-1`. Use values such as `50-65` for normal narration and `38-52` for quiet narration; never use `volume="0.8"` or `volume="1.0"`.
 - Keep user wording intact inside text nodes unless rewriting was requested.
 - Add `prompt` for voice style. For a single `input`, keep it global; for `segments`, write one concise prompt per segment.
-- Multi-sentence CosyVoice口播, ads, product explanation, tutorials, dialogue, and any script with multiple emphasis beats should use `segments`, not one giant SSML document.
+- Multi-sentence digital-human / VideoRetalk speech tracks should use `segments`, not one giant SSML document.
 - Use `language_hints`, for example `["zh"]`, when the script is mostly Chinese.
 
 CosyVoice example:
@@ -179,7 +179,7 @@ For multi-role audio, each segment may override parent `voiceId`. Use one segmen
 
 ## Performance Mapping
 
-This mapping is for MiniMax `emotion` values. For CosyVoice, invoke `cosyvoice-ssml`; that skill translates delivery intent into CosyVoice-supported SSML rather than the `emotion` field.
+This mapping is for MiniMax `emotion` values. For CosyVoice, invoke `cosyvoice-ssml` only in the digital-human / VideoRetalk subflow; that skill translates delivery intent into CosyVoice-supported SSML rather than the `emotion` field.
 
 Do not reuse the MiniMax pitch numbers below in CosyVoice. MiniMax `pitch:-2..3` is a segment control scale; CosyVoice `<speak pitch>` is a positive multiplier in `0.5-2`.
 
@@ -198,7 +198,7 @@ Avoid flat defaults. A long expressive reading should not become many segments t
 
 ## Rhythm Rules
 
-For CosyVoice, invoke `cosyvoice-ssml`, split long text into ordered SSML segments, and use CosyVoice-supported `<break time="...ms"/>`, `<speak>` attributes, `<sub>`, `<phoneme>`, `<soundEvent/>`, and `<say-as>`. For MiniMax, use `<#0.4#>` markers and segment boundary pauses as described below.
+For CosyVoice inside a digital-human / VideoRetalk subflow, invoke `cosyvoice-ssml`, split long text into ordered SSML segments, and use CosyVoice-supported `<break time="...ms"/>`, `<speak>` attributes, `<sub>`, `<phoneme>`, `<soundEvent/>`, and `<say-as>`. For MiniMax, use `<#0.4#>` markers and segment boundary pauses as described below.
 
 Use pauses as performance punctuation:
 
@@ -220,7 +220,7 @@ Recommended workflow for complex or multi-speaker audio:
 
 1. Determine the selected TTS model and role count.
 2. Select one distinct `voiceId` per role from available voices when multi-role audio is requested. Do not claim only one voice can be used unless `voice.list` confirms no alternative voice exists.
-3. If using CosyVoice, invoke `cosyvoice-ssml` and build ordered SSML segments. Each segment must include final spoken text, a complete `<speak rate pitch volume>` SSML input, a segment-specific `prompt`, and boundary pause fields when needed. If multiple voices are required, put the chosen `voiceId` on each segment when available.
+3. If using CosyVoice inside a digital-human / VideoRetalk subflow, invoke `cosyvoice-ssml` and build ordered SSML segments. Each segment must include final spoken text, a complete `<speak rate pitch volume>` SSML input, a segment-specific `prompt`, and boundary pause fields when needed. If multiple voices are required, put the chosen `voiceId` on each segment when available.
 4. If using MiniMax, build ordered speaker-turn segments. Each segment must include final spoken text, the role's `voiceId`, punctuation, `emotion`, `speed`, optional `pitch`, and boundary pause fields.
 5. Submit exactly one `voice.speech` request with `waitForCompletion:true`.
 
@@ -286,9 +286,9 @@ Before calling `voice.speech`, verify:
 
 - The payload contains the final spoken words, not analysis or instructions.
 - The model branch is correct:
-  - CosyVoice: `cosyvoice-ssml` was invoked; only extremely short neutral text may use one SSML `input`; multi-sentence expressive text uses `segments`, each with SSML `input` and segment `prompt`; no `emotion`.
+  - CosyVoice digital-human / VideoRetalk only: `cosyvoice-ssml` was invoked; only extremely short neutral text may use one SSML `input`; multi-sentence expressive text uses `segments`, each with SSML `input` and segment `prompt`; no `emotion`.
   - MiniMax: `segments` allowed, `emotion` allowed, no SSML, no `prompt`.
-- For CosyVoice, every segment has a chosen tone and that tone is reflected with both CosyVoice-supported SSML and segment `prompt`.
+- For CosyVoice digital-human / VideoRetalk speech tracks, every segment has a chosen tone and that tone is reflected with both CosyVoice-supported SSML and segment `prompt`.
 - For MiniMax, multi-beat speech uses one `segments` array, not repeated tool calls.
 - Each segment or SSML sentence has a reason for its emotion/tone, speed/rate, punctuation, and pauses.
 - The first and last segments are not accidentally identical in energy when the script has an arc.
