@@ -36,6 +36,9 @@
 - `OPTIONS /api/knowledge/*`（浏览器插件预检）
 - `GET /api/knowledge/health`
 - `POST /api/knowledge/entries`
+- `POST /api/knowledge/xhs/v2/entries`
+- `POST /api/knowledge/zhihu/answers`
+- `POST /api/knowledge/zhihu/articles`
 - `POST /api/knowledge/document-sources`
 - `POST /api/knowledge/media-assets`
 - `POST /api/knowledge/batch-ingest`
@@ -55,6 +58,12 @@
 - `workspace`: 当前空间 `{ id, name }`
 - `platformAccounts`: 当前空间的小红书、抖音、Bilibili 账号摘要；未绑定的平台返回 `bound: false`
 
+`POST /api/knowledge/xhs/v2/entries` 是小红书导入 V2 的预留入口，用于后续支持“笔记内容 + 评论区内容”同包提交。当前版本只完成 API 壳：解析 `source`、`note`、`comments`、`options`，返回 `stub: true` 和 `persisted: false`，不写入 knowledge store，也不改变旧版 `/entries` 行为。
+
+`POST /api/knowledge/zhihu/answers` 是知乎回答专用入口，接收 `question` 和 `answer` 两段结构化数据，写入 `zhihu-answer` 知识项。正文继续写入 `content.md` / `content.html`，结构化问题、回答、发布时间和互动数据写入 `meta.json.metadata.zhihu`。
+
+`POST /api/knowledge/zhihu/articles` 是知乎专栏文章专用入口，接收 `article` 结构化数据，写入 `zhihu-article` 知识项。正文和图片进入 `content.md` / `content.html` 与 assets，作者、专栏、发布时间和互动数据写入 `meta.json.metadata.zhihu`。
+
 账号档案主数据通过 `/api/accounts/*` 写入当前空间的 `accounts/{platform}/{accountId}/`。导入后由 `profile_learning` 写入 `distillation/evidence-pack.json`、`stats.json`、`data-draft.md`、`ai-distillation-task.md` 和 `quality-report.json`，再更新 `CreatorProfile.md`、`writing-style-skill/SKILL.md` 与 `memory-candidates.json`。知识库保存仍保留为兼容投影，不作为账号历史的主存储。
 
 Renderer 可通过 `accounts:health` 和 `accounts:list` 读取同一份账号 catalog。
@@ -67,6 +76,8 @@ Renderer 可通过 `accounts:health` 和 `accounts:list` 读取同一份账号 c
   - `xhs-video`
   - `link-article`
   - `wechat-article`
+  - `zhihu-answer`
+  - `zhihu-article`
   - `knowledge-note`
   - `webpage`
   - `article`

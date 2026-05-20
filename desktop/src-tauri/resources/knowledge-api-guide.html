@@ -990,6 +990,8 @@
           'douyin-video',
           'link-article',
           'wechat-article',
+          'zhihu-answer',
+          'zhihu-article',
           'webpage',
           'text-note'
         ],
@@ -1162,7 +1164,7 @@
               }
             ],
             notes: [
-              '当前建议使用的 kind：`youtube-video`、`xhs-note`、`xhs-video`、`douyin-video`、`link-article`、`wechat-article`、`webpage`、`text-note`。',
+              '当前建议使用的 kind：`youtube-video`、`xhs-note`、`xhs-video`、`douyin-video`、`link-article`、`wechat-article`、`zhihu-answer`、`zhihu-article`、`webpage`、`text-note`。',
               '`youtube-video` 会走 YouTube 专用保存链路，建议总是传 `source.externalId` 和 `content.title`。',
               '除 YouTube 外，其它结构化 entry 会把 `text` / `description` 写为 Markdown；如果提供 `html` 会额外落盘为 `content.html`。',
               '`options` 当前核心只消费 `allowUpdate` 和 `transcribe`；其它兼容字段可传，但不会影响写入结果。'
@@ -1301,7 +1303,7 @@
           `- Base URL：\`${guide.baseUrl}\``,
           '- 默认无需额外 Token，但应用必须正在运行。',
           '- 当前所有写入都会进入活动空间，没有单独的 `spaceId` 写入接口。',
-          '- 当前公开的 Knowledge API 路由只有：`GET /health`、`POST /entries`、`POST /media-assets`。',
+          '- 当前公开的 Knowledge API 路由包括：`GET /health`、`POST /entries`、`POST /zhihu/answers`、`POST /zhihu/articles`、`POST /media-assets`。',
           '- 建议先调用 `GET /health`，通过后再提交具体导入请求。',
           '',
           '## Source 字段',

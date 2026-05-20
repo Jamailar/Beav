@@ -946,6 +946,26 @@ function getCaptureActionConfig(nextContext) {
       ],
     };
   }
+  if (platform === 'zhihu' && pageInfo?.kind === 'zhihu-answer') {
+    return {
+      variant: 'zhihu',
+      title: 'RedBox 回答采集',
+      subtitle: '知乎',
+      actions: [
+        { label: '保存回答', action: 'saveZhihuAnswer', primary: true, title: '保存当前知乎回答到 RedBox' },
+      ],
+    };
+  }
+  if (platform === 'zhihu' && pageInfo?.kind === 'zhihu-article') {
+    return {
+      variant: 'zhihu',
+      title: 'RedBox 文章采集',
+      subtitle: '知乎专栏',
+      actions: [
+        { label: '保存文章', action: 'saveZhihuArticle', primary: true, title: '保存当前知乎专栏文章到 RedBox' },
+      ],
+    };
+  }
   const platformMap = {
     bilibili: { subtitle: 'Bilibili', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveBilibili', title: '保存当前 Bilibili 内容到 RedBox' },
     kuaishou: { subtitle: '快手', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveKuaishou', title: '保存当前快手内容到 RedBox' },
@@ -987,6 +1007,8 @@ function getCaptureActionMeta(action) {
     savePageLink: { type: 'save-page-link', pending: '保存中...', done: '已保存到 RedBox' },
     saveYoutube: { type: 'save-youtube', pending: '保存中...', done: '已保存 YouTube 视频' },
     saveDouyin: { type: 'save-douyin', pending: '保存中...', done: '已保存抖音视频' },
+    saveZhihuAnswer: { type: 'save-zhihu-answer', pending: '保存中...', done: '已保存知乎回答' },
+    saveZhihuArticle: { type: 'save-zhihu-article', pending: '保存中...', done: '已保存知乎文章' },
     saveBilibili: { type: 'save-bilibili', pending: '保存中...', done: '已保存 Bilibili 内容' },
     saveKuaishou: { type: 'save-kuaishou', pending: '保存中...', done: '已保存快手内容' },
     saveTiktok: { type: 'save-tiktok', pending: '保存中...', done: '已保存 TikTok 内容' },
@@ -1156,6 +1178,7 @@ function normalizePlatform(value) {
   if (hostname === 'douyin.com' || hostname.endsWith('.douyin.com')) return 'douyin';
   if (hostname === 'xiaohongshu.com' || hostname.endsWith('.xiaohongshu.com') || hostname === 'rednote.com' || hostname.endsWith('.rednote.com')) return 'xhs';
   if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com') || hostname === 'youtu.be') return 'youtube';
+  if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) return 'zhihu';
   if (hostname === 'mp.weixin.qq.com' || hostname.endsWith('.weixin.qq.com')) return 'wechat';
   if (/xiaohongshu|xhs|rednote|小红书/.test(text)) return 'xhs';
   if (/youtube|youtu\.be/.test(text)) return 'youtube';
@@ -1166,6 +1189,7 @@ function normalizePlatform(value) {
   if (/reddit/.test(text)) return 'reddit';
   if (/instagram|instagr\.am|ins\b/.test(text)) return 'instagram';
   if (/^x$|(^|[^a-z])x\.com|twitter|platform-x|[^a-z]x[^a-z]/.test(text)) return 'x';
+  if (/zhihu|知乎/.test(text)) return 'zhihu';
   if (/weixin|wechat|mp\.weixin|公众号/.test(text)) return 'wechat';
   if (/redbox|redconvert/.test(text)) return 'redbox';
   return 'web';
@@ -1194,6 +1218,7 @@ function getPlatformMeta(platform) {
     x: { platform: 'x', name: 'X', logo: 'X', icon: 'assets/platforms/x.svg' },
     instagram: { platform: 'instagram', name: 'Instagram', logo: 'I', icon: 'assets/platforms/instagram.svg' },
     wechat: { platform: 'wechat', name: '微信公众号', logo: '微' },
+    zhihu: { platform: 'zhihu', name: '知乎', logo: '知' },
     redbox: { platform: 'redbox', name: 'RedBox', logo: 'R' },
     web: { platform: 'web', name: '网页', logo: 'W' },
   };
@@ -1206,6 +1231,8 @@ function inferPageType(pageInfo, tab) {
   if (/profile|author|博主|主页/.test(kind) || /\/user\/profile\//.test(url)) return 'profile';
   if (/note|image|小红书/.test(kind) || /\/explore\/|\/discovery\/item\//.test(url)) return 'note';
   if (/post|tweet|帖子|推文/.test(kind) || /\/comments\/|\/status\/|instagram\.com\/(p|reel)\//.test(url)) return 'post';
+  if (/zhihu-answer|知乎回答/.test(kind)) return 'article';
+  if (/zhihu-article|知乎文章|知乎专栏/.test(kind)) return 'article';
   if (/video|youtube|douyin|kuaishou|bilibili|tiktok/.test(kind)) return 'video';
   if (/article|wechat|公众号/.test(kind)) return 'article';
   return 'page';

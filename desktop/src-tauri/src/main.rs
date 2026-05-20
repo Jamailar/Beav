@@ -606,6 +606,7 @@ struct KnowledgeNoteRecord {
     excerpt: Option<String>,
     site_name: Option<String>,
     capture_kind: Option<String>,
+    metadata: Option<Value>,
     html_file: Option<String>,
     html_file_url: Option<String>,
     images: Vec<String>,

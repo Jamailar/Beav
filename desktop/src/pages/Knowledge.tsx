@@ -23,6 +23,7 @@ const KNOWLEDGE_SORT_OPTIONS = [
 
 interface Note { type?: string; sourceUrl?: string;
     id: string;
+    knowledgeKind?: string;
     title: string;
     author: string;
     authorId?: string;
@@ -33,6 +34,7 @@ interface Note { type?: string; sourceUrl?: string;
     excerpt?: string;
     siteName?: string;
     captureKind?: string;
+    metadata?: Record<string, unknown>;
     htmlFile?: string;
     htmlFileUrl?: string;
     images: string[];
@@ -92,8 +94,11 @@ type KnowledgeTypeFilter =
     | 'instagram'
     | 'link-article'
     | 'wechat-article'
+    | 'zhihu-answer'
+    | 'zhihu-article'
     | 'youtube'
     | 'docs';
+type KnowledgeBackendKind = 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source';
 
 type KnowledgeSortOrder = 'updated-desc' | 'created-desc' | 'title-asc';
 
@@ -140,7 +145,7 @@ interface VisualSemanticBlock {
 
 interface KnowledgeCatalogSummary {
     itemId: string;
-    kind: 'redbook-note' | 'youtube-video' | 'document-source';
+    kind: KnowledgeBackendKind;
     noteType?: string;
     captureKind?: string;
     title: string;
@@ -224,6 +229,8 @@ const resolveNoteCardKind = (note: Note): KnowledgeCardItem['kind'] => {
     if (captureKind.startsWith('instagram-')) return 'instagram';
     if (captureKind === 'xhs-blogger') return 'xhs-blogger';
     if (captureKind === 'xhs-comments') return 'xhs-comments';
+    if (captureKind === 'zhihu-answer') return 'zhihu-answer';
+    if (captureKind === 'zhihu-article') return 'zhihu-article';
     if (note.type === 'link-article' || note.type === 'text') {
         return note.captureKind === 'wechat-article' ? 'wechat-article' : 'link-article';
     }
@@ -262,6 +269,7 @@ const KNOWLEDGE_SEARCH_DEBOUNCE_MS = 500;
 const KNOWLEDGE_RENDER_BATCH_SIZE = 60;
 const VISUAL_INDEX_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'tif', 'tiff', 'heic', 'bmp', 'webp', 'pdf']);
 const BROWSER_PLUGIN_DOWNLOAD_URL = APP_BRAND.downloadUrl || 'https://redbox.ziz.hk/download';
+const NOTE_CATALOG_KINDS = new Set(['redbook-note', 'link-article', 'wechat-article', 'zhihu-answer', 'zhihu-article']);
 
 const isVisualIndexFilePath = (path: string) => {
     const extension = path.split('.').pop()?.toLowerCase() || '';
@@ -270,6 +278,7 @@ const isVisualIndexFilePath = (path: string) => {
 
 const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     id: item.itemId,
+    knowledgeKind: item.kind,
     type: item.noteType,
     sourceUrl: item.sourceUrl,
     title: item.title,
@@ -279,7 +288,7 @@ const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     content: '',
     excerpt: item.visualSearchSummary || item.previewText,
     siteName: item.siteName,
-    captureKind: item.captureKind,
+    captureKind: item.captureKind || item.kind,
     htmlFile: undefined,
     htmlFileUrl: undefined,
     images: [],
@@ -808,13 +817,14 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const resolveBackendKind = useCallback((typeFilter: KnowledgeTypeFilter): string | undefined => {
         if (typeFilter === 'youtube') return 'youtube-video';
         if (typeFilter === 'docs') return 'document-source';
+        if (typeFilter === 'zhihu-answer' || typeFilter === 'zhihu-article') return typeFilter;
         if (typeFilter === 'all') return undefined;
         return 'redbook-note';
     }, []);
 
     const applyCatalogPage = useCallback((items: KnowledgeCatalogSummary[], append: boolean) => {
         const nextNotes = items
-            .filter((item) => item.kind === 'redbook-note')
+            .filter((item) => NOTE_CATALOG_KINDS.has(item.kind))
             .map(catalogSummaryToNote);
         const nextVideos = items
             .filter((item) => item.kind === 'youtube-video')
@@ -899,7 +909,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         await loadCatalogPage(true);
     }, [loadCatalogPage]);
 
-    const loadKnowledgeDetail = useCallback(async (itemId: string, kind: 'redbook-note' | 'youtube-video' | 'document-source') => {
+    const loadKnowledgeDetail = useCallback(async (itemId: string, kind: string) => {
         const requestId = loadDetailRequestRef.current + 1;
         loadDetailRequestRef.current = requestId;
         try {
@@ -915,7 +925,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
 
     const openNoteDetail = useCallback(async (note: Note) => {
         setSelectedNote(note);
-        const detail = await loadKnowledgeDetail(note.id, 'redbook-note');
+        const detail = await loadKnowledgeDetail(note.id, note.knowledgeKind || note.captureKind || 'redbook-note');
         if (detail && loadDetailRequestRef.current > 0) {
             setSelectedNote(detail as unknown as Note);
         }
@@ -1149,6 +1159,8 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             'instagram': 0,
             'link-article': 0,
             'wechat-article': 0,
+            'zhihu-answer': 0,
+            'zhihu-article': 0,
             'youtube': Number(kindCounts['youtube-video'] || 0),
             'docs': Number(kindCounts['document-source'] || 0),
         };
@@ -1172,6 +1184,8 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             { key: 'x' as const, label: 'X', count: counts.x },
             { key: 'instagram' as const, label: 'Instagram', count: counts.instagram },
             { key: 'link-article' as const, label: '链接文章', count: counts['link-article'] },
+            { key: 'zhihu-answer' as const, label: '知乎回答', count: counts['zhihu-answer'] },
+            { key: 'zhihu-article' as const, label: '知乎文章', count: counts['zhihu-article'] },
             ...(SHOW_WECHAT_KNOWLEDGE_ACTIONS ? [{ key: 'wechat-article' as const, label: '公众号文章', count: counts['wechat-article'] }] : []),
             { key: 'youtube' as const, label: 'YouTube', count: counts.youtube },
             { key: 'docs' as const, label: '文档', count: counts.docs },
@@ -1413,7 +1427,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                     ? 'youtube-video' as const
                     : item.kind === 'docs'
                         ? 'document-source' as const
-                        : 'redbook-note' as const,
+                        : (item.note?.knowledgeKind || 'redbook-note') as KnowledgeBackendKind,
             }));
             const result = await window.ipcRenderer.knowledge.deleteBatch({ items: deleteItems }) as {
                 success?: boolean;
@@ -1427,10 +1441,11 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 .map((item) => {
                     if (item.kind === 'youtube-video') return `youtube:${item.id}`;
                     if (item.kind === 'document-source') return `docs:${item.id}`;
-                    return `xhs-image:${item.id}`;
+                    const selected = selectedKnowledgeItems.find((candidate) => candidate.id === item.id);
+                    return selected ? `${selected.kind}:${item.id}` : `xhs-image:${item.id}`;
                 }));
             const deletedNoteIds = new Set((result.results || [])
-                .filter((item) => item.success && item.kind === 'redbook-note')
+                .filter((item) => item.success && item.kind !== 'youtube-video' && item.kind !== 'document-source')
                 .map((item) => item.id)
                 .filter(Boolean));
             const deletedYoutubeIds = new Set((result.results || [])
@@ -1723,6 +1738,10 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 return '链接文章';
             case 'wechat-article':
                 return '公众号文章';
+            case 'zhihu-answer':
+                return '知乎回答';
+            case 'zhihu-article':
+                return '知乎文章';
             case 'youtube':
                 return 'YouTube';
             case 'docs':
@@ -1760,6 +1779,10 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 return 'bg-sky-500/90 text-white';
             case 'wechat-article':
                 return 'bg-emerald-500/90 text-white';
+            case 'zhihu-answer':
+                return 'bg-blue-500/90 text-white';
+            case 'zhihu-article':
+                return 'bg-blue-500/90 text-white';
             case 'youtube':
                 return 'bg-red-600/90 text-white';
             case 'docs':
@@ -1775,13 +1798,16 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 return 'text-emerald-700 bg-emerald-50 border-emerald-200';
             case '网页文章':
                 return 'text-sky-700 bg-sky-50 border-sky-200';
+            case '知乎回答':
+            case '知乎文章':
+                return 'text-blue-700 bg-blue-50 border-blue-200';
             default:
                 return 'text-accent-primary bg-accent-primary/5 border-accent-primary/10';
         }
     };
 
     const renderNoteBody = (note: Note) => {
-        const isMarkdownArticle = note.type === 'link-article' && note.captureKind !== 'wechat-article';
+        const isMarkdownArticle = (note.type === 'link-article' || note.captureKind === 'zhihu-answer' || note.captureKind === 'zhihu-article') && note.captureKind !== 'wechat-article';
         if (isMarkdownArticle) {
             return (
                 <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
@@ -2701,7 +2727,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     const note = item.note;
                                     const orderedImages = orderImages(note.images || []);
                                     const coverImage = note.cover || orderedImages[0];
-                                    const isTextArticleCard = (item.kind === 'link-article' || item.kind === 'wechat-article') && !coverImage && !note.video;
+                                    const isTextArticleCard = (item.kind === 'link-article' || item.kind === 'wechat-article' || item.kind === 'zhihu-answer' || item.kind === 'zhihu-article') && !coverImage && !note.video;
                                     const notePreviewText = note.excerpt || note.content || note.sourceUrl || '暂无摘要';
                                     const isNoteTranscribing = Boolean(note.video && !note.transcript && note.transcriptionStatus === 'processing');
                                     const canExpandToWechat = SHOW_WECHAT_KNOWLEDGE_ACTIONS && isExpandableXiaohongshuNote(note) && Boolean(onNavigateToRedClaw);
@@ -2763,7 +2789,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                 <div
                                                     className={clsx(
                                                         'relative w-full bg-black/[0.02] overflow-hidden',
-                                                        (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'aspect-[4/3]' : resolveAspectClass(note.id)
+                                                        (item.kind === 'link-article' || item.kind === 'wechat-article' || item.kind === 'zhihu-answer' || item.kind === 'zhihu-article') ? 'aspect-[4/3]' : resolveAspectClass(note.id)
                                                     )}
                                                 >
                                                     <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>
@@ -2807,7 +2833,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                 <div
                                                     className={clsx(
                                                         'relative bg-black/[0.02] flex items-center justify-center text-text-tertiary',
-                                                        (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'aspect-[4/2.6]' : 'aspect-[3/4]'
+                                                        (item.kind === 'link-article' || item.kind === 'wechat-article' || item.kind === 'zhihu-answer' || item.kind === 'zhihu-article') ? 'aspect-[4/2.6]' : 'aspect-[3/4]'
                                                     )}
                                                 >
                                                     <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>

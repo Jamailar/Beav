@@ -702,6 +702,18 @@ fn handle_knowledge_http_request(
             let response = knowledge::ingest_entry(Some(app), &state, &request)?;
             Ok((200, "OK", response))
         }
+        ("POST", "zhihu/answers") => {
+            let request: knowledge::ZhihuAnswerIngestRequest = serde_json::from_str(body)
+                .map_err(|error| format!("zhihu answer request 无法解析: {error}"))?;
+            let response = knowledge::ingest_zhihu_answer(Some(app), &state, &request)?;
+            Ok((200, "OK", response))
+        }
+        ("POST", "zhihu/articles") => {
+            let request: knowledge::ZhihuArticleIngestRequest = serde_json::from_str(body)
+                .map_err(|error| format!("zhihu article request 无法解析: {error}"))?;
+            let response = knowledge::ingest_zhihu_article(Some(app), &state, &request)?;
+            Ok((200, "OK", response))
+        }
         ("POST", "document-sources") => {
             let request: knowledge::KnowledgeDocumentSourceIngestRequest =
                 serde_json::from_str(body).map_err(|error| {

@@ -1719,7 +1719,7 @@ declare global {
         rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeVisualIndex?: boolean }) => Promise<unknown>;
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;
-        deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'youtube-video' | 'document-source' }> }) => Promise<unknown>;
+        deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source' }> }) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;
         deleteYoutube: (videoId: string) => Promise<unknown>;
         retryYoutubeSubtitle: (videoId: string) => Promise<unknown>;
