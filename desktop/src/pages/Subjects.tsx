@@ -469,6 +469,30 @@ function AudioMediaThumb({ src, compact = false }: { src: string; compact?: bool
     );
 }
 
+function VideoMediaThumb({
+    sourceUrl,
+    thumbnailUrl,
+    label,
+}: {
+    sourceUrl: string;
+    thumbnailUrl?: string;
+    label: string;
+}) {
+    const resolvedThumbnailUrl = thumbnailUrl ? resolveAssetUrl(thumbnailUrl) : '';
+    if (resolvedThumbnailUrl) {
+        return <img src={resolvedThumbnailUrl} alt={label} className="h-full w-full object-cover" />;
+    }
+    const resolvedSourceUrl = sourceUrl ? resolveAssetUrl(sourceUrl) : '';
+    if (resolvedSourceUrl) {
+        return <video src={resolvedSourceUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />;
+    }
+    return (
+        <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+            <Clapperboard className="h-6 w-6" />
+        </div>
+    );
+}
+
 function subjectVoiceString(subject: SubjectRecord, keys: string[]): string {
     const voice = subject.voice || {};
     for (const key of keys) {
@@ -1901,7 +1925,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 isAudioAsset(asset) ? (
                                                     <AudioMediaThumb src={sourceUrl} />
                                                 ) : isVideoAsset(asset) ? (
-                                                    <video src={previewUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />
+                                                    <VideoMediaThumb
+                                                        sourceUrl={sourceUrl}
+                                                        thumbnailUrl={asset.thumbnailUrl}
+                                                        label={asset.title || asset.id}
+                                                    />
                                                 ) : (
                                                     <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
                                                 )
@@ -1944,7 +1972,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 isAudioAsset(asset) ? (
                                                     <AudioMediaThumb src={sourceUrl} compact />
                                                 ) : isVideoAsset(asset) ? (
-                                                    <video src={previewUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />
+                                                    <VideoMediaThumb
+                                                        sourceUrl={sourceUrl}
+                                                        thumbnailUrl={asset.thumbnailUrl}
+                                                        label={asset.title || asset.id}
+                                                    />
                                                 ) : (
                                                     <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
                                                 )
