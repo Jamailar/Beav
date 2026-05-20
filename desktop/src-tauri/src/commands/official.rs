@@ -988,19 +988,6 @@ fn merge_official_ai_source(settings: &mut Value, source: &Value) {
         None
     };
     if let Some(selected_model) = selected_model {
-        let existing_models = existing_official_source
-            .as_ref()
-            .and_then(|item| item.get("models"))
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(str::trim))
-                    .filter(|item| !item.is_empty())
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
         let incoming_models = official_source
             .get("models")
             .and_then(Value::as_array)
@@ -1013,52 +1000,9 @@ fn merge_official_ai_source(settings: &mut Value, source: &Value) {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let mut merged_models = Vec::<String>::new();
-        for model in existing_models
-            .into_iter()
-            .chain(incoming_models.into_iter())
-            .chain(std::iter::once(selected_model.clone()))
-        {
-            if !merged_models.iter().any(|item| item == &model) {
-                merged_models.push(model);
-            }
-        }
-        let incoming_models_meta = official_source
-            .get("modelsMeta")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
         if let Some(object) = official_source.as_object_mut() {
-            object.insert("model".to_string(), json!(selected_model));
-            object.insert("models".to_string(), json!(merged_models));
-            if let Some(existing_meta) = existing_official_source
-                .as_ref()
-                .and_then(|item| item.get("modelsMeta"))
-                .and_then(Value::as_array)
-                .filter(|items| !items.is_empty())
-            {
-                let mut merged_meta = incoming_models_meta;
-                for item in existing_meta {
-                    let id = item
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .unwrap_or_default();
-                    if id.is_empty() {
-                        continue;
-                    }
-                    let exists = merged_meta.iter().any(|existing| {
-                        existing
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .map(|value| value.trim() == id)
-                            .unwrap_or(false)
-                    });
-                    if !exists {
-                        merged_meta.push(item.clone());
-                    }
-                }
-                object.insert("modelsMeta".to_string(), json!(merged_meta));
+            if incoming_models.iter().any(|model| model == &selected_model) {
+                object.insert("model".to_string(), json!(selected_model));
             }
         }
     }

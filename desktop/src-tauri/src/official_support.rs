@@ -1248,42 +1248,32 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
         .and_then(|item| item.get("id").and_then(|value| value.as_str()))
         .unwrap_or("gpt-4.1-mini");
     let current_text_model = payload_string(settings, "model_name");
-    let chat_model = choose_preferred_official_chat_model(
-        &available_chat_models,
-        current_text_model.as_deref(),
-        fallback_chat_model,
-    );
+    let official_model_id_set = official_model_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    let preserved_official_model = existing_source
+        .as_ref()
+        .and_then(|item| payload_string(item, "model"))
+        .filter(|value| official_model_id_set.contains(value.trim()))
+        .or_else(|| {
+            current_text_model
+                .clone()
+                .filter(|value| official_model_id_set.contains(value.trim()))
+        });
+    let chat_model = preserved_official_model.unwrap_or_else(|| {
+        choose_preferred_official_chat_model(
+            &available_chat_models,
+            current_text_model.as_deref(),
+            fallback_chat_model,
+        )
+    });
     let official_base_url = official_base_url_from_settings(settings);
     let official_video_api_key = official_ai_api_key_from_settings(settings).unwrap_or_default();
-    let existing_models = existing_source
-        .as_ref()
-        .and_then(|value| value.get("models"))
-        .and_then(|value| value.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(ToString::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let merged_models = normalize_model_id_list(
-        &existing_models
-            .into_iter()
-            .chain(official_model_ids.iter().cloned())
-            .chain(std::iter::once(chat_model.clone()))
-            .collect::<Vec<_>>(),
-    );
-    let existing_models_meta = existing_source
-        .as_ref()
-        .and_then(|value| value.get("modelsMeta"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
     let mut seen_meta_ids = std::collections::HashSet::new();
     let merged_models_meta = models
         .iter()
         .cloned()
-        .chain(existing_models_meta)
         .filter(|item| {
             let Some(id) = item.get("id").and_then(Value::as_str).map(str::trim) else {
                 return false;
@@ -1297,7 +1287,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
         "presetId": "redbox-official",
         "baseURL": official_base_url,
         "apiKey": api_key,
-        "models": merged_models,
+        "models": official_model_ids,
         "modelsMeta": merged_models_meta,
         "model": chat_model,
         "protocol": "openai"
