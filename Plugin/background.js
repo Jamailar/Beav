@@ -57,7 +57,7 @@ const DEFAULT_PLUGIN_SETTINGS = {
   autoUpdateCheck: true,
 };
 
-const USER_PROFILE_FEATURE_ENABLED = false;
+const USER_PROFILE_FEATURE_ENABLED = true;
 
 let cachedKnowledgeApi = null;
 let cachedKnowledgeApiAt = 0;

@@ -33,7 +33,7 @@ const REDBOX_XHS_DETAIL_ACTIONS_ID = 'redbox-xhs-detail-actions';
 const REDBOX_XHS_PROFILE_ACTIONS_ID = 'redbox-xhs-profile-actions';
 const REDBOX_XHS_STYLE_ID = 'redbox-xhs-dom-style';
 const REDBOX_XHS_DETAIL_HOST_TAG = 'redbox-xhs-explore';
-const USER_PROFILE_FEATURE_ENABLED = false;
+const USER_PROFILE_FEATURE_ENABLED = true;
 
 function normalizeText(value) {
     return String(value || '').trim();
