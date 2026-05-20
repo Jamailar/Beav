@@ -2307,6 +2307,100 @@ select {
   animation-delay: 1.6s;
 }
 
+@keyframes wander-node-dash {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.animate-wander-dash {
+  stroke-dasharray: 6, 4;
+  animation: wander-node-dash 1.2s linear infinite;
+}
+
+@keyframes wander-node-glow {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 12px rgb(var(--color-accent-primary) / 0.1), 0 8px 30px rgb(0 0 0 / 0.04);
+    border-color: rgb(var(--color-accent-primary) / 0.15);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 24px rgb(var(--color-accent-primary) / 0.28), 0 12px 40px rgb(0 0 0 / 0.08);
+    border-color: rgb(var(--color-accent-primary) / 0.45);
+  }
+}
+
+.animate-wander-node-glow {
+  animation: wander-node-glow 3s ease-in-out infinite;
+}
+
+@keyframes terminal-cursor {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+
+.animate-terminal-cursor {
+  animation: terminal-cursor 1s step-end infinite;
+}
+
+@keyframes step-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-step-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgb(var(--color-accent-primary) / 0.05) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: step-shimmer 2.5s infinite linear;
+}
+
+[data-theme='dark'] .animate-step-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0) 0%,
+    rgb(var(--color-accent-primary) / 0.08) 50%,
+    rgba(0, 0, 0, 0) 100%
+  );
+  background-size: 200% 100%;
+}
+
+@keyframes float-node-1 {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes float-node-2 {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-6px, 6px); }
+}
+
+@keyframes float-node-3 {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(6px, 6px); }
+}
+
+.animate-float-1 {
+  animation: float-node-1 5s ease-in-out infinite;
+}
+
+.animate-float-2 {
+  animation: float-node-2 5.6s ease-in-out infinite;
+}
+
+.animate-float-3 {
+  animation: float-node-3 5.3s ease-in-out infinite;
+}
+
 .ui-switch-track {
   --ui-switch-width: 44px;
   --ui-switch-height: 26px;

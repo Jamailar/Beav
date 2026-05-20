@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
-import { RefreshCw, Sparkles, History, X, Trash2, Dices, FileText, Play, MessageSquarePlus, Search, Square, CheckSquare, Shuffle } from 'lucide-react';
+import { RefreshCw, Sparkles, History, X, Trash2, Dices, FileText, Play, MessageSquarePlus, Search, Square, CheckSquare, Shuffle, Check } from 'lucide-react';
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
@@ -1246,6 +1246,45 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     };
   }, [isActive, onTitleBarContentChange, titleBarContent]);
 
+  const renderSourceNode = (item: WanderItem | undefined, index: number, position: string) => {
+    if (!item) {
+      return (
+        <div className="flex flex-col items-center justify-center p-3 rounded-2xl border border-dashed border-black/[0.08] dark:border-white/[0.08] bg-white/40 dark:bg-black/20 backdrop-blur-md h-[76px] text-center animate-pulse shadow-sm">
+          <div className="w-5 h-5 rounded-full bg-black/[0.05] dark:bg-white/[0.05] flex items-center justify-center mb-1">
+            <span className="text-[9px] font-bold text-text-tertiary/40">?</span>
+          </div>
+          <div className="text-[9px] font-bold text-text-tertiary/40">等候素材...</div>
+        </div>
+      );
+    }
+
+    const isDocItem = (item.meta as Record<string, unknown> | undefined)?.sourceType === 'document';
+    const icon = item.type === 'video' 
+      ? <Play className="w-3.5 h-3.5 text-red-500" /> 
+      : isDocItem 
+        ? <FileText className="w-3.5 h-3.5 text-violet-500" /> 
+        : <FileText className="w-3.5 h-3.5 text-blue-500" />;
+
+    return (
+      <div className="animate-wander-node-glow flex flex-col rounded-2xl border border-black/[0.05] dark:border-white/[0.05] bg-white/85 dark:bg-surface-primary/85 backdrop-blur-md p-3 shadow-md hover:scale-[1.03] transition-transform select-none max-w-full">
+        <div className="flex items-center gap-1.5 mb-1 min-w-0">
+          <div className="p-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.03] shrink-0">
+            {icon}
+          </div>
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/10 text-accent-primary font-black tracking-wider uppercase shrink-0">
+            Node {index + 1}
+          </span>
+        </div>
+        <div className="text-[11px] font-extrabold text-text-primary truncate" title={item.title}>
+          {item.title}
+        </div>
+        <div className="text-[9px] text-text-tertiary truncate mt-0.5">
+          {item.content || "暂无摘要"}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {phase === 'idle' ? (
@@ -1405,20 +1444,109 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
           <div className="flex-1 overflow-y-auto px-6 py-10 custom-scrollbar">
             <div className="max-w-4xl mx-auto space-y-10">
               {loading && (
-                <div className="flex flex-col items-center justify-center min-h-[60vh] py-10 animate-in fade-in zoom-in-[0.98] duration-1000">
-                  <WanderLoadingDice className="mb-10" size={76} />
+                <div className="flex flex-col items-center justify-center min-h-[60vh] py-4 animate-in fade-in zoom-in-[0.98] duration-1000">
                   
-                  <div className="w-full max-w-xl space-y-6">
-                    <div className="text-center space-y-2">
-                        <h3 className="text-lg font-extrabold tracking-tight text-text-primary uppercase tracking-[0.2em]">Deep Thinking</h3>
-                        <p className="text-[13px] font-bold text-text-tertiary/60 uppercase">Searching for Hidden Connections</p>
+                  {/* The Quantum Synaptic Network Map (Expanded & Transparent) */}
+                  <div className="relative w-full max-w-3xl aspect-[1.8] flex items-center justify-center mb-8 select-none">
+                    {/* Background Grid Accent */}
+                    <div className="absolute inset-0 opacity-[0.015] dark:opacity-[0.03] bg-[linear-gradient(rgba(0,0,0,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.1)_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
+                    
+                    {/* SVG Connections with Animated Particles */}
+                    <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 720 400">
+                      <defs>
+                        <filter id="glow-effect" x="-20%" y="-20%" width="140%" height="140%">
+                          <feGaussianBlur stdDeviation="3.5" result="blur" />
+                          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                        </filter>
+                      </defs>
+                      
+                      {/* Concentric Rotating Quantum Orbits */}
+                      <circle cx="360" cy="200" r="75" fill="none" stroke="rgb(var(--color-accent-primary) / 0.15)" strokeWidth="1" strokeDasharray="4, 12" style={{ transformOrigin: '360px 200px', animation: 'spin 35s linear infinite' }} />
+                      <circle cx="360" cy="200" r="135" fill="none" stroke="rgb(var(--color-accent-primary) / 0.1)" strokeWidth="1.2" strokeDasharray="6, 18" style={{ transformOrigin: '360px 200px', animation: 'spin 25s linear infinite reverse' }} />
+                      <circle cx="360" cy="200" r="190" fill="none" stroke="rgb(var(--color-accent-primary) / 0.05)" strokeWidth="1.5" strokeDasharray="8, 24" style={{ transformOrigin: '360px 200px', animation: 'spin 45s linear infinite' }} />
+
+                      {/* Twinkling Quantum Particles */}
+                      <circle cx="160" cy="90" r="1.5" className="fill-accent-primary animate-pulse" style={{ animationDelay: '0.2s', animationDuration: '3s' }} />
+                      <circle cx="560" cy="80" r="2" className="fill-accent-primary/60 animate-pulse" style={{ animationDelay: '1.4s', animationDuration: '4s' }} />
+                      <circle cx="240" cy="280" r="1.2" className="fill-accent-primary/80 animate-pulse" style={{ animationDelay: '0.7s', animationDuration: '2.5s' }} />
+                      <circle cx="480" cy="290" r="1.8" className="fill-accent-primary animate-pulse" style={{ animationDelay: '2.1s', animationDuration: '3.5s' }} />
+                      <circle cx="90" cy="180" r="1" className="fill-accent-primary/50 animate-pulse" style={{ animationDelay: '1.1s', animationDuration: '5s' }} />
+                      <circle cx="630" cy="170" r="1.5" className="fill-accent-primary/70 animate-pulse" style={{ animationDelay: '0.5s', animationDuration: '3.2s' }} />
+
+                      {/* Connections from three orbits to center (360, 200) */}
+                      {/* Node 1: Top Center */}
+                      <line x1="360" y1="64" x2="360" y2="150" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
+                      <line x1="360" y1="64" x2="360" y2="150" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
+                      
+                      {/* Node 2: Bottom Left */}
+                      <line x1="110" y1="310" x2="310" y2="230" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
+                      <line x1="110" y1="310" x2="310" y2="230" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
+                      
+                      {/* Node 3: Bottom Right */}
+                      <line x1="610" y1="310" x2="410" y2="230" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
+                      <line x1="610" y1="310" x2="410" y2="230" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
+                    </svg>
+
+                    {/* Central Glowing Pulses */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-accent-primary/10 rounded-full blur-3xl pointer-events-none animate-pulse" />
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 bg-accent-primary/5 rounded-full blur-2xl pointer-events-none animate-pulse" style={{ animationDelay: '1s' }} />
+
+                    {/* Central Quantum Dice */}
+                    <div className="relative z-10 flex flex-col items-center select-none scale-[0.92] transition-transform duration-500">
+                      <WanderLoadingDice size={82} />
+                      <div className="mt-2.5 text-[9px] font-black tracking-[0.25em] text-accent-primary/80 uppercase animate-pulse">
+                        Brain Nucleus
+                      </div>
                     </div>
 
-                    <div className="rounded-3xl border border-white/60 bg-white/40 p-1 shadow-[0_20px_40px_-12px_rgba(0,0,0,0.08)] backdrop-blur-xl">
-                      <div className="bg-white/80 rounded-[22px] px-6 py-5 border border-black/[0.02]">
-                        <div className="text-[10px] font-black text-accent-primary/60 uppercase tracking-widest mb-2">Live Status</div>
+                    {/* Orbiting Source Nodes with Float Animations */}
+                    {/* Node 1: Top Center */}
+                    <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 w-[170px]">
+                      <div className="animate-float-1">
+                        {renderSourceNode(items[0], 0, "Top")}
+                      </div>
+                    </div>
+
+                    {/* Node 2: Bottom Left */}
+                    <div className="absolute bottom-2 left-4 z-20 w-[170px]">
+                      <div className="animate-float-2">
+                        {renderSourceNode(items[1], 1, "Left")}
+                      </div>
+                    </div>
+
+                    {/* Node 3: Bottom Right */}
+                    <div className="absolute bottom-2 right-4 z-20 w-[170px]">
+                      <div className="animate-float-3">
+                        {renderSourceNode(items[2], 2, "Right")}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="w-full max-w-lg space-y-4">
+                    <div className="text-center space-y-0.5">
+                        <h3 className="text-sm font-black tracking-[0.2em] text-text-primary uppercase">Deep Thinking</h3>
+                        <p className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-wider">Searching for Hidden Connections</p>
+                    </div>
+
+                    {/* High-tech Live Status Console (Smaller & Sleeker) */}
+                    <div className="relative rounded-2xl border border-white/30 dark:border-white/5 bg-white/30 dark:bg-black/10 p-0.5 shadow-sm backdrop-blur-lg overflow-hidden">
+                      <div className="absolute inset-0 opacity-[0.015] dark:opacity-[0.03] bg-[linear-gradient(rgba(0,0,0,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.1)_1px,transparent_1px)] bg-[size:12px_12px]" />
+                      
+                      <div className="relative bg-white/50 dark:bg-surface-primary/50 rounded-[14px] px-4 py-2.5 border border-black/[0.01]">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="text-[9px] font-black text-accent-primary uppercase tracking-[0.12em]">
+                            Live Brainstorm Stream
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="relative flex h-1.5 w-1.5">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                            </span>
+                            <span className="text-[8px] font-black uppercase text-emerald-500/80 tracking-wider">ACTIVE</span>
+                          </div>
+                        </div>
                         <div
-                            className="text-[15px] font-bold text-text-primary leading-relaxed h-12"
+                            className="text-[12px] font-mono font-bold text-text-primary leading-relaxed h-9"
                             style={{
                             display: '-webkit-box',
                             WebkitLineClamp: 2,
@@ -1427,44 +1555,70 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                             }}
                         >
                             {liveStatus || '正在初始化量子灵感引擎...'}
+                            <span className="inline-block w-1.5 h-3 ml-1 bg-accent-primary animate-terminal-cursor" />
                         </div>
                       </div>
                     </div>
 
+                    {/* Checklist Steps (Smaller & Sleeker) */}
                     {progressCards.length > 0 && (
-                      <div className="grid gap-2.5">
-                        {progressCards.map((card) => (
-                          <div key={card.phase} className={clsx(
-                            "rounded-2xl border px-5 py-4 transition-all duration-500 flex items-center justify-between gap-4",
-                            card.status === 'running' ? "bg-white border-accent-primary/20 shadow-lg ring-1 ring-accent-primary/5" : "bg-black/[0.02] border-transparent"
-                          )}>
-                            <div className="min-w-0 flex items-center gap-4">
+                      <div className="grid gap-1.5">
+                        {progressCards.map((card) => {
+                          const isRunning = card.status === 'running';
+                          const isCompleted = card.status === 'completed';
+                          return (
+                            <div 
+                              key={card.phase} 
+                              className={clsx(
+                                "relative overflow-hidden rounded-xl border px-3.5 py-2.5 transition-all duration-500 flex items-center justify-between gap-3",
+                                isRunning 
+                                  ? "bg-white dark:bg-surface-primary border-accent-primary/20 dark:border-accent-primary/30 shadow-[0_4px_20px_rgb(var(--color-accent-primary)/0.06)] ring-1 ring-accent-primary/5" 
+                                  : "bg-black/[0.01] dark:bg-white/[0.005] border-black/[0.02] dark:border-white/[0.02]"
+                              )}
+                            >
+                              {isRunning && (
+                                <div className="absolute inset-0 pointer-events-none animate-step-shimmer opacity-30" />
+                              )}
+                              
+                              <div className="relative z-10 min-w-0 flex items-center gap-3">
                                 <div className={clsx(
-                                    "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-colors",
-                                    card.status === 'completed' ? "bg-emerald-500 text-white" : card.status === 'running' ? "bg-accent-primary text-white" : "bg-black/[0.05] text-text-tertiary"
+                                    "w-6 h-6 rounded-lg flex items-center justify-center shrink-0 transition-all duration-300 shadow-sm",
+                                    isCompleted 
+                                      ? "bg-emerald-500 dark:bg-emerald-600 text-white shadow-emerald-500/10" 
+                                      : isRunning 
+                                        ? "bg-accent-primary text-white shadow-accent-primary/15 scale-102" 
+                                        : "bg-black/[0.03] dark:bg-white/[0.03] text-text-tertiary"
                                 )}>
-                                    {card.status === 'completed' ? <X className="w-4 h-4 rotate-45" /> : <div className="text-[11px] font-black">{card.stepIndex || '•'}</div>}
+                                    {isCompleted ? (
+                                      <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                                    ) : (
+                                      <span className="text-[10px] font-black">{card.stepIndex || '•'}</span>
+                                    )}
                                 </div>
                                 <div className="min-w-0">
-                                    <div className={clsx("text-[13px] font-extrabold tracking-tight", card.status === 'running' ? "text-text-primary" : "text-text-tertiary")}>
+                                    <div className={clsx(
+                                      "text-[11.5px] font-extrabold tracking-tight transition-colors", 
+                                      isRunning ? "text-text-primary" : "text-text-tertiary/60"
+                                    )}>
                                         {card.title}
                                     </div>
-                                    {card.status === 'running' && (
-                                        <div className="mt-0.5 text-[11px] font-bold text-text-tertiary truncate max-w-[300px]">
+                                    {isRunning && (
+                                        <div className="mt-0.5 text-[9.5px] font-bold text-text-tertiary truncate max-w-[280px] animate-pulse">
                                             {card.detail}
                                         </div>
                                     )}
                                 </div>
+                              </div>
+                              {isRunning && (
+                                  <div className="relative z-10 flex gap-0.5 bg-accent-primary/5 px-1.5 py-1 rounded border border-accent-primary/10 shrink-0">
+                                      <div className="w-1 h-1 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.3s]" />
+                                      <div className="w-1 h-1 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.15s]" />
+                                      <div className="w-1 h-1 rounded-full bg-accent-primary animate-bounce" />
+                                  </div>
+                              )}
                             </div>
-                            {card.status === 'running' && (
-                                <div className="flex gap-1">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.3s]" />
-                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.15s]" />
-                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce" />
-                                </div>
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
