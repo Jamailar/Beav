@@ -53,7 +53,8 @@ const elements = {
   taskLogList: document.getElementById('task-log-list'),
 };
 
-const USER_PROFILE_FEATURE_ENABLED = false;
+const USER_PROFILE_FEATURE_ENABLED = true;
+const ACCOUNT_BINDING_FEATURE_ENABLED = false;
 let context = null;
 let refreshing = false;
 let capturePendingAction = '';
@@ -109,7 +110,7 @@ function bindEvents() {
   elements.taskQueuePause.addEventListener('click', () => void controlActiveTask('pause'));
   elements.taskQueueResume.addEventListener('click', () => void controlActiveTask('resume'));
   elements.taskQueueCancel.addEventListener('click', () => void controlActiveTask('cancel'));
-  if (USER_PROFILE_FEATURE_ENABLED) {
+  if (USER_PROFILE_FEATURE_ENABLED && ACCOUNT_BINDING_FEATURE_ENABLED) {
     elements.accountBindingAction.addEventListener('click', () => void bindCurrentProfileAsAccount());
   }
   elements.captureActions.addEventListener('click', (event) => {
@@ -299,8 +300,8 @@ function renderConnection(health) {
 }
 
 function renderWorkspaceAndAccounts(nextContext, healthPayload) {
-  elements.accountFooter?.classList.toggle('hidden', !USER_PROFILE_FEATURE_ENABLED);
-  if (!USER_PROFILE_FEATURE_ENABLED) {
+  elements.accountFooter?.classList.toggle('hidden', !ACCOUNT_BINDING_FEATURE_ENABLED);
+  if (!USER_PROFILE_FEATURE_ENABLED || !ACCOUNT_BINDING_FEATURE_ENABLED) {
     elements.workspaceName.textContent = healthPayload?.success
       ? `当前空间：${cleanTitle(healthPayload.workspaceName || healthPayload.spaceName || '') || '已连接'}`
       : '当前空间：未连接';
@@ -345,7 +346,7 @@ function renderWorkspaceAndAccounts(nextContext, healthPayload) {
 }
 
 function renderAccountBindingNotice(nextContext, healthPayload) {
-  if (!USER_PROFILE_FEATURE_ENABLED) {
+  if (!USER_PROFILE_FEATURE_ENABLED || !ACCOUNT_BINDING_FEATURE_ENABLED) {
     elements.accountBindingNotice.classList.add('hidden');
     elements.accountBindingAction.disabled = true;
     return;
@@ -411,9 +412,10 @@ function resolvePageIdentity(nextContext) {
   const tab = nextContext?.tab || {};
   const pageInfo = nextContext?.pageInfo || {};
   const identity = nextContext?.pageIdentity || {};
-  const platform = normalizePlatform(identity.platform || pageInfo.platform || tab.hostname || pageInfo.kind || tab.url);
+  const platform = normalizePlatform(pageInfo.platform || tab.hostname || tab.url || identity.platform || pageInfo.kind);
   const platformMeta = getPlatformMeta(platform);
-  const pageType = identity.pageType || inferPageType(pageInfo, tab);
+  const inferredPageType = inferPageType(pageInfo, tab);
+  const pageType = inferredPageType !== 'page' ? inferredPageType : (identity.pageType || inferredPageType);
   const fallbackTitle = cleanTitle(identity.title || tab.title || '');
   const hostname = tab.hostname || getHostname(tab.url);
 
@@ -803,8 +805,9 @@ function renderBloggerNotesPanel(nextContext) {
   const tab = nextContext?.tab || {};
   const pageInfo = nextContext?.pageInfo || {};
   const identity = nextContext?.pageIdentity || {};
-  const platform = normalizePlatform(identity.platform || pageInfo.platform || tab.hostname || pageInfo.kind || tab.url);
-  const pageType = identity.pageType || inferPageType(pageInfo, tab);
+  const platform = normalizePlatform(pageInfo.platform || tab.hostname || tab.url || identity.platform || pageInfo.kind);
+  const inferredPageType = inferPageType(pageInfo, tab);
+  const pageType = inferredPageType !== 'page' ? inferredPageType : (identity.pageType || inferredPageType);
   const visible = platform === 'xhs' && pageType === 'profile';
   elements.bloggerNotesPanel.classList.toggle('hidden', !visible);
   if (!visible) {
@@ -868,8 +871,9 @@ function getCaptureActionConfig(nextContext) {
   const tab = nextContext?.tab || {};
   const pageInfo = nextContext?.pageInfo || {};
   const identity = nextContext?.pageIdentity || {};
-  const platform = normalizePlatform(identity.platform || pageInfo.platform || tab.hostname || pageInfo.kind || tab.url);
-  const pageType = identity.pageType || inferPageType(pageInfo, tab);
+  const platform = normalizePlatform(pageInfo.platform || tab.hostname || tab.url || identity.platform || pageInfo.kind);
+  const inferredPageType = inferPageType(pageInfo, tab);
+  const pageType = inferredPageType !== 'page' ? inferredPageType : (identity.pageType || inferredPageType);
   if (!tab.url) {
     return {
       variant: 'empty',
@@ -892,7 +896,7 @@ function getCaptureActionConfig(nextContext) {
       title: 'RedBox 博主采集',
       subtitle: '小红书博主页',
       actions: [
-        { label: '绑定并学习账号', action: 'blogger', primary: true, title: '绑定当前账号并学习历史内容' },
+        { label: '采集博主笔记', action: 'bloggerNotes', primary: true, title: '采集当前博主主页笔记' },
       ],
     };
   }
@@ -946,6 +950,26 @@ function getCaptureActionConfig(nextContext) {
       ],
     };
   }
+  if (platform === 'zhihu' && pageInfo?.kind === 'zhihu-answer') {
+    return {
+      variant: 'zhihu',
+      title: 'RedBox 回答采集',
+      subtitle: '知乎',
+      actions: [
+        { label: '保存回答', action: 'saveZhihuAnswer', primary: true, title: '保存当前知乎回答到 RedBox' },
+      ],
+    };
+  }
+  if (platform === 'zhihu' && pageInfo?.kind === 'zhihu-article') {
+    return {
+      variant: 'zhihu',
+      title: 'RedBox 文章采集',
+      subtitle: '知乎专栏',
+      actions: [
+        { label: '保存文章', action: 'saveZhihuArticle', primary: true, title: '保存当前知乎专栏文章到 RedBox' },
+      ],
+    };
+  }
   const platformMap = {
     bilibili: { subtitle: 'Bilibili', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveBilibili', title: '保存当前 Bilibili 内容到 RedBox' },
     kuaishou: { subtitle: '快手', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveKuaishou', title: '保存当前快手内容到 RedBox' },
@@ -987,6 +1011,8 @@ function getCaptureActionMeta(action) {
     savePageLink: { type: 'save-page-link', pending: '保存中...', done: '已保存到 RedBox' },
     saveYoutube: { type: 'save-youtube', pending: '保存中...', done: '已保存 YouTube 视频' },
     saveDouyin: { type: 'save-douyin', pending: '保存中...', done: '已保存抖音视频' },
+    saveZhihuAnswer: { type: 'save-zhihu-answer', pending: '保存中...', done: '已保存知乎回答' },
+    saveZhihuArticle: { type: 'save-zhihu-article', pending: '保存中...', done: '已保存知乎文章' },
     saveBilibili: { type: 'save-bilibili', pending: '保存中...', done: '已保存 Bilibili 内容' },
     saveKuaishou: { type: 'save-kuaishou', pending: '保存中...', done: '已保存快手内容' },
     saveTiktok: { type: 'save-tiktok', pending: '保存中...', done: '已保存 TikTok 内容' },
@@ -1156,6 +1182,7 @@ function normalizePlatform(value) {
   if (hostname === 'douyin.com' || hostname.endsWith('.douyin.com')) return 'douyin';
   if (hostname === 'xiaohongshu.com' || hostname.endsWith('.xiaohongshu.com') || hostname === 'rednote.com' || hostname.endsWith('.rednote.com')) return 'xhs';
   if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com') || hostname === 'youtu.be') return 'youtube';
+  if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) return 'zhihu';
   if (hostname === 'mp.weixin.qq.com' || hostname.endsWith('.weixin.qq.com')) return 'wechat';
   if (/xiaohongshu|xhs|rednote|小红书/.test(text)) return 'xhs';
   if (/youtube|youtu\.be/.test(text)) return 'youtube';
@@ -1166,6 +1193,7 @@ function normalizePlatform(value) {
   if (/reddit/.test(text)) return 'reddit';
   if (/instagram|instagr\.am|ins\b/.test(text)) return 'instagram';
   if (/^x$|(^|[^a-z])x\.com|twitter|platform-x|[^a-z]x[^a-z]/.test(text)) return 'x';
+  if (/zhihu|知乎/.test(text)) return 'zhihu';
   if (/weixin|wechat|mp\.weixin|公众号/.test(text)) return 'wechat';
   if (/redbox|redconvert/.test(text)) return 'redbox';
   return 'web';
@@ -1194,6 +1222,7 @@ function getPlatformMeta(platform) {
     x: { platform: 'x', name: 'X', logo: 'X', icon: 'assets/platforms/x.svg' },
     instagram: { platform: 'instagram', name: 'Instagram', logo: 'I', icon: 'assets/platforms/instagram.svg' },
     wechat: { platform: 'wechat', name: '微信公众号', logo: '微' },
+    zhihu: { platform: 'zhihu', name: '知乎', logo: '知', icon: 'assets/platforms/zhihu.svg' },
     redbox: { platform: 'redbox', name: 'RedBox', logo: 'R' },
     web: { platform: 'web', name: '网页', logo: 'W' },
   };
@@ -1206,6 +1235,8 @@ function inferPageType(pageInfo, tab) {
   if (/profile|author|博主|主页/.test(kind) || /\/user\/profile\//.test(url)) return 'profile';
   if (/note|image|小红书/.test(kind) || /\/explore\/|\/discovery\/item\//.test(url)) return 'note';
   if (/post|tweet|帖子|推文/.test(kind) || /\/comments\/|\/status\/|instagram\.com\/(p|reel)\//.test(url)) return 'post';
+  if (/zhihu-answer|知乎回答/.test(kind)) return 'article';
+  if (/zhihu-article|知乎文章|知乎专栏/.test(kind)) return 'article';
   if (/video|youtube|douyin|kuaishou|bilibili|tiktok/.test(kind)) return 'video';
   if (/article|wechat|公众号/.test(kind)) return 'article';
   return 'page';

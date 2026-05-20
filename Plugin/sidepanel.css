@@ -204,7 +204,8 @@ h1 {
 .platform-tiktok,
 .platform-reddit,
 .platform-x,
-.platform-instagram {
+.platform-instagram,
+.platform-zhihu {
   background: #ffffff;
   color: #ffffff;
 }
