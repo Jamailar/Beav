@@ -4231,10 +4231,13 @@ export function Settings({
           if (fallback === 'disabled') return 'disabled';
           return normalizedSourceId ? 'custom' : fallback;
         };
-        const loadedVoiceTtsModel = String(settings.voice_tts_model || settings.tts_model || loadedModelRoutes.voiceTts.model || DEFAULT_VOICE_TTS_MODEL).trim();
+        const loadedVoiceTtsModel = String(loadedModelRoutes.voiceTts.model || settings.voice_tts_model || settings.tts_model || DEFAULT_VOICE_TTS_MODEL).trim();
         const loadedVoiceCloneModel = cloneModelForVoiceTtsModel(
           loadedVoiceTtsModel,
-          String(settings.voice_clone_model || loadedModelRoutes.voiceClone.model || DEFAULT_VOICE_CLONE_MODEL).trim(),
+          String(loadedModelRoutes.voiceClone.model || settings.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL).trim(),
+        );
+        const routeModelFirst = (routeModel: string, legacyModel: unknown) => (
+          String(routeModel || legacyModel || '').trim()
         );
         const nextModelRoutes: AiModelRoutes = {
           ...loadedModelRoutes,
@@ -4242,41 +4245,41 @@ export function Settings({
             ...loadedModelRoutes.chat,
             mode: routeSourceMode(normalizedDefaultId, loadedModelRoutes.chat.mode),
             sourceId: normalizedDefaultId,
-            model: loadedModelRoutes.chat.model || String(resolvedDefaultSource?.model || settings.model_name || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.chat.model, resolvedDefaultSource?.model || settings.model_name),
           },
           wander: {
             ...loadedModelRoutes.wander,
-            model: String(settings.model_name_wander || loadedModelRoutes.wander.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.wander.model, settings.model_name_wander),
           },
           team: {
             ...loadedModelRoutes.team,
-            model: String(settings.model_name_chatroom || loadedModelRoutes.team.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.team.model, settings.model_name_chatroom),
           },
           knowledge: {
             ...loadedModelRoutes.knowledge,
-            model: String(settings.model_name_knowledge || loadedModelRoutes.knowledge.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.knowledge.model, settings.model_name_knowledge),
           },
           redclaw: {
             ...loadedModelRoutes.redclaw,
-            model: String(settings.model_name_redclaw || loadedModelRoutes.redclaw.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.redclaw.model, settings.model_name_redclaw),
           },
           transcription: {
             ...loadedModelRoutes.transcription,
             mode: routeSourceMode(resolvedTranscriptionSourceId, loadedModelRoutes.transcription.mode),
             sourceId: resolvedTranscriptionSourceId,
-            model: String(settings.transcription_model || loadedModelRoutes.transcription.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.transcription.model, settings.transcription_model),
           },
           embedding: {
             ...loadedModelRoutes.embedding,
             mode: routeSourceMode(resolvedEmbeddingSourceId, loadedModelRoutes.embedding.mode),
             sourceId: resolvedEmbeddingSourceId,
-            model: String(settings.embedding_model || loadedModelRoutes.embedding.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.embedding.model, settings.embedding_model),
           },
           image: {
             ...loadedModelRoutes.image,
             mode: routeSourceMode(resolvedImageSourceId, loadedModelRoutes.image.mode),
             sourceId: resolvedImageSourceId,
-            model: String(settings.image_model || loadedModelRoutes.image.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.image.model, settings.image_model),
           },
           visualIndex: {
             ...loadedModelRoutes.visualIndex,
@@ -4284,7 +4287,7 @@ export function Settings({
               ? routeSourceMode(resolvedVisualIndexSourceId, loadedModelRoutes.visualIndex.mode === 'disabled' ? 'official' : loadedModelRoutes.visualIndex.mode)
               : 'disabled',
             sourceId: resolvedVisualIndexSourceId,
-            model: String(settings.visual_index_model || loadedModelRoutes.visualIndex.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.visualIndex.model, settings.visual_index_model),
           },
           videoAnalysis: {
             ...loadedModelRoutes.videoAnalysis,
@@ -4292,7 +4295,7 @@ export function Settings({
               ? routeSourceMode(resolvedVideoAnalysisSourceId, loadedModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : loadedModelRoutes.videoAnalysis.mode)
               : 'disabled',
             sourceId: resolvedVideoAnalysisSourceId,
-            model: String(settings.video_analysis_model || loadedModelRoutes.videoAnalysis.model || '').trim(),
+            model: routeModelFirst(loadedModelRoutes.videoAnalysis.model, settings.video_analysis_model),
           },
           voiceTts: {
             ...loadedModelRoutes.voiceTts,
@@ -4372,19 +4375,19 @@ export function Settings({
         setFormData({
           api_endpoint: resolvedDefaultSource?.baseURL || '',
           api_key: resolvedDefaultSource?.apiKey || '',
-          model_name: resolvedDefaultSource?.model || '',
+          model_name: nextModelRoutes.chat.model || resolvedDefaultSource?.model || '',
           workspace_dir: settings.workspace_dir || '',
-          transcription_model: settings.transcription_model || '',
+          transcription_model: nextModelRoutes.transcription.model || '',
           transcription_endpoint: settings.transcription_endpoint || '',
           transcription_key: settings.transcription_key || '',
           embedding_endpoint: settings.embedding_endpoint || '',
           embedding_key: settings.embedding_key || '',
-          embedding_model: settings.embedding_model || '',
+          embedding_model: nextModelRoutes.embedding.model || '',
           visual_index_enabled: Boolean(settings.visual_index_enabled),
           visual_index_provider: settings.visual_index_provider || 'openai-compatible',
           visual_index_endpoint: settings.visual_index_endpoint || '',
           visual_index_api_key: settings.visual_index_api_key || '',
-          visual_index_model: settings.visual_index_model || '',
+          visual_index_model: nextModelRoutes.visualIndex.model || '',
           visual_index_prompt_version: normalizeVisualIndexPromptVersion(settings.visual_index_prompt_version),
           visual_index_timeout_seconds: String(settings.visual_index_timeout_seconds || 90),
           visual_index_max_image_edge: String(settings.visual_index_max_image_edge || 1536),
@@ -4395,7 +4398,7 @@ export function Settings({
           video_analysis_enabled: Boolean(settings.video_analysis_enabled),
           video_analysis_endpoint: settings.video_analysis_endpoint || '',
           video_analysis_api_key: settings.video_analysis_api_key || '',
-          video_analysis_model: settings.video_analysis_model || '',
+          video_analysis_model: nextModelRoutes.videoAnalysis.model || '',
           video_analysis_protocol: settings.video_analysis_protocol || 'gemini',
           video_analysis_max_direct_video_bytes: String(settings.video_analysis_max_direct_video_bytes || 64 * 1024 * 1024),
           docling_endpoint: settings.docling_endpoint || settings.parser_docling_endpoint || '',
@@ -4426,7 +4429,7 @@ export function Settings({
             if (loadedTemplate === 'dashscope-wan-native') {
               return DASHSCOPE_LOCKED_IMAGE_MODEL;
             }
-            return settings.image_model || 'gpt-image-1';
+            return nextModelRoutes.image.model || 'gpt-image-1';
           })(),
           voice_endpoint: settings.voice_endpoint || settings.tts_endpoint || '',
           voice_api_key: settings.voice_api_key || settings.tts_api_key || '',
@@ -4439,10 +4442,10 @@ export function Settings({
           image_aspect_ratio: settings.image_aspect_ratio || '3:4',
           image_size: '',
           image_quality: settings.image_quality === 'low' || settings.image_quality === 'medium' || settings.image_quality === 'high' ? settings.image_quality : 'medium',
-          model_name_wander: settings.model_name_wander || '',
-          model_name_chatroom: settings.model_name_chatroom || '',
-          model_name_knowledge: settings.model_name_knowledge || '',
-          model_name_redclaw: settings.model_name_redclaw || '',
+          model_name_wander: nextModelRoutes.wander.model || '',
+          model_name_chatroom: nextModelRoutes.team.model || '',
+          model_name_knowledge: nextModelRoutes.knowledge.model || '',
+          model_name_redclaw: nextModelRoutes.redclaw.model || '',
           proxy_enabled: Boolean(settings.proxy_enabled),
           proxy_url: settings.proxy_url || '',
           proxy_bypass: settings.proxy_bypass || 'localhost,127.0.0.1,::1',
