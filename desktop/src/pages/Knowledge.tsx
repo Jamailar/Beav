@@ -1171,7 +1171,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             counts[item.kind] += 1;
         });
         return [
-            { key: 'all' as const, label: '全部', count: Number(kindCounts['redbook-note'] || 0) + counts.youtube + counts.docs },
+            { key: 'all' as const, label: '全部', count: knowledgeItems.length },
             { key: 'xhs-image' as const, label: '小红书图文', count: counts['xhs-image'] },
             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
             { key: 'xhs-blogger' as const, label: '小红书博主', count: counts['xhs-blogger'] },

@@ -619,26 +619,6 @@ function detectPageInfo() {
         };
     }
 
-    if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) {
-        const isAnswerPage = /^\/question\/\d+\/answer\/\d+/.test(pathname);
-        if (isAnswerPage) {
-            return {
-                kind: 'zhihu-answer',
-                platform: 'zhihu',
-                action: 'save-zhihu-answer',
-                label: '保存知乎回答到知识库',
-                description: '当前页面已识别为知乎回答页，将保存问题和最高赞回答。',
-                primaryEnabled: true,
-                detected: true,
-            };
-        }
-        return createLinkFallbackPageInfo({
-            kind: 'zhihu-page',
-            platform: 'zhihu',
-            description: '当前页面还没有稳定识别到可保存的知乎回答。',
-        });
-    }
-
     if (hostname === 'zhuanlan.zhihu.com') {
         const isArticlePage = /^\/p\/\d+/.test(pathname);
         if (isArticlePage) {
@@ -656,6 +636,26 @@ function detectPageInfo() {
             kind: 'zhihu-page',
             platform: 'zhihu',
             description: '当前页面还没有稳定识别到可保存的知乎文章。',
+        });
+    }
+
+    if (hostname === 'zhihu.com' || hostname.endsWith('.zhihu.com')) {
+        const isAnswerPage = /^\/question\/\d+\/answer\/\d+/.test(pathname);
+        if (isAnswerPage) {
+            return {
+                kind: 'zhihu-answer',
+                platform: 'zhihu',
+                action: 'save-zhihu-answer',
+                label: '保存知乎回答到知识库',
+                description: '当前页面已识别为知乎回答页，将保存问题和最高赞回答。',
+                primaryEnabled: true,
+                detected: true,
+            };
+        }
+        return createLinkFallbackPageInfo({
+            kind: 'zhihu-page',
+            platform: 'zhihu',
+            description: '当前页面还没有稳定识别到可保存的知乎回答。',
         });
     }
 

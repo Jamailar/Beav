@@ -725,8 +725,16 @@ pub(crate) fn ensure_supported_space(
     Ok(active_space_id)
 }
 
-fn knowledge_redbook_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
-    let root = knowledge_root(state)?.join("redbook");
+fn knowledge_entry_root_for_kind(
+    state: &State<'_, AppState>,
+    normalized_kind: &str,
+) -> Result<PathBuf, String> {
+    let dir_name = match normalized_kind {
+        "zhihu-answer" | "zhihu-article" => "zhihu",
+        "wechat-article" => "wechat",
+        _ => "redbook",
+    };
+    let root = knowledge_root(state)?.join(dir_name);
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
 }
@@ -743,10 +751,33 @@ pub(crate) fn imported_docs_root(state: &State<'_, AppState>) -> Result<PathBuf,
     Ok(root)
 }
 
-fn redbook_entry_dir(state: &State<'_, AppState>, entry_id: &str) -> Result<PathBuf, String> {
-    let root = knowledge_redbook_root(state)?.join(entry_id);
+fn note_entry_dir_for_kind(
+    state: &State<'_, AppState>,
+    normalized_kind: &str,
+    entry_id: &str,
+) -> Result<PathBuf, String> {
+    let root = knowledge_entry_root_for_kind(state, normalized_kind)?.join(entry_id);
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
+}
+
+fn knowledge_entry_search_roots_for_kind(
+    state: &State<'_, AppState>,
+    normalized_kind: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let primary = knowledge_entry_root_for_kind(state, normalized_kind)?;
+    let mut roots = vec![primary.clone()];
+    if matches!(
+        normalized_kind,
+        "zhihu-answer" | "zhihu-article" | "wechat-article"
+    ) {
+        let legacy_root = knowledge_root(state)?.join("redbook");
+        fs::create_dir_all(&legacy_root).map_err(|error| error.to_string())?;
+        if legacy_root != primary {
+            roots.push(legacy_root);
+        }
+    }
+    Ok(roots)
 }
 
 fn safe_existing_entry_id(raw: &str) -> Option<String> {
@@ -859,6 +890,8 @@ fn knowledge_platform_from_source(
         "youtube".to_string()
     } else if combined.contains("weixin.qq.com") {
         "wechat".to_string()
+    } else if combined.contains("zhihu.com") {
+        "zhihu".to_string()
     } else {
         "web".to_string()
     }
@@ -1388,8 +1421,9 @@ fn metadata_string(path: &Path, key: &str) -> Option<String> {
     })
 }
 
-fn find_redbook_entry_id_by_meta_field(
+fn find_note_entry_id_by_meta_field(
     state: &State<'_, AppState>,
+    normalized_kind: &str,
     field_name: &str,
     expected: &str,
 ) -> Result<Option<String>, String> {
@@ -1397,21 +1431,22 @@ fn find_redbook_entry_id_by_meta_field(
     if expected.is_empty() {
         return Ok(None);
     }
-    let root = knowledge_redbook_root(state)?;
-    let entries = fs::read_dir(&root).map_err(|error| error.to_string())?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let meta_path = path.join("meta.json");
-        let Some(value) = metadata_string(&meta_path, field_name) else {
-            continue;
-        };
-        if value == expected {
-            let meta_id = metadata_string(&meta_path, "id").unwrap_or_default();
-            let entry_name = entry.file_name().to_string_lossy().to_string();
-            return Ok(existing_entry_id_from_record(&meta_id, Some(&entry_name)));
+    for root in knowledge_entry_search_roots_for_kind(state, normalized_kind)? {
+        let entries = fs::read_dir(&root).map_err(|error| error.to_string())?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let meta_path = path.join("meta.json");
+            let Some(value) = metadata_string(&meta_path, field_name) else {
+                continue;
+            };
+            if value == expected {
+                let meta_id = metadata_string(&meta_path, "id").unwrap_or_default();
+                let entry_name = entry.file_name().to_string_lossy().to_string();
+                return Ok(existing_entry_id_from_record(&meta_id, Some(&entry_name)));
+            }
         }
     }
     Ok(None)
@@ -1822,9 +1857,10 @@ fn find_existing_note_entry_id(
     state: &State<'_, AppState>,
     request: &KnowledgeEntryIngestRequest,
 ) -> Result<Option<ExistingNoteMatch>, String> {
+    let normalized_kind = normalize_entry_kind(&request.kind);
     if let Some(dedupe_key) = normalize_string(request.options.dedupe_key.clone()) {
         if let Some(entry_id) =
-            find_redbook_entry_id_by_meta_field(state, "dedupeKey", &dedupe_key)?
+            find_note_entry_id_by_meta_field(state, &normalized_kind, "dedupeKey", &dedupe_key)?
         {
             return Ok(Some(ExistingNoteMatch {
                 entry_id,
@@ -1834,7 +1870,7 @@ fn find_existing_note_entry_id(
     }
     if let Some(external_id) = normalize_string(request.source.external_id.clone()) {
         if let Some(entry_id) =
-            find_redbook_entry_id_by_meta_field(state, "externalId", &external_id)?
+            find_note_entry_id_by_meta_field(state, &normalized_kind, "externalId", &external_id)?
         {
             return Ok(Some(ExistingNoteMatch {
                 entry_id,
@@ -1859,7 +1895,7 @@ fn find_existing_note_entry_id(
             }));
         }
         if let Some(entry_id) =
-            find_redbook_entry_id_by_meta_field(state, "sourceUrl", &source_url)?
+            find_note_entry_id_by_meta_field(state, &normalized_kind, "sourceUrl", &source_url)?
         {
             return Ok(Some(ExistingNoteMatch {
                 entry_id,
@@ -2063,7 +2099,7 @@ fn ingest_note_entry(
         .as_ref()
         .map(|item| item.entry_id.clone())
         .unwrap_or_else(|| note_entry_id(&resolve_note_seed(request)));
-    let entry_dir = redbook_entry_dir(state, &entry_id)?;
+    let entry_dir = note_entry_dir_for_kind(state, &normalized_kind, &entry_id)?;
     let existing_meta = read_json_file(entry_dir.join("meta.json").as_path());
 
     let markdown = note_content_markdown(&request.content);

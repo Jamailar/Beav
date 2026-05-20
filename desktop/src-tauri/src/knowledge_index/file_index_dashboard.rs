@@ -343,6 +343,8 @@ fn workspace_visual_candidate_count(
     let mut total = 0;
     for path in [
         knowledge_root.join("redbook"),
+        knowledge_root.join("zhihu"),
+        knowledge_root.join("wechat"),
         knowledge_root.join("youtube"),
     ] {
         total += count_visual_candidates_under(&path);
