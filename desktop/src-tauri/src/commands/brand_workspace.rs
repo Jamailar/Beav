@@ -499,6 +499,35 @@ fn ensure_sample_brand_workspace(conn: &Connection) -> Result<(), String> {
         ],
     )
     .map_err(|error| error.to_string())?;
+    let sample_assets = [
+        (
+            "asset_sample_apple_logo",
+            "brand",
+            "brand_sample_apple",
+            "https://commons.wikimedia.org/wiki/Special:FilePath/Apple%20Logo.svg",
+        ),
+        (
+            "asset_sample_iphone_image",
+            "product",
+            "product_sample_iphone",
+            "https://commons.wikimedia.org/wiki/Special:FilePath/Apple%20iPhones.jpg",
+        ),
+        (
+            "asset_sample_ipad_image",
+            "product",
+            "product_sample_ipad",
+            "https://commons.wikimedia.org/wiki/Special:FilePath/Apple%20iPad.jpg",
+        ),
+    ];
+    for (id, owner_type, owner_id, path) in sample_assets {
+        conn.execute(
+            "INSERT INTO asset_refs (
+                id, owner_type, owner_id, path, role, created_at
+             ) VALUES (?1, ?2, ?3, ?4, 'image', ?5)",
+            params![id, owner_type, owner_id, path, now],
+        )
+        .map_err(|error| error.to_string())?;
+    }
     let products = [
         (
             "product_sample_iphone",
