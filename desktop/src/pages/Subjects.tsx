@@ -2986,8 +2986,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             </h2>
                         </div>
                         {activeDetailPlatform && (
-                            <div className="hidden min-w-0 max-w-[280px] items-center gap-2 rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] px-3 py-2 lg:flex">
-                                <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white">
+                            <div className="absolute left-1/2 hidden min-w-0 max-w-[320px] -translate-x-1/2 items-center gap-2 lg:flex">
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg">
                                     {activeDetailPlatformIcon ? (
                                         <img src={activeDetailPlatformIcon} alt="" className="h-5 w-5 object-contain" />
                                     ) : (
