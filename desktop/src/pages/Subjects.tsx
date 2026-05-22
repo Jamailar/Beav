@@ -113,13 +113,25 @@ interface BrandWorkspaceSku {
     variantText?: string;
 }
 
+interface BrandWorkspaceAssetRef {
+    id: string;
+    ownerType: string;
+    ownerId: string;
+    path: string;
+    role: string;
+    createdAt: string;
+}
+
 interface BrandWorkspaceProductBundle {
     product: BrandWorkspaceProduct;
     skus: BrandWorkspaceSku[];
+    assets: BrandWorkspaceAssetRef[];
+    skuAssets?: Record<string, BrandWorkspaceAssetRef[]>;
 }
 
 interface BrandWorkspaceBrandBundle {
     brand: BrandWorkspaceBrand;
+    assets: BrandWorkspaceAssetRef[];
     products: BrandWorkspaceProductBundle[];
 }
 
@@ -145,13 +157,30 @@ interface BrandWorkspaceProductDraft {
     brandId: string;
     name: string;
     description: string;
+    images: BrandWorkspaceImageDraft[];
     skus: BrandWorkspaceSkuDraft[];
+}
+
+interface BrandWorkspaceBrandDraft {
+    id?: string;
+    name: string;
+    description: string;
+    images: BrandWorkspaceImageDraft[];
 }
 
 interface BrandWorkspaceSkuDraft {
     id: string;
     name: string;
     variantText: string;
+    images: BrandWorkspaceImageDraft[];
+}
+
+interface BrandWorkspaceImageDraft {
+    id?: string;
+    name: string;
+    previewUrl: string;
+    path?: string;
+    dataUrl?: string;
 }
 
 interface SubjectImageDraft {
@@ -866,8 +895,30 @@ function createEmptyProductDraft(brandId = ''): BrandWorkspaceProductDraft {
         brandId,
         name: '',
         description: '',
+        images: [],
         skus: [],
     };
+}
+
+function assetRefsToImageDrafts(assets?: BrandWorkspaceAssetRef[]): BrandWorkspaceImageDraft[] {
+    return (assets || [])
+        .filter((asset) => asset.role === 'image')
+        .map((asset) => ({
+            id: asset.id,
+            name: asset.path.split(/[\\/]/).pop() || 'image',
+            path: asset.path,
+            previewUrl: asset.path,
+        }));
+}
+
+function imageDraftPayload(images: BrandWorkspaceImageDraft[]) {
+    return images.map((image) => ({
+        id: image.id,
+        path: image.path,
+        dataUrl: image.dataUrl,
+        name: image.name,
+        role: 'image',
+    }));
 }
 
 function productBundleToDraft(bundle: BrandWorkspaceProductBundle): BrandWorkspaceProductDraft {
@@ -876,11 +927,22 @@ function productBundleToDraft(bundle: BrandWorkspaceProductBundle): BrandWorkspa
         brandId: bundle.product.brandId,
         name: bundle.product.name,
         description: bundle.product.description || '',
+        images: assetRefsToImageDrafts(bundle.assets),
         skus: bundle.skus.map((sku) => ({
             id: sku.id,
             name: sku.name,
             variantText: sku.variantText || '',
+            images: assetRefsToImageDrafts(bundle.skuAssets?.[sku.id]),
         })),
+    };
+}
+
+function createEmptyBrandDraft(brand?: BrandWorkspaceBrand, assets?: BrandWorkspaceAssetRef[]): BrandWorkspaceBrandDraft {
+    return {
+        id: brand?.id,
+        name: brand?.name || '',
+        description: brand?.description || '',
+        images: assetRefsToImageDrafts(assets),
     };
 }
 
@@ -916,6 +978,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [categoryDialogTargetId, setCategoryDialogTargetId] = useState<string | null>(null);
     const [isCategoryDialogSubmitting, setIsCategoryDialogSubmitting] = useState(false);
     const [draft, setDraft] = useState<SubjectDraft>(createEmptyDraft);
+    const [brandDraft, setBrandDraft] = useState<BrandWorkspaceBrandDraft>(() => createEmptyBrandDraft());
+    const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
+    const [isBrandModalSubmitting, setIsBrandModalSubmitting] = useState(false);
     const [productDraft, setProductDraft] = useState<BrandWorkspaceProductDraft>(() => createEmptyProductDraft());
     const [productDraftBrand, setProductDraftBrand] = useState<BrandWorkspaceBrand | null>(null);
     const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -1149,9 +1214,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }
         return counts;
     }, [brandWorkspaceBrands]);
-    const legacyBrandById = useMemo(() => (
-        new Map(subjects.filter((subject) => subjectCategoryName(subject) === '品牌').map((subject) => [subject.id, subject]))
-    ), [subjectCategoryName, subjects]);
     const activeDraftSubject = useMemo(
         () => draft.id ? subjects.find((subject) => subject.id === draft.id) || null : null,
         [draft.id, subjects],
@@ -1184,7 +1246,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const filteredSubjects = useMemo(() => {
         const keyword = query.trim().toLowerCase();
         return subjects.filter((subject) => {
-            if (subjectCategoryName(subject) === '商品') return false;
+            if (['品牌', '商品'].includes(subjectCategoryName(subject))) return false;
             if (categoryFilter === UNCATEGORIZED_FILTER && subject.categoryId) return false;
             if (categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER && subject.categoryId !== categoryFilter) return false;
             if (!keyword) return true;
@@ -1257,7 +1319,84 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         return stats;
     }, [categories, subjects]);
 
+    const openCreateBrandModal = useCallback(() => {
+        setBrandDraft(createEmptyBrandDraft());
+        setError('');
+        setIsBrandModalOpen(true);
+    }, []);
+
+    const openEditBrandModal = useCallback((brand: BrandWorkspaceBrand, assets: BrandWorkspaceAssetRef[] = []) => {
+        setBrandDraft(createEmptyBrandDraft(brand, assets));
+        setError('');
+        setIsBrandModalOpen(true);
+    }, []);
+
+    const closeBrandModal = useCallback(() => {
+        if (isBrandModalSubmitting) return;
+        setIsBrandModalOpen(false);
+        setBrandDraft(createEmptyBrandDraft());
+    }, [isBrandModalSubmitting]);
+
+    const updateBrandDraft = useCallback((patch: Partial<BrandWorkspaceBrandDraft>) => {
+        setBrandDraft((current) => ({ ...current, ...patch }));
+    }, []);
+
+    const handleSaveBrand = useCallback(async () => {
+        const name = brandDraft.name.trim();
+        if (!name) {
+            void appAlert('品牌名称不能为空');
+            return;
+        }
+        const brandWorkspaceBridge = getBrandWorkspaceBridge();
+        if (!brandWorkspaceBridge) {
+            void appAlert('品牌工作区不可用');
+            return;
+        }
+        setIsBrandModalSubmitting(true);
+        setError('');
+        try {
+            const result = await brandWorkspaceBridge.upsertBrand({
+                id: brandDraft.id,
+                name,
+                description: brandDraft.description.trim() || undefined,
+                images: imageDraftPayload(brandDraft.images),
+            });
+            if (!result?.success) {
+                throw new Error(result?.error || '保存品牌失败');
+            }
+            await loadData();
+            closeBrandModal();
+        } catch (e) {
+            console.error('Failed to save brand:', e);
+            setError(e instanceof Error ? e.message : '保存品牌失败');
+        } finally {
+            setIsBrandModalSubmitting(false);
+        }
+    }, [brandDraft, closeBrandModal, loadData]);
+
+    const handleBrandImageInput = useCallback(async (files: FileList | null) => {
+        const file = files?.[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+            void appAlert('品牌图片仅支持图片文件');
+            return;
+        }
+        const dataUrl = await readFileAsDataUrl(file);
+        setBrandDraft((current) => ({
+            ...current,
+            images: [{ name: file.name, previewUrl: dataUrl, dataUrl }],
+        }));
+    }, []);
+
+    const handleRemoveBrandImage = useCallback(() => {
+        setBrandDraft((current) => ({ ...current, images: [] }));
+    }, []);
+
     const openCreateModal = useCallback(() => {
+        if (categoryNameMap.get(categoryFilter)?.trim() === '品牌') {
+            openCreateBrandModal();
+            return;
+        }
         const nextDraft = createEmptyDraft();
         if (categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER) {
             nextDraft.categoryId = categoryFilter;
@@ -1269,7 +1408,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setError('');
         setIsDraftCategoryMenuOpen(false);
         openAssetModalSurface();
-    }, [categoryFilter, openAssetModalSurface]);
+    }, [categoryFilter, categoryNameMap, openAssetModalSurface, openCreateBrandModal]);
 
     const openEditModal = useCallback((subject: SubjectRecord) => {
         autosaveLastPayloadRef.current = null;
@@ -1313,7 +1452,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             ...current,
             skus: [
                 ...current.skus,
-                { id: createDraftSkuId(), name: '', variantText: '' },
+                { id: createDraftSkuId(), name: '', variantText: '', images: [] },
             ],
         }));
     }, []);
@@ -1329,6 +1468,51 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setProductDraft((current) => ({
             ...current,
             skus: current.skus.filter((_, skuIndex) => skuIndex !== index),
+        }));
+    }, []);
+
+    const handleProductImageInput = useCallback(async (files: FileList | null) => {
+        const file = files?.[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+            void appAlert('商品图片仅支持图片文件');
+            return;
+        }
+        const dataUrl = await readFileAsDataUrl(file);
+        setProductDraft((current) => ({
+            ...current,
+            images: [{ name: file.name, previewUrl: dataUrl, dataUrl }],
+        }));
+    }, []);
+
+    const handleRemoveProductImage = useCallback(() => {
+        setProductDraft((current) => ({ ...current, images: [] }));
+    }, []);
+
+    const handleProductSkuImageInput = useCallback(async (index: number, files: FileList | null) => {
+        const file = files?.[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+            void appAlert('SKU 图片仅支持图片文件');
+            return;
+        }
+        const dataUrl = await readFileAsDataUrl(file);
+        setProductDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, skuIndex) => (
+                skuIndex === index
+                    ? { ...sku, images: [{ name: file.name, previewUrl: dataUrl, dataUrl }] }
+                    : sku
+            )),
+        }));
+    }, []);
+
+    const handleRemoveProductSkuImage = useCallback((index: number) => {
+        setProductDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, skuIndex) => (
+                skuIndex === index ? { ...sku, images: [] } : sku
+            )),
         }));
     }, []);
 
@@ -1351,12 +1535,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 brandId: productDraft.brandId,
                 name,
                 description: productDraft.description.trim() || undefined,
+                images: imageDraftPayload(productDraft.images),
                 skus: productDraft.skus
                     .filter((sku) => sku.name.trim())
                     .map((sku) => ({
                         id: sku.id.startsWith('draft-sku-') ? undefined : sku.id,
                         name: sku.name.trim(),
                         variantText: sku.variantText.trim(),
+                        images: imageDraftPayload(sku.images),
                     })),
             };
             const result = await brandWorkspaceBridge.upsertProduct(payload);
@@ -2123,7 +2309,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const draftCategoryOptions = useMemo(() => [
         { id: '', name: '未分类', icon: Tag },
         ...categories
-            .filter((category) => category.name.trim() !== '商品' || category.id === draft.categoryId)
+            .filter((category) => (
+                !['品牌', '商品'].includes(category.name.trim()) || category.id === draft.categoryId
+            ))
             .map((category) => ({
             id: category.id,
             name: category.name,
@@ -2450,9 +2638,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             )}
                             <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
                             {filteredBrandSubjects.map((bundle) => {
-                                const { brand, products } = bundle;
+                                const { brand, assets, products } = bundle;
                                 const expanded = expandedBrandIds.has(brand.id);
-                                const legacyBrand = legacyBrandById.get(brand.id);
+                                const brandImage = assets.find((asset) => asset.role === 'image');
                                 return (
                                     <div key={brand.id} className="bg-white">
                                         <div className="flex items-center gap-3 px-3 py-2.5">
@@ -2466,8 +2654,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 <ChevronDown className={clsx('h-4 w-4 transition-transform', !expanded && '-rotate-90')} />
                                             </button>
                                             <div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
-                                                {legacyBrand?.primaryPreviewUrl ? (
-                                                    <img src={resolveAssetUrl(legacyBrand.primaryPreviewUrl)} alt={brand.name} className="h-full w-full object-cover" />
+                                                {brandImage ? (
+                                                    <img src={resolveAssetUrl(brandImage.path)} alt={brand.name} className="h-full w-full object-cover" />
                                                 ) : (
                                                     <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
                                                         <Building2 className="h-5 w-5" />
@@ -2487,7 +2675,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             </button>
                                             <button
                                                 type="button"
-                                                onClick={() => legacyBrand ? openEditModal(legacyBrand) : void appAlert('这个品牌来自品牌工作区，基础资料已入库')}
+                                                onClick={() => openEditBrandModal(brand, assets)}
                                                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
                                                 aria-label="编辑品牌"
                                                 title="编辑品牌"
@@ -2512,7 +2700,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 ) : (
                                                     <div className="space-y-1.5">
                                                         {products.map((productBundle) => {
-                                                            const { product, skus } = productBundle;
+                                                            const { product, skus, assets } = productBundle;
+                                                            const productImage = assets.find((asset) => asset.role === 'image');
                                                             return (
                                                             <button
                                                                 key={product.id}
@@ -2521,9 +2710,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                                 className="flex w-full items-center gap-3 rounded-lg bg-white px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-secondary))]"
                                                             >
                                                                 <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
-                                                                    <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
-                                                                        <Package className="h-4 w-4" />
-                                                                    </div>
+                                                                    {productImage ? (
+                                                                        <img src={resolveAssetUrl(productImage.path)} alt={product.name} className="h-full w-full object-cover" />
+                                                                    ) : (
+                                                                        <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                                                            <Package className="h-4 w-4" />
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                                 <div className="min-w-0 flex-1">
                                                                     <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{product.name}</div>
@@ -2712,6 +2905,101 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 </LiquidGlassMenuPanel>
             )}
 
+            {isBrandModalOpen && (
+                <div className="fixed inset-0 z-[125] flex items-center justify-center bg-black/35 p-4">
+                    <div className="flex max-h-[86vh] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+                        <div className="flex items-center justify-between px-6 py-5">
+                            <h2 className="text-lg font-semibold leading-none text-[rgb(var(--color-text-primary))]">
+                                {brandDraft.id ? '编辑品牌' : '新建品牌'}
+                            </h2>
+                            <button
+                                type="button"
+                                onClick={closeBrandModal}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                aria-label="关闭"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <div className="min-h-0 flex-1 space-y-4 overflow-auto px-6 pb-5">
+                            {error && (
+                                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                    {error}
+                                </div>
+                            )}
+                            <label className="block">
+                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">品牌名称 <span className="text-red-500">*</span></div>
+                                <input
+                                    value={brandDraft.name}
+                                    onChange={(event) => updateBrandDraft({ name: event.target.value })}
+                                    placeholder="品牌名称"
+                                    className="h-10 w-full rounded-lg border border-violet-500 bg-white px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none ring-2 ring-violet-500/15 placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-violet-500/20"
+                                />
+                            </label>
+                            <label className="block">
+                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">品牌描述</div>
+                                <textarea
+                                    value={brandDraft.description}
+                                    onChange={(event) => updateBrandDraft({ description: event.target.value.slice(0, 300) })}
+                                    rows={5}
+                                    maxLength={300}
+                                    placeholder="品牌定位、风格、目标用户、适用场景"
+                                    className="min-h-[120px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2.5 text-sm leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
+                                />
+                            </label>
+                            <div className="space-y-2">
+                                <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">品牌图片</div>
+                                {brandDraft.images[0] ? (
+                                    <div className="group relative h-36 overflow-hidden rounded-xl bg-[rgb(var(--color-surface-secondary))]">
+                                        <img src={resolveAssetUrl(brandDraft.images[0].previewUrl)} alt={brandDraft.images[0].name} className="h-full w-full object-cover" />
+                                        <button
+                                            type="button"
+                                            onClick={handleRemoveBrandImage}
+                                            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                            aria-label="删除品牌图片"
+                                        >
+                                            <X className="h-3.5 w-3.5" />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <label className="flex h-24 cursor-pointer items-center justify-center rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]">
+                                        上传品牌图片
+                                        <input
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={(event) => {
+                                                void handleBrandImageInput(event.target.files);
+                                                event.currentTarget.value = '';
+                                            }}
+                                        />
+                                    </label>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex justify-end gap-2 border-t border-[rgb(var(--color-border))] px-6 py-4">
+                            <button
+                                type="button"
+                                onClick={closeBrandModal}
+                                disabled={isBrandModalSubmitting}
+                                className="inline-flex h-9 items-center rounded-lg bg-[rgb(var(--color-surface-secondary))] px-3 text-sm font-medium text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))] disabled:opacity-50"
+                            >
+                                取消
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleSaveBrand()}
+                                disabled={isBrandModalSubmitting}
+                                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:opacity-50"
+                            >
+                                <Save className="h-4 w-4" />
+                                {isBrandModalSubmitting ? '保存中' : '保存'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {isProductModalOpen && (
                 <div className="fixed inset-0 z-[125] flex items-center justify-center bg-black/35 p-4">
                     <div className="flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -2759,6 +3047,35 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     className="min-h-[88px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2.5 text-sm leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
                                 />
                             </label>
+                            <div className="space-y-2">
+                                <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品图片</div>
+                                {productDraft.images[0] ? (
+                                    <div className="group relative h-36 overflow-hidden rounded-xl bg-[rgb(var(--color-surface-secondary))]">
+                                        <img src={resolveAssetUrl(productDraft.images[0].previewUrl)} alt={productDraft.images[0].name} className="h-full w-full object-cover" />
+                                        <button
+                                            type="button"
+                                            onClick={handleRemoveProductImage}
+                                            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                            aria-label="删除商品图片"
+                                        >
+                                            <X className="h-3.5 w-3.5" />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <label className="flex h-24 cursor-pointer items-center justify-center rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]">
+                                        上传商品图片
+                                        <input
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={(event) => {
+                                                void handleProductImageInput(event.target.files);
+                                                event.currentTarget.value = '';
+                                            }}
+                                        />
+                                    </label>
+                                )}
+                            </div>
                             <div className="space-y-2 rounded-xl bg-[rgb(var(--color-surface-primary))] p-4">
                                 <div className="flex items-center justify-between">
                                     <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">SKU</div>
@@ -2803,6 +3120,34 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     placeholder="规格描述，如：颜色：樱桃红；容量：3.5g"
                                                     className="mt-2 min-h-[58px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2 text-xs leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
                                                 />
+                                                <div className="mt-2">
+                                                    {sku.images[0] ? (
+                                                        <div className="group relative h-24 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                                            <img src={resolveAssetUrl(sku.images[0].previewUrl)} alt={sku.images[0].name} className="h-full w-full object-cover" />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemoveProductSkuImage(skuIndex)}
+                                                                className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                                aria-label="删除 SKU 图片"
+                                                            >
+                                                                <X className="h-3 w-3" />
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <label className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]">
+                                                            上传 SKU 图片
+                                                            <input
+                                                                type="file"
+                                                                accept="image/*"
+                                                                className="hidden"
+                                                                onChange={(event) => {
+                                                                    void handleProductSkuImageInput(skuIndex, event.target.files);
+                                                                    event.currentTarget.value = '';
+                                                                }}
+                                                            />
+                                                        </label>
+                                                    )}
+                                                </div>
                                             </div>
                                         ))}
                                     </div>

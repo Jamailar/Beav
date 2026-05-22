@@ -1,12 +1,13 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use tauri::State;
 
-use crate::persistence::ensure_store_hydrated_for_subjects;
-use crate::{make_id, now_iso, with_store, workspace_root, AppState, SubjectRecord};
+use crate::http_utils::decode_base64_bytes;
+use crate::{make_id, now_iso, workspace_root, AppState};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +58,7 @@ pub(crate) struct BrandWorkspaceProductBundle {
     pub product: BrandWorkspaceProduct,
     pub skus: Vec<BrandWorkspaceSku>,
     pub assets: Vec<BrandWorkspaceAssetRef>,
+    pub sku_assets: BTreeMap<String, Vec<BrandWorkspaceAssetRef>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +75,7 @@ struct BrandMutationInput {
     id: Option<String>,
     name: String,
     description: Option<String>,
+    images: Option<Vec<AssetMutationInput>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +85,7 @@ struct ProductMutationInput {
     brand_id: String,
     name: String,
     description: Option<String>,
+    images: Option<Vec<AssetMutationInput>>,
     skus: Option<Vec<SkuMutationInput>>,
 }
 
@@ -92,6 +96,17 @@ struct SkuMutationInput {
     product_id: Option<String>,
     name: String,
     variant_text: Option<String>,
+    images: Option<Vec<AssetMutationInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetMutationInput {
+    id: Option<String>,
+    path: Option<String>,
+    data_url: Option<String>,
+    name: Option<String>,
+    role: Option<String>,
 }
 
 fn clean_string(value: Option<String>) -> Option<String> {
@@ -114,6 +129,12 @@ fn brand_workspace_db_path(state: &State<'_, AppState>) -> Result<PathBuf, Strin
 
 fn brand_workspace_ai_index_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = brand_workspace_root(state)?.join("ai-index");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn brand_workspace_asset_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = brand_workspace_root(state)?.join("media");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
 }
@@ -322,6 +343,108 @@ fn select_asset_refs(
         .map_err(|error| error.to_string())
 }
 
+fn data_url_extension(meta: &str) -> &'static str {
+    let mime = meta
+        .strip_prefix("data:")
+        .unwrap_or(meta)
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match mime.as_str() {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/svg+xml" => "svg",
+        _ => "png",
+    }
+}
+
+fn write_asset_data_url(
+    state: &State<'_, AppState>,
+    owner_type: &str,
+    owner_id: &str,
+    data_url: &str,
+    name: Option<&str>,
+) -> Result<String, String> {
+    let (meta, encoded) = data_url
+        .split_once(',')
+        .ok_or_else(|| "图片 data URL 无效".to_string())?;
+    if !meta
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"))
+    {
+        return Err("图片 data URL 必须是 base64".to_string());
+    }
+    let bytes = decode_base64_bytes(encoded)?;
+    let extension = name
+        .and_then(|value| value.rsplit_once('.').map(|(_, ext)| ext))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg"
+            )
+        })
+        .unwrap_or_else(|| data_url_extension(meta).to_string());
+    let dir = brand_workspace_asset_root(state)?
+        .join(owner_type)
+        .join(owner_id);
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let timestamp = now_iso().replace(':', "-").replace('.', "-");
+    let file_name = format!("image-{}-{}.{}", timestamp, make_id("asset"), extension);
+    let path = dir.join(file_name);
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn sync_asset_images(
+    conn: &Connection,
+    state: &State<'_, AppState>,
+    owner_type: &str,
+    owner_id: &str,
+    images: Vec<AssetMutationInput>,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM asset_refs WHERE owner_type = ?1 AND owner_id = ?2 AND role = 'image'",
+        params![owner_type, owner_id],
+    )
+    .map_err(|error| error.to_string())?;
+    let now = now_iso();
+    for image in images {
+        let path = if let Some(data_url) = image
+            .data_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            write_asset_data_url(state, owner_type, owner_id, data_url, image.name.as_deref())?
+        } else {
+            image
+                .path
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "图片缺少路径".to_string())?
+        };
+        conn.execute(
+            "INSERT INTO asset_refs (
+                id, owner_type, owner_id, path, role, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                image.id.unwrap_or_else(|| make_id("asset")),
+                owner_type,
+                owner_id,
+                path,
+                image.role.unwrap_or_else(|| "image".to_string()),
+                now,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn brand_bundle(
     conn: &Connection,
     brand: BrandWorkspaceBrand,
@@ -332,10 +455,20 @@ fn brand_bundle(
     for product in products {
         let skus = select_skus_for_product(conn, &product.id)?;
         let assets = select_asset_refs(conn, "product", &[product.id.clone()])?;
+        let sku_ids = skus.iter().map(|sku| sku.id.clone()).collect::<Vec<_>>();
+        let sku_asset_refs = select_asset_refs(conn, "sku", &sku_ids)?;
+        let mut sku_assets: BTreeMap<String, Vec<BrandWorkspaceAssetRef>> = BTreeMap::new();
+        for asset in sku_asset_refs {
+            sku_assets
+                .entry(asset.owner_id.clone())
+                .or_default()
+                .push(asset);
+        }
         bundles.push(BrandWorkspaceProductBundle {
             product,
             skus,
             assets,
+            sku_assets,
         });
     }
     Ok(BrandWorkspaceBrandBundle {
@@ -343,126 +476,6 @@ fn brand_bundle(
         assets: brand_assets,
         products: bundles,
     })
-}
-
-fn subject_category_name(subject: &SubjectRecord, categories: &[(String, String)]) -> String {
-    let Some(category_id) = subject.category_id.as_deref() else {
-        return String::new();
-    };
-    categories
-        .iter()
-        .find(|(id, _)| id == category_id)
-        .map(|(_, name)| name.trim().to_string())
-        .unwrap_or_default()
-}
-
-fn sync_subject_brands(conn: &Connection, state: &State<'_, AppState>) -> Result<(), String> {
-    ensure_store_hydrated_for_subjects(state)?;
-    let (categories, subjects) = with_store(state, |store| {
-        Ok((
-            store
-                .categories
-                .iter()
-                .map(|item| (item.id.clone(), item.name.clone()))
-                .collect::<Vec<_>>(),
-            store.subjects.clone(),
-        ))
-    })?;
-    let now = now_iso();
-    for subject in subjects.iter() {
-        if subject_category_name(subject, &categories) != "品牌" {
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO brand_records (
-                id, name, description, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                description = excluded.description,
-                updated_at = excluded.updated_at",
-            params![
-                subject.id,
-                subject.name,
-                subject.description,
-                subject.created_at,
-                now,
-            ],
-        )
-        .map_err(|error| error.to_string())?;
-    }
-
-    for subject in subjects.iter() {
-        if subject_category_name(subject, &categories) != "商品" {
-            continue;
-        }
-        let Some(brand_id) = subject.brand_id.as_deref() else {
-            continue;
-        };
-        let brand_exists: Option<String> = conn
-            .query_row(
-                "SELECT id FROM brand_records WHERE id = ?1",
-                params![brand_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        if brand_exists.is_none() {
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO product_records (
-                id, brand_id, name, description, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(id) DO UPDATE SET
-                brand_id = excluded.brand_id,
-                name = excluded.name,
-                description = excluded.description,
-                updated_at = excluded.updated_at",
-            params![
-                subject.id,
-                brand_id,
-                subject.name,
-                subject.description,
-                subject.created_at,
-                now,
-            ],
-        )
-        .map_err(|error| error.to_string())?;
-        for sku in &subject.skus {
-            let variant_text = sku
-                .attributes
-                .iter()
-                .filter_map(|item| {
-                    let key = item.key.trim();
-                    let value = item.value.trim();
-                    if key.is_empty() && value.is_empty() {
-                        None
-                    } else if key.is_empty() {
-                        Some(value.to_string())
-                    } else if value.is_empty() {
-                        Some(key.to_string())
-                    } else {
-                        Some(format!("{key}: {value}"))
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
-            conn.execute(
-                "INSERT INTO product_skus (
-                    id, product_id, name, variant_text, created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(id) DO UPDATE SET
-                    product_id = excluded.product_id,
-                    name = excluded.name,
-                    variant_text = excluded.variant_text,
-                    updated_at = excluded.updated_at",
-                params![sku.id, subject.id, sku.name, variant_text, now, now],
-            )
-            .map_err(|error| error.to_string())?;
-        }
-    }
-    Ok(())
 }
 
 fn ensure_sample_brand_workspace(conn: &Connection) -> Result<(), String> {
@@ -512,6 +525,7 @@ fn ensure_sample_brand_workspace(conn: &Connection) -> Result<(), String> {
 
 fn upsert_brand(
     conn: &Connection,
+    state: &State<'_, AppState>,
     input: BrandMutationInput,
 ) -> Result<BrandWorkspaceBrand, String> {
     let name = input.name.trim().to_string();
@@ -540,11 +554,15 @@ fn upsert_brand(
         params![id, name, clean_string(input.description), created_at, now],
     )
     .map_err(|error| error.to_string())?;
+    if let Some(images) = input.images {
+        sync_asset_images(conn, state, "brand", &id, images)?;
+    }
     get_brand(conn, &id)
 }
 
 fn upsert_product(
     conn: &Connection,
+    state: &State<'_, AppState>,
     input: ProductMutationInput,
 ) -> Result<BrandWorkspaceProductBundle, String> {
     let name = input.name.trim().to_string();
@@ -593,10 +611,13 @@ fn upsert_product(
         ],
     )
     .map_err(|error| error.to_string())?;
+    if let Some(images) = input.images {
+        sync_asset_images(conn, state, "product", &id, images)?;
+    }
     if let Some(skus) = input.skus {
         let mut next_sku_ids = Vec::new();
         for sku in skus {
-            let saved_sku = upsert_sku_for_product(conn, &id, sku)?;
+            let saved_sku = upsert_sku_for_product(conn, state, &id, sku)?;
             next_sku_ids.push(saved_sku.id);
         }
         if next_sku_ids.is_empty() {
@@ -618,12 +639,20 @@ fn upsert_product(
             conn.execute(&sql, rusqlite::params_from_iter(params))
                 .map_err(|error| error.to_string())?;
         }
+        conn.execute(
+            "DELETE FROM asset_refs
+             WHERE owner_type = 'sku'
+               AND owner_id NOT IN (SELECT id FROM product_skus)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
     }
     get_product_bundle(conn, &id)
 }
 
 fn upsert_sku_for_product(
     conn: &Connection,
+    state: &State<'_, AppState>,
     product_id: &str,
     input: SkuMutationInput,
 ) -> Result<BrandWorkspaceSku, String> {
@@ -658,6 +687,9 @@ fn upsert_sku_for_product(
         params![id, product_id, name, variant_text, created_at, now],
     )
     .map_err(|error| error.to_string())?;
+    if let Some(images) = input.images {
+        sync_asset_images(conn, state, "sku", &id, images)?;
+    }
     get_sku(conn, &id)
 }
 
@@ -695,10 +727,20 @@ fn get_product_bundle(conn: &Connection, id: &str) -> Result<BrandWorkspaceProdu
     let product = get_product(conn, id)?;
     let skus = select_skus_for_product(conn, id)?;
     let assets = select_asset_refs(conn, "product", &[product.id.clone()])?;
+    let sku_ids = skus.iter().map(|sku| sku.id.clone()).collect::<Vec<_>>();
+    let sku_asset_refs = select_asset_refs(conn, "sku", &sku_ids)?;
+    let mut sku_assets: BTreeMap<String, Vec<BrandWorkspaceAssetRef>> = BTreeMap::new();
+    for asset in sku_asset_refs {
+        sku_assets
+            .entry(asset.owner_id.clone())
+            .or_default()
+            .push(asset);
+    }
     Ok(BrandWorkspaceProductBundle {
         product,
         skus,
         assets,
+        sku_assets,
     })
 }
 
@@ -747,6 +789,11 @@ fn brand_markdown(bundle: &BrandWorkspaceBrandBundle, generated_at: &str) -> Str
                     markdown.push_str(&format!("- {}\n", sku.name));
                 } else {
                     markdown.push_str(&format!("- {}：{}\n", sku.name, variant_text));
+                }
+                if let Some(assets) = product_bundle.sku_assets.get(&sku.id) {
+                    for asset in assets {
+                        markdown.push_str(&format!("  - {}: {}\n", asset.role, asset.path));
+                    }
                 }
             }
             markdown.push('\n');
@@ -799,7 +846,6 @@ fn rebuild_ai_index_with_connection(
 
 fn prepare_workspace(state: &State<'_, AppState>) -> Result<Connection, String> {
     let conn = open_connection(state)?;
-    sync_subject_brands(&conn, state)?;
     ensure_sample_brand_workspace(&conn)?;
     rebuild_ai_index_with_connection(&conn, state)?;
     Ok(conn)
@@ -846,7 +892,7 @@ pub fn handle_brand_workspace_channel(
             let conn = prepare_workspace(state)?;
             let input: BrandMutationInput =
                 serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
-            let brand = upsert_brand(&conn, input)?;
+            let brand = upsert_brand(&conn, state, input)?;
             rebuild_ai_index_with_connection(&conn, state)?;
             Ok(json!({ "success": true, "brand": brand }))
         }
@@ -854,7 +900,7 @@ pub fn handle_brand_workspace_channel(
             let conn = prepare_workspace(state)?;
             let input: ProductMutationInput =
                 serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
-            let product = upsert_product(&conn, input)?;
+            let product = upsert_product(&conn, state, input)?;
             rebuild_ai_index_with_connection(&conn, state)?;
             Ok(json!({ "success": true, "product": product }))
         }
@@ -868,7 +914,7 @@ pub fn handle_brand_workspace_channel(
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| "缺少商品 id".to_string())?;
-            let sku = upsert_sku_for_product(&conn, &product_id, input)?;
+            let sku = upsert_sku_for_product(&conn, state, &product_id, input)?;
             rebuild_ai_index_with_connection(&conn, state)?;
             Ok(json!({ "success": true, "sku": sku }))
         }
