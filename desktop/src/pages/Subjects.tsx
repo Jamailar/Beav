@@ -2594,8 +2594,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         const detailPages = activeDetailPages;
         const hasPlatforms = enabledEcommercePlatforms.length > 0;
         return (
-            <div className="flex h-full min-h-0 flex-col bg-white">
-                <div className={clsx('border-b border-[rgb(var(--color-border))]', isModalVariant ? 'px-5 py-4' : 'px-8 py-5')}>
+            <div className="fixed inset-0 z-[10020] flex min-h-0 flex-col bg-white">
+                <div className={clsx('shrink-0 border-b border-[rgb(var(--color-border))] bg-white', isModalVariant ? 'px-5 py-4' : 'px-8 py-5')}>
                     <div className="flex min-w-0 items-center gap-3">
                         <button
                             type="button"
@@ -2636,8 +2636,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     </div>
                 </div>
 
-                <div className="flex min-h-0 flex-1">
-                    <aside className={clsx('hidden min-h-0 w-[250px] shrink-0 border-r border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-4 lg:block', isModalVariant && 'w-[220px]')}>
+                <div className="flex min-h-0 flex-1 bg-[rgb(var(--color-surface-primary))]">
+                    <aside className={clsx('hidden min-h-0 w-[250px] shrink-0 overflow-y-auto border-r border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-4 lg:block', isModalVariant && 'w-[220px]')}>
                         <div className="mb-3 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">电商平台</div>
                         {hasPlatforms ? (
                             <div className="space-y-1">
@@ -2678,8 +2678,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         )}
                     </aside>
 
-                    <main className="min-w-0 flex-1 overflow-auto">
-                        <div className={clsx('mx-auto w-full max-w-[1180px] space-y-5 py-5', isModalVariant ? 'px-5' : 'px-8')}>
+                    <main className="min-w-0 flex-1 overflow-y-auto bg-white">
+                        <div className={clsx('mx-auto min-h-full w-full max-w-[1180px] space-y-5 bg-white py-5 pb-10', isModalVariant ? 'px-5' : 'px-8')}>
                             <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">
                                 {enabledEcommercePlatforms.map((platform) => {
                                     const active = activeDetailPlatform?.id === platform.id;
