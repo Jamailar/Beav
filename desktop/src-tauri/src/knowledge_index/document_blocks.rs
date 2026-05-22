@@ -1634,6 +1634,11 @@ pub(crate) fn resolve_visual_index_config(
     state: &State<'_, AppState>,
 ) -> Result<VisualIndexConfig, String> {
     let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let resolved = crate::ai_model_manager::AiModelManager::resolve(
+        &settings,
+        crate::ai_model_manager::AiModelScope::VisualIndex,
+        None,
+    );
     let timeout_seconds = payload_field(&settings, "visual_index_timeout_seconds")
         .and_then(|value| {
             value.as_u64().or_else(|| {
@@ -1689,9 +1694,20 @@ pub(crate) fn resolve_visual_index_config(
         .unwrap_or(true);
     Ok(VisualIndexConfig {
         enabled: true,
-        endpoint: payload_string(&settings, "visual_index_endpoint"),
-        api_key: payload_string(&settings, "visual_index_api_key"),
-        model: payload_string(&settings, "visual_index_model"),
+        endpoint: resolved
+            .as_ref()
+            .map(|route| route.base_url.clone())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| payload_string(&settings, "visual_index_endpoint")),
+        api_key: resolved
+            .as_ref()
+            .and_then(|route| route.api_key.clone())
+            .or_else(|| payload_string(&settings, "visual_index_api_key")),
+        model: resolved
+            .as_ref()
+            .map(|route| route.model_name.clone())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| payload_string(&settings, "visual_index_model")),
         prompt_version: normalized_visual_prompt_version(payload_string(
             &settings,
             "visual_index_prompt_version",

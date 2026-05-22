@@ -45,26 +45,14 @@ This file is the readable configuration center for model selection. Credentials 
 
 ## Runtime Contract
 
-- Startup calls `model_config::load_model_config_into_settings`, which reads `model-config.json` and applies provider/routes into the existing settings snapshot.
-- Settings saves call `model_config::sync_model_config_file`, keeping the JSON file in sync with the current settings without writing API keys into the file.
+- Startup calls `ai_model_manager::legacy_config::load_model_config_into_settings`, which reads `model-config.json` and applies provider/routes into the existing settings snapshot.
+- Settings saves call `ai_model_manager::store::sync_model_config_file`, keeping the JSON file in sync with the current settings without writing API keys into the file.
 - Chat runtime still resolves through `resolve_chat_config`; the model config layer feeds the same legacy keys so existing runtime paths keep working.
 - Media routes also project into legacy fields such as `image_model`, `video_model`, `visual_index_model`, and `video_analysis_model`.
 
 ## Query Surface
 
-Renderer / diagnostics:
-
-```ts
-window.ipcRenderer.readModelConfig()
-window.ipcRenderer.getEffectiveModelConfig('chat')
-```
-
-Agent tool surface:
-
-```text
-app_cli model-config read
-app_cli model-config effective --runtime-mode chat
-```
+Renderer / diagnostics use `ai-model-manager:snapshot` and `ai-model-manager:resolve`.
 
 Both surfaces return redacted values. They expose `apiKeyPresent`, never the key.
 

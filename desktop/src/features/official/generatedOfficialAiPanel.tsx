@@ -42,10 +42,6 @@ interface RedboxCallRecordItem {
   status: string;
 }
 
-interface ModelsResponseItem {
-  id: string;
-}
-
 interface OfficialRealmConfig {
   id: 'cn' | 'global';
   label: string;
@@ -63,7 +59,6 @@ const PANEL_DISPLAY_SNAPSHOT_KEY = 'redbox-auth:panel-display';
 interface RedboxPanelDisplaySnapshot {
   user: Record<string, unknown> | null;
   points: Record<string, unknown> | null;
-  models: ModelsResponseItem[];
   callRecords: RedboxCallRecordItem[];
   updatedAt: number;
 }
@@ -144,7 +139,6 @@ const readPanelDisplaySnapshot = (): RedboxPanelDisplaySnapshot | null => {
     return {
       user: parsed.user && typeof parsed.user === 'object' ? parsed.user : null,
       points: parsed.points && typeof parsed.points === 'object' ? parsed.points : null,
-      models: Array.isArray(parsed.models) ? parsed.models : [],
       callRecords: Array.isArray(parsed.callRecords) ? parsed.callRecords : [],
       updatedAt: Number(parsed.updatedAt || Date.now()),
     };
@@ -163,7 +157,6 @@ const writePanelDisplaySnapshot = (snapshot: RedboxPanelDisplaySnapshot | null):
     const nextSnapshot: RedboxPanelDisplaySnapshot = {
       ...snapshot,
       points: snapshot.points || previous?.points || null,
-      models: snapshot.models.length ? snapshot.models : previous?.models || [],
       callRecords: snapshot.callRecords.length ? snapshot.callRecords : previous?.callRecords || [],
     };
     window.localStorage.setItem(PANEL_DISPLAY_SNAPSHOT_KEY, JSON.stringify(nextSnapshot));
@@ -236,7 +229,6 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   const [loginTab, setLoginTab] = useState<LoginTab>('wechat');
   const [user, setUser] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.user || null);
   const [points, setPoints] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.points || null);
-  const [models, setModels] = useState<ModelsResponseItem[]>(() => initialPanelSnapshot?.models || []);
   const [callRecords, setCallRecords] = useState<RedboxCallRecordItem[]>(() => initialPanelSnapshot?.callRecords || []);
   const [rechargeAmount, setRechargeAmount] = useState('50');
   const [rechargeOrderNo, setRechargeOrderNo] = useState('');
@@ -357,7 +349,6 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
       stopWechatPolling();
       setUser(null);
       setPoints(null);
-      setModels([]);
       setCallRecords([]);
       writePanelDisplaySnapshot(null);
       return;
@@ -391,17 +382,16 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, [bootstrapped, session]);
 
   useEffect(() => {
-    if (!user && !points && !models.length && !callRecords.length) {
+    if (!user && !points && !callRecords.length) {
       return;
     }
     writePanelDisplaySnapshot({
       user,
       points,
-      models,
       callRecords,
       updatedAt: Date.now(),
     });
-  }, [callRecords, models, points, user]);
+  }, [callRecords, points, user]);
 
   const fetchUser = useCallback(async () => {
     const result = await timedInvoke<{ success: boolean; user?: Record<string, unknown>; error?: string }>('redbox-auth:me');
@@ -419,15 +409,6 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     setPoints((prev) => result.points || prev);
   }, []);
 
-  const fetchModels = useCallback(async () => {
-    const result = await timedInvoke<{ success: boolean; models?: ModelsResponseItem[]; error?: string }>('redbox-auth:models');
-    if (!result?.success) {
-      throw new Error(result?.error || '拉取模型失败');
-    }
-    const nextModels = (result.models || []).filter((item) => String(item?.id || '').trim());
-    setModels((prev) => nextModels.length ? nextModels : prev);
-  }, []);
-
   const fetchCallRecords = useCallback(async () => {
     const result = await timedInvoke<{ success: boolean; records?: RedboxCallRecordItem[]; error?: string }>('redbox-auth:call-records');
     if (!result?.success) {
@@ -441,7 +422,6 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     const tasks: Array<{ label: string; run: () => Promise<void> }> = [
       { label: '用户信息', run: fetchUser },
       { label: '积分余额', run: fetchPoints },
-      { label: '模型列表', run: fetchModels },
       { label: '调用记录', run: fetchCallRecords },
     ];
     const results = await Promise.all(
@@ -461,7 +441,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
       }),
     );
     return results.filter((item): item is AuthenticatedDataIssue => item !== null);
-  }, [fetchCallRecords, fetchModels, fetchPoints, fetchUser]);
+  }, [fetchCallRecords, fetchPoints, fetchUser]);
 
   const requestBackgroundRefresh = useCallback(async () => {
     const result = await timedInvoke<{ success: boolean; queued?: boolean; error?: string }>('auth:refresh-now', undefined, { trace: true });
@@ -670,7 +650,6 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
       stopWechatPolling();
       setUser(null);
       setPoints(null);
-      setModels([]);
       setCallRecords([]);
       writePanelDisplaySnapshot(null);
       setRechargeOrderNo('');
@@ -794,18 +773,13 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, [stopWechatPolling]);
 
   useEffect(() => {
-    const handleDataUpdated = (_event: unknown, payload?: { points?: Record<string, unknown> | null; models?: ModelsResponseItem[]; callRecords?: RedboxCallRecordItem[]; records?: RedboxCallRecordItem[] }) => {
+    const handleDataUpdated = (_event: unknown, payload?: { points?: Record<string, unknown> | null; callRecords?: RedboxCallRecordItem[]; records?: RedboxCallRecordItem[] }) => {
       const nextCallRecords = payload?.callRecords || payload?.records || [];
       traceAuthUi('auth:onDataChanged', {
         hasPoints: Boolean(payload?.points),
-        modelCount: payload?.models?.length || 0,
         recordCount: nextCallRecords.length,
       });
       if (payload?.points) setPoints(payload.points);
-      if (payload?.models) {
-        const nextModels = (payload.models || []).filter((item) => String(item?.id || '').trim());
-        setModels((prev) => nextModels.length ? nextModels : prev);
-      }
       if (payload?.callRecords || payload?.records) {
         const filteredCallRecords = nextCallRecords.filter((item) => String(item?.id || '').trim());
         setCallRecords((prev) => filteredCallRecords.length ? filteredCallRecords : prev);

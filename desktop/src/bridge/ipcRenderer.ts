@@ -944,8 +944,6 @@ function createIpcRenderer() {
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
     getSettings: () => invokeChannel('db:get-settings'),
     pickWorkspaceDir: () => invokeChannel('settings:pick-workspace-dir'),
-    readModelConfig: () => invokeChannel('model-config:read'),
-    getEffectiveModelConfig: (runtimeMode?: string) => invokeChannel('model-config:effective', { runtimeMode }),
     debug: {
       getStatus: () => invokeChannel('debug:get-status'),
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),
@@ -1301,7 +1299,6 @@ function createIpcRenderer() {
         invokeChannel('plugins:read-data', payload),
       home: () => invokeChannel('plugins:home'),
     },
-    fetchModels: (config: unknown) => invokeChannel('ai:fetch-models', config),
     aiRoles: {
       list: () => invokeChannel('ai:roles:list')
     },

@@ -245,19 +245,6 @@ fn session_resources_get_input_schema() -> Value {
     )
 }
 
-fn model_config_effective_input_schema() -> Value {
-    object_schema(
-        &[(
-            "runtimeMode",
-            string_schema(
-                "Optional runtime mode or model route, such as redclaw, team, knowledge, chat, image, or videoAnalysis. Defaults to the current runtime mode.",
-            ),
-        )],
-        &[],
-        Some("Selects which effective model route to resolve."),
-    )
-}
-
 fn ok_output_schema(data_schema: Value) -> Value {
     object_schema(
         &[
@@ -3222,28 +3209,6 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
-        action: "model_config.read",
-        namespace: "model_config",
-        description: "Read the redacted application-level AI model provider and route configuration. Use this when the user asks what model, provider, endpoint, or model settings are configured.",
-        input_schema: no_payload_schema,
-        output_schema: generic_state_output_schema,
-        mutating: false,
-        concurrency_safe: true,
-        runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
-    },
-    ActionDescriptor {
-        action: "model_config.effective",
-        namespace: "model_config",
-        description: "Resolve the redacted effective AI model config for a runtime mode or route, including provider, protocol, endpoint, model name, and whether credentials exist.",
-        input_schema: model_config_effective_input_schema,
-        output_schema: generic_state_output_schema,
-        mutating: false,
-        concurrency_safe: true,
-        runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
-    },
-    ActionDescriptor {
         action: "session.resources.list",
         namespace: "session.resources",
         description: "List files and media resources visible in the current session, including user attachments and prior tool-generated assets. Use this when a later tool call needs an exact reference path from the current conversation.",
@@ -5101,8 +5066,6 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                                 "memory.search",
                                 "chat.sessions.list",
                                 "settings.summary",
-                                "model_config.read",
-                                "model_config.effective",
                                 "redclaw.profile.bundle",
                                 "redclaw.profile.completeStyleDefinition",
                                 "redclaw.profile.onboarding"
@@ -5242,7 +5205,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["list", "invoke", "create", "save", "enable", "disable", "market_install", "ai_roles_list", "detect_protocol", "test_connection", "fetch_models"]
+                            "enum": ["list", "invoke", "create", "save", "enable", "disable", "market_install", "ai_roles_list", "detect_protocol", "test_connection"]
                         },
                         "name": { "type": "string" },
                         "skill": { "type": "string" },

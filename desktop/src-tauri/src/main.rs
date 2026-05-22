@@ -4,6 +4,7 @@
 mod accounts;
 mod agent;
 mod agent_hub;
+mod ai_model_manager;
 mod app_shared;
 mod assistant_core;
 mod auth;
@@ -35,7 +36,6 @@ mod media_task_context;
 mod member_skill;
 mod memory;
 mod memory_maintenance;
-mod model_config;
 mod official_support;
 mod persistence;
 mod process_utils;
@@ -10416,8 +10416,10 @@ fn main() {
             None,
         );
     }
-    let model_config_existed_at_startup = model_config::model_config_path(&store_path).exists();
-    if !model_config_existed_at_startup {
+    let model_config_existed_at_startup =
+        ai_model_manager::legacy_config::model_config_path(&store_path).exists();
+    let model_defaults_initialized = official_support::model_defaults_initialized(&store.settings);
+    if !model_config_existed_at_startup && !model_defaults_initialized {
         match official_support::fetch_official_default_model_slots_for_settings(&store.settings) {
             Ok(default_slots) => {
                 let catalog_models =
@@ -10427,9 +10429,10 @@ fn main() {
                     &default_slots,
                     &catalog_models,
                 ) {
-                    if let Err(error) =
-                        model_config::sync_model_config_file(&store_path, &store.settings)
-                    {
+                    if let Err(error) = ai_model_manager::store::sync_model_config_file(
+                        &store_path,
+                        &store.settings,
+                    ) {
                         logging::emit_legacy_line(
                             logging::event::LogSource::Host,
                             logging::event::LogLevel::Warn,
@@ -10454,10 +10457,25 @@ fn main() {
                 );
             }
         }
+    } else if !model_config_existed_at_startup && model_defaults_initialized {
+        if let Err(error) =
+            ai_model_manager::store::sync_model_config_file(&store_path, &store.settings)
+        {
+            logging::emit_legacy_line(
+                logging::event::LogSource::Host,
+                logging::event::LogLevel::Warn,
+                "model_config",
+                "startup.model_config_user_settings_sync_failed",
+                format!("[{} model config] {error}", app_brand_display_name()),
+                json!({ "error": error }),
+                None,
+            );
+        }
     }
-    if let Err(error) =
-        model_config::load_model_config_into_settings(&store_path, &mut store.settings)
-    {
+    if let Err(error) = ai_model_manager::legacy_config::load_model_config_into_settings(
+        &store_path,
+        &mut store.settings,
+    ) {
         logging::emit_legacy_line(
             logging::event::LogSource::Host,
             logging::event::LogLevel::Warn,
@@ -10483,8 +10501,13 @@ fn main() {
             None,
         );
     }
-    if synced_cached_official_models && model_config::model_config_path(&store_path).exists() {
-        if let Err(error) = model_config::sync_model_config_file(&store_path, &store.settings) {
+    if synced_cached_official_models
+        && ai_model_manager::legacy_config::model_config_path(&store_path).exists()
+    {
+        ai_model_manager::legacy_projection::normalize_settings_projection(&mut store.settings);
+        if let Err(error) =
+            ai_model_manager::store::sync_model_config_file(&store_path, &store.settings)
+        {
             logging::emit_legacy_line(
                 logging::event::LogSource::Host,
                 logging::event::LogLevel::Warn,

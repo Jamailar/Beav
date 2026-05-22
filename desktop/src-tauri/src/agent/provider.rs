@@ -16,6 +16,37 @@ fn runtime_accepts_implicit_model_config(runtime_mode: &str) -> bool {
     )
 }
 
+fn model_config_has_route_override(model_config: Option<&Value>) -> bool {
+    let Some(value) = model_config else {
+        return false;
+    };
+    [
+        "modelName",
+        "model_name",
+        "model",
+        "sourceId",
+        "source_id",
+        "baseURL",
+        "baseUrl",
+        "base_url",
+        "apiKey",
+        "api_key",
+        "presetId",
+        "preset_id",
+        "protocol",
+        "reasoningEffort",
+        "reasoning_effort",
+    ]
+    .iter()
+    .any(|key| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|item| !item.is_empty())
+    })
+}
+
 pub fn resolve_chat_exchange_response_stage(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
@@ -44,6 +75,7 @@ pub fn resolve_chat_exchange_response_stage(
         .filter(|value| !value.is_empty())
         .is_some();
     let scoped_model_config = if model_config_has_runtime_mode
+        || model_config_has_route_override(model_config)
         || runtime_accepts_implicit_model_config(&context.runtime_mode)
     {
         model_config.cloned().unwrap_or_else(|| json!({}))
@@ -265,7 +297,11 @@ fn emits_live_events_for_runtime_mode(runtime_mode: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{emits_live_events_for_runtime_mode, runtime_accepts_implicit_model_config};
+    use super::{
+        emits_live_events_for_runtime_mode, model_config_has_route_override,
+        runtime_accepts_implicit_model_config,
+    };
+    use serde_json::json;
 
     #[test]
     fn emits_live_events_for_runtime_mode_skips_wander_only() {
@@ -286,5 +322,14 @@ mod tests {
         assert!(runtime_accepts_implicit_model_config("chat"));
         assert!(runtime_accepts_implicit_model_config("team"));
         assert!(runtime_accepts_implicit_model_config("advisor-discussion"));
+    }
+
+    #[test]
+    fn dedicated_runtime_modes_can_accept_explicit_route_override() {
+        assert!(model_config_has_route_override(Some(&json!({
+            "modelName": "gpt-5.5",
+            "sourceId": "redbox_official_auto"
+        }))));
+        assert!(!model_config_has_route_override(Some(&json!({}))));
     }
 }

@@ -1,4 +1,6 @@
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -23,6 +25,7 @@ use crate::{
 const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
 const OFFICIAL_SESSION_MAX_REFRESH_WINDOW_MS: i64 = 5 * 60_000;
 const OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS: i64 = 60_000;
+const OFFICIAL_CALL_RECORDS_PAGE_SIZE: usize = 30;
 const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 24] = [
     "redbox_official_realm",
     "redbox_official_base_url",
@@ -480,8 +483,54 @@ fn official_response_is_unauthorized(status: u16, response: &Value) -> bool {
         || message.contains("登录过期")
 }
 
+fn timestamp_millis_from_numeric(value: i64) -> Option<i64> {
+    if value <= 0 {
+        return None;
+    }
+    if value >= 1_000_000_000_000 {
+        Some(value)
+    } else {
+        value.checked_mul(1000)
+    }
+}
+
+fn timestamp_millis_from_text(value: &str) -> Option<i64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = trimmed.parse::<i64>() {
+        return timestamp_millis_from_numeric(parsed);
+    }
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
+        return Some(parsed.timestamp_millis());
+    }
+    for format in ["%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"] {
+        if let Ok(parsed) = NaiveDateTime::parse_from_str(trimmed, format) {
+            return Some(parsed.and_utc().timestamp_millis());
+        }
+    }
+    None
+}
+
+fn timestamp_millis_from_value(value: Option<&Value>) -> Option<i64> {
+    match value {
+        Some(Value::Number(number)) => number.as_i64().and_then(timestamp_millis_from_numeric),
+        Some(Value::String(text)) => timestamp_millis_from_text(text),
+        Some(other) => other
+            .as_str()
+            .and_then(timestamp_millis_from_text)
+            .or_else(|| other.as_i64().and_then(timestamp_millis_from_numeric)),
+        None => None,
+    }
+}
+
 fn iso_time_from_value(value: Option<&Value>) -> String {
     match value {
+        Some(Value::Number(_)) => timestamp_millis_from_value(value)
+            .and_then(DateTime::<Utc>::from_timestamp_millis)
+            .map(|time| time.to_rfc3339())
+            .unwrap_or_else(now_iso),
         Some(raw) => raw
             .as_str()
             .map(str::trim)
@@ -493,7 +542,8 @@ fn iso_time_from_value(value: Option<&Value>) -> String {
 }
 
 fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value> {
-    let mut deduped = std::collections::BTreeMap::<String, Value>::new();
+    let mut seen_ids = HashSet::<String>::new();
+    let mut records = Vec::<Value>::new();
     for (index, item) in items.iter().filter(|value| value.is_object()).enumerate() {
         let id = payload_string(item, "id")
             .or_else(|| payload_string(item, "record_id"))
@@ -543,9 +593,22 @@ fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value> {
             "createdAt": created_at,
             "raw": item,
         });
-        deduped.entry(id).or_insert(normalized);
+        if seen_ids.insert(id) {
+            records.push(normalized);
+        }
     }
-    deduped.into_values().take(100).collect()
+    records.sort_by(|left, right| {
+        let left_time = timestamp_millis_from_value(left.get("createdAt")).unwrap_or(0);
+        let right_time = timestamp_millis_from_value(right.get("createdAt")).unwrap_or(0);
+        right_time
+            .cmp(&left_time)
+            .then_with(|| {
+                payload_string(right, "id")
+                    .unwrap_or_default()
+                    .cmp(&payload_string(left, "id").unwrap_or_default())
+            })
+    });
+    records.into_iter().take(OFFICIAL_CALL_RECORDS_PAGE_SIZE).collect()
 }
 
 fn extract_official_call_record_rows(payload: &Value) -> Vec<Value> {
@@ -1177,9 +1240,11 @@ fn apply_official_settings_update(
         }
     }
     let mut next_settings = settings.clone();
-    let model_config_exists = crate::model_config::model_config_path(&state.store_path).exists();
-    let mut should_sync_model_config = model_config_exists;
-    if !model_config_exists {
+    let model_config_exists =
+        crate::ai_model_manager::legacy_config::model_config_path(&state.store_path).exists();
+    let model_defaults_initialized = crate::model_defaults_initialized(&next_settings);
+    let mut should_sync_model_config = model_config_exists || model_defaults_initialized;
+    if !model_config_exists && !model_defaults_initialized {
         match crate::fetch_official_default_model_slots_for_settings(&next_settings) {
             Ok(default_slots) => {
                 let catalog_models = official_settings_models(&next_settings);
@@ -1200,12 +1265,16 @@ fn apply_official_settings_update(
     }
     let merged_settings = with_store_mut(state, |store| {
         merge_official_settings(&mut store.settings, &next_settings);
+        crate::ai_model_manager::legacy_projection::normalize_settings_projection(
+            &mut store.settings,
+        );
         Ok(store.settings.clone())
     })?;
     if should_sync_model_config {
-        if let Err(error) =
-            crate::model_config::sync_model_config_file(&state.store_path, &merged_settings)
-        {
+        if let Err(error) = crate::ai_model_manager::store::sync_model_config_file(
+            &state.store_path,
+            &merged_settings,
+        ) {
             log_official_auth(
                 state,
                 "model-config-sync-failed",
@@ -1569,7 +1638,7 @@ fn fetch_remote_official_call_records(
         state,
         settings,
         "GET",
-        "/users/me/ai-usage-logs",
+        &format!("/users/me/ai-usage-logs?limit={OFFICIAL_CALL_RECORDS_PAGE_SIZE}&page=1"),
         None,
         expected_generation,
     )?;
@@ -1865,7 +1934,6 @@ pub fn handle_official_channel(
         | "redbox-auth:refresh"
         | "redbox-auth:me"
         | "redbox-auth:points"
-        | "redbox-auth:models"
         | "redbox-auth:pricing"
         | "redbox-auth:pricing-refresh"
         | "redbox-auth:api-keys:list"
@@ -2310,12 +2378,6 @@ pub fn handle_official_channel(
                         "error": error,
                     }))
                 }
-                "redbox-auth:models" => with_store(state, |store| {
-                    Ok(json!({
-                        "success": true,
-                        "models": official_settings_models(&store.settings),
-                    }))
-                }),
                 "redbox-auth:pricing" => with_store(state, |store| {
                     let pricing = official_settings_pricing(&store.settings);
                     Ok(json!({

@@ -2122,7 +2122,10 @@ pub fn handle_library_channel(
                         .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
                     crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime)
                 };
-                let real_image_config = resolve_image_generation_settings(&settings_snapshot);
+                let real_image_config = resolve_image_generation_settings_with_override(
+                    &settings_snapshot,
+                    Some(payload),
+                );
                 let placeholder_fallback_allowed =
                     payload_field(payload, "allowPlaceholderFallback")
                         .and_then(Value::as_bool)

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::runtime::{infer_protocol, resolve_chat_config};
+use crate::runtime::infer_protocol;
 use crate::{now_iso, payload_string};
 
 const MODEL_CONFIG_FILE: &str = "model-config.json";
@@ -11,22 +11,6 @@ const MODEL_CONFIG_VERSION: u64 = 1;
 const DEFAULT_MODELS_INITIALIZED_AT_KEY: &str = "ai_model_defaults_initialized_at";
 const DEFAULT_VOICE_CLONE_MODEL: &str = "cosyvoice-v3.5-plus-voice-clone";
 const MINIMAX_VOICE_CLONE_MODEL: &str = "minimax-voice-clone";
-
-const ROUTE_SCOPES: &[&str] = &[
-    "chat",
-    "wander",
-    "team",
-    "knowledge",
-    "redclaw",
-    "transcription",
-    "embedding",
-    "image",
-    "video",
-    "visualIndex",
-    "videoAnalysis",
-    "voiceTts",
-    "voiceClone",
-];
 
 pub(crate) fn model_config_path(store_path: &Path) -> PathBuf {
     store_path
@@ -476,116 +460,6 @@ pub(crate) fn load_model_config_into_settings(
     Ok(())
 }
 
-fn route_scope_from_runtime_mode(runtime_mode: &str) -> &str {
-    match runtime_mode.trim() {
-        "wander" => "wander",
-        "knowledge" => "knowledge",
-        "redclaw" => "redclaw",
-        "team" | "chatroom" | "advisor-discussion" => "team",
-        "transcription" | "embedding" | "image" | "video" | "visualIndex" | "videoAnalysis"
-        | "voiceTts" | "voiceClone" => runtime_mode.trim(),
-        _ => "chat",
-    }
-}
-
-pub(crate) fn effective_model_config_value(settings: &Value, runtime_mode: Option<&str>) -> Value {
-    let runtime_mode = runtime_mode.unwrap_or("chat");
-    let scope = route_scope_from_runtime_mode(runtime_mode);
-    let sources = parse_json_array_setting(settings, "ai_sources_json");
-    let routes = parse_json_object_setting(settings, "ai_model_routes_json");
-    let route = routes.get(scope).cloned().unwrap_or_else(|| json!({}));
-    let source_id = route_source_id(&routes, scope)
-        .or_else(|| payload_string(settings, "default_ai_source_id"))
-        .unwrap_or_default();
-    let source = source_by_id(&sources, &source_id).or_else(|| sources.first());
-    let source_base_url = source
-        .map(|item| value_string(item, &["baseURL", "baseUrl"]))
-        .unwrap_or_default();
-    let source_model = source
-        .map(|item| value_string(item, &["model", "modelName"]))
-        .unwrap_or_default();
-    let source_protocol = source
-        .map(|item| value_string(item, &["protocol"]))
-        .unwrap_or_default();
-    let model_name = route_model(&routes, scope).unwrap_or(source_model);
-    let protocol = if source_protocol.is_empty() {
-        infer_protocol(&source_base_url, None, None)
-    } else {
-        source_protocol
-    };
-    let key_present = source
-        .map(|item| !provider_key(item).is_empty())
-        .unwrap_or_else(|| {
-            payload_string(settings, "api_key")
-                .map(|key| !key.is_empty())
-                .unwrap_or(false)
-        });
-
-    let resolved_chat = resolve_chat_config(
-        settings,
-        Some(&json!({
-            "runtimeMode": scope,
-            "baseURL": source_base_url,
-            "modelName": model_name,
-            "protocol": protocol,
-        })),
-    );
-
-    json!({
-        "runtimeMode": runtime_mode,
-        "scope": scope,
-        "provider": source.map(provider_without_secrets).unwrap_or(Value::Null),
-        "sourceId": source_id,
-        "baseURL": resolved_chat.as_ref().map(|item| item.base_url.clone()).unwrap_or(source_base_url),
-        "protocol": resolved_chat.as_ref().map(|item| item.protocol.clone()).unwrap_or(protocol),
-        "modelName": resolved_chat.as_ref().map(|item| item.model_name.clone()).unwrap_or(model_name),
-        "reasoningEffort": resolved_chat.as_ref().and_then(|item| item.reasoning_effort.clone()),
-        "apiKeyPresent": resolved_chat.as_ref().and_then(|item| item.api_key.as_ref()).map(|key| !key.trim().is_empty()).unwrap_or(key_present),
-        "source": if route.is_object() { "route" } else { "default" },
-    })
-}
-
-pub(crate) fn model_config_diagnostics_value(store_path: &Path, settings: &Value) -> Value {
-    let path = model_config_path(store_path);
-    let config = read_model_config_file(store_path, settings).unwrap_or_else(|error| {
-        json!({
-            "version": MODEL_CONFIG_VERSION,
-            "error": error,
-            "providers": [],
-            "routes": {},
-        })
-    });
-    let routes = config
-        .get("routes")
-        .and_then(Value::as_object)
-        .map(|object| {
-            ROUTE_SCOPES
-                .iter()
-                .filter_map(|scope| {
-                    object.get(*scope).map(|route| {
-                        json!({
-                            "scope": scope,
-                            "mode": route.get("mode").cloned().unwrap_or(Value::Null),
-                            "sourceId": route.get("sourceId").or_else(|| route.get("source_id")).cloned().unwrap_or(Value::Null),
-                            "model": route.get("model").or_else(|| route.get("modelName")).cloned().unwrap_or(Value::Null),
-                        })
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    json!({
-        "path": path.display().to_string(),
-        "config": config,
-        "routes": routes,
-        "effective": ROUTE_SCOPES
-            .iter()
-            .map(|scope| effective_model_config_value(settings, Some(scope)))
-            .collect::<Vec<_>>(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,30 +596,5 @@ mod tests {
             routes["voiceClone"]["model"],
             json!("cosyvoice-v3.5-plus-voice-clone")
         );
-    }
-
-    #[test]
-    fn effective_model_config_returns_redacted_route_result() {
-        let settings = json!({
-            "default_ai_source_id": "source-1",
-            "ai_sources_json": serde_json::to_string(&vec![json!({
-                "id": "source-1",
-                "name": "Custom",
-                "baseURL": "https://example.test/v1",
-                "apiKey": "sk-secret",
-                "protocol": "openai",
-                "model": "model-a"
-            })]).unwrap(),
-            "ai_model_routes_json": serde_json::to_string(&json!({
-                "chat": { "mode": "custom", "sourceId": "source-1", "model": "model-b" }
-            })).unwrap()
-        });
-
-        let value = effective_model_config_value(&settings, Some("chat"));
-
-        assert_eq!(value["modelName"], json!("model-b"));
-        assert_eq!(value["baseURL"], json!("https://example.test/v1"));
-        assert_eq!(value["apiKeyPresent"], json!(true));
-        assert!(value["provider"].get("apiKey").is_none());
     }
 }

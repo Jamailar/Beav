@@ -49,17 +49,12 @@ import {
   filterAiModelsByCapability,
   generateAiSourceId,
   inferImageTemplateByProvider,
-  isImageTemplateRemoteModelFetchEnabled,
-  isLikelyLocalEndpoint,
-  normalizeImageModelFetchBaseURL,
   normalizeAiModelDescriptors,
   normalizeSourceModels,
   parseAiSources,
   parseEnvText,
   parseMcpServers,
   resolveDefaultImageEndpoint,
-  resolveImageModelFetchPresetId,
-  resolveImageModelFetchProtocol,
   stringifyEnvRecord,
   toAiModelDescriptor,
 } from './settings/shared';
@@ -1204,13 +1199,8 @@ export function Settings({
   const [videoAnalysisSourceId, setVideoAnalysisSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
   const [voiceSourceId, setVoiceSourceId] = useState('');
-  const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
-  const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [testMsg, setTestMsg] = useState('');
-  const [imageAvailableModels, setImageAvailableModels] = useState<Array<{ id: string; source: 'remote' | 'suggested' }>>([]);
-  const [isFetchingImageModels, setIsFetchingImageModels] = useState(false);
-  const [imageModelStatus, setImageModelStatus] = useState('');
   const [recentDebugLogs, setRecentDebugLogs] = useState<string[]>([]);
   const [isDebugLogsLoading, setIsDebugLogsLoading] = useState(false);
   const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(
@@ -1438,8 +1428,6 @@ export function Settings({
     setStatus('idle');
   }, [savedRedclawProfileDraft.creatorProfile, savedRedclawProfileDraft.user, setRedclawProfileDirtyState]);
 
-  const fetchModelsRequestRef = useRef<Record<string, number>>({});
-  const fetchImageModelsRequestRef = useRef(0);
   const settingsLoadRequestRef = useRef(0);
   const debugLogsLoadRequestRef = useRef(0);
   const runtimeTasksLoadRequestRef = useRef(0);
@@ -1524,10 +1512,6 @@ export function Settings({
     return aiSources.find((source) => source.id === addModelModalSourceId) || null;
   }, [aiSources, addModelModalSourceId]);
 
-  const getSourceAvailableModels = useCallback((sourceId: string) => {
-    return modelsBySource[sourceId] || [];
-  }, [modelsBySource]);
-
   const getSourceModelList = useCallback((source: AiSourceConfig) => {
     const merged = new Map<string, AiModelDescriptor>();
     for (const raw of (source.modelsMeta || [])) {
@@ -1545,18 +1529,8 @@ export function Settings({
         inputCapabilities: Array.from(new Set([...(previous?.inputCapabilities || []), ...descriptor.inputCapabilities])),
       });
     }
-    for (const remoteModel of (modelsBySource[source.id] || [])) {
-      const descriptor = toAiModelDescriptor(remoteModel);
-      if (!descriptor) continue;
-      const previous = merged.get(descriptor.id);
-      merged.set(descriptor.id, {
-        id: descriptor.id,
-        capabilities: Array.from(new Set([...(previous?.capabilities || []), ...descriptor.capabilities])),
-        inputCapabilities: Array.from(new Set([...(previous?.inputCapabilities || []), ...descriptor.inputCapabilities])),
-      });
-    }
     return Array.from(merged.values());
-  }, [modelsBySource]);
+  }, []);
 
   const getAddedSourceModelList = useCallback((source: AiSourceConfig) => {
     return normalizeAiModelDescriptors([
@@ -1834,8 +1808,8 @@ export function Settings({
 
   const addModelModalRemoteModels = useMemo(() => {
     if (!addModelModalSource) return [];
-    return getSourceAvailableModels(addModelModalSource.id);
-  }, [addModelModalSource, getSourceAvailableModels]);
+    return getAddedSourceModelList(addModelModalSource);
+  }, [addModelModalSource, getAddedSourceModelList]);
 
   const addModelModalDraft = addModelModalSource
     ? String(sourceModelDrafts[addModelModalSource.id] || '')
@@ -2016,42 +1990,9 @@ export function Settings({
     [aiSources, isOfficialManagedSource]
   );
 
-  const officialAuthModels = useMemo(() => (
-    normalizeAiModelDescriptors(
-      (((officialAuthState as { models?: unknown[] } | null)?.models || []) as unknown[])
-        .map((item) => {
-          if (typeof item === 'string') return item;
-          if (!item || typeof item !== 'object') return null;
-          const record = item as Record<string, unknown>;
-          return {
-            id: String(record.id || record.name || record.model || '').trim(),
-            capabilities: Array.isArray(record.capabilities) ? record.capabilities as string[] : ['chat'],
-          };
-        })
-    )
-  ), [officialAuthState]);
-
   const displayedAiSources = useMemo<AiSourceConfig[]>(() => {
-    const withOfficialModels = (source: AiSourceConfig): AiSourceConfig => (
-      isOfficialManagedSource(source)
-        ? {
-          ...source,
-          models: normalizeSourceModels([
-            ...(source.models || []),
-            ...officialAuthModels.map((model) => model.id),
-            source.model,
-          ]),
-          modelsMeta: normalizeAiModelDescriptors([
-            ...(source.modelsMeta || []),
-            ...officialAuthModels,
-            ...(source.models || []).map((id) => ({ id })),
-            source.model ? { id: source.model } : null,
-          ]),
-        }
-        : source
-    );
     if (!officialAiPanelEnabled || hasOfficialManagedSource) {
-      return aiSources.map(withOfficialModels);
+      return aiSources;
     }
     return [
       {
@@ -2060,14 +2001,14 @@ export function Settings({
         presetId: 'redbox-official',
         baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL,
         apiKey: '',
-        models: officialAuthModels.map((model) => model.id),
-        modelsMeta: officialAuthModels,
+        models: [],
+        modelsMeta: [],
         model: '',
         protocol: 'openai',
       },
       ...aiSources,
     ];
-  }, [aiSources, hasOfficialManagedSource, isOfficialManagedSource, officialAiPanelEnabled, officialAuthModels]);
+  }, [aiSources, hasOfficialManagedSource, officialAiPanelEnabled]);
 
   const officialAuthStatus = String((officialAuthState as { status?: string } | null)?.status || '').trim();
   const officialAuthKnown = officialAuthBootstrapped;
@@ -2457,26 +2398,12 @@ export function Settings({
       delete next[sourceId];
       return next;
     });
-    setFetchingModelsBySourceId((prev) => {
-      if (!prev[sourceId]) return prev;
-      const next = { ...prev };
-      delete next[sourceId];
-      return next;
-    });
-    fetchModelsRequestRef.current = Object.fromEntries(
-      Object.entries(fetchModelsRequestRef.current).filter(([id]) => id !== sourceId),
-    );
     setSourceModelDrafts((prev) => {
       const next = { ...prev };
       delete next[sourceId];
       return next;
     });
     setAddModelModalSourceId((prev) => (prev === sourceId ? '' : prev));
-    setModelsBySource((prev) => {
-      const next = { ...prev };
-      delete next[sourceId];
-      return next;
-    });
   };
 
   const handleToggleAiSourceExpand = (sourceId: string) => {
@@ -2692,136 +2619,12 @@ export function Settings({
     }));
   };
 
-  const fetchModelsForSource = useCallback(async (
-    source: AiSourceConfig,
-    options?: { manual?: boolean }
-  ) => {
-    const sourceId = String(source.id || '').trim();
-    const baseURL = source.baseURL.trim();
-    const apiKey = source.apiKey.trim();
-    const allowEmptyKey = isLocalAiSource(source);
-    if (!baseURL || (!apiKey && !allowEmptyKey)) {
-      setModelsBySource((prev) => ({ ...prev, [source.id]: [] }));
-      setFetchingModelsBySourceId((prev) => {
-        if (!prev[source.id]) return prev;
-        const next = { ...prev };
-        delete next[source.id];
-        return next;
-      });
-      if (options?.manual) {
-        setTestStatus('error');
-        setTestMsg(allowEmptyKey ? '请先填写 Endpoint' : '请先填写 Endpoint 与 API Key');
-      } else {
-        setTestStatus('idle');
-        setTestMsg('');
-      }
-      return;
-    }
-
-    const requestId = (fetchModelsRequestRef.current[sourceId] || 0) + 1;
-    fetchModelsRequestRef.current = {
-      ...fetchModelsRequestRef.current,
-      [sourceId]: requestId,
-    };
-    setFetchingModelsBySourceId((prev) => ({ ...prev, [source.id]: true }));
-    if (options?.manual) {
-      setTestStatus('idle');
-      setTestMsg('');
-    }
-
-    try {
-      const detectResult = await window.ipcRenderer.detectAiProtocol({
-        baseURL: source.baseURL,
-        presetId: source.presetId,
-        protocol: source.protocol,
-      });
-
-      const protocol = detectResult?.protocol || source.protocol || 'openai';
-      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
-
-      if (source.protocol !== protocol) {
-        updateAiSource(source.id, (prev) => ({ ...prev, protocol }));
-      }
-      if (source.id === activeAiSourceId) {
-        setDetectedAiProtocol(protocol);
-      }
-
-      const models = await window.ipcRenderer.fetchModels({
-        apiKey: source.apiKey,
-        baseURL: source.baseURL,
-        presetId: source.presetId,
-        protocol,
-      });
-      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
-
-      const deduped = Array.from(new Map(
-        ((models || []) as unknown[])
-          .map((item) => toAiModelDescriptor(item as Record<string, unknown>))
-          .filter((item): item is AiModelDescriptor => Boolean(item))
-          .map((item) => [item.id, item]),
-      ).values());
-      setModelsBySource((prev) => ({ ...prev, [source.id]: deduped }));
-      if (isOfficialManagedSource(source)) {
-        updateAiSource(source.id, (prev) => {
-          const fetchedIds = deduped.map((item) => item.id);
-          const mergedModels = normalizeSourceModels([
-            ...(prev.models || []),
-            ...fetchedIds,
-            prev.model,
-          ]);
-          const mergedMeta = normalizeAiModelDescriptors([
-            ...(prev.modelsMeta || []),
-            ...deduped,
-            ...mergedModels.map((id) => ({ id })),
-          ]);
-          const nextModel = String(prev.model || '').trim() || mergedModels[0] || '';
-          if (
-            nextModel === String(prev.model || '').trim()
-            && mergedModels.join('\n') === normalizeSourceModels(prev.models || []).join('\n')
-            && JSON.stringify(mergedMeta) === JSON.stringify(normalizeAiModelDescriptors(prev.modelsMeta || []))
-          ) {
-            return prev;
-          }
-          return {
-            ...prev,
-            models: mergedModels,
-            modelsMeta: mergedMeta,
-            model: nextModel,
-          };
-        });
-      }
-
-      setTestStatus('success');
-      setTestMsg(
-        isOfficialManagedSource(source)
-          ? `模型列表已更新（${deduped.length} 个）`
-          : `候选模型已更新（${deduped.length} 个），请在“添加模型”中手动加入需要的模型`
-      );
-    } catch (e: unknown) {
-      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
-      setModelsBySource((prev) => ({ ...prev, [source.id]: [] }));
-      setTestStatus('error');
-      const message = e instanceof Error ? e.message : '拉取模型列表失败';
-      setTestMsg(message);
-    } finally {
-      if (requestId === (fetchModelsRequestRef.current[sourceId] || 0)) {
-        setFetchingModelsBySourceId((prev) => {
-          if (!prev[source.id]) return prev;
-          const next = { ...prev };
-          delete next[source.id];
-          return next;
-        });
-      }
-    }
-  }, [activeAiSourceId, isLocalAiSource, isOfficialManagedSource, updateAiSource]);
-
   useEffect(() => {
     if (!activeAiSource) return;
     const baseURL = activeAiSource.baseURL.trim();
     const apiKey = activeAiSource.apiKey.trim();
     const allowEmptyKey = isLocalAiSource(activeAiSource);
     if (!baseURL || (!apiKey && !allowEmptyKey)) {
-      setModelsBySource((prev) => ({ ...prev, [activeAiSource.id]: [] }));
       setTestStatus('idle');
       setTestMsg('');
     }
@@ -2832,107 +2635,7 @@ export function Settings({
     activeAiSource?.apiKey,
     activeAiSource?.presetId,
     activeAiSource?.protocol,
-    fetchModelsForSource,
     isLocalAiSource,
-  ]);
-
-  const fetchImageModels = useCallback(async (options?: { manual?: boolean }) => {
-    const provider = String(formData.image_provider || '').trim();
-    const template = inferImageTemplateByProvider(provider, formData.image_provider_template);
-    const defaultEndpoint = resolveDefaultImageEndpoint(provider, template);
-    const endpointRaw = String(formData.image_endpoint || defaultEndpoint || formData.api_endpoint || '').trim();
-    const resolvedBaseURL = normalizeImageModelFetchBaseURL(endpointRaw, template);
-    const resolvedApiKey = String(formData.image_api_key || formData.api_key || '').trim();
-    const protocol = resolveImageModelFetchProtocol(template);
-    const presetId = resolveImageModelFetchPresetId(provider, template, resolvedBaseURL);
-    const allowEmptyKey = protocol === 'openai' && isLikelyLocalEndpoint(resolvedBaseURL);
-    const shouldFetchRemote = isImageTemplateRemoteModelFetchEnabled(template);
-    const forceDashscopeModel = template === 'dashscope-wan-native';
-
-    const applyModelOptions = (
-      remoteIds: string[],
-      statusMessage: string,
-    ) => {
-      const seen = new Set<string>();
-      const optionsList: Array<{ id: string; source: 'remote' | 'suggested' }> = [];
-      for (const id of remoteIds) {
-        const normalized = String(id || '').trim();
-        if (!normalized || seen.has(normalized)) continue;
-        seen.add(normalized);
-        optionsList.push({ id: normalized, source: 'remote' });
-      }
-      setImageAvailableModels(optionsList);
-      setImageModelStatus(statusMessage);
-      setFormData((prev) => {
-        const current = String(prev.image_model || '').trim();
-        if (forceDashscopeModel) {
-          if (current === DASHSCOPE_LOCKED_IMAGE_MODEL) return prev;
-          return { ...prev, image_model: DASHSCOPE_LOCKED_IMAGE_MODEL };
-        }
-        if (current && optionsList.some((item) => item.id === current)) {
-          return prev;
-        }
-        if (optionsList.length === 0) {
-          return prev;
-        }
-        const nextModel = optionsList[0].id;
-        return current === nextModel ? prev : { ...prev, image_model: nextModel };
-      });
-    };
-
-    if (!resolvedBaseURL) {
-      applyModelOptions([], '未配置生图 Endpoint，无法拉取模型列表');
-      return;
-    }
-
-    if (!resolvedApiKey && !allowEmptyKey) {
-      applyModelOptions([], '未配置生图 API Key，无法拉取模型列表');
-      return;
-    }
-
-    if (!shouldFetchRemote) {
-      applyModelOptions([], '当前模板不提供统一模型列表接口');
-      return;
-    }
-
-    const requestId = ++fetchImageModelsRequestRef.current;
-    setIsFetchingImageModels(true);
-    if (options?.manual) {
-      setImageModelStatus('正在拉取生图模型列表...');
-    }
-
-    try {
-      const models = await window.ipcRenderer.fetchModels({
-        apiKey: resolvedApiKey,
-        baseURL: resolvedBaseURL,
-        presetId,
-        protocol,
-        purpose: 'image',
-      });
-      if (requestId !== fetchImageModelsRequestRef.current) return;
-      const remoteIds = Array.from(new Set(
-        ((models || []) as Array<{ id?: string }>)
-          .map((item) => String(item.id || '').trim())
-          .filter(Boolean)
-      ));
-      const summary = remoteIds.length > 0 ? `已拉取远端模型 ${remoteIds.length} 个` : '远端未返回可用生图模型';
-      applyModelOptions(remoteIds, summary);
-    } catch (error) {
-      if (requestId !== fetchImageModelsRequestRef.current) return;
-      const message = error instanceof Error ? error.message : '拉取失败';
-      applyModelOptions([], `拉取失败：${message}`);
-    } finally {
-      if (requestId === fetchImageModelsRequestRef.current) {
-        setIsFetchingImageModels(false);
-      }
-    }
-  }, [
-    formData.api_endpoint,
-    formData.api_key,
-    formData.image_api_key,
-    formData.image_endpoint,
-    formData.image_provider,
-    formData.image_provider_template,
   ]);
 
   useEffect(() => {
@@ -2943,19 +2646,6 @@ export function Settings({
       return { ...prev, image_model: DASHSCOPE_LOCKED_IMAGE_MODEL };
     });
   }, [activeTab, isDashscopeImageTemplate]);
-
-  useEffect(() => {
-    return;
-  }, [
-    activeTab,
-    formData.api_endpoint,
-    formData.api_key,
-    formData.image_api_key,
-    formData.image_endpoint,
-    formData.image_provider,
-    formData.image_provider_template,
-    fetchImageModels,
-  ]);
 
   const persistMcpServers = useCallback(async (nextServers: McpServerConfig[], tip?: string) => {
     setIsSyncingMcp(true);
@@ -4109,7 +3799,6 @@ export function Settings({
 
   const loadSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     const preserveViewState = Boolean(options?.preserveViewState);
-    const preserveRemoteModels = options?.preserveRemoteModels ?? preserveViewState;
     const requestId = ++settingsLoadRequestRef.current;
     const hadLocalAiSourceDraft = aiSourceDraftDirtyRef.current;
     const requestAiSourceEditGeneration = aiSourceEditGenerationRef.current;
@@ -4333,24 +4022,6 @@ export function Settings({
           }
           return normalizedDefaultId;
         });
-        setModelsBySource((prev) => {
-          if (!preserveRemoteModels) {
-            return {};
-          }
-          const validSourceIds = new Set(sourceList.map((source) => source.id));
-          return Object.fromEntries(
-            Object.entries(prev).filter(([sourceId]) => sourceId === OFFICIAL_AUTO_SOURCE_ID || validSourceIds.has(sourceId))
-          );
-        });
-        setFetchingModelsBySourceId((prev) => {
-          if (!preserveRemoteModels) {
-            return {};
-          }
-          const validSourceIds = new Set(sourceList.map((source) => source.id));
-          return Object.fromEntries(
-            Object.entries(prev).filter(([sourceId]) => sourceId === OFFICIAL_AUTO_SOURCE_ID || validSourceIds.has(sourceId))
-          );
-        });
         setDetectedAiProtocol((resolvedDefaultSource?.protocol || findAiPresetById(resolvedDefaultSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
         setMcpServers(parseMcpServers(settings.mcp_servers_json));
         setCliRuntimeExecutionMode(loadedCliRuntimeExecutionMode);
@@ -4486,8 +4157,6 @@ export function Settings({
           }
           return OFFICIAL_AUTO_SOURCE_ID;
         });
-        setModelsBySource((prev) => (preserveRemoteModels ? prev : {}));
-        setFetchingModelsBySourceId((prev) => (preserveRemoteModels ? prev : {}));
         setDetectedAiProtocol('openai');
         setMcpServers([]);
         setCliRuntimeExecutionMode('host_compatible');
@@ -6022,7 +5691,7 @@ export function Settings({
       if (defaultSource?.baseURL && (defaultSource?.apiKey || isLocalAiSource(defaultSource))) {
         const normalizedModel = (defaultSource.model || '').trim();
         if (!normalizedModel) {
-          throw new Error('请为默认供应商填写模型名称（可手动填写，或从模型列表选择）');
+          throw new Error('请为默认供应商填写模型名称');
         }
       }
       const resolvedTranscriptionSource = getAiSourceById(transcriptionSourceId) || defaultSource || null;
@@ -6983,7 +6652,6 @@ export function Settings({
                         <button
                           type="button"
                           onClick={() => {
-                            setModelsBySource({});
                             setTestStatus('idle');
                             setTestMsg('');
                           }}
@@ -7214,7 +6882,7 @@ export function Settings({
                                   <div className="rounded border border-dashed border-border px-2.5 py-2 text-[11px] text-text-tertiary">
                                     {isOfficialSourcePending
                                       ? '正在等待官方账号状态检查完成。'
-                                      : '请先重新登录，登录后会自动同步官方模型列表。'}
+                                      : '请先重新登录，登录后会同步官方模型配置。'}
                                   </div>
                                 ) : (
                                   <div className="rounded border border-border bg-surface-secondary/20 p-2.5 space-y-2">
@@ -7234,18 +6902,6 @@ export function Settings({
                                           className="px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors"
                                         >
                                           添加模型
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setActiveAiSourceId(source.id);
-                                            void fetchModelsForSource(source, { manual: true });
-                                          }}
-                                          disabled={Boolean(fetchingModelsBySourceId[source.id])}
-                                          className="flex items-center gap-1 px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
-                                        >
-                                          <RefreshCw className={clsx('w-3 h-3', fetchingModelsBySourceId[source.id] && 'animate-spin')} />
-                                          拉取候选
                                         </button>
                                       </div>
                                     </div>
@@ -8683,7 +8339,7 @@ export function Settings({
                   <div className="min-w-0">
                     <h3 className="text-base font-semibold text-text-primary truncate">添加模型</h3>
                     <p className="text-xs text-text-tertiary mt-1 truncate">
-                      {addModelModalSource.name || '未命名供应商'} · 候选模型 {addModelModalRemoteModels.length} 个，可手动输入模型 ID
+                      {addModelModalSource.name || '未命名供应商'} · 已配置模型 {addModelModalRemoteModels.length} 个，可手动输入模型 ID
                     </p>
                   </div>
                   <button
@@ -8697,9 +8353,9 @@ export function Settings({
 
                 <div className="px-5 py-4 space-y-3">
                   <div className="text-[12px] text-text-tertiary">
-                    候选列表仅用于辅助选择；也可以直接手动输入模型 ID，点击确认后才会加入当前供应商。
+                    可从已配置模型中选择，也可以直接手动输入模型 ID，点击确认后才会加入当前供应商。
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px,auto] gap-2">
+                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px] gap-2">
                     <input
                       type="text"
                       list={`ai-source-model-options-${addModelModalSource.id}`}
@@ -8731,17 +8387,6 @@ export function Settings({
                       <option value="video">视频生成</option>
                       <option value="embedding">向量模型</option>
                     </select>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveAiSourceId(addModelModalSource.id);
-                        void fetchModelsForSource(addModelModalSource, { manual: true });
-                      }}
-                      disabled={Boolean(fetchingModelsBySourceId[addModelModalSource.id])}
-                      className="px-3 py-2 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
-                    >
-                      {fetchingModelsBySourceId[addModelModalSource.id] ? '拉取中...' : '刷新候选'}
-                    </button>
                   </div>
                   <div className="max-h-40 overflow-auto rounded border border-border bg-surface-secondary/20 p-2">
                     {addModelModalRemoteModels.length ? (
@@ -8790,7 +8435,7 @@ export function Settings({
                       </div>
                     ) : (
                       <div className="text-xs text-text-tertiary">
-                        暂无候选模型，可直接手动输入模型 ID，或点击“刷新候选”拉取。
+                        暂无已配置模型，可直接手动输入模型 ID。
                       </div>
                     )}
                   </div>

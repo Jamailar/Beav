@@ -1555,7 +1555,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
       return;
     }
     setCustomBusy(true);
-    setLoginNotice('idle', '正在拉取模型列表…');
+    setLoginNotice('idle', '正在保存模型配置…');
     try {
       const result = await window.ipcRenderer.llmReadiness.configureCustomSource({
         baseURL,

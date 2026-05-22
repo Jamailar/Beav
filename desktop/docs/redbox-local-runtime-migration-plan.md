@@ -383,7 +383,6 @@ Status: Current
 - `localRuntime.start(payload?)`
 - `localRuntime.stop()`
 - `localRuntime.restart(payload?)`
-- `localRuntime.fetchModels()`
 - `localRuntime.getLogs(payload?)`
 - `localRuntime.clearLogs()`
 - `localRuntime.detectHardware()`
@@ -671,7 +670,7 @@ Status: Current
 
 - 新增“本地 runtime 未运行时的错误归因”
 - 新增“模型未安装 / 模型未加载”的结构化错误
-- `ai:fetch-models` 在本地源场景下优先走 management API 的缓存结果，失败再 fallback 到 `/v1/models`
+- 本地源模型可用性由 runtime 状态和 `ai_model_manager` route 共同声明，不再提供通用远端枚举入口。
 
 ## 6. Video Processing Boundary
 
@@ -1000,7 +999,7 @@ type LocalRuntimeModelRecord = {
 
 - Chat 使用本地模型能完成一次真实问答
 - Wander 能完成一次真实任务并通过工具调用循环
-- `ai:fetch-models` 在本地源上返回正确模型列表
+- 本地源 route 能通过 `ai_model_manager` resolve 到明确模型，缺失时返回结构化不可用原因
 
 ### Failure Injection
 

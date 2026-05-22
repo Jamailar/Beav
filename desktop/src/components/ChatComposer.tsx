@@ -94,6 +94,7 @@ export interface ChatSettingsSnapshot {
   api_key?: string;
   model_name?: string;
   ai_sources_json?: string;
+  ai_model_routes_json?: string;
   default_ai_source_id?: string;
 }
 
@@ -740,6 +741,21 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
 
   const options: ChatModelOption[] = [];
   const defaultSourceId = String(settings.default_ai_source_id || '').trim();
+  const chatRoute = (() => {
+    try {
+      const routes = JSON.parse(String(settings.ai_model_routes_json || '{}')) as Record<string, unknown>;
+      const route = routes?.chat;
+      return route && typeof route === 'object' && !Array.isArray(route)
+        ? route as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  })();
+  const routeSourceId = String(chatRoute.sourceId || chatRoute.source_id || '').trim();
+  const routeModel = String(chatRoute.model || chatRoute.modelName || chatRoute.model_name || '').trim();
+  const selectedDefaultSourceId = routeSourceId || defaultSourceId;
+  const selectedDefaultModel = routeModel || String(settings.model_name || '').trim();
   const prefersOfficialDefault = defaultSourceId.toLowerCase() === OFFICIAL_AUTO_SOURCE_ID;
   let hasExplicitDefaultSource = false;
 
@@ -750,7 +766,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
         if (!item || typeof item !== 'object') continue;
         const sourceId = String(item.id || '').trim();
         const presetId = String(item.presetId || item.preset_id || '').trim();
-        if (sourceId && sourceId === defaultSourceId) {
+        if (sourceId && sourceId === selectedDefaultSourceId) {
           hasExplicitDefaultSource = true;
         }
         const sourceName = String(item.name || sourceId || '供应商').trim();
@@ -782,7 +798,11 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
             presetId,
             baseURL,
             apiKey,
-            isDefault: Boolean(sourceId && sourceId === defaultSourceId && modelName === String(item.model || item.modelName || '').trim()),
+            isDefault: Boolean(
+              sourceId
+              && sourceId === selectedDefaultSourceId
+              && modelName === selectedDefaultModel,
+            ),
           });
         }
       }

@@ -2,8 +2,8 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    auth, fetch_models_by_protocol, infer_protocol, now_iso, now_ms, payload_string,
-    refresh_runtime_warm_state, with_store, with_store_mut, AppState,
+    auth, infer_protocol, now_iso, now_ms, payload_string, refresh_runtime_warm_state, with_store,
+    with_store_mut, AppState,
 };
 
 const OFFICIAL_SOURCE_ID: &str = "redbox_official_auto";
@@ -51,24 +51,12 @@ fn source_id(source: &Value) -> String {
     trim_json_string(source, "id")
 }
 
-fn source_name(source: &Value) -> String {
-    trim_json_string(source, "name")
-}
-
 fn source_base_url(source: &Value) -> String {
     trim_json_string(source, "baseURL")
 }
 
 fn source_api_key(source: &Value) -> String {
     trim_json_string(source, "apiKey")
-}
-
-fn source_model(source: &Value) -> String {
-    trim_json_string(source, "model")
-}
-
-fn source_protocol(source: &Value) -> String {
-    trim_json_string(source, "protocol")
 }
 
 fn source_preset_id(source: &Value) -> String {
@@ -93,307 +81,21 @@ fn settings_routes(settings: &Value) -> Value {
         .unwrap_or_else(|| json!({}))
 }
 
-fn official_plaintext_key(settings: &Value) -> Option<String> {
-    payload_string(settings, "redbox_auth_session_json")
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .and_then(|session| {
-            payload_string(&session, "apiKey").or_else(|| payload_string(&session, "api_key"))
-        })
-        .filter(|value| !value.trim().is_empty())
-}
-
-fn official_logged_in(settings: &Value) -> bool {
-    payload_string(settings, "redbox_auth_session_json")
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .and_then(|session| {
-            payload_string(&session, "accessToken")
-                .or_else(|| payload_string(&session, "access_token"))
-                .or_else(|| payload_string(&session, "refreshToken"))
-                .or_else(|| payload_string(&session, "refresh_token"))
-        })
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-}
-
-fn route_source_id(settings: &Value) -> String {
-    settings_routes(settings)
-        .get("chat")
-        .and_then(|route| route.get("sourceId").or_else(|| route.get("source_id")))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| payload_string(settings, "default_ai_source_id"))
-        .unwrap_or_default()
-}
-
-fn route_model(settings: &Value) -> String {
-    settings_routes(settings)
-        .get("chat")
-        .and_then(|route| route.get("model").or_else(|| route.get("modelName")))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| payload_string(settings, "model_name"))
-        .unwrap_or_default()
-}
-
-fn readiness_payload(
-    ready: bool,
-    mode: &str,
-    reason: &str,
-    source: Option<&Value>,
-    base_url: String,
-    model: String,
-    protocol: String,
-    official_logged_in_value: bool,
-    can_use_official: bool,
-) -> Value {
-    json!({
-        "ready": ready,
-        "mode": mode,
-        "reason": reason,
-        "sourceId": source.map(source_id).unwrap_or_default(),
-        "sourceName": source.map(source_name).unwrap_or_default(),
-        "baseURL": base_url,
-        "model": model,
-        "protocol": protocol,
-        "officialLoggedIn": official_logged_in_value,
-        "canUseOfficial": can_use_official,
-        "canUseCustom": ready && mode != "official",
-        "updatedAt": now_iso(),
-    })
-}
-
 pub(crate) fn resolve_llm_readiness_from_settings(settings: &Value) -> Value {
-    let sources = settings_sources(settings);
-    let selected_source_id = route_source_id(settings);
-    let selected_source = if !selected_source_id.is_empty() {
-        sources
-            .iter()
-            .find(|source| source_id(source) == selected_source_id)
-    } else {
-        None
-    }
-    .or_else(|| sources.iter().find(|source| !source_is_official(source)))
-    .or_else(|| sources.iter().find(|source| source_is_official(source)));
-
-    let official_logged_in_value = official_logged_in(settings);
-    let can_use_official = official_logged_in_value && official_plaintext_key(settings).is_some();
-
-    if let Some(source) = selected_source {
-        let base_url = source_base_url(source);
-        let model = route_model(settings);
-        let model = if model.is_empty() {
-            source_model(source)
-        } else {
-            model
-        };
-        let protocol = source_protocol(source);
-        if source_is_official(source) {
-            if !official_logged_in_value {
-                return readiness_payload(
-                    false,
-                    "official",
-                    "official_auth_required",
-                    Some(source),
-                    base_url,
-                    model,
-                    protocol,
-                    official_logged_in_value,
-                    can_use_official,
-                );
-            }
-            if !can_use_official {
-                return readiness_payload(
-                    false,
-                    "official",
-                    "missing_api_key",
-                    Some(source),
-                    base_url,
-                    model,
-                    protocol,
-                    official_logged_in_value,
-                    can_use_official,
-                );
-            }
-            if model.is_empty() {
-                return readiness_payload(
-                    false,
-                    "official",
-                    "missing_model",
-                    Some(source),
-                    base_url,
-                    model,
-                    protocol,
-                    official_logged_in_value,
-                    can_use_official,
-                );
-            }
-            return readiness_payload(
-                true,
-                "official",
-                "ready",
-                Some(source),
-                base_url,
-                model,
-                protocol,
-                official_logged_in_value,
-                can_use_official,
-            );
-        }
-
-        let api_key = source_api_key(source);
-        let is_local = is_local_base_url(&base_url);
-        let mode = if is_local { "local" } else { "custom" };
-        if base_url.is_empty() {
-            return readiness_payload(
-                false,
-                mode,
-                "missing_base_url",
-                Some(source),
-                base_url,
-                model,
-                protocol,
-                official_logged_in_value,
-                can_use_official,
-            );
-        }
-        if api_key.is_empty() && !is_local {
-            return readiness_payload(
-                false,
-                mode,
-                "missing_api_key",
-                Some(source),
-                base_url,
-                model,
-                protocol,
-                official_logged_in_value,
-                can_use_official,
-            );
-        }
-        if model.is_empty() {
-            return readiness_payload(
-                false,
-                mode,
-                "missing_model",
-                Some(source),
-                base_url,
-                model,
-                protocol,
-                official_logged_in_value,
-                can_use_official,
-            );
-        }
-        return readiness_payload(
-            true,
-            mode,
-            "ready",
-            Some(source),
-            base_url,
-            model,
-            protocol,
-            official_logged_in_value,
-            can_use_official,
-        );
-    }
-
-    let legacy_base_url = payload_string(settings, "api_endpoint").unwrap_or_default();
-    let legacy_api_key = payload_string(settings, "api_key").unwrap_or_default();
-    let legacy_model = payload_string(settings, "model_name").unwrap_or_default();
-    if !legacy_base_url.trim().is_empty()
-        && !legacy_model.trim().is_empty()
-        && (!legacy_api_key.trim().is_empty() || is_local_base_url(&legacy_base_url))
-    {
-        let legacy_protocol = infer_protocol(&legacy_base_url, None, None);
-        return readiness_payload(
-            true,
-            if is_local_base_url(&legacy_base_url) {
-                "local"
-            } else {
-                "custom"
-            },
-            "ready",
-            None,
-            legacy_base_url,
-            legacy_model,
-            legacy_protocol,
-            official_logged_in_value,
-            can_use_official,
-        );
-    }
-
-    readiness_payload(
-        false,
-        "none",
-        "missing_source",
-        None,
-        String::new(),
-        String::new(),
-        String::new(),
-        official_logged_in_value,
-        can_use_official,
-    )
+    crate::ai_model_manager::AiModelManager::readiness_value(settings)
 }
 
-fn pick_default_model(models: &[Value], preferred_model: &str) -> Result<String, String> {
-    let ids = models
-        .iter()
-        .filter_map(|item| {
-            item.get("id")
-                .or_else(|| item.get("name"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        })
-        .collect::<Vec<_>>();
-    if ids.is_empty() {
-        return Err("模型列表为空，请检查 Endpoint 与 API Key".to_string());
-    }
+fn fallback_default_model(protocol: &str, preferred_model: &str) -> String {
     let preferred_model = preferred_model.trim();
-    if !preferred_model.is_empty() && ids.iter().any(|id| id == preferred_model) {
-        return Ok(preferred_model.to_string());
+    if !preferred_model.is_empty() {
+        return preferred_model.to_string();
     }
-    for preferred in [
-        "gpt-4.1",
-        "gpt-4o",
-        "claude-3-5-sonnet-latest",
-        "gemini-1.5-pro",
-        "deepseek-chat",
-        "qwen-plus",
-    ] {
-        if let Some(found) = ids.iter().find(|id| id.as_str() == preferred) {
-            return Ok(found.clone());
-        }
+    match protocol {
+        "anthropic" => "claude-3-5-sonnet-latest",
+        "gemini" => "gemini-1.5-pro",
+        _ => "gpt-4o",
     }
-    Ok(ids[0].clone())
-}
-
-fn model_meta(models: &[Value]) -> Vec<Value> {
-    models
-        .iter()
-        .filter_map(|item| {
-            item.get("id")
-                .or_else(|| item.get("name"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|id| json!({ "id": id, "capabilities": ["chat"] }))
-        })
-        .collect()
-}
-
-fn model_ids(models: &[Value]) -> Vec<String> {
-    model_meta(models)
-        .into_iter()
-        .filter_map(|item| {
-            item.get("id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-        })
-        .collect()
+    .to_string()
 }
 
 fn route_config(source_id: &str, model: &str) -> Value {
@@ -409,7 +111,6 @@ fn merge_custom_source_settings(
     api_key: &str,
     protocol: &str,
     model: &str,
-    models: &[Value],
 ) -> Result<Value, String> {
     let mut sources = settings_sources(settings);
     let source = json!({
@@ -418,8 +119,8 @@ fn merge_custom_source_settings(
         "presetId": preset_id,
         "baseURL": base_url,
         "apiKey": api_key,
-        "models": model_ids(models),
-        "modelsMeta": model_meta(models),
+        "models": [model],
+        "modelsMeta": [{ "id": model, "capabilities": ["chat"] }],
         "model": model,
         "protocol": protocol,
     });
@@ -495,8 +196,7 @@ fn configure_custom_source(
         return Ok(json!({ "success": false, "error": "请先填写 API Key" }));
     }
     let protocol = infer_protocol(&base_url, Some(&preset_id), explicit_protocol.as_deref());
-    let models = fetch_models_by_protocol(&protocol, &base_url, Some(api_key.as_str()))?;
-    let model = pick_default_model(&models, &preferred_model)?;
+    let model = fallback_default_model(&protocol, &preferred_model);
     let source_id = format!("ai-source-{}", now_ms());
     let source_name = payload_string(payload, "name").unwrap_or_else(|| {
         if is_local_base_url(&base_url) {
@@ -516,7 +216,10 @@ fn configure_custom_source(
         api_key.trim(),
         &protocol,
         &model,
-        &models,
+    )?;
+    crate::ai_model_manager::AiModelManager::apply_settings_patch(
+        &state.store_path,
+        &mut settings,
     )?;
     with_store_mut(state, |store| {
         store.settings = settings.clone();
@@ -539,7 +242,7 @@ fn configure_custom_source(
             "model": model,
             "protocol": protocol,
         },
-        "models": model_meta(&models),
+        "models": [{ "id": model, "capabilities": ["chat"] }],
         "readiness": readiness,
         "savedSource": source,
     }))

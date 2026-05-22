@@ -36,43 +36,84 @@ pub(crate) fn is_redbox_official_endpoint(endpoint: &str) -> bool {
             .any(|suffix| normalized.contains(suffix))
 }
 
-pub(crate) fn resolve_image_generation_settings(
+pub(crate) fn resolve_image_generation_settings_with_override(
     settings: &Value,
+    request_override: Option<&Value>,
 ) -> Option<(String, Option<String>, String, String, String)> {
-    let endpoint = payload_string(settings, "image_endpoint")
+    let resolved = crate::ai_model_manager::AiModelManager::resolve(
+        settings,
+        crate::ai_model_manager::AiModelScope::Image,
+        request_override,
+    );
+    let endpoint = resolved
+        .as_ref()
+        .map(|route| route.base_url.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "image_endpoint"))
         .or_else(|| payload_string(settings, "api_endpoint"))?;
-    let api_key =
-        payload_string(settings, "image_api_key").or_else(|| payload_string(settings, "api_key"));
-    let model =
-        payload_string(settings, "image_model").or_else(|| Some("gpt-image-1".to_string()))?;
-    let provider = payload_string(settings, "image_provider")
+    let api_key = resolved
+        .as_ref()
+        .and_then(|route| route.api_key.clone())
+        .or_else(|| payload_string(settings, "image_api_key"))
+        .or_else(|| payload_string(settings, "api_key"));
+    let model = resolved
+        .as_ref()
+        .map(|route| route.model_name.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "image_model"))
+        .or_else(|| Some("gpt-image-1".to_string()))?;
+    let provider = resolved
+        .as_ref()
+        .and_then(|route| route.provider.clone())
+        .or_else(|| payload_string(settings, "image_provider"))
         .unwrap_or_else(|| "openai-compatible".to_string());
-    let template = payload_string(settings, "image_provider_template")
+    let template = resolved
+        .as_ref()
+        .and_then(|route| route.provider_template.clone())
+        .or_else(|| payload_string(settings, "image_provider_template"))
         .unwrap_or_else(|| "openai-images".to_string());
     Some((endpoint, api_key, model, provider, template))
 }
 
-pub(crate) fn resolve_video_generation_settings(
+pub(crate) fn resolve_video_generation_settings_with_override(
     settings: &Value,
+    request_override: Option<&Value>,
 ) -> Option<(String, Option<String>, String)> {
-    let endpoint = payload_string(settings, "video_endpoint").map(|endpoint| {
-        let normalized = normalize_base_url(&endpoint);
-        let normalized_lower = normalized.to_lowercase();
-        if normalized_lower.contains("api.ziz.hk")
-            && !is_redbox_official_endpoint(&normalized_lower)
-        {
-            crate::official_base_url_for_realm("cn")
-        } else if normalized_lower.contains("api.thrivingos.com")
-            && !is_redbox_official_endpoint(&normalized_lower)
-        {
-            crate::official_base_url_for_realm("global")
-        } else {
-            normalized
-        }
-    })?;
-    let api_key =
-        payload_string(settings, "video_api_key").or_else(|| payload_string(settings, "api_key"));
-    let model = payload_string(settings, "video_model")?;
+    let resolved = crate::ai_model_manager::AiModelManager::resolve(
+        settings,
+        crate::ai_model_manager::AiModelScope::Video,
+        request_override,
+    );
+    let endpoint = resolved
+        .as_ref()
+        .map(|route| route.base_url.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "video_endpoint"))
+        .map(|endpoint| {
+            let normalized = normalize_base_url(&endpoint);
+            let normalized_lower = normalized.to_lowercase();
+            if normalized_lower.contains("api.ziz.hk")
+                && !is_redbox_official_endpoint(&normalized_lower)
+            {
+                crate::official_base_url_for_realm("cn")
+            } else if normalized_lower.contains("api.thrivingos.com")
+                && !is_redbox_official_endpoint(&normalized_lower)
+            {
+                crate::official_base_url_for_realm("global")
+            } else {
+                normalized
+            }
+        })?;
+    let api_key = resolved
+        .as_ref()
+        .and_then(|route| route.api_key.clone())
+        .or_else(|| payload_string(settings, "video_api_key"))
+        .or_else(|| payload_string(settings, "api_key"));
+    let model = resolved
+        .as_ref()
+        .map(|route| route.model_name.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "video_model"))?;
     Some((endpoint, api_key, model))
 }
 
@@ -2344,11 +2385,27 @@ pub(crate) fn normalize_embedding_url(endpoint: &str) -> String {
 pub(crate) fn resolve_embedding_settings(
     settings: &Value,
 ) -> Option<(String, Option<String>, String)> {
-    let endpoint = payload_string(settings, "embedding_endpoint")
+    let resolved = crate::ai_model_manager::AiModelManager::resolve(
+        settings,
+        crate::ai_model_manager::AiModelScope::Embedding,
+        None,
+    );
+    let endpoint = resolved
+        .as_ref()
+        .map(|route| route.base_url.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "embedding_endpoint"))
         .or_else(|| payload_string(settings, "api_endpoint"))?;
-    let api_key =
-        payload_string(settings, "embedding_key").or_else(|| payload_string(settings, "api_key"));
-    let model = payload_string(settings, "embedding_model")
+    let api_key = resolved
+        .as_ref()
+        .and_then(|route| route.api_key.clone())
+        .or_else(|| payload_string(settings, "embedding_key"))
+        .or_else(|| payload_string(settings, "api_key"));
+    let model = resolved
+        .as_ref()
+        .map(|route| route.model_name.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "embedding_model"))
         .or_else(|| Some("text-embedding-3-small".to_string()))?;
     Some((endpoint, api_key, model))
 }
@@ -2653,7 +2710,8 @@ mod tests {
             "video_model": "seedance-2.0"
         });
         let (endpoint, _api_key, model) =
-            resolve_video_generation_settings(&settings).expect("video settings");
+            resolve_video_generation_settings_with_override(&settings, None)
+                .expect("video settings");
 
         assert_eq!(endpoint, "https://api.ziz.hk/thrive/v1");
         assert_eq!(model, "seedance-2.0");

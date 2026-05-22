@@ -698,14 +698,6 @@ impl<'a> AppCliExecutor<'a> {
                 self.handle_memory(&tokens, payload)
             }
             "webfetch" => self.handle_web(&["fetch".to_string()], payload),
-            "modelconfigread" => {
-                let tokens = vec!["read".to_string()];
-                self.handle_model_config(&tokens, payload)
-            }
-            "modelconfigeffective" => {
-                let tokens = vec!["effective".to_string()];
-                self.handle_model_config(&tokens, payload)
-            }
             "sessionresourceslist" => self.handle_session_resources_list(payload),
             "sessionresourcesget" => self.handle_session_resources_get(payload),
             "videoanalyze" => self.handle_video_analyze(payload),
@@ -1186,7 +1178,6 @@ impl<'a> AppCliExecutor<'a> {
                 }
             }
             "cli-runtime" | "cli_runtime" => self.handle_cli_runtime(args, payload),
-            "model-config" | "model_config" => self.handle_model_config(args, payload),
             "settings" => self.handle_settings(args, payload),
             "skills" => self.handle_skills(args, payload),
             "session-resources" | "session_resources" => {
@@ -2021,10 +2012,24 @@ impl<'a> AppCliExecutor<'a> {
 
     fn video_analysis_model_config(&self) -> Result<Value, String> {
         let settings = with_store(self.state, |store| Ok(store.settings.clone()))?;
-        let base_url = payload_string(&settings, "video_analysis_endpoint")
+        let resolved = crate::ai_model_manager::AiModelManager::resolve(
+            &settings,
+            crate::ai_model_manager::AiModelScope::VideoAnalysis,
+            None,
+        );
+        let base_url = resolved
+            .as_ref()
+            .map(|route| route.base_url.clone())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| payload_string(&settings, "video_analysis_endpoint"))
             .or_else(|| payload_string(&settings, "api_endpoint"))
             .unwrap_or_default();
-        let model_name = payload_string(&settings, "video_analysis_model").unwrap_or_default();
+        let model_name = resolved
+            .as_ref()
+            .map(|route| route.model_name.clone())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| payload_string(&settings, "video_analysis_model"))
+            .unwrap_or_default();
         if base_url.trim().is_empty() || model_name.trim().is_empty() {
             return Err(app_cli_error_json(
                 Some("video.analyze"),
@@ -2037,9 +2042,16 @@ impl<'a> AppCliExecutor<'a> {
                 })),
             ));
         }
-        let api_key = payload_string(&settings, "video_analysis_api_key")
+        let api_key = resolved
+            .as_ref()
+            .and_then(|route| route.api_key.clone())
+            .or_else(|| payload_string(&settings, "video_analysis_api_key"))
             .or_else(|| payload_string(&settings, "api_key"));
-        let protocol = payload_string(&settings, "video_analysis_protocol")
+        let protocol = resolved
+            .as_ref()
+            .map(|route| route.protocol.clone())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| payload_string(&settings, "video_analysis_protocol"))
             .unwrap_or_else(|| infer_protocol(&base_url, None, None));
         Ok(json!({
             "protocol": protocol,
@@ -3145,29 +3157,6 @@ impl<'a> AppCliExecutor<'a> {
         }
     }
 
-    fn handle_model_config(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
-        let Some(action) = tokens.first().map(String::as_str) else {
-            return Ok(help_response(Some("model-config")));
-        };
-        let args = parse_cli_args(&tokens[1..])?;
-        match action {
-            "read" => self.call_channel("model-config:read", json!({})),
-            "effective" => {
-                let runtime_mode = args
-                    .string(&["runtime-mode", "runtimeMode", "mode"])
-                    .or_else(|| payload_string(payload, "runtimeMode"))
-                    .or_else(|| payload_string(payload, "runtime_mode"));
-                self.call_channel(
-                    "model-config:effective",
-                    json!({
-                        "runtimeMode": runtime_mode.unwrap_or_else(|| self.runtime_mode.to_string()),
-                    }),
-                )
-            }
-            _ => Err(format!("unsupported model_config action: {action}")),
-        }
-    }
-
     fn handle_skills(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
         let Some(action) = tokens.first().map(String::as_str) else {
             return Ok(help_response(Some("skills")));
@@ -3408,24 +3397,6 @@ impl<'a> AppCliExecutor<'a> {
             ),
             "test-connection" => self.call_channel(
                 "ai:test-connection",
-                json!({
-                    "baseURL": args
-                        .string(&["base-url", "baseURL"])
-                        .or_else(|| payload_string(payload, "baseURL"))
-                        .unwrap_or_default(),
-                    "apiKey": args
-                        .string(&["api-key", "apiKey"])
-                        .or_else(|| payload_string(payload, "apiKey")),
-                    "presetId": args
-                        .string(&["preset-id", "presetId"])
-                        .or_else(|| payload_string(payload, "presetId")),
-                    "protocol": args
-                        .string(&["protocol"])
-                        .or_else(|| payload_string(payload, "protocol")),
-                }),
-            ),
-            "fetch-models" => self.call_channel(
-                "ai:fetch-models",
                 json!({
                     "baseURL": args
                         .string(&["base-url", "baseURL"])
@@ -6156,11 +6127,10 @@ fn help_response(namespace: Option<&str>) -> Value {
             "memory list|search|recall|add|update|archive|delete|rebuild-index|diagnostics",
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
             "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
-            "model-config read|effective",
             "settings summary|get|set",
             "skills list|invoke|create|save|enable|disable|market-install",
             "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
-            "ai roles-list|detect-protocol|test-connection|fetch-models",
+            "ai roles-list|detect-protocol|test-connection",
         ],
         "advisors" => vec![
             "advisors list",
@@ -6171,10 +6141,6 @@ fn help_response(namespace: Option<&str>) -> Value {
             "advisors delete --id <advisorId>",
         ],
         "chat" => vec!["chat sessions list", "chat sessions get --id <sessionId>"],
-        "model-config" | "model_config" => vec![
-            "model-config read",
-            "model-config effective [--runtime-mode chat|wander|team|knowledge|redclaw|image|videoAnalysis]",
-        ],
         "spaces" => vec![
             "spaces list",
             "spaces get --id <spaceId>",
@@ -6332,7 +6298,6 @@ fn help_response(namespace: Option<&str>) -> Value {
             "ai roles-list",
             "ai detect-protocol --base-url <url>",
             "ai test-connection --base-url <url> [--api-key <key>]",
-            "ai fetch-models --base-url <url> [--api-key <key>]",
         ],
         _ => vec!["help"],
     };

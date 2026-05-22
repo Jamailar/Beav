@@ -1634,7 +1634,6 @@ declare global {
         readData: (payload: { pluginId: string; source: string; limit?: number; kind?: string; query?: string }) => Promise<{ success: boolean; pluginId?: string; source?: string; data?: Record<string, unknown>; error?: string }>;
         home: () => Promise<ThrivePluginHomeResponse>;
       };
-      fetchModels: (config: { apiKey: string, baseURL: string, presetId?: string, protocol?: 'openai' | 'anthropic' | 'gemini', purpose?: 'chat' | 'image' }) => Promise<Array<{ id: string; capabilities?: Array<'chat' | 'image' | 'video' | 'audio' | 'transcription' | 'embedding'> }>>;
       aiRoles: {
         list: () => Promise<RoleSpec[]>;
       };

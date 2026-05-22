@@ -39,7 +39,6 @@
 | `ai:cancel` | 1 |
 | `ai:confirm-tool` | 1 |
 | `ai:detect-protocol` | 1 |
-| `ai:fetch-models` | 1 |
 | `ai:roles:list` | 1 |
 | `ai:start-chat` | 1 |
 | `ai:test-connection` | 1 |
@@ -695,7 +694,6 @@
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/official.rs:redbox-auth:login-wechat-code` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/official.rs:redbox-auth:logout` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/official.rs:redbox-auth:me` | 1 |
-| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/official.rs:redbox-auth:models` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/official.rs:redbox-auth:open-payment-form` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/official.rs:redbox-auth:order-status` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/official.rs:redbox-auth:points` | 1 |
@@ -753,7 +751,6 @@
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/runtime_tasks.rs:tasks:resume` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/runtime_tasks.rs:tasks:trace` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:ai:detect-protocol` | 1 |
-| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:ai:fetch-models` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:ai:roles:list` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:ai:test-connection` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:skills:create` | 1 |

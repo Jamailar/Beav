@@ -3,8 +3,7 @@
 官方平台与多提供商模型支持模块。
 
 - 官方登录态、鉴权、会话状态辅助。
-- OpenAI-compatible / Anthropic / Gemini 模型列表拉取。
-- 多协议统一聊天请求调用。
+- 多协议统一聊天请求调用；通用远端模型枚举已移除，模型配置统一交给 `ai_model_manager`。
 - 登录态生命周期由 `commands/official.rs` 负责：
   - app setup 时执行 bootstrap
   - 前台唤醒与后台守护都会复用同一条会话恢复链路
