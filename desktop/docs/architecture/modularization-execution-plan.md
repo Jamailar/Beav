@@ -1646,6 +1646,7 @@ Verification:
 
 - `pnpm exec tsc --noEmit`
 - `pnpm build`
+- `pnpm build`
 
 Remaining in this slice:
 
@@ -1671,3 +1672,78 @@ Verification:
 Remaining in this slice:
 
 - Add focused tests for persisted feed normalization and media job projection before moving host-side media runtime code.
+
+### 2026-05-22 Media Generation Submit Contract Slice Started
+
+Completed:
+
+- Added `src/features/media-generation/index.ts` as the public renderer module entry.
+- Added `src/features/media-generation/agentContext.ts` for Agent-mode runtime context and sanitized request projection.
+- Added `src/features/media-generation/digitalHuman.ts` for digital-human final audio result parsing.
+- Added `src/features/media-generation/submitter.ts` for renderer-side submit orchestration and digital-human staged submit flow.
+- Added `src/features/media-generation/validation.ts` for stable request validation and user-facing error messages.
+- Added `src/features/media-generation/submitPayload.ts` for typed IPC submit payload builders across image, video, audio, cover, and digital human generation.
+- Moved submit payload construction out of `src/pages/GenerationStudio.tsx` while keeping async invocation, UI state updates, and error placement in the page.
+- Kept queued job replay on the existing persisted `jobRequest` payload to preserve current retry behavior.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+
+Remaining in this slice:
+
+- Add focused tests once a renderer test runner exists.
+- Move queued job replay after persisted job request compatibility is covered by tests.
+- Defer Rust host queue reshaping until unrelated Rust worktree changes are clear or scoped to the same module.
+
+### 2026-05-22 Media Generation Host Command Slice Started
+
+Completed:
+
+- Added `src-tauri/src/media_runtime/config.rs` for queue limits, timeouts, event names, and dispatch timing constants.
+- Added `src-tauri/src/media_runtime/types.rs` for runtime slots, job records, attempts, artifacts, loaded jobs, poll states, and the runtime handle.
+- Split VideoRetalk reference-video preparation out of `src-tauri/src/commands/media_jobs.rs`.
+- Added `src-tauri/src/commands/media_jobs/video_retalk.rs` for local path resolution, ffprobe dimension probing, target-size calculation, and ffmpeg normalization.
+- Kept `media_jobs.rs` as the IPC channel router plus official temp-upload command path.
+- Left `media_runtime/mod.rs` as the orchestration hub for queue persistence, leasing, retries, polling, artifacts, and worker dispatch; deeper extraction needs behavior-focused slices.
+
+Verification:
+
+- `cargo check`
+
+### 2026-05-22 Media Queue CRUD Completion Slice Started
+
+Completed:
+
+- Added soft archive fields to the unified `media_jobs.sqlite` queue (`archived_at`, `archive_reason`) with startup migration for existing workspaces.
+- Added `generation:delete-job` as the unified delete/archive IPC path for every media job kind.
+- Kept queue deletion as soft archive instead of physical delete so active provider callbacks and worker diagnostics remain recoverable.
+- Updated media job list and summary APIs to exclude archived jobs by default, with `includeArchived` for diagnostics.
+- Updated media runtime pressure and dispatch selection to ignore archived jobs.
+- Exposed `deleteJob` through the generation bridge and renderer type declarations.
+- Made renderer media job kinds extensible beyond the current image/video/audio/voice-clone set.
+- Added renderer store removal helpers so archived jobs leave the in-memory queue immediately.
+- Wired Generation Studio feed deletion and clear-all to archive the corresponding unified media queue jobs.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `pnpm build`
+- `cargo check`
+- `git diff --check`
+
+### 2026-05-22 Video Sequence Queue Slice Started
+
+Completed:
+
+- Added `video_sequence` as a unified media queue kind for long video generation.
+- Kept `generation:submit-video` as the public entry; requests with `durationSeconds > 15` or multiple `videoSegments` are routed into `video_sequence`.
+- Added per-segment generation, polling, download, progress updates, and `video_segment` artifacts inside the media runtime.
+- Added ffmpeg concat merge for generated video segments and registers one final `media` artifact for the user.
+- Reused the existing media runtime queue, retry, archive, artifact, event, provider routing, and media library registration surfaces.
+- Updated tool schema so Agent callers can request long videos or pass explicit `videoSegments`.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `cargo check`

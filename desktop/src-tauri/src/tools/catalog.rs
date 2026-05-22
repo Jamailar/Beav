@@ -2294,7 +2294,12 @@ fn image_generate_input_schema() -> Value {
             ),
             ("title", string_schema("Optional media asset title.")),
             ("projectId", string_schema("Optional media project id.")),
-            ("model", string_schema("Optional model override.")),
+            (
+                "model",
+                string_schema(
+                    "Optional model override. Omit this to use the user's Settings default for this media type.",
+                ),
+            ),
             (
                 "planConfirmed",
                 bool_schema("Whether the user has confirmed the multi-image plan."),
@@ -2357,7 +2362,12 @@ fn image_generate_input_schema() -> Value {
 fn video_generate_input_schema() -> Value {
     object_schema(
         &[
-            ("prompt", string_schema("Video generation prompt.")),
+            (
+                "prompt",
+                string_schema(
+                    "Video generation prompt. For long videos, describe the full final video; the runtime can split it into <=15 second upstream segments and concatenate the final result.",
+                ),
+            ),
             (
                 "referenceImages",
                 json!({
@@ -2370,10 +2380,19 @@ fn video_generate_input_schema() -> Value {
             (
                 "durationSeconds",
                 integer_schema(
-                    "Requested video duration in seconds. Use 5-12 seconds for official video generation unless the user specifies otherwise.",
+                    "Requested final video duration in seconds. A single upstream video segment is limited to 15 seconds. If this value is greater than 15, the media runtime automatically creates a video_sequence job, splits the request into <=15 second segments, generates each segment, concatenates them, and returns one final video.",
                     5,
-                    12,
+                    3600,
                 ),
+            ),
+            (
+                "videoSegments",
+                json!({
+                    "type": "array",
+                    "description": "Optional explicit long-video segments. Use this when you need scene-by-scene control for a final video longer than 15 seconds. Each segment should be <=15 seconds and can include prompt, durationSeconds, referenceImages, generationMode, drivingAudio, or firstClip. The runtime generates each segment and returns one concatenated final video.",
+                    "items": { "type": "object", "additionalProperties": true },
+                    "minItems": 2,
+                }),
             ),
             (
                 "aspectRatio",
@@ -4366,7 +4385,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "video.generate",
         namespace: "video",
-        description: "Generate videos with the configured provider.",
+        description: "Generate videos with the configured provider. Upstream video generation is capped at 15 seconds per segment; for longer final videos, pass durationSeconds > 15 or explicit videoSegments and the media runtime will create a video_sequence job, generate <=15 second segments, concatenate them, and return one final video asset.",
         input_schema: video_generate_input_schema,
         output_schema: media_output_schema,
         mutating: true,

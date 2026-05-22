@@ -1201,7 +1201,6 @@ pub(crate) fn official_sync_source_into_settings(
         }
         object.insert("video_endpoint".to_string(), json!(official_base_url));
         object.insert("video_api_key".to_string(), json!(official_video_api_key));
-        object.insert("video_model".to_string(), json!("seedance-2.0"));
         object.insert(
             "redbox_official_models_json".to_string(),
             json!(serde_json::to_string(models).unwrap_or_else(|_| "[]".to_string())),
@@ -1229,6 +1228,56 @@ pub(crate) fn fetch_official_default_model_slots_for_settings(
 ) -> Result<Vec<Value>, String> {
     run_official_json_request(settings, "GET", "/ai/default-models", None)
         .map(|remote| official_response_items(&remote))
+}
+
+fn parse_routes_setting(settings: &Value) -> serde_json::Map<String, Value> {
+    payload_string(settings, "ai_model_routes_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn route_has_model(routes: &serde_json::Map<String, Value>, scope: &str) -> bool {
+    routes
+        .get(scope)
+        .and_then(|route| route.get("model").or_else(|| route.get("modelName")))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+}
+
+fn scope_has_configured_model(
+    settings: &Value,
+    routes: &serde_json::Map<String, Value>,
+    scope: &str,
+) -> bool {
+    route_has_model(routes, scope)
+        || default_slot_setting_key(scope)
+            .and_then(|key| payload_string(settings, key))
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+}
+
+pub(crate) fn has_missing_official_default_models(settings: &Value) -> bool {
+    let routes = parse_routes_setting(settings);
+    [
+        "chat",
+        "wander",
+        "team",
+        "knowledge",
+        "redclaw",
+        "transcription",
+        "embedding",
+        "image",
+        "video",
+        "visualIndex",
+        "videoAnalysis",
+        "voiceTts",
+        "voiceClone",
+    ]
+    .iter()
+    .any(|scope| !scope_has_configured_model(settings, &routes, scope))
 }
 
 fn value_text<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -1370,6 +1419,84 @@ pub(crate) fn seed_official_default_models_into_settings(
                 }
             }
         }
+        object.insert(
+            "ai_model_routes_json".to_string(),
+            json!(
+                serde_json::to_string(&Value::Object(routes)).unwrap_or_else(|_| "{}".to_string())
+            ),
+        );
+    }
+    crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
+    true
+}
+
+pub(crate) fn repair_missing_official_default_models_into_settings(
+    settings: &mut Value,
+    default_slots: &[Value],
+    catalog_models: &[Value],
+) -> bool {
+    let mut routes = parse_routes_setting(settings);
+    let mut default_models = Vec::<Value>::new();
+    let mut repaired = false;
+
+    for slot in default_slots {
+        let Some(slot_key) = default_slot_key(slot) else {
+            continue;
+        };
+        let Some(model) = default_slot_model(slot) else {
+            continue;
+        };
+        let Some(model_id) = value_text(&model, &["id"]).map(ToString::to_string) else {
+            continue;
+        };
+        let mut used_model = false;
+        for scope in default_slot_route_scopes(&slot_key) {
+            if scope_has_configured_model(settings, &routes, scope) {
+                continue;
+            }
+            routes.insert(
+                (*scope).to_string(),
+                json!({
+                    "mode": "official",
+                    "sourceId": "redbox_official_auto",
+                    "model": model_id,
+                }),
+            );
+            if let Some(setting_key) = default_slot_setting_key(scope) {
+                if let Some(object) = settings.as_object_mut() {
+                    object.insert(setting_key.to_string(), json!(model_id));
+                }
+            }
+            repaired = true;
+            used_model = true;
+        }
+        if used_model {
+            default_models.push(model);
+        }
+    }
+
+    if !repaired {
+        return false;
+    }
+
+    let mut models_for_source = Vec::<Value>::new();
+    models_for_source.extend(catalog_models.iter().cloned());
+    models_for_source.extend(default_models);
+    official_sync_source_into_settings(settings, &models_for_source, false);
+
+    let default_source_missing = payload_string(settings, "default_ai_source_id")
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(true);
+    if let Some(object) = settings.as_object_mut() {
+        if default_source_missing {
+            object.insert(
+                "default_ai_source_id".to_string(),
+                json!("redbox_official_auto"),
+            );
+        }
+        object
+            .entry(AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY.to_string())
+            .or_insert_with(|| json!(now_ms().to_string()));
         object.insert(
             "ai_model_routes_json".to_string(),
             json!(
@@ -1748,6 +1875,87 @@ mod tests {
             payload_string(&settings, "video_model").as_deref(),
             Some("user-video")
         );
+    }
+
+    #[test]
+    fn repair_missing_official_default_models_only_fills_empty_scopes() {
+        let user_routes = json!({
+            "chat": { "mode": "custom", "sourceId": "custom-source", "model": "user-chat" },
+            "image": { "mode": "custom", "sourceId": "custom-source", "model": "user-image" }
+        });
+        let mut settings = json!({
+            "default_ai_source_id": "custom-source",
+            "api_endpoint": "https://custom.example/v1",
+            "api_key": "custom-key",
+            "model_name": "user-chat",
+            "image_model": "user-image",
+            "ai_model_routes_json": serde_json::to_string(&user_routes).unwrap(),
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "custom-source",
+                "name": "Custom",
+                "presetId": "custom",
+                "baseURL": "https://custom.example/v1",
+                "apiKey": "custom-key",
+                "model": "user-chat",
+                "protocol": "openai"
+            })]).unwrap(),
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
+        });
+        let default_slots = vec![
+            json!({
+                "slot_key": "reasoning",
+                "effective_model": { "model_key": "qwen3.5-plus", "capability": "chat", "is_active": true }
+            }),
+            json!({
+                "slot_key": "image_generation",
+                "effective_model": { "model_key": "gpt-image-2", "capability": "image", "is_active": true }
+            }),
+            json!({
+                "slot_key": "video_text_to_video",
+                "effective_model": { "model_key": "seedance-3.0", "capability": "video", "is_active": true }
+            }),
+            json!({
+                "slot_key": "embedding",
+                "effective_model": { "model_key": "embedding-3", "capability": "embedding", "is_active": true }
+            }),
+        ];
+
+        assert!(repair_missing_official_default_models_into_settings(
+            &mut settings,
+            &default_slots,
+            &official_models_fixture()
+        ));
+
+        let routes = payload_string(&settings, "ai_model_routes_json")
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .unwrap_or_else(|| json!({}));
+        assert_eq!(routes["chat"]["model"], json!("user-chat"));
+        assert_eq!(routes["image"]["model"], json!("user-image"));
+        assert_eq!(routes["video"]["model"], json!("seedance-3.0"));
+        assert_eq!(routes["embedding"]["model"], json!("embedding-3"));
+        assert_eq!(
+            payload_string(&settings, "default_ai_source_id").as_deref(),
+            Some("custom-source")
+        );
+        assert_eq!(
+            payload_string(&settings, "video_model").as_deref(),
+            Some("seedance-3.0")
+        );
+        assert_eq!(
+            payload_string(&settings, "embedding_model").as_deref(),
+            Some("embedding-3")
+        );
+    }
+
+    #[test]
+    fn official_model_catalog_sync_does_not_invent_video_model() {
+        let mut settings = json!({
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
+        });
+
+        official_sync_source_into_settings(&mut settings, &official_models_fixture(), false);
+
+        assert_eq!(payload_string(&settings, "video_model"), None);
     }
 }
 

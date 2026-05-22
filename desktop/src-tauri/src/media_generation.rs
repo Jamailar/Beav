@@ -60,8 +60,7 @@ pub(crate) fn resolve_image_generation_settings_with_override(
         .as_ref()
         .map(|route| route.model_name.clone())
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| payload_string(settings, "image_model"))
-        .or_else(|| Some("gpt-image-1".to_string()))?;
+        .or_else(|| payload_string(settings, "image_model"))?;
     let provider = resolved
         .as_ref()
         .and_then(|route| route.provider.clone())
@@ -412,7 +411,7 @@ fn normalize_video_resolution(value: &str) -> &'static str {
 
 fn normalize_video_duration(value: Option<i64>) -> i64 {
     let parsed = value.unwrap_or(8);
-    parsed.clamp(5, 12)
+    parsed.clamp(1, 15)
 }
 
 fn payload_video_duration_seconds(payload: &Value) -> i64 {
@@ -2405,8 +2404,7 @@ pub(crate) fn resolve_embedding_settings(
         .as_ref()
         .map(|route| route.model_name.clone())
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| payload_string(settings, "embedding_model"))
-        .or_else(|| Some("text-embedding-3-small".to_string()))?;
+        .or_else(|| payload_string(settings, "embedding_model"))?;
     Some((endpoint, api_key, model))
 }
 
@@ -2716,6 +2714,24 @@ mod tests {
         assert_eq!(endpoint, "https://api.ziz.hk/thrive/v1");
         assert_eq!(model, "seedance-2.0");
         assert!(is_redbox_official_endpoint(&endpoint));
+    }
+
+    #[test]
+    fn specialized_media_settings_do_not_use_provider_chat_model() {
+        let settings = json!({
+            "api_endpoint": "https://custom.example/v1",
+            "default_ai_source_id": "custom-source",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "custom-source",
+                "baseURL": "https://custom.example/v1",
+                "model": "chat-model"
+            })]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({})).unwrap()
+        });
+
+        assert!(resolve_image_generation_settings_with_override(&settings, None).is_none());
+        assert!(resolve_video_generation_settings_with_override(&settings, None).is_none());
+        assert!(resolve_embedding_settings(&settings).is_none());
     }
 
     #[test]

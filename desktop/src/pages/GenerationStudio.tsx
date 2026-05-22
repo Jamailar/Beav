@@ -29,7 +29,7 @@ import { APP_BRAND } from '../config/brand';
 import type { GenerationIntent, PendingChatMessage } from '../App';
 import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
-import { shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { mediaJobsStore, shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { normalizeMediaJobProjection, type MediaJobProjection } from '../features/media-jobs/types';
 import {
     buildRecentGenerationAssetSummaries,
@@ -46,7 +46,6 @@ import {
     isFeedEntryDeleted,
     isGenerationFeedEntry,
     isGenerationStudioMediaJob,
-    latestAssetOfKind,
     mergeMediaJobsIntoFeedEntries,
     normalizeAspectRatio,
     normalizeDeletedFeedState,
@@ -71,7 +70,6 @@ import {
     type DigitalHumanGenerationRequest,
     type FeedEntry,
     type GeneratedAsset,
-    type GenerationAgentAssetSummary,
     type GenerationFeedEntry,
     type GenerationFeedSource,
     type GenerationRequest,
@@ -81,7 +79,23 @@ import {
     type StudioMode,
     type VideoGenerationMode,
     type VideoGenerationRequest,
-} from '../features/media-generation/feedModel';
+    buildGenerationAgentRuntimeContext,
+    generationAgentRoleForMode,
+    generationSubmitSource,
+    submitAudioGeneration,
+    submitCoverGeneration,
+    submitDigitalHumanGeneration,
+    submitImageGeneration,
+    submitVideoGeneration,
+    validateAudioGenerationRequest,
+    validateCoverGenerationRequest,
+    validateDigitalHumanGenerationRequest,
+    validateImageGenerationRequest,
+    validateVideoGenerationRequest,
+    type GenerationAgentPreferredRole,
+    type GenerationAgentVoice,
+    type ModelRouteOverride,
+} from '../features/media-generation';
 import { Chat, clearFixedSessionWarmSnapshot } from './Chat';
 import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources } from './settings/shared';
 import { resolveAssetUrl } from '../utils/pathManager';
@@ -117,7 +131,7 @@ type SettingsShape = {
 type GenerationAgentSessionMetadata = {
     contextType: typeof GENERATION_AGENT_CONTEXT_TYPE;
     intent: 'image_creation';
-    preferredRole: 'image-director' | 'video-director' | 'audio-director';
+    preferredRole: GenerationAgentPreferredRole;
     generationTarget: StudioMode;
     executionMode: 'auto';
     requiresHumanApproval: false;
@@ -355,24 +369,6 @@ function digitalHumanReadiness(subject: SubjectRecord | null): { ok: boolean; vo
     return { ok: issues.length === 0, voiceId, videoPath, issue: issues.join('，') };
 }
 
-function extractFinalAudio(value: Record<string, unknown>): Record<string, unknown> {
-    return valueRecord(value.finalAudio);
-}
-
-function extractFinalAudioResult(value: unknown): { path: string; mimeType: string } | null {
-    const record = valueRecord(value);
-    const data = valueRecord(record.data);
-    const finalAudio = extractFinalAudio(data);
-    const fallbackFinalAudio = Object.keys(finalAudio).length > 0 ? finalAudio : extractFinalAudio(record);
-    const asset = valueRecord(fallbackFinalAudio.asset);
-    const path = firstString(fallbackFinalAudio.path, asset.absolutePath, fallbackFinalAudio.previewUrl);
-    if (!path) return null;
-    return {
-        path,
-        mimeType: firstString(fallbackFinalAudio.mimeType, asset.mimeType) || 'audio/mpeg',
-    };
-}
-
 function dataUrlMimeType(dataUrl: string): string {
     const match = String(dataUrl || '').match(/^data:([^;,]+)[;,]/i);
     return String(match?.[1] || '').trim().toLowerCase();
@@ -560,12 +556,6 @@ function buildGenerationAgentInitialContext(projectId: string, sourceTitle?: str
     ].filter(Boolean).join('\n');
 }
 
-function generationAgentRoleForMode(mode: StudioMode): GenerationAgentSessionMetadata['preferredRole'] {
-    if (mode === 'video') return 'video-director';
-    if (mode === 'audio') return 'audio-director';
-    return 'image-director';
-}
-
 function buildGenerationAgentSessionMetadata(
     mode: StudioMode,
     projectId: string,
@@ -732,94 +722,6 @@ function shortVoiceId(value: string): string {
     return `${value.slice(0, 10)}...${value.slice(-4)}`;
 }
 
-function summarizeReferenceItems(items: ReferenceItem[]): Array<{ name: string; kind: 'image' | 'video' | 'audio' | 'file' }> {
-    return items.map((item) => {
-        const mimeType = dataUrlMimeType(item.dataUrl);
-        const kind = mimeType.startsWith('image/')
-            ? 'image'
-            : mimeType.startsWith('video/')
-                ? 'video'
-                : mimeType.startsWith('audio/')
-                    ? 'audio'
-                    : 'file';
-        return { name: item.name, kind };
-    });
-}
-
-function sanitizeGenerationRequestForAgent(request: GenerationRequest): Record<string, unknown> {
-    if (request.type === 'cover') {
-        return {
-            ...request,
-            templateImage: request.templateImage ? summarizeReferenceItems([request.templateImage])[0] : null,
-            baseImage: request.baseImage ? summarizeReferenceItems([request.baseImage])[0] : null,
-        };
-    }
-    if (request.type === 'video') {
-        return {
-            ...request,
-            referenceItems: summarizeReferenceItems(request.referenceItems),
-            firstClip: request.firstClip ? summarizeReferenceItems([request.firstClip])[0] : null,
-            drivingAudio: request.drivingAudio ? summarizeReferenceItems([request.drivingAudio])[0] : null,
-        };
-    }
-    if (request.type === 'image') {
-        return {
-            ...request,
-            aspectRatio: 'agent-decides',
-            size: 'agent-decides',
-            referenceItems: summarizeReferenceItems(request.referenceItems),
-        };
-    }
-    return { ...request };
-}
-
-function buildGenerationAgentRuntimeContext(params: {
-    mode: StudioMode;
-    request: GenerationRequest;
-    source?: GenerationFeedSource;
-    sourceTitle?: string;
-    recentAssets: GenerationAgentAssetSummary[];
-    attachmentNote?: string;
-    audioVoices?: VoiceListItem[];
-    audioLanguageBoost?: string;
-}): string {
-    const latest = {
-        image: latestAssetOfKind(params.recentAssets, 'image') || null,
-        cover: latestAssetOfKind(params.recentAssets, 'cover') || null,
-        video: latestAssetOfKind(params.recentAssets, 'video') || null,
-        audio: latestAssetOfKind(params.recentAssets, 'audio') || null,
-    };
-    return [
-        '[GenerationAgentContext]',
-        JSON.stringify({
-            executionMode: 'auto',
-            noSecondConfirmation: true,
-            currentMode: params.mode,
-            preferredRole: generationAgentRoleForMode(params.mode),
-            source: params.source || 'standalone',
-            sourceTitle: params.sourceTitle || '',
-            currentRequest: sanitizeGenerationRequestForAgent(params.request),
-            availableVoicesForAgent: params.mode === 'audio'
-                ? summarizeAudioVoicesForAgent(
-                    params.audioVoices || [],
-                    params.audioLanguageBoost || '',
-                    params.request.type === 'audio' ? params.request.voiceId : '',
-                )
-                : undefined,
-            audioVoicePolicy: params.mode === 'audio'
-                ? 'Use currentRequest.model and currentRequest.voiceId unless the task or available voices require a deliberate change. Voices are model-bound; each availableVoicesForAgent item includes targetTtsModel when known.'
-                : undefined,
-            recentAssets: params.recentAssets,
-            latestAssets: latest,
-            fuzzyReferencePolicy: 'When the user says 上一张图/刚才那张/之前的图片, use latestAssets.image by default; for video/audio use the matching latest asset.',
-            imageSizingPolicy: 'In Agent mode, image aspectRatio and size are selected by the agent from the user goal. Ignore composer defaults unless the user explicitly asks for a ratio or pixel size.',
-            attachmentNote: params.attachmentNote || '',
-            executionExpectation: 'Use the current mode, request fields, available tools, and skill catalog to decide the next executable steps. Complete the requested generation without asking for a second confirmation unless a required field is genuinely missing.',
-        }, null, 2),
-        '[/GenerationAgentContext]',
-    ].join('\n');
-}
-
 function placeholderCountForRequest(request: GenerationRequest): number {
     return request.type === 'image' || request.type === 'cover' ? Math.max(1, request.count) : 1;
 }
@@ -865,15 +767,7 @@ type PickerOption = {
     tone?: 'danger';
 };
 
-type ModelRouteOverride = {
-    sourceId?: string;
-    baseURL?: string;
-    apiKey?: string;
-    presetId?: string;
-    protocol?: string;
-};
-
-type VoiceListItem = {
+type VoiceListItem = GenerationAgentVoice & {
     id: string;
     name: string;
     language: string;
@@ -888,6 +782,7 @@ type VoiceListItem = {
     targetTtsModel: string;
     cloneModel: string;
     provider: string;
+    supportedModels: string[];
 };
 
 const DEFAULT_AUDIO_TTS_MODEL = 'cosyvoice-v3.5-plus';
@@ -896,22 +791,32 @@ function normalizedModelKey(value: string): string {
     return value.trim().toLowerCase();
 }
 
-function isCosyVoiceModel(model: string): boolean {
-    return normalizedModelKey(model).includes('cosyvoice');
-}
-
 function isMinimaxTtsModel(model: string): boolean {
     const key = normalizedModelKey(model);
     return key.includes('minimax') || key.startsWith('speech-') || key.startsWith('speech_');
 }
 
+function modelKeysMatch(left: string, right: string): boolean {
+    return normalizedModelKey(left) === normalizedModelKey(right);
+}
+
+function stringArrayValue(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean);
+}
+
 function voiceMatchesAudioModel(voice: VoiceListItem, model: string): boolean {
-    const selected = normalizedModelKey(model);
-    if (!selected) return true;
+    const selected = model.trim();
+    if (!selected) return false;
     if (voice.systemVoice) return isMinimaxTtsModel(model);
-    const target = normalizedModelKey(voice.targetTtsModel);
-    if (target) return target === selected;
-    return !isCosyVoiceModel(model);
+    const target = voice.targetTtsModel.trim();
+    if (target) return modelKeysMatch(target, selected);
+    if (voice.supportedModels.length > 0) {
+        return voice.supportedModels.some((candidate) => modelKeysMatch(candidate, selected));
+    }
+    return false;
 }
 
 function getAiSourceTypeLabel(source: AiSourceConfig): string {
@@ -1113,9 +1018,15 @@ function normalizeVoiceList(value: unknown): VoiceListItem[] {
                 ownerAssetId: String(voice.ownerAssetId || voice.assetId || voice.subjectId || '').trim(),
                 genderHint: String(voice.genderHint || voice.gender_hint || '').trim(),
                 systemVoice: Boolean(voice.systemVoice || voice.system_voice || voice.source === 'system'),
-                targetTtsModel: String(voice.targetTtsModel || voice.target_tts_model || voice.ttsModel || voice.tts_model || '').trim(),
+                targetTtsModel: String(voice.targetTtsModel || voice.target_tts_model || voice.ttsModel || voice.tts_model || voice.model || '').trim(),
                 cloneModel: String(voice.cloneModel || voice.clone_model || '').trim(),
                 provider: String(voice.provider || '').trim(),
+                supportedModels: [
+                    ...stringArrayValue(voice.supportedModels),
+                    ...stringArrayValue(voice.supported_models),
+                    ...stringArrayValue(voice.ttsModels),
+                    ...stringArrayValue(voice.tts_models),
+                ],
             } satisfies VoiceListItem;
         })
         .filter((item): item is VoiceListItem => {
@@ -1123,12 +1034,6 @@ function normalizeVoiceList(value: unknown): VoiceListItem[] {
             const status = item.status.trim().toLowerCase();
             return !['failed', 'error', 'dead_lettered', 'deleted', 'cancelled', 'canceled'].includes(status);
         })
-}
-
-function audioPromptForSpeech(input: string): string {
-    return input
-        .replace(/〔停顿\s*([0-9.]+)\s*秒〕/g, (_match, seconds) => `<#${seconds}#>`)
-        .replace(/【停顿\s*([0-9.]+)\s*秒】/g, (_match, seconds) => `<#${seconds}#>`);
 }
 
 function readAudioRichText(root: HTMLElement | null): string {
@@ -1348,32 +1253,6 @@ function buildAudioVoiceOptions(voices: VoiceListItem[], languageBoost: string):
                 voice.genderHint,
                 voice.status && voice.status !== 'ready' ? voice.status : '',
             ].filter(Boolean).join(' · '),
-        }));
-}
-
-function summarizeAudioVoicesForAgent(voices: VoiceListItem[], languageBoost: string, selectedVoiceId: string) {
-    const selected = selectedVoiceId.trim();
-    return voices
-        .filter((voice) => voice.id === selected || voiceLanguageMatches(voice, languageBoost) || voice.source === 'subject')
-        .sort((left, right) => {
-            if (left.id === selected) return -1;
-            if (right.id === selected) return 1;
-            if (left.source === 'subject' && right.source !== 'subject') return -1;
-            if (right.source === 'subject' && left.source !== 'subject') return 1;
-            if (left.systemVoice !== right.systemVoice) return left.systemVoice ? 1 : -1;
-            return left.name.localeCompare(right.name);
-        })
-        .slice(0, 40)
-        .map((voice) => ({
-            voiceId: voice.id,
-            name: voice.name || shortVoiceId(voice.id),
-            languageBoost: voice.languageBoost || voice.language || '',
-            language: voice.languageZh || voice.languageEn || voice.language || '',
-            genderHint: voice.genderHint || '',
-            source: voice.source || (voice.systemVoice ? 'system' : 'custom'),
-            targetTtsModel: voice.targetTtsModel || '',
-            cloneModel: voice.cloneModel || '',
-            selected: voice.id === selected,
         }));
 }
 
@@ -2677,6 +2556,10 @@ export function GenerationStudio({
         () => audioVoices.filter((voice) => voiceMatchesAudioModel(voice, effectiveAudioModel)),
         [audioVoices, effectiveAudioModel],
     );
+    const selectedAudioVoice = useMemo(
+        () => audioVoicesForModel.find((voice) => voice.id === audioVoiceId.trim()) || null,
+        [audioVoiceId, audioVoicesForModel],
+    );
 
     const imageModelOptions = useMemo<PickerOption[]>(() => buildImageModelOptions(settings), [settings]);
     const activeImageModelOption = useMemo(
@@ -2861,20 +2744,9 @@ export function GenerationStudio({
     }), [contextIntent?.source, contextIntent?.sourceTitle]);
 
     const runImageRequest = useCallback((request: ImageGenerationRequest): boolean => {
-        if (!request.prompt.trim()) {
-            setImageError('请先输入提示词');
-            return false;
-        }
-        if (!hasImageConfig) {
-            setImageError('未检测到生图配置，请先在设置中补齐');
-            return false;
-        }
-        if (!request.model.trim()) {
-            setImageError('未检测到已添加的生图模型，请先在设置中添加生图模型');
-            return false;
-        }
-        if (request.generationMode === 'image-to-image' && request.referenceItems.length === 0) {
-            setImageError('图生图模式至少需要 1 张参考图');
+        const validationError = validateImageGenerationRequest(request, { hasImageConfig });
+        if (validationError) {
+            setImageError(validationError);
             return false;
         }
 
@@ -2885,29 +2757,13 @@ export function GenerationStudio({
         void (async () => {
             try {
                 const modelRouteOverride = resolveSelectedModelOverride(settings, 'image', 'image', request.model);
-                const result = await window.ipcRenderer.generation.submitImage({
+                const result = await submitImageGeneration(window.ipcRenderer.generation, request, {
                     clientRequestId: entry.id,
-                    prompt: request.prompt.trim(),
-                    bypassPromptOptimizer: true,
-                    projectId: request.projectId.trim() || undefined,
-                    title: request.title.trim() || undefined,
-                    generationMode: request.referenceItems.length > 0 ? request.generationMode : 'text-to-image',
-                    referenceImages: request.referenceItems.map((item) => item.dataUrl),
-                    count: request.count,
-                    model: request.model.trim() || undefined,
-                    ...modelRouteOverride,
-                    provider: settings.image_provider || undefined,
-                    providerTemplate: settings.image_provider_template || undefined,
-                    aspectRatio: request.aspectRatio.trim() || '1:1',
-                    size: request.size.trim() || undefined,
-                    quality: request.quality.trim() || 'medium',
-                    resolution: request.resolution.trim() || '2K',
-                    source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
-                }) as { success?: boolean; error?: string; jobId?: string };
-
-                if (!result?.success || !result?.jobId) {
-                    throw new Error(result?.error || '生图失败');
-                }
+                    source: generationSubmitSource(contextIntent?.source),
+                    routeOverride: modelRouteOverride,
+                    provider: settings.image_provider,
+                    providerTemplate: settings.image_provider_template,
+                });
 
                 updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
@@ -2936,27 +2792,9 @@ export function GenerationStudio({
     ]);
 
     const runVideoRequest = useCallback((request: VideoGenerationRequest): boolean => {
-        if (!request.prompt.trim()) {
-            setVideoError('请先输入提示词');
-            return false;
-        }
-        const effectiveVideoMode = request.generationMode === 'text-to-video' && request.referenceItems.length > 0
-            ? 'reference-guided'
-            : request.generationMode;
-        if (!hasVideoConfig) {
-            setVideoError('未检测到生视频配置，请先在设置中补齐');
-            return false;
-        }
-        if (effectiveVideoMode === 'reference-guided' && request.referenceItems.length === 0) {
-            setVideoError('参考图视频模式至少需要 1 张参考图');
-            return false;
-        }
-        if (effectiveVideoMode === 'first-last-frame' && request.referenceItems.length < 2) {
-            setVideoError('首尾帧模式需要首帧和尾帧两张图片');
-            return false;
-        }
-        if (effectiveVideoMode === 'continuation' && !request.firstClip?.dataUrl) {
-            setVideoError('视频续写模式需要上传起始视频');
+        const validationError = validateVideoGenerationRequest(request, { hasVideoConfig });
+        if (validationError) {
+            setVideoError(validationError);
             return false;
         }
 
@@ -2966,26 +2804,10 @@ export function GenerationStudio({
 
         void (async () => {
             try {
-                const result = await window.ipcRenderer.generation.submitVideo({
+                const result = await submitVideoGeneration(window.ipcRenderer.generation, request, {
                     clientRequestId: entry.id,
-                    prompt: request.prompt.trim(),
-                    projectId: request.projectId.trim() || undefined,
-                    title: request.title.trim() || undefined,
-                    generationMode: effectiveVideoMode,
-                    referenceImages: request.referenceItems.map((item) => item.dataUrl),
-                    firstClip: request.firstClip?.dataUrl || undefined,
-                    drivingAudio: request.drivingAudio?.dataUrl || undefined,
-                    aspectRatio: request.aspectRatio,
-                    resolution: request.resolution,
-                    durationSeconds: request.durationSeconds,
-                    model: request.model,
-                    generateAudio: request.generateAudio,
-                    source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
-                }) as { success?: boolean; error?: string; jobId?: string };
-
-                if (!result?.success || !result?.jobId) {
-                    throw new Error(result?.error || '生视频失败');
-                }
+                    source: generationSubmitSource(contextIntent?.source),
+                });
 
                 updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
@@ -3006,48 +2828,27 @@ export function GenerationStudio({
     }, [contextIntent?.source, createFeedEntry, hasVideoConfig, updateFeedEntries]);
 
     const runAudioRequest = useCallback((request: AudioGenerationRequest): boolean => {
-        if (!request.prompt.trim()) {
-            setAudioError('请先输入要合成的文本');
-            return false;
-        }
-        if (!request.voiceId.trim()) {
-            setAudioError('请先填写 voice_id');
-            return false;
-        }
-        if (!hasVoiceConfig) {
-            setAudioError('未检测到声音合成配置，请先在设置中补齐');
+        const validationError = validateAudioGenerationRequest(request, {
+            hasVoiceConfig,
+            audioVoiceIdsForModel: audioVoicesForModel.map((voice) => voice.id),
+        });
+        if (validationError) {
+            setAudioError(validationError);
             return false;
         }
 
-        const speechInput = audioPromptForSpeech(request.prompt.trim());
         const entry = createFeedEntry(request);
         updateFeedEntries((prev) => [...prev, entry]);
         setAudioError('');
 
         void (async () => {
             try {
-                const speed = Number(request.speed || '1');
                 const modelRouteOverride = resolveSelectedModelOverride(settings, 'voiceTts', 'tts', request.model);
-                const result = await window.ipcRenderer.generation.submitAudio({
+                const result = await submitAudioGeneration(window.ipcRenderer.generation, request, {
                     clientRequestId: entry.id,
-                    source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
-                    input: speechInput,
-                    title: request.title.trim() || undefined,
-                    projectId: request.projectId.trim() || undefined,
-                    voiceId: request.voiceId.trim(),
-                    voice_id: request.voiceId.trim(),
-                    model: request.model.trim() || undefined,
-                    ...modelRouteOverride,
-                    languageBoost: request.languageBoost.trim() || undefined,
-                    speed: Number.isFinite(speed) ? speed : undefined,
-                    emotion: request.emotion.trim() || undefined,
-                    responseFormat: 'mp3',
-                    returnAudioBinary: true,
-                }) as { success?: boolean; error?: string; jobId?: string };
-
-                if (!result?.success || !result?.jobId) {
-                    throw new Error(result?.error || '生音频失败');
-                }
+                    source: generationSubmitSource(contextIntent?.source),
+                    routeOverride: modelRouteOverride,
+                });
 
                 updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
@@ -3065,7 +2866,7 @@ export function GenerationStudio({
             }
         })();
         return true;
-    }, [contextIntent?.source, createFeedEntry, hasVoiceConfig, updateFeedEntries]);
+    }, [audioVoicesForModel, contextIntent?.source, createFeedEntry, hasVoiceConfig, settings, updateFeedEntries]);
 
     const uploadDigitalHumanMedia = useCallback(async (path: string, contentType: string, keyPrefix: string) => {
         if (isRemoteUrl(path)) return path;
@@ -3086,16 +2887,9 @@ export function GenerationStudio({
     }, []);
 
     const runDigitalHumanRequest = useCallback((request: DigitalHumanGenerationRequest): boolean => {
-        if (!request.prompt.trim()) {
-            setDigitalHumanError('请先输入文案');
-            return false;
-        }
-        if (!request.roleId || !request.voiceId || !request.videoPath) {
-            setDigitalHumanError('角色需要参考视频；音色会从视频音轨自动克隆，完成后即可生成');
-            return false;
-        }
-        if (!hasVoiceConfig) {
-            setDigitalHumanError('未检测到声音合成配置，请先在设置中补齐');
+        const validationError = validateDigitalHumanGenerationRequest(request, { hasVoiceConfig });
+        if (validationError) {
+            setDigitalHumanError(validationError);
             return false;
         }
 
@@ -3105,66 +2899,19 @@ export function GenerationStudio({
 
         void (async () => {
             try {
-                updateFeedEntries((prev) => prev.map((item) => item.id === entry.id ? { ...item, jobStatus: 'preparing' } : item));
-                const preparedVideo = await window.ipcRenderer.generation.prepareVideoRetalkSource({
-                    path: request.videoPath,
-                    resolution: request.resolution,
-                });
-                if (preparedVideo?.success === false || !preparedVideo?.path) {
-                    throw new Error(preparedVideo?.error || '参考视频不符合数字人生成要求');
-                }
-                const videoUrl = await uploadDigitalHumanMedia(String(preparedVideo.path), 'video/mp4', 'ai/digital-human/video');
-                updateFeedEntries((prev) => prev.map((item) => item.id === entry.id ? { ...item, jobStatus: 'generating_audio' } : item));
-                const ttsProjectId = request.projectId.trim();
-                const speed = Number(audioSpeed || '1');
-                const speechResult = await window.ipcRenderer.voice.speech({
-                    source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
-                    surface: 'digital-human',
-                    subjectId: request.roleId,
-                    input: audioPromptForSpeech(request.prompt.trim()),
-                    title: request.title.trim() || `${request.roleName} 数字人口播声音`,
-                    projectId: ttsProjectId || undefined,
-                    voiceId: request.voiceId.trim(),
-                    voice_id: request.voiceId.trim(),
-                    model: effectiveAudioModel.trim() || undefined,
-                    languageBoost: audioLanguageBoost.trim() || undefined,
-                    speed: Number.isFinite(speed) ? speed : undefined,
-                    emotion: audioEmotion.trim() || undefined,
-                    responseFormat: 'mp3',
-                    waitForCompletion: true,
-                    timeoutMs: DIGITAL_HUMAN_TTS_TIMEOUT_MS,
-                });
-                const finalAudio = extractFinalAudioResult(speechResult);
-                if (!finalAudio) {
-                    const result = valueRecord(speechResult);
-                    throw new Error(firstString(result.error, result.message) || '声音生成完成但没有返回最终音频');
-                }
-                const audioUrl = await uploadDigitalHumanMedia(finalAudio.path, finalAudio.mimeType, 'ai/digital-human/audio');
-                updateFeedEntries((prev) => prev.map((item) => item.id === entry.id ? { ...item, jobStatus: 'submitting' } : item));
-                const result = await window.ipcRenderer.generation.submitVideo({
+                const result = await submitDigitalHumanGeneration(window.ipcRenderer.generation, window.ipcRenderer.voice, request, {
                     clientRequestId: entry.id,
-                    model: 'videoretalk',
-                    generationMode: 'video-retalk',
-                    title: request.title.trim() || `${request.roleName} 数字人口播`,
-                    prompt: request.prompt.trim(),
-                    projectId: request.projectId.trim() || undefined,
-                    input: {
-                        video_url: videoUrl,
-                        audio_url: audioUrl,
+                    source: generationSubmitSource(contextIntent?.source),
+                    ttsModel: effectiveAudioModel,
+                    languageBoost: audioLanguageBoost,
+                    speed: audioSpeed,
+                    emotion: audioEmotion,
+                    timeoutMs: DIGITAL_HUMAN_TTS_TIMEOUT_MS,
+                    uploadMedia: uploadDigitalHumanMedia,
+                    onStage: (stage) => {
+                        updateFeedEntries((prev) => prev.map((item) => item.id === entry.id ? { ...item, jobStatus: stage } : item));
                     },
-                    parameters: {
-                        video_extension: false,
-                    },
-                    durationSeconds: request.durationSeconds,
-                    resolution: request.resolution,
-                    metadata: {
-                        surface: 'digital-human',
-                        subjectId: request.roleId,
-                    },
-                }) as { success?: boolean; error?: string; jobId?: string };
-                if (!result?.success || !result?.jobId) {
-                    throw new Error(result?.error || '数字人视频提交失败');
-                }
+                });
                 updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
                         ? { ...item, jobId: result.jobId, jobStatus: 'queued', status: 'running', error: undefined }
@@ -3195,16 +2942,9 @@ export function GenerationStudio({
     ]);
 
     const runCoverRequest = useCallback((request: CoverGenerationRequest): boolean => {
-        if (!request.prompt.trim()) {
-            setCoverError('请先输入封面标题或要求');
-            return false;
-        }
-        if (!hasImageConfig) {
-            setCoverError('未检测到生图配置，请先在设置中补齐');
-            return false;
-        }
-        if (!request.model.trim()) {
-            setCoverError('未检测到已添加的生图模型，请先在设置中添加生图模型');
+        const validationError = validateCoverGenerationRequest(request, { hasImageConfig });
+        if (validationError) {
+            setCoverError(validationError);
             return false;
         }
 
@@ -3215,25 +2955,12 @@ export function GenerationStudio({
         void (async () => {
             try {
                 const modelRouteOverride = resolveSelectedModelOverride(settings, 'image', 'image', request.model);
-                const result = await window.ipcRenderer.cover.generate({
-                    templateImage: request.templateImage?.dataUrl,
-                    baseImage: request.baseImage?.dataUrl,
-                    titles: [{ id: makeId('cover-title'), type: 'main', text: request.prompt.trim() }],
-                    titleMode: 'titles',
-                    titlePrompt: undefined,
-                    promptSwitches: request.promptSwitches,
-                    templateName: request.title.trim() || undefined,
-                    count: request.count,
-                    model: request.model.trim() || undefined,
-                    ...modelRouteOverride,
-                    provider: settings.image_provider || undefined,
-                    providerTemplate: settings.image_provider_template || undefined,
-                    quality: request.quality.trim() || 'medium',
-                }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
-
-                if (!result?.success) {
-                    throw new Error(result?.error || '封面生成失败');
-                }
+                const result = await submitCoverGeneration(window.ipcRenderer.cover, request, {
+                    titleId: makeId('cover-title'),
+                    routeOverride: modelRouteOverride,
+                    provider: settings.image_provider,
+                    providerTemplate: settings.image_provider_template,
+                });
 
                 updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
@@ -3341,6 +3068,7 @@ export function GenerationStudio({
             projectId: audioProjectId,
             model: effectiveAudioModel,
             voiceId: audioVoiceId,
+            voiceTargetTtsModel: selectedAudioVoice?.targetTtsModel || effectiveAudioModel,
             languageBoost: audioLanguageBoost,
             speed: audioSpeed,
             emotion: audioEmotion,
@@ -3358,6 +3086,7 @@ export function GenerationStudio({
         audioVoiceId,
         effectiveAudioModel,
         runAudioRequest,
+        selectedAudioVoice?.targetTtsModel,
     ]);
 
     const handleGenerateDigitalHuman = useCallback(() => {
@@ -3561,6 +3290,9 @@ export function GenerationStudio({
         const agentSessionIdToClear = entryToDelete && isAgentSessionFeedEntry(entryToDelete)
             ? entryToDelete.sessionId
             : '';
+        const jobIdToDelete = entryToDelete && isGenerationFeedEntry(entryToDelete)
+            ? entryToDelete.jobId
+            : null;
         updateFeedEntries((prev) => {
             const entry = prev.find((item) => item.id === entryId);
             if (entry) {
@@ -3580,6 +3312,12 @@ export function GenerationStudio({
             }
             return prev.filter((entry) => entry.id !== entryId);
         });
+        if (jobIdToDelete) {
+            mediaJobsStore.removeJob(jobIdToDelete);
+            void window.ipcRenderer.generation.deleteJob(jobIdToDelete).catch((error) => {
+                console.error('Failed to archive generation job:', error);
+            });
+        }
         setAssetContextMenu((current) => (current?.entryId === entryId ? null : current));
         if (agentSessionIdToClear) {
             if (agentSessionIdToClear === agentSessionId) {
@@ -3791,6 +3529,7 @@ export function GenerationStudio({
                 projectId: audioProjectId,
                 model: effectiveAudioModel,
                 voiceId: audioVoiceId,
+                voiceTargetTtsModel: selectedAudioVoice?.targetTtsModel || effectiveAudioModel,
                 languageBoost: audioLanguageBoost,
                 speed: audioSpeed,
                 emotion: audioEmotion,
@@ -3842,6 +3581,7 @@ export function GenerationStudio({
         coverTitle,
         effectiveAudioModel,
         effectiveVideoModel,
+        selectedAudioVoice?.targetTtsModel,
         imageAspectRatio,
         imageCount,
         imageMode,
@@ -3956,6 +3696,11 @@ export function GenerationStudio({
             setAgentPendingMessage(null);
             setAgentExecutionActive(false);
             setAgentClearNonce((value) => value + 1);
+            const jobIdsToArchive = Array.from(nextJobIds);
+            mediaJobsStore.removeJobs(jobIdsToArchive);
+            await Promise.all(
+                jobIdsToArchive.map((jobId) => window.ipcRenderer.generation.deleteJob(jobId)),
+            );
             await Promise.all(
                 Array.from(agentSessionIds).map((sessionId) => window.ipcRenderer.chat.clearMessages(sessionId)),
             );

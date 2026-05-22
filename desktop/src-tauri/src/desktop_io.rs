@@ -531,8 +531,7 @@ pub(crate) fn resolve_transcription_settings(
         .as_ref()
         .map(|route| route.model_name.clone())
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| payload_string(settings, "transcription_model"))
-        .or_else(|| Some("whisper-1".to_string()))?;
+        .or_else(|| payload_string(settings, "transcription_model"))?;
     let api_key = resolved
         .as_ref()
         .and_then(|route| route.api_key.clone())

@@ -662,6 +662,12 @@ pub fn handle_system_channel(
                         &state.store_path,
                         &settings_snapshot,
                     )?;
+                    let _ =
+                        crate::ai_model_manager::defaults::repair_missing_official_defaults_for_store(
+                            Some(app),
+                            state,
+                            "settings-model-defaults-repair",
+                        );
                     let workspace_root =
                         update_workspace_root_cache(state, &settings_snapshot, &active_space_id)?;
                     let workspace_changed = previous_workspace_root

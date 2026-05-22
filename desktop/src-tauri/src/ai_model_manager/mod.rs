@@ -1,5 +1,5 @@
-mod catalog;
 mod credentials;
+pub(crate) mod defaults;
 pub(crate) mod legacy_config;
 pub(crate) mod legacy_projection;
 mod official_sync;
@@ -23,7 +23,6 @@ pub(crate) use types::{
     AiResolvedRoute,
 };
 
-use catalog::default_model_for_scope;
 use credentials::{
     is_local_base_url, normalize_base_url, official_plaintext_key, source_api_key, source_base_url,
     source_id, source_is_official, source_model, source_name, source_preset_id, source_protocol,
@@ -120,15 +119,24 @@ fn scoped_endpoint(scope: AiModelScope, settings: &Value) -> Option<String> {
 }
 
 fn scoped_model(scope: AiModelScope, settings: &Value) -> Option<String> {
-    payload_string(settings, scope.legacy_model_key())
-        .or_else(|| {
-            if scope == AiModelScope::VoiceTts {
-                payload_string(settings, "tts_model")
-            } else {
-                None
-            }
-        })
-        .or_else(|| default_model_for_scope(scope).map(ToString::to_string))
+    payload_string(settings, scope.legacy_model_key()).or_else(|| {
+        if scope == AiModelScope::VoiceTts {
+            payload_string(settings, "tts_model")
+        } else {
+            None
+        }
+    })
+}
+
+fn scope_allows_source_model_fallback(scope: AiModelScope) -> bool {
+    matches!(
+        scope,
+        AiModelScope::Chat
+            | AiModelScope::Wander
+            | AiModelScope::Team
+            | AiModelScope::Knowledge
+            | AiModelScope::Redclaw
+    )
 }
 
 fn route_source<'a>(
@@ -294,7 +302,11 @@ impl AiModelManager {
                 (!route_model.is_empty()).then_some(route_model)
             })
             .or_else(|| scoped_model(scope, settings))
-            .or_else(|| source.as_ref().map(source_model))
+            .or_else(|| {
+                scope_allows_source_model_fallback(scope)
+                    .then(|| source.as_ref().map(source_model))
+                    .flatten()
+            })
             .unwrap_or_default();
         let source_protocol_value = source.as_ref().map(source_protocol).unwrap_or_default();
         let protocol = override_string(request_override, &["protocol"])
@@ -506,6 +518,56 @@ mod tests {
             route.source.get("credentialRef").and_then(Value::as_str),
             Some("settings:custom-source")
         );
+    }
+
+    #[test]
+    fn specialized_scopes_do_not_fallback_to_provider_chat_model() {
+        let settings = json!({
+            "api_endpoint": "https://custom.example/v1",
+            "api_key": "sk-root",
+            "model_name": "chat-default",
+            "default_ai_source_id": "custom-source",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "custom-source",
+                "baseURL": "https://custom.example/v1",
+                "apiKey": "sk-custom",
+                "model": "provider-chat-model",
+                "protocol": "openai"
+            })]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({})).unwrap()
+        });
+
+        for scope in [
+            AiModelScope::Transcription,
+            AiModelScope::Embedding,
+            AiModelScope::Image,
+            AiModelScope::Video,
+            AiModelScope::VisualIndex,
+            AiModelScope::VideoAnalysis,
+            AiModelScope::VoiceTts,
+            AiModelScope::VoiceClone,
+        ] {
+            let route = AiModelManager::resolve(&settings, scope, None).unwrap();
+            assert_eq!(route.model_name, "", "scope {:?}", scope);
+        }
+    }
+
+    #[test]
+    fn chat_scopes_can_still_fallback_to_provider_default_model() {
+        let settings = json!({
+            "api_endpoint": "https://custom.example/v1",
+            "default_ai_source_id": "custom-source",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "custom-source",
+                "baseURL": "https://custom.example/v1",
+                "model": "provider-chat-model",
+                "protocol": "openai"
+            })]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({})).unwrap()
+        });
+
+        let route = AiModelManager::resolve(&settings, AiModelScope::Chat, None).unwrap();
+        assert_eq!(route.model_name, "provider-chat-model");
     }
 
     #[test]

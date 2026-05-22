@@ -74,6 +74,7 @@ export type AudioGenerationRequest = {
     projectId: string;
     model: string;
     voiceId: string;
+    voiceTargetTtsModel?: string;
     languageBoost: string;
     speed: string;
     emotion: string;
@@ -256,6 +257,7 @@ export function buildAudioGenerationRequest(input: AudioGenerationRequestInput):
         projectId: input.projectId,
         model: input.model,
         voiceId: input.voiceId,
+        voiceTargetTtsModel: input.voiceTargetTtsModel,
         languageBoost: input.languageBoost,
         speed: input.speed,
         emotion: input.emotion,
@@ -884,7 +886,7 @@ export function requestFromJobProjection(job: MediaJobProjection): GenerationReq
         } satisfies AudioGenerationRequest;
     }
 
-    if (job.kind === 'video') {
+    if (job.kind === 'video' || job.kind === 'video_sequence') {
         const referenceItems = referenceItemsFromJobRequest(request, ['referenceItems', 'referenceImages', 'reference_images']);
         const firstClip = normalizeReferenceItem(request.firstClip || request.first_clip);
         const drivingAudio = normalizeReferenceItem(request.drivingAudio || request.driving_audio);
@@ -1014,7 +1016,7 @@ export function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobPro
 }
 
 export function isGenerationStudioMediaJob(job: MediaJobProjection): boolean {
-    return job.kind === 'image' || job.kind === 'video' || job.kind === 'audio';
+    return job.kind === 'image' || job.kind === 'video' || job.kind === 'video_sequence' || job.kind === 'audio';
 }
 
 export function mergeMediaJobsIntoFeedEntries(

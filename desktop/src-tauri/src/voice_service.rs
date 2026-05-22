@@ -21,8 +21,6 @@ use crate::{
     subjects_root, workspace_root, AppState, MediaAssetRecord, SubjectRecord,
 };
 
-const DEFAULT_CLONE_MODEL: &str = "cosyvoice-v3.5-plus-voice-clone";
-const DEFAULT_TTS_MODEL: &str = "cosyvoice-v3.5-plus";
 const COSYVOICE_TTS_MODEL: &str = "cosyvoice-v3.5-plus";
 const COSYVOICE_CLONE_MODEL: &str = "cosyvoice-v3.5-plus-voice-clone";
 const MINIMAX_SYSTEM_VOICES_JSON: &str = include_str!("../resources/minimax-system-voices.json");
@@ -250,7 +248,7 @@ fn clone_target_tts_model_from_payload(
             == normalized_model_key(clone_model)
             && normalized_model_key(clone_model).contains("clone")
         {
-            DEFAULT_TTS_MODEL
+            ""
         } else {
             fallback_tts_model
         };
@@ -356,7 +354,7 @@ fn resolve_voice_config(
                 .filter(|value| !value.trim().is_empty())
         })
         .or_else(|| payload_string(&settings, "voice_clone_model"))
-        .unwrap_or_else(|| DEFAULT_CLONE_MODEL.to_string());
+        .unwrap_or_default();
     let tts_model = payload
         .and_then(|value| {
             payload_string_alias(
@@ -372,7 +370,7 @@ fn resolve_voice_config(
         })
         .or_else(|| payload_string(&settings, "voice_tts_model"))
         .or_else(|| payload_string(&settings, "tts_model"))
-        .unwrap_or_else(|| DEFAULT_TTS_MODEL.to_string());
+        .unwrap_or_default();
 
     let base_url = clean_base_url(base_url);
     if base_url.is_empty() {
@@ -519,7 +517,7 @@ fn voice_matches_selected_tts_model(value: &Value, selected_tts_model: &str) -> 
             });
         }
     }
-    !is_cosyvoice_model(model)
+    false
 }
 
 fn delete_platform_voice(config: &VoiceGatewayConfig, voice_id: &str) -> Result<(), String> {
@@ -1038,6 +1036,18 @@ pub(crate) fn clone_voice(
     let Some(api_key) = config.api_key.as_deref() else {
         return Err("voice clone requires an API key".to_string());
     };
+    if config.clone_model.trim().is_empty() {
+        return Err(
+            "voice clone model is not configured; choose a voice clone model in Settings first"
+                .to_string(),
+        );
+    }
+    if config.tts_model.trim().is_empty() {
+        return Err(
+            "voice clone target TTS model is not configured; choose a TTS model in Settings first"
+                .to_string(),
+        );
+    }
     let owner_asset_id = payload_string_alias(payload, &["ownerAssetId", "assetId", "subjectId"]);
     if let Some(sample_file_key) =
         payload_string_alias(payload, &["sampleFileKey", "sample_file_key"])
@@ -1893,7 +1903,29 @@ fn synthesize_speech_inner(
                 .ok()
                 .flatten()
         })
-        .unwrap_or_else(|| config.tts_model.clone());
+        .or_else(|| (!config.tts_model.trim().is_empty()).then_some(config.tts_model.clone()))
+        .ok_or_else(|| {
+            "TTS model is not configured; choose a TTS model in Settings first".to_string()
+        })?;
+    if let Some(target_model) = payload_string_alias(
+        payload,
+        &[
+            "voiceTargetTtsModel",
+            "voice_target_tts_model",
+            "targetTtsModel",
+            "target_tts_model",
+            "ttsModel",
+            "tts_model",
+        ],
+    ) {
+        if !target_model.trim().is_empty()
+            && normalized_model_key(&target_model) != normalized_model_key(&model)
+        {
+            return Err(format!(
+                "音色 {voice_id} 绑定到 TTS 模型 {target_model}，不能用于当前模型 {model}"
+            ));
+        }
+    }
     validate_speech_voice_for_model(state, &voice_id, &model)?;
     let response_format =
         payload_string_alias(payload, &["responseFormat", "response_format", "format"])
@@ -2468,6 +2500,37 @@ mod tests {
             tts_model_for_voice_id_from_subjects(&subjects, "voice_cosy").as_deref(),
             Some("cosyvoice-v3.5-plus")
         );
+    }
+
+    #[test]
+    fn voice_list_model_filter_requires_explicit_model_match() {
+        assert!(voice_matches_selected_tts_model(
+            &json!({
+                "voiceId": "voice_cosy",
+                "targetTtsModel": "cosyvoice-v3.5-plus"
+            }),
+            "cosyvoice-v3.5-plus"
+        ));
+        assert!(voice_matches_selected_tts_model(
+            &json!({
+                "voiceId": "voice_multi",
+                "supportedModels": ["speech-2.8-hd"]
+            }),
+            "speech-2.8-hd"
+        ));
+        assert!(!voice_matches_selected_tts_model(
+            &json!({
+                "voiceId": "voice_cosy",
+                "targetTtsModel": "cosyvoice-v3.5-plus"
+            }),
+            "speech-2.8-hd"
+        ));
+        assert!(!voice_matches_selected_tts_model(
+            &json!({
+                "voiceId": "voice_unknown"
+            }),
+            "speech-2.8-hd"
+        ));
     }
 
     #[test]

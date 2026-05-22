@@ -246,11 +246,17 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         .iter()
         .map(|descriptor| descriptor.action)
         .collect::<BTreeSet<_>>();
-    let deferred_app_cli_actions = app_cli_descriptors
-        .iter()
-        .filter(|descriptor| !direct_action_names.contains(descriptor.action))
-        .map(deferred_action_entry)
-        .collect::<Vec<_>>();
+    let has_explicit_action_allowlist =
+        !normalized_allowed_app_cli_actions(params.session_metadata).is_empty();
+    let deferred_app_cli_actions = if has_explicit_action_allowlist {
+        Vec::new()
+    } else {
+        app_cli_descriptors
+            .iter()
+            .filter(|descriptor| !direct_action_names.contains(descriptor.action))
+            .map(deferred_action_entry)
+            .collect::<Vec<_>>()
+    };
     let deferred_action_namespaces = deferred_app_cli_actions
         .iter()
         .map(|entry| entry.namespace.clone())
@@ -878,7 +884,11 @@ mod tests {
                 "image.generate"
             ]
         );
-        assert!(plan.has_deferred_app_cli_action("redclaw.task.create"));
+        assert!(!plan.has_deferred_app_cli_action("redclaw.task.create"));
+        assert!(!plan
+            .visible_tools
+            .iter()
+            .any(|tool| tool.name == "tool_search"));
     }
 
     #[test]
@@ -931,6 +941,37 @@ mod tests {
         assert!(!visible.contains(&"Search"));
         assert!(!plan.has_deferred_app_cli_action("redclaw.task.create"));
         assert!(!plan.has_deferred_app_cli_action("team.session.create"));
+    }
+
+    #[test]
+    fn explicit_operate_allowlist_does_not_create_deferred_actions() {
+        let metadata = json!({
+            "activeSkills": ["redclaw-style-definition"],
+            "allowedOperateActions": [
+                "redclaw.profile.bundle",
+                "redclaw.profile.read",
+                "redclaw.profile.update",
+                "redclaw.profile.completeStyleDefinition"
+            ]
+        });
+
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("redclaw.profile.bundle"));
+        assert!(plan.has_direct_app_cli_action("redclaw.profile.read"));
+        assert!(plan.has_direct_app_cli_action("redclaw.profile.update"));
+        assert!(plan.has_direct_app_cli_action("redclaw.profile.completeStyleDefinition"));
+        assert!(!plan.has_direct_app_cli_action("video.analyze"));
+        assert!(!plan.has_deferred_app_cli_action("video.analyze"));
+        assert!(plan.deferred_app_cli_actions.is_empty());
+        assert!(!plan
+            .visible_tools
+            .iter()
+            .any(|tool| tool.name == "tool_search"));
     }
 
     #[test]

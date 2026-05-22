@@ -30,6 +30,10 @@ export function useMediaJobSubscription(
         const handleJobUpdated = (_event: unknown, payload: unknown) => {
             const projection = normalizeMediaJobProjection(payload);
             if (!projection) return;
+            if (projection.archivedAt && !options?.bootstrapFilter?.includeArchived) {
+                mediaJobsStore.removeJob(projection.jobId);
+                return;
+            }
             mediaJobsStore.upsertJob(projection);
         };
         const handleJobLog = (_event: unknown, payload: unknown) => {

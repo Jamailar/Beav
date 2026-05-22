@@ -600,15 +600,16 @@ fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value> {
     records.sort_by(|left, right| {
         let left_time = timestamp_millis_from_value(left.get("createdAt")).unwrap_or(0);
         let right_time = timestamp_millis_from_value(right.get("createdAt")).unwrap_or(0);
-        right_time
-            .cmp(&left_time)
-            .then_with(|| {
-                payload_string(right, "id")
-                    .unwrap_or_default()
-                    .cmp(&payload_string(left, "id").unwrap_or_default())
-            })
+        right_time.cmp(&left_time).then_with(|| {
+            payload_string(right, "id")
+                .unwrap_or_default()
+                .cmp(&payload_string(left, "id").unwrap_or_default())
+        })
     });
-    records.into_iter().take(OFFICIAL_CALL_RECORDS_PAGE_SIZE).collect()
+    records
+        .into_iter()
+        .take(OFFICIAL_CALL_RECORDS_PAGE_SIZE)
+        .collect()
 }
 
 fn extract_official_call_record_rows(payload: &Value) -> Vec<Value> {
@@ -1261,6 +1262,20 @@ fn apply_official_settings_update(
                     format!("source={source} error={error}"),
                 );
             }
+        }
+    }
+    match crate::ai_model_manager::defaults::repair_missing_official_defaults_in_settings(
+        &mut next_settings,
+    ) {
+        Ok(repaired) => {
+            should_sync_model_config = should_sync_model_config || repaired;
+        }
+        Err(error) => {
+            log_official_auth(
+                state,
+                "default-models-repair-failed",
+                format!("source={source} error={error}"),
+            );
         }
     }
     let merged_settings = with_store_mut(state, |store| {
@@ -3198,6 +3213,58 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert_eq!(payload_string(&records[0], "id").as_deref(), Some("req-1"));
         assert_eq!(payload_string(&records[1], "id").as_deref(), Some("req-2"));
+    }
+
+    #[test]
+    fn normalize_official_call_record_items_sorts_desc_and_limits_page_size() {
+        let items = (0..35)
+            .map(|index| {
+                json!({
+                    "id": format!("record-{index:02}"),
+                    "model": "qwen3.5-flash",
+                    "points_cost": 0.1,
+                    "token": 100,
+                    "created_at": 1_776_000_000_000_i64 + (index * 1000),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let records = normalize_official_call_record_items(&items);
+
+        assert_eq!(records.len(), OFFICIAL_CALL_RECORDS_PAGE_SIZE);
+        assert_eq!(
+            payload_string(&records[0], "id").as_deref(),
+            Some("record-34")
+        );
+        assert_eq!(
+            payload_string(&records[OFFICIAL_CALL_RECORDS_PAGE_SIZE - 1], "id").as_deref(),
+            Some("record-05")
+        );
+    }
+
+    #[test]
+    fn normalize_official_call_record_items_sorts_string_times_desc() {
+        let records = normalize_official_call_record_items(&[
+            json!({
+                "id": "early",
+                "model": "qwen3.5-flash",
+                "created_at": "2026-05-20T21:33:40Z",
+            }),
+            json!({
+                "id": "latest",
+                "model": "qwen3.5-plus",
+                "created_at": "2026-05-22T10:49:58Z",
+            }),
+            json!({
+                "id": "middle",
+                "model": "qwen3.5-plus",
+                "created_at": "2026-05-21T12:47:12Z",
+            }),
+        ]);
+
+        assert_eq!(payload_string(&records[0], "id").as_deref(), Some("latest"));
+        assert_eq!(payload_string(&records[1], "id").as_deref(), Some("middle"));
+        assert_eq!(payload_string(&records[2], "id").as_deref(), Some("early"));
     }
 
     #[test]

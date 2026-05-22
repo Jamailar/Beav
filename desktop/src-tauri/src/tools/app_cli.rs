@@ -6197,7 +6197,9 @@ fn help_response(namespace: Option<&str>) -> Value {
         "video" => vec![
             "video analyze --path <workspaceRelativePath> [--mode smart_edit] [payload.instruction]",
             "video generate --prompt \"...\" [--mode text-to-video] [--duration 8] [--resolution 1080p]",
+            "video generate --prompt \"...\" --duration 45  # long video: runtime splits into <=15s segments and returns one concatenated video",
             "video generate --prompt \"...\" --mode reference-guided --reference-images /abs/a.png,/abs/b.png",
+            "video generate [payload.videoSegments]  # explicit scene segments, each <=15s, concatenated into one final video",
             "video generate --prompt \"...\" --mode first-last-frame --reference-images /abs/first.png,/abs/last.png",
             "video generate --prompt \"...\" --mode continuation --first-clip /abs/clip.mp4",
             "video generate --mode reference-guided --duration 6 --aspect-ratio 9:16  # put approved storyboardMarkdown/storyboardShots in payload so the host can compile the final execution prompt",

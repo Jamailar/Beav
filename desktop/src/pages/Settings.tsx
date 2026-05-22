@@ -1232,7 +1232,7 @@ export function Settings({
     image_provider: 'openai-compatible',
     image_endpoint: '',
     image_api_key: '',
-    image_model: 'gpt-image-1',
+    image_model: '',
     voice_endpoint: '',
     voice_api_key: '',
     voice_tts_model: DEFAULT_VOICE_TTS_MODEL,
@@ -4211,7 +4211,7 @@ export function Settings({
             if (loadedTemplate === 'dashscope-wan-native') {
               return DASHSCOPE_LOCKED_IMAGE_MODEL;
             }
-            return nextModelRoutes.image.model || 'gpt-image-1';
+            return nextModelRoutes.image.model || '';
           })(),
           voice_endpoint: settings.voice_endpoint || settings.tts_endpoint || '',
           voice_api_key: settings.voice_api_key || settings.tts_api_key || '',
@@ -6202,7 +6202,7 @@ export function Settings({
     if (scope === 'voiceClone') return pickBestModelForSource(officialAiSource, preferredModel, 'voice_clone') || pickBestModelForSource(officialAiSource, preferredModel, 'audio') || pickFirstOfficialModel('voice_clone') || DEFAULT_VOICE_CLONE_MODEL;
     if (scope === 'transcription') return pickBestModelForSource(officialAiSource, preferredModel, 'transcription') || pickFirstOfficialModel('transcription');
     if (scope === 'embedding') return pickBestModelForSource(officialAiSource, preferredModel, 'embedding') || pickFirstOfficialModel('embedding') || 'text-embedding-3-small';
-    if (scope === 'image') return pickBestModelForSource(officialAiSource, preferredModel, 'image') || pickFirstOfficialModel('image') || 'gpt-image-1';
+    if (scope === 'image') return pickBestModelForSource(officialAiSource, preferredModel, 'image') || pickFirstOfficialModel('image');
     if (scope === 'visualIndex') return preferredModel || pickFirstOfficialVisualModel();
     if (scope === 'videoAnalysis') return pickFirstOfficialVideoModel();
     if (scope === 'chat') return String(formData.model_name || defaultAiSource?.model || '').trim() || pickFirstOfficialModel('chat');
