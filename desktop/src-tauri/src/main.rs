@@ -10308,6 +10308,11 @@ fn handle_channel(
     {
         return result;
     }
+    if let Some(result) =
+        commands::brand_workspace::handle_brand_workspace_channel(state, channel, &payload)
+    {
+        return result;
+    }
     if let Some(result) = commands::subjects::handle_subjects_channel(app, state, channel, &payload)
     {
         return result;
