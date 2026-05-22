@@ -230,7 +230,7 @@ interface MediaAssetContextMenuState {
 }
 
 const UNCATEGORIZED_FILTER = '__uncategorized__';
-const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '商品', '场景'];
+const DEFAULT_SUBJECT_CATEGORY_NAMES = ['品牌', '角色', '物品', '商品', '场景'];
 const VISIBLE_SUBJECT_CATEGORY_NAMES = DEFAULT_SUBJECT_CATEGORY_NAMES.filter((name) => name !== '商品');
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。请用自然稳定的语速朗读这段文字，保持音量一致、停顿清晰，让系统更好地学习你的声音特点和语气节奏。';
 const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 30;
@@ -932,6 +932,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const recordingIntervalRef = useRef<number | null>(null);
     const hasLoadedSnapshotRef = useRef(false);
     const hasEnsuredDefaultCategoriesRef = useRef(false);
+    const hasAppliedInitialCategoryRef = useRef(false);
+    const hasInitializedBrandExpansionRef = useRef(false);
     const loadDataRequestRef = useRef(0);
     const refreshedVoiceJobIdsRef = useRef(new Set<string>());
     const autosaveTimerRef = useRef<number | null>(null);
@@ -1129,6 +1131,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [isActive, loadData, voiceJobs]);
 
     const categoryNameMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+    useEffect(() => {
+        if (hasAppliedInitialCategoryRef.current) return;
+        const brandCategory = categories.find((item) => item.name.trim() === '品牌');
+        if (!brandCategory) return;
+        hasAppliedInitialCategoryRef.current = true;
+        setCategoryFilter(brandCategory.id);
+    }, [categories]);
     const subjectCategoryName = useCallback((subject: SubjectRecord) => (
         categoryNameMap.get(subject.categoryId || '')?.trim() || ''
     ), [categoryNameMap]);
@@ -1215,6 +1224,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             return haystack.includes(keyword);
         });
     }, [brandWorkspaceBrands, query]);
+    useEffect(() => {
+        if (hasInitializedBrandExpansionRef.current) return;
+        if (brandWorkspaceBrands.length !== 1 || brandWorkspaceBrands[0].products.length === 0) return;
+        hasInitializedBrandExpansionRef.current = true;
+        setExpandedBrandIds(new Set([brandWorkspaceBrands[0].brand.id]));
+    }, [brandWorkspaceBrands]);
 
     const filteredMediaAssets = useMemo(() => {
         const keyword = query.trim().toLowerCase();

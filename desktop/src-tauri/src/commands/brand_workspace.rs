@@ -465,6 +465,51 @@ fn sync_subject_brands(conn: &Connection, state: &State<'_, AppState>) -> Result
     Ok(())
 }
 
+fn ensure_sample_brand_workspace(conn: &Connection) -> Result<(), String> {
+    let brand_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM brand_records", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if brand_count > 0 {
+        return Ok(());
+    }
+    let now = now_iso();
+    conn.execute(
+        "INSERT INTO brand_records (
+            id, name, description, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            "brand_sample_apple",
+            "Apple",
+            "示例品牌，用来展示品牌资产如何绑定多个商品。",
+            now,
+            now,
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    let products = [
+        (
+            "product_sample_iphone",
+            "iPhone",
+            "示例商品：手机产品线，可以继续维护颜色、容量、版本等 SKU。",
+        ),
+        (
+            "product_sample_ipad",
+            "iPad",
+            "示例商品：平板产品线，可以继续维护尺寸、颜色、存储容量等 SKU。",
+        ),
+    ];
+    for (id, name, description) in products {
+        conn.execute(
+            "INSERT INTO product_records (
+                id, brand_id, name, description, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, "brand_sample_apple", name, description, now, now,],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn upsert_brand(
     conn: &Connection,
     input: BrandMutationInput,
@@ -755,6 +800,7 @@ fn rebuild_ai_index_with_connection(
 fn prepare_workspace(state: &State<'_, AppState>) -> Result<Connection, String> {
     let conn = open_connection(state)?;
     sync_subject_brands(&conn, state)?;
+    ensure_sample_brand_workspace(&conn)?;
     rebuild_ai_index_with_connection(&conn, state)?;
     Ok(conn)
 }
