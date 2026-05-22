@@ -1753,6 +1753,7 @@ declare global {
         showInFolder: (payload: { source: string }) => Promise<unknown>;
         copyImage: (payload: { source: string }) => Promise<unknown>;
         saveAs: (payload: { source: string; defaultName?: string }) => Promise<unknown>;
+        saveZip: (payload: { defaultName?: string; files: Array<{ source: string; name?: string }> }) => Promise<{ success?: boolean; error?: string; canceled?: boolean; path?: string; count?: number }>;
         resolvePreview: (payload: { source: string }) => Promise<{
           success: boolean;
           error?: string;
@@ -1921,6 +1922,7 @@ declare global {
         getJobArtifacts: (jobId: string) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         awaitJob: (payload: { jobId: string; timeoutMs?: number }) => Promise<Record<string, unknown> | null>;
         cancelJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; error?: string }>;
+        deleteJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; archivedAt?: string; error?: string }>;
         retryJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; attemptNo?: number; error?: string }>;
         getRuntimeStatus: () => Promise<{ success?: boolean; runtimeReady?: boolean; runtimeRunning?: boolean }>;
         onJobUpdated: (listener: (...args: any[]) => void) => void;
