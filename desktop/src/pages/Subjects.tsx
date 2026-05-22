@@ -214,6 +214,15 @@ interface ProductDetailVersionDraft {
     title: string;
 }
 
+interface GeneratedImageAsset {
+    id: string;
+    title?: string;
+    previewUrl?: string;
+    absolutePath?: string;
+    relativePath?: string;
+    exists?: boolean;
+}
+
 interface SubjectImageDraft {
     name: string;
     previewUrl: string;
@@ -972,6 +981,42 @@ function detailVersionLabel(page?: Pick<BrandWorkspaceProductDetailPage, 'market
     return parts.length ? parts.join(' / ') : '默认版本';
 }
 
+function generatedAssetToImageDraft(asset: GeneratedImageAsset): BrandWorkspaceImageDraft | null {
+    const path = asset.absolutePath || asset.previewUrl || asset.relativePath || '';
+    if (!path.trim()) return null;
+    return {
+        name: asset.title || path.split(/[\\/]/).pop() || asset.id,
+        previewUrl: asset.previewUrl || path,
+        path,
+    };
+}
+
+function buildProductDetailGenerationPrompt(
+    brand: BrandWorkspaceBrand,
+    productBundle: BrandWorkspaceProductBundle,
+    platform: EcommercePlatformRecord,
+    version: ProductDetailVersionDraft,
+): string {
+    const skuText = productBundle.skus
+        .map((sku) => {
+            const variant = (sku.variantText || '').trim();
+            return variant ? `${sku.name}: ${variant}` : sku.name;
+        })
+        .filter(Boolean)
+        .join('；') || '未填写';
+    const marketText = [version.market.trim(), version.locale.trim()].filter(Boolean).join(' / ') || '默认市场';
+    return [
+        `为电商平台 ${platform.name} 生成一张商品详情页长图。`,
+        `品牌：${brand.name}`,
+        `品牌描述：${brand.description || '未填写'}`,
+        `商品：${productBundle.product.name}`,
+        `商品描述：${productBundle.product.description || '未填写'}`,
+        `SKU：${skuText}`,
+        `目标市场/语言：${marketText}`,
+        '画面要求：清晰展示商品卖点、材质/规格、使用场景和购买理由；整体像真实电商详情页，不要做成海报封面；排版平铺清晰，信息层级明确，留白克制，适合商品详情图使用。',
+    ].join('\n');
+}
+
 async function imageFilesToDrafts(files: FileList | null): Promise<BrandWorkspaceImageDraft[]> {
     const nextFiles = Array.from(files || []);
     const invalid = nextFiles.find((file) => !file.type.startsWith('image/'));
@@ -1100,6 +1145,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [detailVersionDraft, setDetailVersionDraft] = useState<ProductDetailVersionDraft>({ market: '', locale: '', title: '' });
     const [detailImageDrafts, setDetailImageDrafts] = useState<BrandWorkspaceImageDraft[]>([]);
     const [isDetailPageSubmitting, setIsDetailPageSubmitting] = useState(false);
+    const [isGeneratingDetailPage, setIsGeneratingDetailPage] = useState(false);
     const [initialVoicePresent, setInitialVoicePresent] = useState(false);
     const [initialVideoPresent, setInitialVideoPresent] = useState(false);
     const [recordingError, setRecordingError] = useState('');
@@ -1630,22 +1676,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [enabledEcommercePlatforms]);
 
     const closeProductDetailPage = useCallback(() => {
-        if (isDetailPageSubmitting) return;
+        if (isDetailPageSubmitting || isGeneratingDetailPage) return;
         setProductDetailContext(null);
         setSelectedDetailVersionKey('__default__');
         setDetailVersionDraft({ market: '', locale: '', title: '' });
         setDetailImageDrafts([]);
-    }, [isDetailPageSubmitting]);
-
-    const handleDetailImageInput = useCallback(async (files: FileList | null) => {
-        try {
-            const images = await imageFilesToDrafts(files);
-            if (!images.length) return;
-            setDetailImageDrafts((current) => [...current, ...images]);
-        } catch (e) {
-            void appAlert(e instanceof Error ? e.message : '商品详情图仅支持图片文件');
-        }
-    }, []);
+    }, [isDetailPageSubmitting, isGeneratingDetailPage]);
 
     const handleRemoveDetailImage = useCallback((index: number) => {
         setDetailImageDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
@@ -1701,6 +1737,76 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             setIsDetailPageSubmitting(false);
         }
     }, [activeDetailPage, activeDetailPlatform, activeDetailProductBundle, detailImageDrafts, detailVersionDraft, loadData]);
+
+    const persistDetailPageImages = useCallback(async (images: BrandWorkspaceImageDraft[]) => {
+        if (!activeDetailProductBundle || !activeDetailPlatform) {
+            throw new Error('请选择商品和电商平台');
+        }
+        const brandWorkspaceBridge = getBrandWorkspaceBridge();
+        if (!brandWorkspaceBridge?.upsertProductDetailPage) {
+            throw new Error('商品详情图保存接口不可用');
+        }
+        const result = await brandWorkspaceBridge.upsertProductDetailPage({
+            id: activeDetailPage?.id,
+            productId: activeDetailProductBundle.product.id,
+            platform: activeDetailPlatform.id,
+            market: detailVersionDraft.market.trim(),
+            locale: detailVersionDraft.locale.trim(),
+            title: detailVersionDraft.title.trim() || undefined,
+            images: imageDraftPayload(images),
+        });
+        if (!result?.success) {
+            throw new Error(result?.error || '保存商品详情图失败');
+        }
+    }, [activeDetailPage, activeDetailPlatform, activeDetailProductBundle, detailVersionDraft]);
+
+    const handleGenerateDetailPage = useCallback(async () => {
+        if (!activeDetailBrandBundle || !activeDetailProductBundle || !activeDetailPlatform) {
+            void appAlert('请选择商品和电商平台');
+            return;
+        }
+        setIsGeneratingDetailPage(true);
+        setError('');
+        try {
+            const prompt = buildProductDetailGenerationPrompt(
+                activeDetailBrandBundle.brand,
+                activeDetailProductBundle,
+                activeDetailPlatform,
+                detailVersionDraft,
+            );
+            const result = await window.ipcRenderer.invoke('image-gen:generate', {
+                runtimeBypass: true,
+                bypassPromptOptimizer: true,
+                prompt,
+                title: detailVersionDraft.title.trim() || `${activeDetailProductBundle.product.name} ${activeDetailPlatform.name} 详情页`,
+                projectId: `brand-workspace:${activeDetailProductBundle.product.id}`,
+                generationMode: 'text-to-image',
+                count: 1,
+                aspectRatio: '3:4',
+                quality: 'high',
+                source: 'brand-workspace-product-detail',
+            }) as { success?: boolean; error?: string; assets?: GeneratedImageAsset[] };
+            if (!result?.success) {
+                throw new Error(result?.error || 'AI 生成商品详情页失败');
+            }
+            const generatedImages = (result.assets || [])
+                .map(generatedAssetToImageDraft)
+                .filter((image): image is BrandWorkspaceImageDraft => Boolean(image));
+            if (!generatedImages.length) {
+                throw new Error('AI 生成完成，但没有返回可用图片');
+            }
+            const nextImages = [...detailImageDrafts, ...generatedImages];
+            setDetailImageDrafts(nextImages);
+            await persistDetailPageImages(nextImages);
+            await loadData();
+            setSelectedDetailVersionKey(detailVersionKey(detailVersionDraft.market, detailVersionDraft.locale));
+        } catch (e) {
+            console.error('Failed to generate product detail page:', e);
+            setError(e instanceof Error ? e.message : 'AI 生成商品详情页失败');
+        } finally {
+            setIsGeneratingDetailPage(false);
+        }
+    }, [activeDetailBrandBundle, activeDetailPlatform, activeDetailProductBundle, detailImageDrafts, detailVersionDraft, loadData, persistDetailPageImages]);
 
     const closeProductModal = useCallback(() => {
         if (isProductModalSubmitting) return;
@@ -2711,147 +2817,185 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             )}
 
                             {hasPlatforms && activeDetailPlatform ? (
-                                <>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        {detailPages.length === 0 && (
+                                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                                    <div className="min-w-0 space-y-5">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {detailPages.length === 0 && (
+                                                <button
+                                                    type="button"
+                                                    className="inline-flex h-8 items-center rounded-lg bg-black px-3 text-xs font-semibold text-white"
+                                                >
+                                                    默认版本
+                                                </button>
+                                            )}
+                                            {detailPages.map((page) => {
+                                                const active = activeDetailPage?.id === page.id;
+                                                return (
+                                                    <button
+                                                        key={page.id}
+                                                        type="button"
+                                                        onClick={() => handleSelectDetailVersion(page)}
+                                                        className={clsx(
+                                                            'inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold transition',
+                                                            active
+                                                                ? 'bg-black text-white'
+                                                                : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
+                                                        )}
+                                                    >
+                                                        {detailVersionLabel(page)}
+                                                    </button>
+                                                );
+                                            })}
                                             <button
                                                 type="button"
-                                                className="inline-flex h-8 items-center rounded-lg bg-black px-3 text-xs font-semibold text-white"
+                                                onClick={handleCreateDetailVersion}
+                                                className="inline-flex h-8 items-center gap-1 rounded-lg border border-dashed border-[rgb(var(--color-border))] px-2.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
                                             >
-                                                默认版本
-                                            </button>
-                                        )}
-                                        {detailPages.map((page) => {
-                                            const active = activeDetailPage?.id === page.id;
-                                            return (
-                                                <button
-                                                    key={page.id}
-                                                    type="button"
-                                                    onClick={() => handleSelectDetailVersion(page)}
-                                                    className={clsx(
-                                                        'inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold transition',
-                                                        active
-                                                            ? 'bg-black text-white'
-                                                            : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
-                                                    )}
-                                                >
-                                                    {detailVersionLabel(page)}
-                                                </button>
-                                            );
-                                        })}
-                                        <button
-                                            type="button"
-                                            onClick={handleCreateDetailVersion}
-                                            className="inline-flex h-8 items-center gap-1 rounded-lg border border-dashed border-[rgb(var(--color-border))] px-2.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
-                                        >
-                                            <Plus className="h-3.5 w-3.5" />
-                                            版本
-                                        </button>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                                        <label className="block">
-                                            <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">标题</div>
-                                            <input
-                                                value={detailVersionDraft.title}
-                                                onChange={(event) => setDetailVersionDraft((current) => ({ ...current, title: event.target.value }))}
-                                                placeholder={`${activeDetailPlatform.name} 商品详情`}
-                                                className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                            />
-                                        </label>
-                                        <label className="block">
-                                            <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">国家 / 市场</div>
-                                            <input
-                                                value={detailVersionDraft.market}
-                                                onChange={(event) => setDetailVersionDraft((current) => ({ ...current, market: event.target.value }))}
-                                                placeholder="例如 US、JP、泰国；国内平台可留空"
-                                                className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                            />
-                                        </label>
-                                        <label className="block">
-                                            <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">语言</div>
-                                            <input
-                                                value={detailVersionDraft.locale}
-                                                onChange={(event) => setDetailVersionDraft((current) => ({ ...current, locale: event.target.value }))}
-                                                placeholder="例如 en-US、ja-JP、th-TH"
-                                                className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                            />
-                                        </label>
-                                    </div>
-
-                                    <section className="space-y-3">
-                                        <div className="flex items-center justify-between">
-                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品详情图</div>
-                                            <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-[rgb(var(--color-surface-secondary))] px-3 text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]">
                                                 <Plus className="h-3.5 w-3.5" />
-                                                添加图片
+                                                版本
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                                            <label className="block">
+                                                <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">标题</div>
                                                 <input
-                                                    type="file"
-                                                    accept="image/*"
-                                                    multiple
-                                                    className="hidden"
-                                                    onChange={(event) => {
-                                                        void handleDetailImageInput(event.target.files);
-                                                        event.currentTarget.value = '';
-                                                    }}
+                                                    value={detailVersionDraft.title}
+                                                    onChange={(event) => setDetailVersionDraft((current) => ({ ...current, title: event.target.value }))}
+                                                    placeholder={`${activeDetailPlatform.name} 商品详情`}
+                                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">国家 / 市场</div>
+                                                <input
+                                                    value={detailVersionDraft.market}
+                                                    onChange={(event) => setDetailVersionDraft((current) => ({ ...current, market: event.target.value }))}
+                                                    placeholder="例如 US、JP、泰国；国内平台可留空"
+                                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">语言</div>
+                                                <input
+                                                    value={detailVersionDraft.locale}
+                                                    onChange={(event) => setDetailVersionDraft((current) => ({ ...current, locale: event.target.value }))}
+                                                    placeholder="例如 en-US、ja-JP、th-TH"
+                                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
                                                 />
                                             </label>
                                         </div>
 
-                                        {detailImageDrafts.length === 0 ? (
-                                            <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-center text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))]">
-                                                <ImagePlus className="mb-3 h-10 w-10 stroke-[1.6]" />
-                                                <div className="text-sm font-semibold">上传商品详情图</div>
-                                                <input
-                                                    type="file"
-                                                    accept="image/*"
-                                                    multiple
-                                                    className="hidden"
-                                                    onChange={(event) => {
-                                                        void handleDetailImageInput(event.target.files);
-                                                        event.currentTarget.value = '';
-                                                    }}
-                                                />
-                                            </label>
-                                        ) : (
-                                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                                                {detailImageDrafts.map((image, index) => (
-                                                    <div key={`${image.path || image.name}-${index}`} className="group relative overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))] shadow-sm">
-                                                        <img
-                                                            src={resolveAssetUrl(image.previewUrl)}
-                                                            alt={image.name}
-                                                            className="block h-auto w-full object-contain"
-                                                        />
-                                                        <div className="absolute left-2 top-2 rounded-md bg-black/60 px-2 py-1 text-[10px] font-semibold text-white">
-                                                            {index + 1}
-                                                        </div>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleRemoveDetailImage(index)}
-                                                            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
-                                                            aria-label="删除详情图"
-                                                        >
-                                                            <X className="h-4 w-4" />
-                                                        </button>
-                                                    </div>
-                                                ))}
-                                                <label className="flex min-h-[220px] cursor-pointer items-center justify-center rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-[rgb(var(--color-text-tertiary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]">
-                                                    <Plus className="h-6 w-6" />
-                                                    <input
-                                                        type="file"
-                                                        accept="image/*"
-                                                        multiple
-                                                        className="hidden"
-                                                        onChange={(event) => {
-                                                            void handleDetailImageInput(event.target.files);
-                                                            event.currentTarget.value = '';
-                                                        }}
-                                                    />
-                                                </label>
+                                        <section className="space-y-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品详情页</div>
+                                                    <div className="mt-0.5 text-xs text-[rgb(var(--color-text-secondary))]">由 AI 根据商品资料生成</div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleGenerateDetailPage()}
+                                                    disabled={isGeneratingDetailPage || isDetailPageSubmitting}
+                                                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    <Sparkles className={clsx('h-3.5 w-3.5', isGeneratingDetailPage && 'animate-pulse')} />
+                                                    {isGeneratingDetailPage ? '生成中' : 'AI生成详情页'}
+                                                </button>
                                             </div>
-                                        )}
-                                    </section>
-                                </>
+
+                                            {detailImageDrafts.length === 0 ? (
+                                                <div className="flex min-h-[360px] flex-col items-center justify-center rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-center text-[rgb(var(--color-text-secondary))]">
+                                                    <Sparkles className="mb-3 h-10 w-10 stroke-[1.6]" />
+                                                    <div className="text-sm font-semibold">还没有生成详情页</div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleGenerateDetailPage()}
+                                                        disabled={isGeneratingDetailPage || isDetailPageSubmitting}
+                                                        className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        <Sparkles className={clsx('h-3.5 w-3.5', isGeneratingDetailPage && 'animate-pulse')} />
+                                                        {isGeneratingDetailPage ? '生成中' : 'AI生成详情页'}
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                                    {detailImageDrafts.map((image, index) => (
+                                                        <div key={`${image.path || image.name}-${index}`} className="group relative overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))] shadow-sm">
+                                                            <img
+                                                                src={resolveAssetUrl(image.previewUrl)}
+                                                                alt={image.name}
+                                                                className="block h-auto w-full object-contain"
+                                                            />
+                                                            <div className="absolute left-2 top-2 rounded-md bg-black/60 px-2 py-1 text-[10px] font-semibold text-white">
+                                                                {index + 1}
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemoveDetailImage(index)}
+                                                                className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                                aria-label="删除详情页"
+                                                            >
+                                                                <X className="h-4 w-4" />
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleGenerateDetailPage()}
+                                                        disabled={isGeneratingDetailPage || isDetailPageSubmitting}
+                                                        className="flex min-h-[220px] items-center justify-center gap-1.5 rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-xs font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))] disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        <Sparkles className={clsx('h-4 w-4', isGeneratingDetailPage && 'animate-pulse')} />
+                                                        {isGeneratingDetailPage ? '生成中' : '再生成一版'}
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </section>
+                                    </div>
+
+                                    <aside className="h-fit rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-3 xl:sticky xl:top-5">
+                                        <div className="mb-3 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">商品资料</div>
+                                        <div className="grid grid-cols-4 gap-1.5">
+                                            {[productCover, ...activeDetailProductBundle.assets.filter((asset) => asset.id !== productCover?.id)].slice(0, 4).map((asset) => (
+                                                <div key={asset.id} className="aspect-square overflow-hidden rounded-lg bg-white">
+                                                    <img src={resolveAssetUrl(asset.path)} alt="" className="h-full w-full object-cover" />
+                                                </div>
+                                            ))}
+                                            {!productCover && activeDetailProductBundle.assets.length === 0 && (
+                                                <div className="col-span-4 flex aspect-[4/3] items-center justify-center rounded-lg bg-white text-[rgb(var(--color-text-tertiary))]">
+                                                    <Package className="h-6 w-6" />
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="mt-3 space-y-2">
+                                            <div>
+                                                <div className="text-[11px] text-[rgb(var(--color-text-secondary))]">品牌</div>
+                                                <div className="truncate text-sm font-semibold text-[rgb(var(--color-text-primary))]">{activeDetailBrandBundle.brand.name}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-[11px] text-[rgb(var(--color-text-secondary))]">商品</div>
+                                                <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">{activeDetailProductBundle.product.name}</div>
+                                            </div>
+                                            {activeDetailProductBundle.product.description && (
+                                                <div className="text-xs leading-5 text-[rgb(var(--color-text-secondary))]">
+                                                    {activeDetailProductBundle.product.description}
+                                                </div>
+                                            )}
+                                            <div className="flex flex-wrap gap-1">
+                                                {activeDetailProductBundle.skus.length === 0 ? (
+                                                    <span className="rounded-md bg-white px-2 py-1 text-[11px] font-medium text-[rgb(var(--color-text-secondary))]">暂无 SKU</span>
+                                                ) : activeDetailProductBundle.skus.slice(0, 6).map((sku) => (
+                                                    <span key={sku.id} className="rounded-md bg-white px-2 py-1 text-[11px] font-medium text-[rgb(var(--color-text-secondary))]">
+                                                        {sku.name}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                            <div className="rounded-lg bg-white px-2.5 py-2 text-[11px] leading-5 text-[rgb(var(--color-text-secondary))]">
+                                                {activeDetailPlatform.name} · {detailVersionLabel(detailVersionDraft)}
+                                            </div>
+                                        </div>
+                                    </aside>
+                                </div>
                             ) : (
                                 <div className="flex min-h-[54vh] flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]">
                                     <Box className="mb-4 h-12 w-12 stroke-[1.8]" />
