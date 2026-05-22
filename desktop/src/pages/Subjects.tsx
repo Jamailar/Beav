@@ -45,6 +45,12 @@ import {
     type AiModelDescriptor,
 } from './settings/shared';
 import { type AiSourceConfig } from '../config/aiSources';
+import {
+    ECOMMERCE_PLATFORM_GROUPS,
+    ecommercePlatformIconPath,
+    normalizeEcommercePlatformsSettings,
+    type EcommercePlatformRecord,
+} from '../features/ecommerce-platforms/catalog';
 
 interface SubjectCategory {
     id: string;
@@ -122,11 +128,24 @@ interface BrandWorkspaceAssetRef {
     createdAt: string;
 }
 
+interface BrandWorkspaceProductDetailPage {
+    id: string;
+    productId: string;
+    platform: string;
+    market: string;
+    locale: string;
+    title?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
 interface BrandWorkspaceProductBundle {
     product: BrandWorkspaceProduct;
     skus: BrandWorkspaceSku[];
     assets: BrandWorkspaceAssetRef[];
     skuAssets?: Record<string, BrandWorkspaceAssetRef[]>;
+    detailPages?: BrandWorkspaceProductDetailPage[];
+    detailPageAssets?: Record<string, BrandWorkspaceAssetRef[]>;
 }
 
 interface BrandWorkspaceBrandBundle {
@@ -149,6 +168,7 @@ interface BrandWorkspaceBridge {
     upsertBrand: (payload: unknown) => Promise<BrandWorkspaceResult>;
     upsertProduct: (payload: unknown) => Promise<BrandWorkspaceResult>;
     upsertSku: (payload: unknown) => Promise<BrandWorkspaceResult>;
+    upsertProductDetailPage?: (payload: unknown) => Promise<BrandWorkspaceResult>;
     rebuildAiIndex: () => Promise<BrandWorkspaceResult>;
 }
 
@@ -181,6 +201,17 @@ interface BrandWorkspaceImageDraft {
     previewUrl: string;
     path?: string;
     dataUrl?: string;
+}
+
+interface ProductDetailContext {
+    brandId: string;
+    productId: string;
+}
+
+interface ProductDetailVersionDraft {
+    market: string;
+    locale: string;
+    title: string;
 }
 
 interface SubjectImageDraft {
@@ -922,6 +953,25 @@ function imageDraftPayload(images: BrandWorkspaceImageDraft[]) {
     }));
 }
 
+const ALL_ECOMMERCE_PLATFORMS = ECOMMERCE_PLATFORM_GROUPS.flatMap((group) => group.platforms);
+
+function enabledEcommercePlatformsFromSettings(settings: Record<string, unknown>): EcommercePlatformRecord[] {
+    const normalized = normalizeEcommercePlatformsSettings(settings.ecommerce_platforms_json);
+    return ALL_ECOMMERCE_PLATFORMS.filter((platform) => normalized.enabledById[platform.id] !== false);
+}
+
+function detailVersionKey(market = '', locale = ''): string {
+    const cleanMarket = market.trim();
+    const cleanLocale = locale.trim();
+    return cleanMarket || cleanLocale ? `${cleanMarket}__${cleanLocale}` : '__default__';
+}
+
+function detailVersionLabel(page?: Pick<BrandWorkspaceProductDetailPage, 'market' | 'locale'>): string {
+    if (!page) return '默认版本';
+    const parts = [page.market, page.locale].map((value) => value.trim()).filter(Boolean);
+    return parts.length ? parts.join(' / ') : '默认版本';
+}
+
 async function imageFilesToDrafts(files: FileList | null): Promise<BrandWorkspaceImageDraft[]> {
     const nextFiles = Array.from(files || []);
     const invalid = nextFiles.find((file) => !file.type.startsWith('image/'));
@@ -1016,6 +1066,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
     const [brandWorkspaceBrands, setBrandWorkspaceBrands] = useState<BrandWorkspaceBrandBundle[]>([]);
     const [brandWorkspaceError, setBrandWorkspaceError] = useState('');
+    const [enabledEcommercePlatforms, setEnabledEcommercePlatforms] = useState<EcommercePlatformRecord[]>([]);
     const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
     const [libraryTab, setLibraryTab] = useState<AssetLibraryTab>('assets');
     const [loading, setLoading] = useState(true);
@@ -1043,6 +1094,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [isProductModalOpen, setIsProductModalOpen] = useState(false);
     const [isProductModalSubmitting, setIsProductModalSubmitting] = useState(false);
     const [expandedBrandIds, setExpandedBrandIds] = useState<Set<string>>(() => new Set());
+    const [productDetailContext, setProductDetailContext] = useState<ProductDetailContext | null>(null);
+    const [selectedDetailPlatformId, setSelectedDetailPlatformId] = useState('');
+    const [selectedDetailVersionKey, setSelectedDetailVersionKey] = useState('__default__');
+    const [detailVersionDraft, setDetailVersionDraft] = useState<ProductDetailVersionDraft>({ market: '', locale: '', title: '' });
+    const [detailImageDrafts, setDetailImageDrafts] = useState<BrandWorkspaceImageDraft[]>([]);
+    const [isDetailPageSubmitting, setIsDetailPageSubmitting] = useState(false);
     const [initialVoicePresent, setInitialVoicePresent] = useState(false);
     const [initialVideoPresent, setInitialVideoPresent] = useState(false);
     const [recordingError, setRecordingError] = useState('');
@@ -1172,6 +1229,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             setSubjects(Array.isArray(subjectsResult.subjects) ? subjectsResult.subjects : []);
             setBrandWorkspaceBrands(Array.isArray(brandWorkspaceResult?.brands) ? brandWorkspaceResult.brands : []);
             setBrandWorkspaceError(brandWorkspaceResult?.success === false ? (brandWorkspaceResult.error || '品牌工作区加载失败') : '');
+            setEnabledEcommercePlatforms(enabledEcommercePlatformsFromSettings(settingsSnapshot));
             setVoiceModelSettingsSnapshot(settingsSnapshot);
             setVoiceCloneModelOptions(voiceModelSettings.options);
             setSelectedVoiceCloneTtsModel((current) => (
@@ -1208,6 +1266,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 setCategories([]);
                 setSubjects([]);
                 setBrandWorkspaceBrands([]);
+                setEnabledEcommercePlatforms([]);
                 setMediaAssets([]);
             }
         } finally {
@@ -1221,6 +1280,17 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         if (!isActive) return;
         void loadData();
     }, [isActive, loadData]);
+
+    useEffect(() => {
+        if (!productDetailContext) return;
+        if (enabledEcommercePlatforms.length === 0) {
+            setSelectedDetailPlatformId('');
+            return;
+        }
+        if (!selectedDetailPlatformId || !enabledEcommercePlatforms.some((platform) => platform.id === selectedDetailPlatformId)) {
+            setSelectedDetailPlatformId(enabledEcommercePlatforms[0].id);
+        }
+    }, [enabledEcommercePlatforms, productDetailContext, selectedDetailPlatformId]);
 
     const voiceJobIds = useMemo(
         () => Array.from(new Set(subjects
@@ -1271,6 +1341,64 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }
         return counts;
     }, [brandWorkspaceBrands]);
+    const activeDetailBrandBundle = useMemo(() => (
+        productDetailContext
+            ? brandWorkspaceBrands.find((bundle) => bundle.brand.id === productDetailContext.brandId) || null
+            : null
+    ), [brandWorkspaceBrands, productDetailContext]);
+    const activeDetailProductBundle = useMemo(() => (
+        productDetailContext && activeDetailBrandBundle
+            ? activeDetailBrandBundle.products.find((bundle) => bundle.product.id === productDetailContext.productId) || null
+            : null
+    ), [activeDetailBrandBundle, productDetailContext]);
+    const activeDetailPlatform = useMemo(() => (
+        enabledEcommercePlatforms.find((platform) => platform.id === selectedDetailPlatformId) || enabledEcommercePlatforms[0] || null
+    ), [enabledEcommercePlatforms, selectedDetailPlatformId]);
+    const activeDetailPages = useMemo(() => (
+        activeDetailProductBundle && activeDetailPlatform
+            ? (activeDetailProductBundle.detailPages || []).filter((page) => page.platform === activeDetailPlatform.id)
+            : []
+    ), [activeDetailPlatform, activeDetailProductBundle]);
+    const isDraftDetailVersion = selectedDetailVersionKey.startsWith('draft-');
+    const activeDetailPage = useMemo(() => (
+        isDraftDetailVersion
+            ? null
+            : activeDetailPages.find((page) => detailVersionKey(page.market, page.locale) === selectedDetailVersionKey)
+                || activeDetailPages.find((page) => detailVersionKey(page.market, page.locale) === '__default__')
+                || activeDetailPages[0]
+                || null
+    ), [activeDetailPages, isDraftDetailVersion, selectedDetailVersionKey]);
+    const productDetailThumbnailsByProductId = useMemo(() => {
+        const result = new Map<string, BrandWorkspaceAssetRef[]>();
+        for (const brandBundle of brandWorkspaceBrands) {
+            for (const productBundle of brandBundle.products) {
+                const assets = (productBundle.detailPages || []).flatMap((page) => (
+                    productBundle.detailPageAssets?.[page.id] || []
+                ));
+                if (assets.length) {
+                    result.set(productBundle.product.id, assets.slice(0, 5));
+                }
+            }
+        }
+        return result;
+    }, [brandWorkspaceBrands]);
+    useEffect(() => {
+        if (!productDetailContext) return;
+        if (isDraftDetailVersion) return;
+        if (activeDetailPage) {
+            setSelectedDetailVersionKey(detailVersionKey(activeDetailPage.market, activeDetailPage.locale));
+            setDetailVersionDraft({
+                market: activeDetailPage.market,
+                locale: activeDetailPage.locale,
+                title: activeDetailPage.title || '',
+            });
+            setDetailImageDrafts(assetRefsToImageDrafts(activeDetailProductBundle?.detailPageAssets?.[activeDetailPage.id]));
+            return;
+        }
+        setSelectedDetailVersionKey('__default__');
+        setDetailVersionDraft({ market: '', locale: '', title: '' });
+        setDetailImageDrafts([]);
+    }, [activeDetailPage, activeDetailProductBundle, isDraftDetailVersion, productDetailContext]);
     const activeDraftSubject = useMemo(
         () => draft.id ? subjects.find((subject) => subject.id === draft.id) || null : null,
         [draft.id, subjects],
@@ -1491,6 +1619,88 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setExpandedBrandIds((current) => new Set(current).add(brand.id));
         setIsProductModalOpen(true);
     }, []);
+
+    const openProductDetailPage = useCallback((brand: BrandWorkspaceBrand, productBundle: BrandWorkspaceProductBundle) => {
+        setProductDetailContext({ brandId: brand.id, productId: productBundle.product.id });
+        setSelectedDetailPlatformId((current) => current || enabledEcommercePlatforms[0]?.id || '');
+        setSelectedDetailVersionKey('__default__');
+        setDetailVersionDraft({ market: '', locale: '', title: '' });
+        setDetailImageDrafts([]);
+        setError('');
+    }, [enabledEcommercePlatforms]);
+
+    const closeProductDetailPage = useCallback(() => {
+        if (isDetailPageSubmitting) return;
+        setProductDetailContext(null);
+        setSelectedDetailVersionKey('__default__');
+        setDetailVersionDraft({ market: '', locale: '', title: '' });
+        setDetailImageDrafts([]);
+    }, [isDetailPageSubmitting]);
+
+    const handleDetailImageInput = useCallback(async (files: FileList | null) => {
+        try {
+            const images = await imageFilesToDrafts(files);
+            if (!images.length) return;
+            setDetailImageDrafts((current) => [...current, ...images]);
+        } catch (e) {
+            void appAlert(e instanceof Error ? e.message : '商品详情图仅支持图片文件');
+        }
+    }, []);
+
+    const handleRemoveDetailImage = useCallback((index: number) => {
+        setDetailImageDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    }, []);
+
+    const handleSelectDetailVersion = useCallback((page: BrandWorkspaceProductDetailPage) => {
+        setSelectedDetailVersionKey(detailVersionKey(page.market, page.locale));
+        setDetailVersionDraft({
+            market: page.market,
+            locale: page.locale,
+            title: page.title || '',
+        });
+        setDetailImageDrafts(assetRefsToImageDrafts(activeDetailProductBundle?.detailPageAssets?.[page.id]));
+    }, [activeDetailProductBundle]);
+
+    const handleCreateDetailVersion = useCallback(() => {
+        setSelectedDetailVersionKey(`draft-${Date.now()}`);
+        setDetailVersionDraft({ market: '', locale: '', title: '' });
+        setDetailImageDrafts([]);
+    }, []);
+
+    const handleSaveDetailPage = useCallback(async () => {
+        if (!activeDetailProductBundle || !activeDetailPlatform) {
+            void appAlert('请选择商品和电商平台');
+            return;
+        }
+        const brandWorkspaceBridge = getBrandWorkspaceBridge();
+        if (!brandWorkspaceBridge?.upsertProductDetailPage) {
+            void appAlert('商品详情图保存接口不可用');
+            return;
+        }
+        setIsDetailPageSubmitting(true);
+        setError('');
+        try {
+            const result = await brandWorkspaceBridge.upsertProductDetailPage({
+                id: activeDetailPage?.id,
+                productId: activeDetailProductBundle.product.id,
+                platform: activeDetailPlatform.id,
+                market: detailVersionDraft.market.trim(),
+                locale: detailVersionDraft.locale.trim(),
+                title: detailVersionDraft.title.trim() || undefined,
+                images: imageDraftPayload(detailImageDrafts),
+            });
+            if (!result?.success) {
+                throw new Error(result?.error || '保存商品详情图失败');
+            }
+            await loadData();
+            setSelectedDetailVersionKey(detailVersionKey(detailVersionDraft.market, detailVersionDraft.locale));
+        } catch (e) {
+            console.error('Failed to save product detail page:', e);
+            setError(e instanceof Error ? e.message : '保存商品详情图失败');
+        } finally {
+            setIsDetailPageSubmitting(false);
+        }
+    }, [activeDetailPage, activeDetailPlatform, activeDetailProductBundle, detailImageDrafts, detailVersionDraft, loadData]);
 
     const closeProductModal = useCallback(() => {
         if (isProductModalSubmitting) return;
@@ -2379,6 +2589,282 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const activeLibraryTab = isModalVariant ? libraryTab : 'assets';
     const showAssetControls = activeLibraryTab === 'assets';
 
+    if (productDetailContext && activeDetailBrandBundle && activeDetailProductBundle) {
+        const productCover = activeDetailProductBundle.assets.find((asset) => asset.role === 'image');
+        const detailPages = activeDetailPages;
+        const hasPlatforms = enabledEcommercePlatforms.length > 0;
+        return (
+            <div className="flex h-full min-h-0 flex-col bg-white">
+                <div className={clsx('border-b border-[rgb(var(--color-border))]', isModalVariant ? 'px-5 py-4' : 'px-8 py-5')}>
+                    <div className="flex min-w-0 items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={closeProductDetailPage}
+                            disabled={isDetailPageSubmitting}
+                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[rgb(var(--color-border))] bg-white text-[rgb(var(--color-text-primary))] shadow-sm transition hover:bg-[rgb(var(--color-surface-primary))] disabled:opacity-50"
+                            aria-label="返回资产库"
+                            title="返回"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                        </button>
+                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-[rgb(var(--color-surface-secondary))]">
+                            {productCover ? (
+                                <img src={resolveAssetUrl(productCover.path)} alt={activeDetailProductBundle.product.name} className="h-full w-full object-cover" />
+                            ) : (
+                                <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                    <Package className="h-5 w-5" />
+                                </div>
+                            )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs font-medium text-[rgb(var(--color-text-secondary))]">
+                                {activeDetailBrandBundle.brand.name}
+                            </div>
+                            <h2 className="mt-1 truncate text-xl font-semibold leading-none text-[rgb(var(--color-text-primary))]">
+                                {activeDetailProductBundle.product.name}
+                            </h2>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => void handleSaveDetailPage()}
+                            disabled={isDetailPageSubmitting || !hasPlatforms}
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <Save className="h-4 w-4" />
+                            {isDetailPageSubmitting ? '保存中' : '保存'}
+                        </button>
+                    </div>
+                </div>
+
+                <div className="flex min-h-0 flex-1">
+                    <aside className={clsx('hidden min-h-0 w-[250px] shrink-0 border-r border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-4 lg:block', isModalVariant && 'w-[220px]')}>
+                        <div className="mb-3 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">电商平台</div>
+                        {hasPlatforms ? (
+                            <div className="space-y-1">
+                                {enabledEcommercePlatforms.map((platform) => {
+                                    const active = activeDetailPlatform?.id === platform.id;
+                                    const iconPath = ecommercePlatformIconPath(platform.id);
+                                    return (
+                                        <button
+                                            key={platform.id}
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedDetailPlatformId(platform.id);
+                                                setSelectedDetailVersionKey('__default__');
+                                            }}
+                                            className={clsx(
+                                                'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold transition',
+                                                active
+                                                    ? 'bg-white text-[rgb(var(--color-text-primary))] shadow-sm'
+                                                    : 'text-[rgb(var(--color-text-secondary))] hover:bg-white hover:text-[rgb(var(--color-text-primary))]'
+                                            )}
+                                        >
+                                            <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white">
+                                                {iconPath ? (
+                                                    <img src={iconPath} alt="" className="h-4 w-4 object-contain" />
+                                                ) : (
+                                                    <Box className="h-3.5 w-3.5" />
+                                                )}
+                                            </span>
+                                            <span className="min-w-0 flex-1 truncate">{platform.name}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-white px-3 py-3 text-xs leading-5 text-[rgb(var(--color-text-secondary))]">
+                                先在设置里开启电商平台。
+                            </div>
+                        )}
+                    </aside>
+
+                    <main className="min-w-0 flex-1 overflow-auto">
+                        <div className={clsx('mx-auto w-full max-w-[1180px] space-y-5 py-5', isModalVariant ? 'px-5' : 'px-8')}>
+                            <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">
+                                {enabledEcommercePlatforms.map((platform) => {
+                                    const active = activeDetailPlatform?.id === platform.id;
+                                    const iconPath = ecommercePlatformIconPath(platform.id);
+                                    return (
+                                        <button
+                                            key={platform.id}
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedDetailPlatformId(platform.id);
+                                                setSelectedDetailVersionKey('__default__');
+                                            }}
+                                            className={clsx(
+                                                'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition',
+                                                active ? 'bg-black text-white' : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))]'
+                                            )}
+                                        >
+                                            {iconPath && <img src={iconPath} alt="" className="h-4 w-4 rounded-sm object-contain" />}
+                                            {platform.name}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {error && (
+                                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                                    {error}
+                                </div>
+                            )}
+
+                            {hasPlatforms && activeDetailPlatform ? (
+                                <>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        {detailPages.length === 0 && (
+                                            <button
+                                                type="button"
+                                                className="inline-flex h-8 items-center rounded-lg bg-black px-3 text-xs font-semibold text-white"
+                                            >
+                                                默认版本
+                                            </button>
+                                        )}
+                                        {detailPages.map((page) => {
+                                            const active = activeDetailPage?.id === page.id;
+                                            return (
+                                                <button
+                                                    key={page.id}
+                                                    type="button"
+                                                    onClick={() => handleSelectDetailVersion(page)}
+                                                    className={clsx(
+                                                        'inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold transition',
+                                                        active
+                                                            ? 'bg-black text-white'
+                                                            : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
+                                                    )}
+                                                >
+                                                    {detailVersionLabel(page)}
+                                                </button>
+                                            );
+                                        })}
+                                        <button
+                                            type="button"
+                                            onClick={handleCreateDetailVersion}
+                                            className="inline-flex h-8 items-center gap-1 rounded-lg border border-dashed border-[rgb(var(--color-border))] px-2.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                        >
+                                            <Plus className="h-3.5 w-3.5" />
+                                            版本
+                                        </button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                                        <label className="block">
+                                            <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">标题</div>
+                                            <input
+                                                value={detailVersionDraft.title}
+                                                onChange={(event) => setDetailVersionDraft((current) => ({ ...current, title: event.target.value }))}
+                                                placeholder={`${activeDetailPlatform.name} 商品详情`}
+                                                className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                            />
+                                        </label>
+                                        <label className="block">
+                                            <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">国家 / 市场</div>
+                                            <input
+                                                value={detailVersionDraft.market}
+                                                onChange={(event) => setDetailVersionDraft((current) => ({ ...current, market: event.target.value }))}
+                                                placeholder="例如 US、JP、泰国；国内平台可留空"
+                                                className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                            />
+                                        </label>
+                                        <label className="block">
+                                            <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">语言</div>
+                                            <input
+                                                value={detailVersionDraft.locale}
+                                                onChange={(event) => setDetailVersionDraft((current) => ({ ...current, locale: event.target.value }))}
+                                                placeholder="例如 en-US、ja-JP、th-TH"
+                                                className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <section className="space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品详情图</div>
+                                            <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-[rgb(var(--color-surface-secondary))] px-3 text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]">
+                                                <Plus className="h-3.5 w-3.5" />
+                                                添加图片
+                                                <input
+                                                    type="file"
+                                                    accept="image/*"
+                                                    multiple
+                                                    className="hidden"
+                                                    onChange={(event) => {
+                                                        void handleDetailImageInput(event.target.files);
+                                                        event.currentTarget.value = '';
+                                                    }}
+                                                />
+                                            </label>
+                                        </div>
+
+                                        {detailImageDrafts.length === 0 ? (
+                                            <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-center text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))]">
+                                                <ImagePlus className="mb-3 h-10 w-10 stroke-[1.6]" />
+                                                <div className="text-sm font-semibold">上传商品详情图</div>
+                                                <input
+                                                    type="file"
+                                                    accept="image/*"
+                                                    multiple
+                                                    className="hidden"
+                                                    onChange={(event) => {
+                                                        void handleDetailImageInput(event.target.files);
+                                                        event.currentTarget.value = '';
+                                                    }}
+                                                />
+                                            </label>
+                                        ) : (
+                                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                                                {detailImageDrafts.map((image, index) => (
+                                                    <div key={`${image.path || image.name}-${index}`} className="group relative overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))] shadow-sm">
+                                                        <img
+                                                            src={resolveAssetUrl(image.previewUrl)}
+                                                            alt={image.name}
+                                                            className="block h-auto w-full object-contain"
+                                                        />
+                                                        <div className="absolute left-2 top-2 rounded-md bg-black/60 px-2 py-1 text-[10px] font-semibold text-white">
+                                                            {index + 1}
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleRemoveDetailImage(index)}
+                                                            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                            aria-label="删除详情图"
+                                                        >
+                                                            <X className="h-4 w-4" />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                <label className="flex min-h-[220px] cursor-pointer items-center justify-center rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-[rgb(var(--color-text-tertiary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]">
+                                                    <Plus className="h-6 w-6" />
+                                                    <input
+                                                        type="file"
+                                                        accept="image/*"
+                                                        multiple
+                                                        className="hidden"
+                                                        onChange={(event) => {
+                                                            void handleDetailImageInput(event.target.files);
+                                                            event.currentTarget.value = '';
+                                                        }}
+                                                    />
+                                                </label>
+                                            </div>
+                                        )}
+                                    </section>
+                                </>
+                            ) : (
+                                <div className="flex min-h-[54vh] flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]">
+                                    <Box className="mb-4 h-12 w-12 stroke-[1.8]" />
+                                    <div className="text-sm font-semibold">没有启用的电商平台</div>
+                                </div>
+                            )}
+                        </div>
+                    </main>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="flex h-full min-h-0 flex-col bg-white">
             <div className={clsx(isModalVariant ? 'px-5 pt-4 pb-3' : 'px-8 pt-6 pb-4')}>
@@ -2758,11 +3244,18 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                         {products.map((productBundle) => {
                                                             const { product, skus, assets } = productBundle;
                                                             const productImage = assets.find((asset) => asset.role === 'image');
+                                                            const detailThumbnails = productDetailThumbnailsByProductId.get(product.id) || [];
                                                             return (
-                                                            <button
+                                                            <div
                                                                 key={product.id}
-                                                                type="button"
-                                                                onClick={() => openEditProductModal(brand, productBundle)}
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                onClick={() => openProductDetailPage(brand, productBundle)}
+                                                                onKeyDown={(event) => {
+                                                                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                                                                    event.preventDefault();
+                                                                    openProductDetailPage(brand, productBundle);
+                                                                }}
                                                                 className="flex w-full items-center gap-3 rounded-lg bg-white px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-secondary))]"
                                                             >
                                                                 <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
@@ -2781,10 +3274,40 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                                         {product.description ? ` · ${product.description}` : ''}
                                                                     </div>
                                                                 </div>
+                                                                <div className="hidden min-w-0 shrink-0 items-center gap-1 sm:flex">
+                                                                    {detailThumbnails.slice(0, 4).map((asset) => (
+                                                                        <div key={asset.id} className="h-8 w-8 overflow-hidden rounded-md bg-[rgb(var(--color-surface-secondary))]">
+                                                                            <img src={resolveAssetUrl(asset.path)} alt="" className="h-full w-full object-cover" />
+                                                                        </div>
+                                                                    ))}
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={(event) => {
+                                                                            event.stopPropagation();
+                                                                            openProductDetailPage(brand, productBundle);
+                                                                        }}
+                                                                        className="inline-flex h-8 items-center gap-1 rounded-md border border-dashed border-[rgb(var(--color-border))] px-2 text-[11px] font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-primary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                                    >
+                                                                        <ImagePlus className="h-3.5 w-3.5" />
+                                                                        详情图
+                                                                    </button>
+                                                                </div>
                                                                 <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
                                                                     {new Date(product.updatedAt).toLocaleDateString()}
                                                                 </div>
-                                                            </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(event) => {
+                                                                        event.stopPropagation();
+                                                                        openEditProductModal(brand, productBundle);
+                                                                    }}
+                                                                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                                    aria-label="编辑商品"
+                                                                    title="编辑商品"
+                                                                >
+                                                                    <Pencil className="h-4 w-4" />
+                                                                </button>
+                                                            </div>
                                                         );})}
                                                     </div>
                                                 )}

@@ -54,11 +54,26 @@ pub(crate) struct BrandWorkspaceAssetRef {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct BrandWorkspaceProductDetailPage {
+    pub id: String,
+    pub product_id: String,
+    pub platform: String,
+    pub market: String,
+    pub locale: String,
+    pub title: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BrandWorkspaceProductBundle {
     pub product: BrandWorkspaceProduct,
     pub skus: Vec<BrandWorkspaceSku>,
     pub assets: Vec<BrandWorkspaceAssetRef>,
     pub sku_assets: BTreeMap<String, Vec<BrandWorkspaceAssetRef>>,
+    pub detail_pages: Vec<BrandWorkspaceProductDetailPage>,
+    pub detail_page_assets: BTreeMap<String, Vec<BrandWorkspaceAssetRef>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +111,18 @@ struct SkuMutationInput {
     product_id: Option<String>,
     name: String,
     variant_text: Option<String>,
+    images: Option<Vec<AssetMutationInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductDetailPageMutationInput {
+    id: Option<String>,
+    product_id: String,
+    platform: String,
+    market: Option<String>,
+    locale: Option<String>,
+    title: Option<String>,
     images: Option<Vec<AssetMutationInput>>,
 }
 
@@ -189,6 +216,20 @@ fn open_connection(state: &State<'_, AppState>) -> Result<Connection, String> {
         );
         CREATE INDEX IF NOT EXISTS idx_skus_product_id
             ON product_skus(product_id, updated_at DESC, id);
+        CREATE TABLE IF NOT EXISTS product_detail_pages (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            market TEXT NOT NULL DEFAULT '',
+            locale TEXT NOT NULL DEFAULT '',
+            title TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(product_id, platform, market, locale),
+            FOREIGN KEY(product_id) REFERENCES product_records(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_detail_pages_product_platform
+            ON product_detail_pages(product_id, platform, market, locale);
         "#,
     )
     .map_err(|error| error.to_string())?;
@@ -269,6 +310,21 @@ fn row_to_asset_ref(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceAssetRef, r
     })
 }
 
+fn row_to_detail_page(
+    row: &rusqlite::Row<'_>,
+) -> Result<BrandWorkspaceProductDetailPage, rusqlite::Error> {
+    Ok(BrandWorkspaceProductDetailPage {
+        id: row.get(0)?,
+        product_id: row.get(1)?,
+        platform: row.get(2)?,
+        market: row.get(3)?,
+        locale: row.get(4)?,
+        title: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
 fn select_brands(conn: &Connection) -> Result<Vec<BrandWorkspaceBrand>, String> {
     let mut stmt = conn
         .prepare(
@@ -338,6 +394,25 @@ fn select_asset_refs(
     let params = std::iter::once(owner_type).chain(owner_ids.iter().map(String::as_str));
     let rows = stmt
         .query_map(rusqlite::params_from_iter(params), row_to_asset_ref)
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn select_detail_pages_for_product(
+    conn: &Connection,
+    product_id: &str,
+) -> Result<Vec<BrandWorkspaceProductDetailPage>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, product_id, platform, market, locale, title, created_at, updated_at
+             FROM product_detail_pages
+             WHERE product_id = ?1
+             ORDER BY platform ASC, market ASC, locale ASC, updated_at DESC",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(params![product_id], row_to_detail_page)
         .map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())
@@ -464,11 +539,26 @@ fn brand_bundle(
                 .or_default()
                 .push(asset);
         }
+        let detail_pages = select_detail_pages_for_product(conn, &product.id)?;
+        let detail_page_ids = detail_pages
+            .iter()
+            .map(|page| page.id.clone())
+            .collect::<Vec<_>>();
+        let detail_page_refs = select_asset_refs(conn, "product_detail_page", &detail_page_ids)?;
+        let mut detail_page_assets: BTreeMap<String, Vec<BrandWorkspaceAssetRef>> = BTreeMap::new();
+        for asset in detail_page_refs {
+            detail_page_assets
+                .entry(asset.owner_id.clone())
+                .or_default()
+                .push(asset);
+        }
         bundles.push(BrandWorkspaceProductBundle {
             product,
             skus,
             assets,
             sku_assets,
+            detail_pages,
+            detail_page_assets,
         });
     }
     Ok(BrandWorkspaceBrandBundle {
@@ -722,6 +812,112 @@ fn upsert_sku_for_product(
     get_sku(conn, &id)
 }
 
+fn upsert_detail_page(
+    conn: &Connection,
+    state: &State<'_, AppState>,
+    input: ProductDetailPageMutationInput,
+) -> Result<BrandWorkspaceProductBundle, String> {
+    let product_id = input.product_id.trim().to_string();
+    if product_id.is_empty() {
+        return Err("缺少商品 id".to_string());
+    }
+    let product_exists: Option<String> = conn
+        .query_row(
+            "SELECT id FROM product_records WHERE id = ?1",
+            params![product_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if product_exists.is_none() {
+        return Err("商品不存在".to_string());
+    }
+    let platform = input.platform.trim().to_string();
+    if platform.is_empty() {
+        return Err("缺少电商平台".to_string());
+    }
+    let market = input
+        .market
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    let locale = input
+        .locale
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    let input_id = input
+        .id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let now = now_iso();
+    if let Some(existing_id) = input_id.as_deref() {
+        let existing_created_at: Option<String> = conn
+            .query_row(
+                "SELECT created_at FROM product_detail_pages WHERE id = ?1",
+                params![existing_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if existing_created_at.is_some() {
+            conn.execute(
+                "UPDATE product_detail_pages
+                 SET product_id = ?2, platform = ?3, market = ?4, locale = ?5, title = ?6, updated_at = ?7
+                 WHERE id = ?1",
+                params![
+                    existing_id,
+                    product_id,
+                    platform,
+                    market,
+                    locale,
+                    clean_string(input.title),
+                    now
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+            if let Some(images) = input.images {
+                sync_asset_images(conn, state, "product_detail_page", existing_id, images)?;
+            }
+            return get_product_bundle(conn, &product_id);
+        }
+    }
+    let existing: Option<(String, String)> = conn
+        .query_row(
+            "SELECT id, created_at FROM product_detail_pages
+             WHERE product_id = ?1 AND platform = ?2 AND market = ?3 AND locale = ?4",
+            params![product_id, platform, market, locale],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let id = input_id
+        .or_else(|| existing.as_ref().map(|item| item.0.clone()))
+        .unwrap_or_else(|| make_id("detail_page"));
+    let created_at = existing.map(|item| item.1).unwrap_or_else(|| now.clone());
+    conn.execute(
+        "INSERT INTO product_detail_pages (
+            id, product_id, platform, market, locale, title, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(product_id, platform, market, locale) DO UPDATE SET
+            title = excluded.title,
+            updated_at = excluded.updated_at",
+        params![
+            id,
+            product_id,
+            platform,
+            market,
+            locale,
+            clean_string(input.title),
+            created_at,
+            now
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    if let Some(images) = input.images {
+        sync_asset_images(conn, state, "product_detail_page", &id, images)?;
+    }
+    get_product_bundle(conn, &product_id)
+}
+
 fn get_brand(conn: &Connection, id: &str) -> Result<BrandWorkspaceBrand, String> {
     conn.query_row(
         "SELECT id, name, description, created_at, updated_at
@@ -765,11 +961,26 @@ fn get_product_bundle(conn: &Connection, id: &str) -> Result<BrandWorkspaceProdu
             .or_default()
             .push(asset);
     }
+    let detail_pages = select_detail_pages_for_product(conn, id)?;
+    let detail_page_ids = detail_pages
+        .iter()
+        .map(|page| page.id.clone())
+        .collect::<Vec<_>>();
+    let detail_page_refs = select_asset_refs(conn, "product_detail_page", &detail_page_ids)?;
+    let mut detail_page_assets: BTreeMap<String, Vec<BrandWorkspaceAssetRef>> = BTreeMap::new();
+    for asset in detail_page_refs {
+        detail_page_assets
+            .entry(asset.owner_id.clone())
+            .or_default()
+            .push(asset);
+    }
     Ok(BrandWorkspaceProductBundle {
         product,
         skus,
         assets,
         sku_assets,
+        detail_pages,
+        detail_page_assets,
     })
 }
 
@@ -820,6 +1031,33 @@ fn brand_markdown(bundle: &BrandWorkspaceBrandBundle, generated_at: &str) -> Str
                     markdown.push_str(&format!("- {}：{}\n", sku.name, variant_text));
                 }
                 if let Some(assets) = product_bundle.sku_assets.get(&sku.id) {
+                    for asset in assets {
+                        markdown.push_str(&format!("  - {}: {}\n", asset.role, asset.path));
+                    }
+                }
+            }
+            markdown.push('\n');
+        }
+        markdown.push_str("### 商品详情图\n\n");
+        if product_bundle.detail_pages.is_empty() {
+            markdown.push_str("- 未创建详情图版本\n\n");
+        } else {
+            for page in &product_bundle.detail_pages {
+                let version_name = [page.market.as_str(), page.locale.as_str()]
+                    .into_iter()
+                    .filter(|value| !value.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" / ");
+                markdown.push_str(&format!(
+                    "- platformId: {}; version: {}\n",
+                    page.platform,
+                    if version_name.is_empty() {
+                        "默认版本"
+                    } else {
+                        version_name.as_str()
+                    }
+                ));
+                if let Some(assets) = product_bundle.detail_page_assets.get(&page.id) {
                     for asset in assets {
                         markdown.push_str(&format!("  - {}: {}\n", asset.role, asset.path));
                     }
@@ -892,6 +1130,7 @@ pub fn handle_brand_workspace_channel(
             | "brand-workspace:brand:upsert"
             | "brand-workspace:product:upsert"
             | "brand-workspace:sku:upsert"
+            | "brand-workspace:product-detail-page:upsert"
             | "brand-workspace:rebuild-ai-index"
     ) {
         return None;
@@ -946,6 +1185,14 @@ pub fn handle_brand_workspace_channel(
             let sku = upsert_sku_for_product(&conn, state, &product_id, input)?;
             rebuild_ai_index_with_connection(&conn, state)?;
             Ok(json!({ "success": true, "sku": sku }))
+        }
+        "brand-workspace:product-detail-page:upsert" => {
+            let conn = prepare_workspace(state)?;
+            let input: ProductDetailPageMutationInput =
+                serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
+            let product = upsert_detail_page(&conn, state, input)?;
+            rebuild_ai_index_with_connection(&conn, state)?;
+            Ok(json!({ "success": true, "product": product }))
         }
         "brand-workspace:rebuild-ai-index" => {
             let conn = prepare_workspace(state)?;
