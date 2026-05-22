@@ -723,6 +723,21 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("image.generate"),
         ),
+        ("generation" | "job" | "jobs", "list" | "search") => app_cli_action_call(
+            "generation.job.list",
+            payload,
+            Some("Operate"),
+            Some("generation.job.list"),
+        ),
+        ("generation" | "job" | "jobs", "get" | "status" | "progress") => {
+            let payload = normalize_id_payload(payload, "jobId");
+            app_cli_action_call(
+                "generation.job.get",
+                payload,
+                Some("Operate"),
+                Some("generation.job.get"),
+            )
+        }
         ("video", "generate" | "run") => app_cli_action_call(
             "video.generate",
             payload,

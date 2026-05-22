@@ -36,6 +36,7 @@ pub fn default_direct_namespaces(
     let mut namespaces = match normalize_runtime_mode(runtime_mode) {
         "image-generation" => vec![
             image::NAMESPACE,
+            "generation.job",
             "video_analysis",
             subjects::NAMESPACE,
             "skills",
@@ -64,6 +65,7 @@ pub fn default_direct_namespaces(
         "video-editor" | "audio-editor" => vec![
             "video_analysis",
             image::NAMESPACE,
+            "generation.job",
             "video",
             voice::NAMESPACE,
             subjects::NAMESPACE,

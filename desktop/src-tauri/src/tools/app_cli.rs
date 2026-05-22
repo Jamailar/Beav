@@ -809,6 +809,16 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["edit".to_string()];
                 self.handle_media(&tokens, payload)
             }
+            "generationjoblist" | "generationjobslist" => {
+                self.call_channel("generation:list-jobs", payload.clone())
+            }
+            "generationjobget" | "generationjobsget" => self.call_channel(
+                "generation:get-job",
+                json!({
+                    "jobId": payload_string_alias(payload, &["jobId", "id"])
+                        .ok_or_else(|| "generation.job.get requires jobId".to_string())?
+                }),
+            ),
             "mediatranscribe" => {
                 let tokens = vec!["transcribe".to_string()];
                 self.handle_media(&tokens, payload)
@@ -1650,6 +1660,17 @@ impl<'a> AppCliExecutor<'a> {
         let args = parse_cli_args(&tokens[1..])?;
         match action {
             "list" => self.call_channel("media:list", json!({})),
+            "jobs" | "job-list" | "generation-jobs" => {
+                self.call_channel("generation:list-jobs", payload.clone())
+            }
+            "job" | "job-get" | "generation-job" | "progress" | "status" => {
+                let job_id = args
+                    .string(&["job-id", "jobId", "id"])
+                    .or_else(|| payload_string_alias(payload, &["jobId", "id"]))
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "media job status requires jobId".to_string())?;
+                self.call_channel("generation:get-job", json!({ "jobId": job_id }))
+            }
             "get" => {
                 let asset_id = args
                     .string(&["id", "asset-id"])
