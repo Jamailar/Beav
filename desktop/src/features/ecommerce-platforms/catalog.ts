@@ -3,6 +3,12 @@ export type EcommercePlatformRecord = {
   name: string;
   market: string;
   platformType: string;
+  detailPageLocales?: EcommercePlatformDetailPageLocale[];
+};
+
+export type EcommercePlatformDetailPageLocale = {
+  market: string;
+  locale: string;
 };
 
 export type EcommercePlatformGroup = {
@@ -60,6 +66,11 @@ export const ECOMMERCE_PLATFORM_ICON_PATHS: Record<string, string> = {
 export const ecommercePlatformIconPath = (platformId: string): string =>
   ECOMMERCE_PLATFORM_ICON_PATHS[platformId] || '';
 
+const detailLocale = (market: string, locale: string): EcommercePlatformDetailPageLocale => ({
+  market,
+  locale,
+});
+
 export const ECOMMERCE_PLATFORM_GROUPS: EcommercePlatformGroup[] = [
   {
     region: '中国',
@@ -77,67 +88,324 @@ export const ECOMMERCE_PLATFORM_GROUPS: EcommercePlatformGroup[] = [
   {
     region: '中国 / 跨境',
     platforms: [
-      { id: 'alibaba-com', name: 'Alibaba.com', market: '全球', platformType: 'B2B跨境平台' },
+      {
+        id: 'alibaba-com',
+        name: 'Alibaba.com',
+        market: '全球',
+        platformType: 'B2B跨境平台',
+        detailPageLocales: [
+          detailLocale('美国', '英语'),
+          detailLocale('马来西亚', '英语'),
+          detailLocale('泰国', '英语'),
+          detailLocale('印尼', '英语'),
+        ],
+      },
     ],
   },
   {
     region: '东南亚',
     platforms: [
-      { id: 'shopee', name: 'Shopee', market: '新加坡/马来西亚/泰国/印尼/菲律宾/越南等', platformType: '综合电商' },
-      { id: 'lazada', name: 'Lazada', market: '区域/泰国', platformType: '综合电商' },
-      { id: 'tiktok-shop-sea', name: 'TikTok Shop', market: '泰国/新加坡/马来西亚/印尼/菲律宾/越南等', platformType: '内容电商/直播电商' },
-      { id: 'tokopedia', name: 'Tokopedia', market: '印尼', platformType: '综合电商' },
-      { id: 'bukalapak', name: 'Bukalapak', market: '印尼', platformType: '综合电商' },
-      { id: 'blibli', name: 'Blibli', market: '印尼', platformType: '综合电商' },
-      { id: 'tiki', name: 'Tiki', market: '越南', platformType: '综合电商' },
-      { id: 'sendo', name: 'Sendo', market: '越南', platformType: '综合电商' },
-      { id: 'zalora', name: 'ZALORA', market: '新加坡/马来西亚/菲律宾/印尼等', platformType: '时尚电商' },
+      {
+        id: 'shopee',
+        name: 'Shopee',
+        market: '新加坡/马来西亚/泰国/印尼/菲律宾/越南等',
+        platformType: '综合电商',
+        detailPageLocales: [
+          detailLocale('新加坡', '英语'),
+          detailLocale('马来西亚', '英语'),
+          detailLocale('马来西亚', '马来语'),
+          detailLocale('泰国', '泰语'),
+          detailLocale('印尼', '印尼语'),
+          detailLocale('菲律宾', '英语'),
+          detailLocale('越南', '越南语'),
+        ],
+      },
+      {
+        id: 'lazada',
+        name: 'Lazada',
+        market: '区域/泰国',
+        platformType: '综合电商',
+        detailPageLocales: [
+          detailLocale('新加坡', '英语'),
+          detailLocale('马来西亚', '英语'),
+          detailLocale('马来西亚', '马来语'),
+          detailLocale('泰国', '泰语'),
+          detailLocale('印尼', '印尼语'),
+          detailLocale('菲律宾', '英语'),
+          detailLocale('越南', '越南语'),
+        ],
+      },
+      {
+        id: 'tiktok-shop-sea',
+        name: 'TikTok Shop',
+        market: '泰国/新加坡/马来西亚/印尼/菲律宾/越南等',
+        platformType: '内容电商/直播电商',
+        detailPageLocales: [
+          detailLocale('新加坡', '英语'),
+          detailLocale('马来西亚', '英语'),
+          detailLocale('马来西亚', '马来语'),
+          detailLocale('泰国', '泰语'),
+          detailLocale('印尼', '印尼语'),
+          detailLocale('菲律宾', '英语'),
+          detailLocale('越南', '越南语'),
+        ],
+      },
+      { id: 'tokopedia', name: 'Tokopedia', market: '印尼', platformType: '综合电商', detailPageLocales: [detailLocale('印尼', '印尼语')] },
+      { id: 'bukalapak', name: 'Bukalapak', market: '印尼', platformType: '综合电商', detailPageLocales: [detailLocale('印尼', '印尼语')] },
+      { id: 'blibli', name: 'Blibli', market: '印尼', platformType: '综合电商', detailPageLocales: [detailLocale('印尼', '印尼语')] },
+      { id: 'tiki', name: 'Tiki', market: '越南', platformType: '综合电商', detailPageLocales: [detailLocale('越南', '越南语')] },
+      { id: 'sendo', name: 'Sendo', market: '越南', platformType: '综合电商', detailPageLocales: [detailLocale('越南', '越南语')] },
+      {
+        id: 'zalora',
+        name: 'ZALORA',
+        market: '新加坡/马来西亚/菲律宾/印尼等',
+        platformType: '时尚电商',
+        detailPageLocales: [
+          detailLocale('新加坡', '英语'),
+          detailLocale('马来西亚', '英语'),
+          detailLocale('马来西亚', '马来语'),
+          detailLocale('菲律宾', '英语'),
+          detailLocale('印尼', '印尼语'),
+        ],
+      },
     ],
   },
   {
     region: '欧洲',
     platforms: [
-      { id: 'amazon-eu-uk', name: 'Amazon EU/UK', market: 'EU/UK 等', platformType: '综合电商' },
-      { id: 'ebay', name: 'eBay', market: 'EU/UK 等', platformType: '综合/拍卖电商' },
-      { id: 'etsy', name: 'Etsy', market: 'EU/UK 等', platformType: '手工/设计品平台' },
-      { id: 'zalando', name: 'Zalando', market: '德国/荷兰/法国/意大利/西班牙等', platformType: '时尚电商' },
-      { id: 'about-you', name: 'ABOUT YOU', market: '德国/奥地利/荷兰等', platformType: '时尚电商' },
-      { id: 'allegro', name: 'Allegro', market: '波兰/区域', platformType: '综合电商' },
-      { id: 'bol-com', name: 'bol.com', market: '荷兰/比利时', platformType: '综合电商' },
-      { id: 'cdiscount-octopia', name: 'Cdiscount / Octopia', market: '法国/欧洲', platformType: '综合电商/Marketplace' },
-      { id: 'otto-market', name: 'OTTO Market', market: '德国', platformType: '综合电商' },
-      { id: 'kaufland-global-marketplace', name: 'Kaufland Global Marketplace', market: '德国/欧洲', platformType: '综合电商' },
-      { id: 'emag', name: 'eMAG', market: '罗马尼亚/保加利亚/匈牙利等', platformType: '综合电商' },
-      { id: 'manomano', name: 'ManoMano', market: '法国/欧洲', platformType: '家装/DIY电商' },
+      {
+        id: 'amazon-eu-uk',
+        name: 'Amazon EU/UK',
+        market: 'EU/UK 等',
+        platformType: '综合电商',
+        detailPageLocales: [
+          detailLocale('英国', '英语'),
+          detailLocale('德国', '德语'),
+          detailLocale('法国', '法语'),
+          detailLocale('意大利', '意大利语'),
+          detailLocale('西班牙', '西班牙语'),
+          detailLocale('荷兰', '荷兰语'),
+        ],
+      },
+      {
+        id: 'ebay',
+        name: 'eBay',
+        market: 'EU/UK 等',
+        platformType: '综合/拍卖电商',
+        detailPageLocales: [
+          detailLocale('英国', '英语'),
+          detailLocale('德国', '德语'),
+          detailLocale('法国', '法语'),
+          detailLocale('意大利', '意大利语'),
+          detailLocale('西班牙', '西班牙语'),
+        ],
+      },
+      {
+        id: 'etsy',
+        name: 'Etsy',
+        market: 'EU/UK 等',
+        platformType: '手工/设计品平台',
+        detailPageLocales: [
+          detailLocale('美国', '英语'),
+          detailLocale('英国', '英语'),
+          detailLocale('德国', '德语'),
+          detailLocale('法国', '法语'),
+        ],
+      },
+      {
+        id: 'zalando',
+        name: 'Zalando',
+        market: '德国/荷兰/法国/意大利/西班牙等',
+        platformType: '时尚电商',
+        detailPageLocales: [
+          detailLocale('德国', '德语'),
+          detailLocale('荷兰', '荷兰语'),
+          detailLocale('法国', '法语'),
+          detailLocale('意大利', '意大利语'),
+          detailLocale('西班牙', '西班牙语'),
+        ],
+      },
+      {
+        id: 'about-you',
+        name: 'ABOUT YOU',
+        market: '德国/奥地利/荷兰等',
+        platformType: '时尚电商',
+        detailPageLocales: [
+          detailLocale('德国', '德语'),
+          detailLocale('奥地利', '德语'),
+          detailLocale('荷兰', '荷兰语'),
+        ],
+      },
+      { id: 'allegro', name: 'Allegro', market: '波兰/区域', platformType: '综合电商', detailPageLocales: [detailLocale('波兰', '波兰语')] },
+      {
+        id: 'bol-com',
+        name: 'bol.com',
+        market: '荷兰/比利时',
+        platformType: '综合电商',
+        detailPageLocales: [
+          detailLocale('荷兰', '荷兰语'),
+          detailLocale('比利时', '荷兰语'),
+          detailLocale('比利时', '法语'),
+        ],
+      },
+      {
+        id: 'cdiscount-octopia',
+        name: 'Cdiscount / Octopia',
+        market: '法国/欧洲',
+        platformType: '综合电商/Marketplace',
+        detailPageLocales: [
+          detailLocale('法国', '法语'),
+          detailLocale('比利时', '法语'),
+        ],
+      },
+      { id: 'otto-market', name: 'OTTO Market', market: '德国', platformType: '综合电商', detailPageLocales: [detailLocale('德国', '德语')] },
+      {
+        id: 'kaufland-global-marketplace',
+        name: 'Kaufland Global Marketplace',
+        market: '德国/欧洲',
+        platformType: '综合电商',
+        detailPageLocales: [
+          detailLocale('德国', '德语'),
+          detailLocale('波兰', '波兰语'),
+          detailLocale('捷克', '捷克语'),
+          detailLocale('斯洛伐克', '斯洛伐克语'),
+        ],
+      },
+      {
+        id: 'emag',
+        name: 'eMAG',
+        market: '罗马尼亚/保加利亚/匈牙利等',
+        platformType: '综合电商',
+        detailPageLocales: [
+          detailLocale('罗马尼亚', '罗马尼亚语'),
+          detailLocale('保加利亚', '保加利亚语'),
+          detailLocale('匈牙利', '匈牙利语'),
+        ],
+      },
+      { id: 'manomano', name: 'ManoMano', market: '法国/欧洲', platformType: '家装/DIY电商', detailPageLocales: [detailLocale('法国', '法语')] },
     ],
   },
   {
     region: '欧洲 / 跨境',
     platforms: [
-      { id: 'temu', name: 'Temu', market: 'EU/UK 等', platformType: '跨境综合电商' },
-      { id: 'shein-marketplace', name: 'SHEIN Marketplace', market: 'EU/UK 等', platformType: '跨境时尚电商' },
-      { id: 'aliexpress', name: 'AliExpress', market: '欧洲/全球', platformType: '跨境综合电商' },
+      {
+        id: 'temu',
+        name: 'Temu',
+        market: 'EU/UK 等',
+        platformType: '跨境综合电商',
+        detailPageLocales: [
+          detailLocale('美国', '英语'),
+          detailLocale('英国', '英语'),
+          detailLocale('德国', '德语'),
+          detailLocale('法国', '法语'),
+          detailLocale('西班牙', '西班牙语'),
+          detailLocale('意大利', '意大利语'),
+        ],
+      },
+      {
+        id: 'shein-marketplace',
+        name: 'SHEIN Marketplace',
+        market: 'EU/UK 等',
+        platformType: '跨境时尚电商',
+        detailPageLocales: [
+          detailLocale('美国', '英语'),
+          detailLocale('英国', '英语'),
+          detailLocale('德国', '德语'),
+          detailLocale('法国', '法语'),
+          detailLocale('西班牙', '西班牙语'),
+          detailLocale('意大利', '意大利语'),
+        ],
+      },
+      {
+        id: 'aliexpress',
+        name: 'AliExpress',
+        market: '欧洲/全球',
+        platformType: '跨境综合电商',
+        detailPageLocales: [
+          detailLocale('美国', '英语'),
+          detailLocale('德国', '德语'),
+          detailLocale('法国', '法语'),
+          detailLocale('西班牙', '西班牙语'),
+          detailLocale('巴西', '葡萄牙语'),
+        ],
+      },
     ],
   },
   {
     region: '欧洲 / 西亚',
     platforms: [
-      { id: 'trendyol', name: 'Trendyol', market: '土耳其/欧洲跨境', platformType: '综合/时尚电商' },
+      {
+        id: 'trendyol',
+        name: 'Trendyol',
+        market: '土耳其/欧洲跨境',
+        platformType: '综合/时尚电商',
+        detailPageLocales: [
+          detailLocale('土耳其', '土耳其语'),
+          detailLocale('德国', '德语'),
+        ],
+      },
     ],
   },
   {
     region: '中亚 / CIS',
     platforms: [
-      { id: 'kaspi-kz', name: 'Kaspi.kz', market: '哈萨克斯坦', platformType: '综合电商/金融生态' },
-      { id: 'ozon', name: 'Ozon', market: '俄罗斯/跨境CIS', platformType: '综合电商' },
-      { id: 'wildberries', name: 'Wildberries', market: '俄罗斯/中亚跨境', platformType: '综合/时尚电商' },
+      {
+        id: 'kaspi-kz',
+        name: 'Kaspi.kz',
+        market: '哈萨克斯坦',
+        platformType: '综合电商/金融生态',
+        detailPageLocales: [
+          detailLocale('哈萨克斯坦', '俄语'),
+          detailLocale('哈萨克斯坦', '哈萨克语'),
+        ],
+      },
+      {
+        id: 'ozon',
+        name: 'Ozon',
+        market: '俄罗斯/跨境CIS',
+        platformType: '综合电商',
+        detailPageLocales: [
+          detailLocale('俄罗斯', '俄语'),
+          detailLocale('哈萨克斯坦', '俄语'),
+          detailLocale('哈萨克斯坦', '哈萨克语'),
+        ],
+      },
+      {
+        id: 'wildberries',
+        name: 'Wildberries',
+        market: '俄罗斯/中亚跨境',
+        platformType: '综合/时尚电商',
+        detailPageLocales: [
+          detailLocale('俄罗斯', '俄语'),
+          detailLocale('哈萨克斯坦', '俄语'),
+          detailLocale('哈萨克斯坦', '哈萨克语'),
+        ],
+      },
     ],
   },
   {
     region: '中亚',
     platforms: [
-      { id: 'uzum-market', name: 'Uzum Market', market: '乌兹别克斯坦', platformType: '综合电商' },
-      { id: 'satu-kz', name: 'Satu.kz', market: '哈萨克斯坦/区域', platformType: 'B2B/B2C marketplace' },
+      {
+        id: 'uzum-market',
+        name: 'Uzum Market',
+        market: '乌兹别克斯坦',
+        platformType: '综合电商',
+        detailPageLocales: [
+          detailLocale('乌兹别克斯坦', '乌兹别克语'),
+          detailLocale('乌兹别克斯坦', '俄语'),
+        ],
+      },
+      {
+        id: 'satu-kz',
+        name: 'Satu.kz',
+        market: '哈萨克斯坦/区域',
+        platformType: 'B2B/B2C marketplace',
+        detailPageLocales: [
+          detailLocale('哈萨克斯坦', '俄语'),
+          detailLocale('哈萨克斯坦', '哈萨克语'),
+        ],
+      },
     ],
   },
 ];
@@ -146,9 +414,21 @@ export const ECOMMERCE_PLATFORM_IDS = ECOMMERCE_PLATFORM_GROUPS.flatMap((group) 
   group.platforms.map((platform) => platform.id)
 );
 
+export const DEFAULT_ENABLED_ECOMMERCE_PLATFORM_IDS = new Set([
+  'taobao-tmall',
+  'xiaohongshu-shop',
+  'shopee',
+  'lazada',
+  'shein-marketplace',
+  'temu',
+  'ozon',
+]);
+
 export const createDefaultEcommercePlatformsSettings = (): EcommercePlatformsSettings => ({
   version: 1,
-  enabledById: Object.fromEntries(ECOMMERCE_PLATFORM_IDS.map((id) => [id, true])),
+  enabledById: Object.fromEntries(
+    ECOMMERCE_PLATFORM_IDS.map((id) => [id, DEFAULT_ENABLED_ECOMMERCE_PLATFORM_IDS.has(id)])
+  ),
 });
 
 export const normalizeEcommercePlatformsSettings = (value: unknown): EcommercePlatformsSettings => {
@@ -169,7 +449,12 @@ export const normalizeEcommercePlatformsSettings = (value: unknown): EcommercePl
   return {
     version: 1,
     enabledById: Object.fromEntries(
-      ECOMMERCE_PLATFORM_IDS.map((id) => [id, savedEnabledById[id] !== false])
+      ECOMMERCE_PLATFORM_IDS.map((id) => [
+        id,
+        typeof savedEnabledById[id] === 'boolean'
+          ? savedEnabledById[id]
+          : defaults.enabledById[id] === true,
+      ])
     ),
   };
 };
