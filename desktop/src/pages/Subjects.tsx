@@ -223,6 +223,14 @@ interface GeneratedImageAsset {
     exists?: boolean;
 }
 
+interface ProductDetailGenerationJob {
+    jobId?: string;
+    status?: string;
+    projectId?: string;
+    request?: Record<string, unknown>;
+    artifacts?: Array<Record<string, unknown>>;
+}
+
 interface SubjectImageDraft {
     name: string;
     previewUrl: string;
@@ -981,14 +989,151 @@ function detailVersionLabel(page?: Pick<BrandWorkspaceProductDetailPage, 'market
     return parts.length ? parts.join(' / ') : '默认版本';
 }
 
-function generatedAssetToImageDraft(asset: GeneratedImageAsset): BrandWorkspaceImageDraft | null {
+function generatedAssetToImageDraft(asset: Partial<GeneratedImageAsset> & Record<string, unknown>): BrandWorkspaceImageDraft | null {
     const path = asset.absolutePath || asset.previewUrl || asset.relativePath || '';
     if (!path.trim()) return null;
     return {
-        name: asset.title || path.split(/[\\/]/).pop() || asset.id,
+        name: asset.title || path.split(/[\\/]/).pop() || String(asset.id || 'image'),
         previewUrl: asset.previewUrl || path,
         path,
     };
+}
+
+function optionalText(value: unknown): string {
+    return typeof value === 'string' ? value : '';
+}
+
+function generatedArtifactToImageDraft(artifact: Record<string, unknown>): BrandWorkspaceImageDraft | null {
+    const metadata = artifact.metadata && typeof artifact.metadata === 'object'
+        ? artifact.metadata as Record<string, unknown>
+        : {};
+    const asset = {
+        id: String(metadata.id || artifact.artifactId || artifact.jobId || 'image'),
+        title: optionalText(metadata.title || artifact.title),
+        previewUrl: optionalText(metadata.previewUrl || artifact.previewUrl),
+        absolutePath: optionalText(metadata.absolutePath || artifact.absolutePath),
+        relativePath: optionalText(metadata.relativePath || artifact.relativePath),
+    };
+    return generatedAssetToImageDraft(asset);
+}
+
+function normalizeGenerationAgentScope(value: string): string {
+    const normalized = String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return normalized || 'default';
+}
+
+function buildProductDetailGenerationAgentContextId(productId: string, platformId: string, version: ProductDetailVersionDraft): string {
+    const scope = normalizeGenerationAgentScope([
+        'brand-workspace',
+        'product-detail',
+        productId,
+        platformId,
+        detailVersionKey(version.market, version.locale),
+    ].join(':'));
+    return `generation-studio:agent:${scope}`;
+}
+
+function buildProductDetailGenerationAgentInitialContext(productBundle: BrandWorkspaceProductBundle): string {
+    return [
+        '你当前位于资产库的商品详情图生成页面。',
+        '这里的任务是为当前商品生成电商详情页图片。用户只负责选择商品、平台和版本；你负责补全提示词并直接调用图片生成工具。',
+        '不要要求用户二次确认；只有缺少不可推断的硬性必填项时才停止并说明缺口。',
+        `当前项目ID: brand-workspace:${productBundle.product.id}`,
+        `当前商品: ${productBundle.product.name}`,
+    ].join('\n');
+}
+
+function buildProductDetailGenerationAgentMessage(
+    prompt: string,
+    brand: BrandWorkspaceBrand,
+    productBundle: BrandWorkspaceProductBundle,
+    platform: EcommercePlatformRecord,
+    version: ProductDetailVersionDraft,
+): string {
+    const title = version.title.trim() || `${productBundle.product.name} ${platform.name} 详情页`;
+    return [
+        prompt,
+        '[GenerationAgentContext]',
+        JSON.stringify({
+            executionMode: 'auto',
+            noSecondConfirmation: true,
+            currentMode: 'image',
+            preferredRole: 'image-director',
+            source: 'brand-workspace-product-detail',
+            sourceTitle: `${brand.name} / ${productBundle.product.name}`,
+            currentRequest: {
+                type: 'image',
+                prompt,
+                title,
+                projectId: `brand-workspace:${productBundle.product.id}`,
+                generationMode: 'text-to-image',
+                referenceItems: [],
+                count: 1,
+                aspectRatio: '3:4',
+                quality: 'high',
+                resolution: '2K',
+            },
+            productDetailBinding: {
+                productId: productBundle.product.id,
+                brandId: brand.id,
+                platformId: platform.id,
+                market: version.market.trim(),
+                locale: version.locale.trim(),
+            },
+            executionExpectation: '请直接调用 image.generate 生成 1 张商品详情页长图。生成完成后不需要保存到资产库，宿主页面会从本次图片生成任务的 artifacts 中取回图片并保存。',
+        }, null, 2),
+        '[/GenerationAgentContext]',
+    ].join('\n\n');
+}
+
+async function listProductDetailGenerationJobs(sessionId: string): Promise<ProductDetailGenerationJob[]> {
+    try {
+        const result = await window.ipcRenderer.generation.listJobs({
+            kind: 'image',
+            ownerSessionId: sessionId,
+            includeArchived: true,
+            limit: 50,
+        });
+        return Array.isArray(result?.items) ? result.items as ProductDetailGenerationJob[] : [];
+    } catch (error) {
+        console.warn('Failed to list product detail generation jobs:', error);
+        return [];
+    }
+}
+
+function productDetailJobMatchesProject(job: ProductDetailGenerationJob, projectId: string): boolean {
+    const request = job.request && typeof job.request === 'object' ? job.request : {};
+    return job.projectId === projectId || request.projectId === projectId;
+}
+
+function generatedImagesFromJobs(jobs: ProductDetailGenerationJob[], knownJobIds: Set<string>, projectId: string): BrandWorkspaceImageDraft[] {
+    return jobs
+        .filter((job) => job.jobId && !knownJobIds.has(job.jobId))
+        .filter((job) => job.status === 'completed')
+        .filter((job) => productDetailJobMatchesProject(job, projectId))
+        .flatMap((job) => job.artifacts || [])
+        .map(generatedArtifactToImageDraft)
+        .filter((image): image is BrandWorkspaceImageDraft => Boolean(image));
+}
+
+async function waitForGeneratedProductDetailImages(
+    sessionId: string,
+    knownJobIds: Set<string>,
+    projectId: string,
+): Promise<BrandWorkspaceImageDraft[]> {
+    const startedAt = Date.now();
+    const timeoutMs = 60_000;
+    while (Date.now() - startedAt < timeoutMs) {
+        const jobs = await listProductDetailGenerationJobs(sessionId);
+        const images = generatedImagesFromJobs(jobs, knownJobIds, projectId);
+        if (images.length > 0) return images;
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+    return [];
 }
 
 function buildProductDetailGenerationPrompt(
@@ -1774,26 +1919,64 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 activeDetailPlatform,
                 detailVersionDraft,
             );
-            const result = await window.ipcRenderer.invoke('image-gen:generate', {
-                runtimeBypass: true,
-                bypassPromptOptimizer: true,
-                prompt,
-                title: detailVersionDraft.title.trim() || `${activeDetailProductBundle.product.name} ${activeDetailPlatform.name} 详情页`,
-                projectId: `brand-workspace:${activeDetailProductBundle.product.id}`,
-                generationMode: 'text-to-image',
-                count: 1,
-                aspectRatio: '3:4',
-                quality: 'high',
-                source: 'brand-workspace-product-detail',
-            }) as { success?: boolean; error?: string; assets?: GeneratedImageAsset[] };
-            if (!result?.success) {
-                throw new Error(result?.error || 'AI 生成商品详情页失败');
+            const projectId = `brand-workspace:${activeDetailProductBundle.product.id}`;
+            const contextId = buildProductDetailGenerationAgentContextId(
+                activeDetailProductBundle.product.id,
+                activeDetailPlatform.id,
+                detailVersionDraft,
+            );
+            const session = await window.ipcRenderer.chat.getOrCreateContextSession({
+                contextId,
+                contextType: 'generation-agent',
+                title: `${activeDetailProductBundle.product.name} 详情页生成`,
+                initialContext: buildProductDetailGenerationAgentInitialContext(activeDetailProductBundle),
+                metadata: {
+                    contextType: 'generation-agent',
+                    intent: 'image_creation',
+                    preferredRole: 'image-director',
+                    generationTarget: 'image',
+                    executionMode: 'auto',
+                    requiresHumanApproval: false,
+                    projectId,
+                    source: 'brand-workspace-product-detail',
+                    sourceTitle: `${activeDetailBrandBundle.brand.name} / ${activeDetailProductBundle.product.name}`,
+                    productId: activeDetailProductBundle.product.id,
+                    brandId: activeDetailBrandBundle.brand.id,
+                    platformId: activeDetailPlatform.id,
+                },
+            });
+            if (!session?.id) {
+                throw new Error('Agent 会话初始化失败');
             }
-            const generatedImages = (result.assets || [])
-                .map(generatedAssetToImageDraft)
-                .filter((image): image is BrandWorkspaceImageDraft => Boolean(image));
+            const knownJobIds = new Set(
+                (await listProductDetailGenerationJobs(session.id))
+                    .map((job) => job.jobId)
+                    .filter((jobId): jobId is string => Boolean(jobId)),
+            );
+            const message = buildProductDetailGenerationAgentMessage(
+                prompt,
+                activeDetailBrandBundle.brand,
+                activeDetailProductBundle,
+                activeDetailPlatform,
+                detailVersionDraft,
+            );
+            const agentResult = await window.ipcRenderer.runtime.query({
+                sessionId: session.id,
+                message,
+                metadata: {
+                    contextType: 'generation-agent',
+                    source: 'brand-workspace-product-detail',
+                    projectId,
+                    preferredRole: 'image-director',
+                    generationTarget: 'image',
+                },
+            } as Parameters<typeof window.ipcRenderer.runtime.query>[0] & { metadata: Record<string, unknown> });
+            if (!agentResult?.success) {
+                throw new Error(agentResult?.error || 'Agent 生成商品详情页失败');
+            }
+            const generatedImages = await waitForGeneratedProductDetailImages(session.id, knownJobIds, projectId);
             if (!generatedImages.length) {
-                throw new Error('AI 生成完成，但没有返回可用图片');
+                throw new Error('Agent 已执行完成，但没有找到可保存的商品详情图');
             }
             const nextImages = [...detailImageDrafts, ...generatedImages];
             setDetailImageDrafts(nextImages);
