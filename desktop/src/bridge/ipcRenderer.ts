@@ -346,6 +346,7 @@ function createIpcRenderer() {
       upsertBrand: (payload: unknown) => invokeChannel('brand-workspace:brand:upsert', payload),
       upsertProduct: (payload: unknown) => invokeChannel('brand-workspace:product:upsert', payload),
       upsertSku: (payload: unknown) => invokeChannel('brand-workspace:sku:upsert', payload),
+      upsertProductDetailPage: (payload: unknown) => invokeChannel('brand-workspace:product-detail-page:upsert', payload),
       rebuildAiIndex: () => invokeChannel('brand-workspace:rebuild-ai-index')
     },
     voice: {
