@@ -13,7 +13,8 @@ export type MediaJobStatus =
     | 'cancelled'
     | 'dead_lettered';
 
-export type MediaJobKind = 'image' | 'video' | 'audio' | 'voice_clone';
+export type KnownMediaJobKind = 'image' | 'video' | 'video_sequence' | 'audio' | 'audio_sequence' | 'voice_clone';
+export type MediaJobKind = KnownMediaJobKind | (string & {});
 
 export type MediaJobArtifact = {
     artifactId: string;
@@ -65,6 +66,8 @@ export type MediaJobProjection = {
     videoProjectPath?: string | null;
     ownerSessionId?: string | null;
     cancelReason?: string | null;
+    archivedAt?: string | null;
+    archiveReason?: string | null;
     createdAt: string;
     updatedAt: string;
     completedAt?: string | null;
@@ -87,6 +90,7 @@ export type MediaJobListFilter = {
     manuscriptPath?: string;
     videoProjectPath?: string;
     ownerSessionId?: string;
+    includeArchived?: boolean;
     limit?: number;
 };
 
@@ -198,6 +202,8 @@ export function normalizeMediaJobProjection(value: unknown): MediaJobProjection 
         videoProjectPath: typeof raw.videoProjectPath === 'string' ? raw.videoProjectPath : null,
         ownerSessionId: typeof raw.ownerSessionId === 'string' ? raw.ownerSessionId : null,
         cancelReason: typeof raw.cancelReason === 'string' ? raw.cancelReason : null,
+        archivedAt: raw.archivedAt == null ? null : normalizeTimestamp(raw.archivedAt, 0),
+        archiveReason: typeof raw.archiveReason === 'string' ? raw.archiveReason : null,
         createdAt: normalizeTimestamp(raw.createdAt, 0),
         updatedAt: normalizeTimestamp(raw.updatedAt, 0),
         completedAt: raw.completedAt == null ? null : normalizeTimestamp(raw.completedAt, 0),

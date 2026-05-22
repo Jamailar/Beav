@@ -10658,6 +10658,24 @@ fn main() {
     }
     let synced_cached_official_models =
         official_support::sync_official_cached_models_into_settings(&mut store.settings);
+    let repaired_missing_model_defaults =
+        match ai_model_manager::defaults::repair_missing_official_defaults_in_settings(
+            &mut store.settings,
+        ) {
+            Ok(repaired) => repaired,
+            Err(error) => {
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "model_config",
+                    "startup.model_config_defaults_repair_failed",
+                    format!("[{} model config] {error}", app_brand_display_name()),
+                    json!({ "error": error }),
+                    None,
+                );
+                false
+            }
+        };
     let startup_migration_status = probe_startup_migration(&store, &store_path);
     sync_redclaw_job_definitions(&mut store);
     if let Err(error) = persist_store(&store_path, &store) {
@@ -10671,7 +10689,7 @@ fn main() {
             None,
         );
     }
-    if synced_cached_official_models
+    if (synced_cached_official_models || repaired_missing_model_defaults)
         && ai_model_manager::legacy_config::model_config_path(&store_path).exists()
     {
         ai_model_manager::legacy_projection::normalize_settings_projection(&mut store.settings);

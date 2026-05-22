@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use tauri::{AppHandle, State};
 
+#[cfg(test)]
 fn is_redbox_official_video_endpoint(endpoint: &str) -> bool {
     crate::media_generation::is_redbox_official_endpoint(endpoint)
 }
@@ -33,10 +34,6 @@ fn summarize_json_for_log(value: &Value) -> String {
     } else {
         format!("{snippet}...")
     }
-}
-
-fn official_video_model_for_mode(_generation_mode: &str) -> String {
-    "seedance-2.0".to_string()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1045,11 +1042,7 @@ pub fn handle_generation_channel(
                 let generation_mode = payload_field(payload, "generationMode")
                     .and_then(|value| value.as_str())
                     .unwrap_or("text-to-video");
-                let effective_video_model = if is_redbox_official_video_endpoint(&endpoint) {
-                    official_video_model_for_mode(generation_mode)
-                } else {
-                    model.clone().unwrap_or_else(|| default_model.clone())
-                };
+                let effective_video_model = model.clone().unwrap_or_else(|| default_model.clone());
                 let asset_label = video_generation_asset_label(index, count);
                 if let Some(context) = video_log_context.as_ref() {
                     let duration_seconds = payload_field(payload, "durationSeconds")

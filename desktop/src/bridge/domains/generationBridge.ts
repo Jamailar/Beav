@@ -18,6 +18,7 @@ export function createGenerationBridge(core: BridgeCore) {
       getJobArtifacts: (jobId: string) => core.invokeChannel('generation:get-job-artifacts', { jobId }),
       awaitJob: (payload: { jobId: string; timeoutMs?: number }) => core.invokeChannel('generation:await-job', payload),
       cancelJob: (jobId: string) => core.invokeChannel('generation:cancel-job', { jobId }),
+      deleteJob: (jobId: string) => core.invokeChannel('generation:delete-job', { jobId }),
       retryJob: (jobId: string) => core.invokeChannel('generation:retry-job', { jobId }),
       getRuntimeStatus: () => core.invokeChannel('generation:get-runtime-status'),
       onJobUpdated: (listener: Listener) => core.on('generation:job-updated', listener),

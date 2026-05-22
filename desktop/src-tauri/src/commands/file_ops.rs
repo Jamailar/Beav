@@ -715,7 +715,12 @@ pub fn handle_file_ops_channel(
                 if files.is_empty() {
                     return Ok(json!({ "success": false, "error": "没有可下载的文件" }));
                 }
-                let selected = pick_save_file_native("选择压缩包保存位置", &default_name, None)?;
+                let default_dir = dirs::download_dir();
+                let selected = pick_save_file_native(
+                    "选择压缩包保存位置",
+                    &default_name,
+                    default_dir.as_deref(),
+                )?;
                 let Some(target_path) = selected else {
                     return Ok(json!({ "success": false, "canceled": true }));
                 };

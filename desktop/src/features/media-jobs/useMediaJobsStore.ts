@@ -14,6 +14,8 @@ type MediaJobsStore = {
     subscribe: (listener: Listener) => () => void;
     upsertJob: (job: MediaJobProjection) => void;
     upsertJobs: (jobs: MediaJobProjection[]) => void;
+    removeJob: (jobId: string) => void;
+    removeJobs: (jobIds: string[]) => void;
     appendLog: (log: MediaJobLogRecord) => void;
 };
 
@@ -75,6 +77,35 @@ export const mediaJobsStore: MediaJobsStore = {
         replaceState({
             ...state,
             jobsById: nextJobsById,
+        });
+    },
+    removeJob: (jobId) => {
+        if (!state.jobsById[jobId] && !state.logsByJobId[jobId]) return;
+        const nextJobsById = { ...state.jobsById };
+        const nextLogsByJobId = { ...state.logsByJobId };
+        delete nextJobsById[jobId];
+        delete nextLogsByJobId[jobId];
+        replaceState({
+            jobsById: nextJobsById,
+            logsByJobId: nextLogsByJobId,
+        });
+    },
+    removeJobs: (jobIds) => {
+        if (jobIds.length === 0) return;
+        let changed = false;
+        const nextJobsById = { ...state.jobsById };
+        const nextLogsByJobId = { ...state.logsByJobId };
+        for (const jobId of jobIds) {
+            if (nextJobsById[jobId] || nextLogsByJobId[jobId]) {
+                changed = true;
+                delete nextJobsById[jobId];
+                delete nextLogsByJobId[jobId];
+            }
+        }
+        if (!changed) return;
+        replaceState({
+            jobsById: nextJobsById,
+            logsByJobId: nextLogsByJobId,
         });
     },
     appendLog: (log) => {

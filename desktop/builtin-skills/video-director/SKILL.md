@@ -1,10 +1,10 @@
 ---
 name: video-director
-description: Use as the canonical entrypoint for every AI chat request that asks to make, generate, plan, or edit a video: promotional film, ad film, short video, product video, reference-image video, image-to-video, first/last-frame transition, storyboard/keyframes, or character talking-head / 口播 video. This includes Chinese requests such as 宣传片, 广告片, 短片, 短视频, 视频, 口播视频, 分镜, 分镜图, 参考图生成视频, 图片转视频, 包包/商品/产品宣传片. Do not invoke `cosyvoice-ssml` or `tts-director` as the first response to a video request. This skill produces a detailed script and shot table first, then generates storyboard contact-sheet preview images through image.generate using four/six/nine-panel grids, includes any product or visual reference images, asks the user to confirm, and only then calls the correct video model. For asset-library character talking-head / 数字人口播 videos, it must synthesize the approved spoken script with the character voice through TTS before calling video generation.
+description: 'Canonical entrypoint for every AI chat request that asks to make, generate, plan, or edit a video, including promotional films, ads, short videos, product videos, reference-image videos, image-to-video, first/last-frame transitions, storyboard/keyframes, character talking-head videos, 宣传片, 广告片, 短视频, 视频, 口播视频, 分镜图, 图片转视频, and 商品宣传片. Do not invoke cosyvoice-ssml or tts-director as the first response to a video request. This skill must draft a script and shot table, generate storyboard contact-sheet preview images through image.generate, ask the user to confirm the script plus storyboard together, and only then call video generation.'
 allowedRuntimeModes: [chatroom, redclaw]
 allowedTools: [workflow]
 activationScope: session
-activationHint: Invoke this before any media generation when the user asks for 宣传片, 广告片, 短片, 短视频, 视频, 口播视频, 数字人视频, 分镜, 分镜图, 图片转视频, reference-image video, product promotional video, character talking-head video, or an attached/reference image to become a video. In AI chat, all video-generation requests must enter this skill first. Do not call `cosyvoice-ssml`, `tts-director`, image.generate, voice.speech, or video.generate first; load this skill and follow its staged workflow.
+activationHint: 'Invoke this before any media generation when the user asks for 宣传片, 广告片, 短片, 短视频, 视频, 口播视频, 数字人视频, 分镜, 分镜图, 图片转视频, reference-image video, product promotional video, character talking-head video, or an attached/reference image to become a video. In AI chat, all video-generation requests must enter this skill first. Do not call cosyvoice-ssml, tts-director, image.generate, voice.speech, or video.generate first; load this skill and follow its staged workflow.'
 ---
 
 # Video Director
@@ -17,22 +17,20 @@ If this skill was loaded because the user attached an image and asked for a prom
 
 ## Default Workflow
 
-Before any video tool call, follow this order:
+Treat the workflow as a gated state machine. Do not skip or reorder states:
 
-1. Clarify the intended video mode from the user's goal and assets.
-2. Draft a concise but detailed video script and shot table for review.
-3. Generate storyboard contact-sheet preview image(s) with `Operate(resource="image", operation="generate", input={ ... })`. The storyboard image is a preview of the planned shots, not a standalone product poster, replacement product render, cover image, or final video keyframe.
-4. Show the script, storyboard preview image(s), and explicit video specs together.
-5. Ask for confirmation or revision.
-6. Default to direct video generation after confirmation.
-7. Only use a video project pack if the user explicitly asks for a project/package/editor workflow, or the task is already bound to an existing pack.
-8. Decide whether this should be a single-video job or a multi-video assembly.
-9. If the confirmed task is a character talking-head / 口播 video, complete the TTS-first workflow below.
-10. Only after confirmation and any required TTS audio is complete, call `Operate(resource="video", operation="generate", input={ ... })`.
+1. `plan_draft`: Clarify the intended video mode from the user's goal and assets, then draft a concise but detailed video script and shot table.
+2. `storyboard_preview`: Immediately after the shot table exists, generate storyboard contact-sheet preview image(s) with `Operate(resource="image", operation="generate", input={ ... })`. The storyboard image is a preview of the planned shots, not a standalone product poster, replacement product render, cover image, or final video keyframe.
+3. `user_review`: Show the script, storyboard preview image(s), and explicit video specs together. Ask the user to confirm or revise the whole plan.
+4. `production_prep`: After confirmation, decide whether this should be a `<=15s` single upstream clip, a long `video_sequence` request, or a manual editor/project assembly. Only use a video project pack if the user explicitly asks for a project/package/editor workflow, or the task is already bound to an existing pack.
+5. `tts_if_needed`: If the confirmed task is a character talking-head / 口播 video, complete the TTS-first workflow below.
+6. `video_generate`: Only after confirmation and any required TTS audio is complete, call `Operate(resource="video", operation="generate", input={ ... })`.
 
 If the user has not yet confirmed the script, do not generate the video.
 
 If the user has not yet seen and approved the storyboard preview image(s), do not generate the video.
+
+If the shot table exists but no storyboard contact-sheet image has been generated yet, the next tool call must be `image.generate` for the storyboard preview, not `video.generate`, `voice.speech`, `tts-director`, or `cosyvoice-ssml`.
 
 The storyboard contact-sheet preview is mandatory after the first shot script is written. It is not the same as final video keyframes; it is a quick visual proof of the planned shot sequence so the user can approve direction, composition, product placement, and continuity before video generation.
 
@@ -177,6 +175,9 @@ Otherwise keep the planning in chat, call `video generate` directly, and let the
   - `reference-guided` -> `wan2.7-r2v-video`
   - `first-last-frame` -> `wan2.7-i2v-video`
 - Treat first/last-frame transitions as a subtype of image-to-video work.
+- A single upstream video generation segment must not exceed `15` seconds.
+- For a final video longer than `15` seconds, submit one `video.generate` request with either the final `durationSeconds` or explicit `videoSegments`; the media queue will generate `<=15s` segments and concatenate one final video asset.
+- Do not call `video.generate` repeatedly just to bypass the upstream `15` second segment limit.
 - Do not skip the script review step just because the request sounds obvious.
 - Unless the user explicitly asks for a longer continuous shot, a single shot should usually be `1-3` seconds.
 - Without explicit user approval, any single shot must not exceed `5` seconds.
@@ -195,10 +196,17 @@ Otherwise keep the planning in chat, call `video generate` directly, and let the
   - Default when the request is simple, the action is short, and the full idea fits inside one coherent clip.
   - A single generated clip must not exceed `15` seconds.
 
-- `多视频模式`:
-  - Use multiple clips when the request contains many beats, scene changes, multiple camera setups, or a narrative that would be unstable as one long clip.
-  - Generate the required clips one by one, then combine them with `ffmpeg` through the available tool path.
-  - When planning multi-video mode, group the storyboard into separate clip units first, then specify the final concatenation order.
+- `长视频队列模式`:
+  - Use this for one final AI-generated video longer than `15` seconds.
+  - Submit one `video.generate` request with `durationSeconds > 15`; the runtime will create a `video_sequence` queue job, split the generation into `<=15s` segments, wait for each segment, concatenate the segments, and return one final video asset.
+  - Use explicit `videoSegments` when the storyboard needs scene-by-scene, beat-by-beat, reference-image, first/last-frame, or driving-audio control.
+  - Each `videoSegments[]` item must be `<=15` seconds and should correspond to a coherent group of approved storyboard rows.
+  - Keep `waitForCompletion: true` unless the user explicitly asks to run the long generation in the background.
+
+- `手动多视频工程模式`:
+  - Use this only when the user explicitly asks for separate clips, a project/editor workflow, imported clip assembly, manual post-production, or separately editable outputs.
+  - In normal chat/agent video generation, do not manually generate one clip at a time and concatenate with `ffmpeg`; use `长视频队列模式` instead.
+  - When manual assembly is explicitly needed, generate each clip deliberately, then concatenate them in storyboard order after all clips succeed.
 
 - If the request has multiple shots, clear continuity requirements, or a risk of visual drift, ask one more question after showing the contact-sheet preview:
   - whether separate storyboard keyframes should also be generated before video production.
@@ -349,7 +357,7 @@ Do not keep reusing raw subject-library portraits or product stills as the prima
 
 ## Script Format
 
-The pre-generation script must be shown as a Markdown table. Use these columns:
+The pre-generation script draft must be shown as a Markdown table. Use these columns:
 
 | Time | Picture | Sound | Shot |
 | --- | --- | --- | --- |
@@ -368,12 +376,12 @@ Requirements:
 - Shot duration should usually stay in the `1-3s` range.
 - Without a clear user requirement, do not plan any row longer than `5s`.
 
-After the table, add one short confirmation prompt, for example:
+After the table, do not ask for final video approval yet. Generate the storyboard contact-sheet preview first, then show the table and storyboard together with one short confirmation prompt, for example:
 
 - `请确认这版视频脚本，我确认后再正式生成。`
 
-If the user requests changes, revise the table first and wait again.
-If duration or aspect ratio is not yet specified, propose a concrete default and include it in the confirmation block so the user can approve or change it.
+If the user requests changes, revise the table, regenerate the storyboard contact-sheet preview when visual beats changed, and ask for confirmation again.
+If duration or aspect ratio is not yet specified, propose a concrete default before generating the storyboard preview and include it in the confirmation block so the user can approve or change it.
 If the script contains multiple shots, a named character, an important environment, or any continuity-sensitive sequence, also ask whether the user wants storyboard stills / keyframes first.
 
 After the user confirms the video plan, the next assistant turn must either call `video.generate` or ask one blocking question required to build a valid payload. Do not reply that generation has started, is queued, or is complete until a `video.generate` tool result exists.
@@ -493,6 +501,62 @@ For chat/agent video creation, set `waitForCompletion: true` unless the user exp
 }
 ```
 
+- For final videos longer than `15` seconds, use the queue's long-video capability in one tool call. If the approved storyboard is clear enough to split automatically, pass the final `durationSeconds` and the approved `storyboardShots`:
+
+```json
+{
+  "generationMode": "reference-guided",
+  "durationSeconds": 45,
+  "referenceImages": [
+    "/absolute/path/to/approved-storyboard-contact-sheet.png",
+    "/absolute/path/to/product-or-character-reference.png"
+  ],
+  "prompt": "Create one continuous 45-second final video from the approved storyboard. The runtime may split it into <=15 second generation segments, but the user-facing output should be one complete concatenated video. Preserve visual continuity across segment boundaries.",
+  "storyboardShots": [
+    {
+      "time": "0-5s",
+      "picture": "Opening product reveal with slow dolly-in.",
+      "sound": "Music intro.",
+      "shot": "Wide shot to medium close-up."
+    },
+    {
+      "time": "5-12s",
+      "picture": "Presenter enters and demonstrates the product.",
+      "sound": "Approved voiceover line.",
+      "shot": "Medium shot with slow lateral tracking."
+    }
+  ],
+  "waitForCompletion": true
+}
+```
+
+- Use explicit `videoSegments` when segment boundaries, references, mode, audio, or prompt details must be controlled. Each segment must be `<=15` seconds:
+
+```json
+{
+  "generationMode": "reference-guided",
+  "durationSeconds": 45,
+  "videoSegments": [
+    {
+      "durationSeconds": 15,
+      "prompt": "Segment 1: opening reveal from storyboard rows 1-3. Keep the product centered and preserve the approved lighting.",
+      "referenceImages": ["/absolute/path/to/keyframe-1.png"]
+    },
+    {
+      "durationSeconds": 15,
+      "prompt": "Segment 2: demonstration beats from storyboard rows 4-6. Match the same room, product placement, and camera height.",
+      "referenceImages": ["/absolute/path/to/keyframe-2.png"]
+    },
+    {
+      "durationSeconds": 15,
+      "prompt": "Segment 3: closing call-to-action from storyboard rows 7-9. Continue the same visual identity and end on the approved hero frame.",
+      "referenceImages": ["/absolute/path/to/keyframe-3.png"]
+    }
+  ],
+  "waitForCompletion": true
+}
+```
+
 - If the storyboard lives in a confirmed video project pack, pass `video-project-id` / `video-project-path`; the host will use the confirmed project script as storyboard input.
 - If the user intent is ambiguous, explain the ambiguity briefly and pick the safer mode instead of faking certainty.
-- For multi-video mode, generate each clip deliberately, then use `ffmpeg` tooling to concatenate them in storyboard order after all clips succeed.
+- Use manual `ffmpeg` concatenation only for explicit editor/project assembly or imported clips. For normal AI-generated long videos, rely on the unified video generation queue.

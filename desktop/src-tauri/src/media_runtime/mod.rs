@@ -1,4 +1,6 @@
+mod config;
 mod followup;
+mod types;
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -13,7 +15,6 @@ use std::time::Duration;
 
 use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -22,123 +23,15 @@ use crate::commands::library::persist_media_workspace_catalog;
 use crate::runtime::resolve_session_file_reference_inputs;
 use crate::*;
 use crate::{commands, with_store, with_store_mut, AppState};
-
-const MEDIA_JOB_EVENT_UPDATED: &str = "generation:job-updated";
-const MEDIA_JOB_EVENT_LOG: &str = "generation:job-log";
-
-const IMAGE_SUBMIT_LIMIT_PER_PROVIDER: usize = 8;
-const VIDEO_SUBMIT_LIMIT_PER_PROVIDER: usize = 4;
-const AUDIO_SUBMIT_LIMIT_PER_PROVIDER: usize = 6;
-const VOICE_CLONE_SUBMIT_LIMIT_PER_PROVIDER: usize = 2;
-const VIDEO_DOWNLOAD_LIMIT_PER_PROVIDER: usize = 3;
-const VIDEO_POLL_LIMIT_GLOBAL: usize = 32;
-
-const DISPATCH_TICK_MS: u64 = 350;
-const DEFAULT_POLL_INTERVAL_MS: i64 = 2_500;
-const VIDEO_JOB_TIMEOUT_MS: i64 = 30 * 60 * 1000;
-const DEFAULT_JOB_WAIT_TIMEOUT_MS: u64 = VIDEO_JOB_TIMEOUT_MS as u64;
-const ACTIVE_STAGE_LEASE_MS: i64 = 20 * 60 * 1000;
+use config::*;
+pub use types::MediaGenerationRuntime;
+use types::*;
 
 static MEDIA_RUNTIME_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
-
-#[derive(Default)]
-struct RuntimeSlots {
-    image_submit_by_provider: HashMap<String, usize>,
-    video_submit_by_provider: HashMap<String, usize>,
-    audio_submit_by_provider: HashMap<String, usize>,
-    voice_clone_submit_by_provider: HashMap<String, usize>,
-    video_download_by_provider: HashMap<String, usize>,
-    active_video_polls: usize,
-}
-
-pub struct MediaGenerationRuntime {
-    pub stop: Arc<AtomicBool>,
-    pub dispatcher_join: Option<JoinHandle<()>>,
-}
 
 pub(crate) use followup::{
     spawn_media_job_followup, spawn_media_job_followup_for_kind, tick_media_followups,
 };
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MediaJobRecord {
-    job_id: String,
-    kind: String,
-    source: String,
-    priority: String,
-    status: String,
-    provider_key: String,
-    provider_model: Option<String>,
-    request_json: Value,
-    result_json: Option<Value>,
-    project_id: Option<String>,
-    manuscript_path: Option<String>,
-    video_project_path: Option<String>,
-    owner_session_id: Option<String>,
-    current_attempt_no: i64,
-    cancel_reason: Option<String>,
-    created_at: String,
-    updated_at: String,
-    completed_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MediaJobAttemptRecord {
-    attempt_id: String,
-    job_id: String,
-    attempt_no: i64,
-    status: String,
-    provider_task_id: Option<String>,
-    provider_status_url: Option<String>,
-    idempotency_key: String,
-    lease_owner: Option<String>,
-    lease_expires_at: Option<i64>,
-    next_poll_at: Option<i64>,
-    retry_not_before_at: Option<i64>,
-    last_error: Option<String>,
-    response_json: Option<Value>,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MediaJobArtifactRecord {
-    artifact_id: String,
-    job_id: String,
-    kind: String,
-    relative_path: Option<String>,
-    absolute_path: Option<String>,
-    mime_type: Option<String>,
-    preview_url: Option<String>,
-    metadata_json: Option<Value>,
-    created_at: String,
-}
-
-#[derive(Debug, Clone)]
-struct LoadedJob {
-    job: MediaJobRecord,
-    attempt: MediaJobAttemptRecord,
-}
-
-#[derive(Debug, Clone)]
-enum VideoPollState {
-    Pending {
-        response: Value,
-        next_poll_at: i64,
-    },
-    Ready {
-        response: Value,
-        inline_base64: Option<String>,
-        download_url: Option<String>,
-    },
-    Failed {
-        response: Value,
-        message: String,
-    },
-}
 
 fn media_runtime_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = workspace_root(state)?.join(".redbox").join("media-runtime");
@@ -232,7 +125,45 @@ fn open_media_runtime_connection(state: &State<'_, AppState>) -> Result<Connecti
             "#,
         )
         .map_err(|error| error.to_string())?;
+    ensure_media_jobs_archive_columns(&connection)?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_jobs_archived_updated ON media_jobs(archived_at, updated_at, job_id)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
     Ok(connection)
+}
+
+fn ensure_media_jobs_archive_columns(conn: &Connection) -> Result<(), String> {
+    for (column, definition) in [
+        (
+            "archived_at",
+            "ALTER TABLE media_jobs ADD COLUMN archived_at TEXT",
+        ),
+        (
+            "archive_reason",
+            "ALTER TABLE media_jobs ADD COLUMN archive_reason TEXT",
+        ),
+    ] {
+        let exists = conn
+            .prepare("PRAGMA table_info(media_jobs)")
+            .and_then(|mut statement| {
+                let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+                for row in rows {
+                    if row? == column {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+            .map_err(|error| error.to_string())?;
+        if !exists {
+            conn.execute(definition, [])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn ensure_media_runtime_ready(state: &State<'_, AppState>) -> Result<(), String> {
@@ -251,6 +182,7 @@ pub(crate) fn media_runtime_pressure_snapshot(
                 r#"
                 SELECT kind, status, COUNT(*) AS count
                 FROM media_jobs
+                WHERE archived_at IS NULL
                 GROUP BY kind, status
                 ORDER BY kind ASC, status ASC
                 "#,
@@ -279,6 +211,7 @@ pub(crate) fn media_runtime_pressure_snapshot(
             JOIN media_job_attempts a
               ON a.job_id = j.job_id AND a.attempt_no = j.current_attempt_no
             WHERE j.kind = 'video'
+              AND j.archived_at IS NULL
               AND j.status = 'polling'
               AND COALESCE(a.next_poll_at, 0) <= ?1
               AND COALESCE(a.retry_not_before_at, 0) <= ?1
@@ -296,6 +229,7 @@ pub(crate) fn media_runtime_pressure_snapshot(
             JOIN media_job_attempts a
               ON a.job_id = j.job_id AND a.attempt_no = j.current_attempt_no
             WHERE COALESCE(a.lease_expires_at, 0) > ?1
+              AND j.archived_at IS NULL
             "#,
             params![now],
             |row| row.get::<_, i64>(0),
@@ -512,6 +446,8 @@ fn row_to_job(row: &rusqlite::Row<'_>) -> Result<MediaJobRecord, rusqlite::Error
         owner_session_id: row.get("owner_session_id")?,
         current_attempt_no: row.get("current_attempt_no")?,
         cancel_reason: row.get("cancel_reason")?,
+        archived_at: row.get("archived_at")?,
+        archive_reason: row.get("archive_reason")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         completed_at: row.get("completed_at")?,
@@ -690,6 +626,8 @@ fn job_projection(
         "videoProjectPath": job.video_project_path,
         "ownerSessionId": job.owner_session_id,
         "cancelReason": job.cancel_reason,
+        "archivedAt": job.archived_at,
+        "archiveReason": job.archive_reason,
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
         "completedAt": job.completed_at,
@@ -827,6 +765,8 @@ fn media_job_summary(
         "manuscriptPath": job.manuscript_path,
         "videoProjectPath": job.video_project_path,
         "cancelReason": job.cancel_reason,
+        "archivedAt": job.archived_at,
+        "archiveReason": job.archive_reason,
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
         "completedAt": job.completed_at,
@@ -914,6 +854,7 @@ fn next_job_candidates(
         JOIN media_job_attempts a
             ON a.job_id = j.job_id AND a.attempt_no = j.current_attempt_no
         WHERE j.kind = ?1
+          AND j.archived_at IS NULL
           AND j.status IN ({quoted_statuses})
           AND COALESCE(a.lease_expires_at, 0) <= {now}
           {poll_filter}
@@ -944,6 +885,8 @@ fn next_job_candidates(
                     owner_session_id: row.get("owner_session_id")?,
                     current_attempt_no: row.get("current_attempt_no")?,
                     cancel_reason: row.get("cancel_reason")?,
+                    archived_at: row.get("archived_at")?,
+                    archive_reason: row.get("archive_reason")?,
                     created_at: row.get("created_at")?,
                     updated_at: row.get("updated_at")?,
                     completed_at: row.get("completed_at")?,
@@ -1237,12 +1180,9 @@ fn set_job_terminal_failure(
 fn retry_policy_for_stage(stage: &str) -> Option<(&'static str, &'static str, usize, i64)> {
     match stage {
         "image-submit" => Some(("queued", "retry_image_submit", 3, 1_500)),
-        "video-submit" => Some(("queued", "retry_video_submit", 3, 1_500)),
         "audio-submit" => Some(("queued", "retry_audio_submit", 3, 1_500)),
         "audio-sequence-submit" => Some(("queued", "retry_audio_sequence_submit", 3, 1_500)),
         "voice-clone-submit" => Some(("queued", "retry_voice_clone_submit", 3, 2_500)),
-        "video-poll" => Some(("polling", "retry_video_poll", 20, 2_500)),
-        "video-download" => Some(("downloading", "retry_video_download", 5, 2_000)),
         _ => None,
     }
 }
@@ -1485,12 +1425,61 @@ fn resolve_image_provider_model(
     Ok(configured_model)
 }
 
+fn route_model_from_settings(settings: &Value, scope: &str) -> Option<String> {
+    payload_string(settings, "ai_model_routes_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|routes| {
+            routes
+                .get(scope)
+                .and_then(|route| route.get("model").or_else(|| route.get("modelName")))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+fn configured_image_model_from_settings(settings: &Value) -> Option<String> {
+    route_model_from_settings(settings, "image").or_else(|| payload_string(settings, "image_model"))
+}
+
+fn ensure_image_model_settings(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<Value, String> {
+    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    if configured_image_model_from_settings(&settings).is_some() {
+        return Ok(settings);
+    }
+
+    crate::ai_model_manager::defaults::repair_missing_official_defaults_for_store(
+        Some(app),
+        state,
+        "media-runtime-model-defaults-repair",
+    )?;
+    let repaired_settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let Some(model) = configured_image_model_from_settings(&repaired_settings) else {
+        return Err("生图默认模型未初始化，请重新登录官方账号或在设置中选择生图模型".to_string());
+    };
+    if looks_like_video_model_id(&model) {
+        return Err(format!(
+            "图片生成配置无效：当前默认图片模型 `{model}` 看起来是视频模型。请到设置里改成图片模型。"
+        ));
+    }
+    Ok(repaired_settings)
+}
+
 fn resolve_provider_metadata(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     kind: &str,
     payload: &Value,
 ) -> Result<(String, Option<String>), String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = if kind == "image" {
+        ensure_image_model_settings(app, state)?
+    } else {
+        with_store(state, |store| Ok(store.settings.clone()))?
+    };
     let provider = match kind {
         "image" => payload_string(payload, "provider")
             .or_else(|| payload_string(&settings, "image_provider"))
@@ -1499,23 +1488,23 @@ fn resolve_provider_metadata(
             .or_else(|| payload_string(&settings, "voice_provider"))
             .or_else(|| payload_string(&settings, "tts_provider"))
             .unwrap_or_else(|| "voice".to_string()),
+        "video_sequence" => payload_string(payload, "provider")
+            .or_else(|| payload_string(&settings, "video_provider"))
+            .unwrap_or_else(|| "redbox-official".to_string()),
         _ => payload_string(payload, "provider").unwrap_or_else(|| "redbox-official".to_string()),
     };
     let model = match kind {
         "image" => {
-            let route = crate::ai_model_manager::AiModelManager::resolve(
-                &settings,
-                crate::ai_model_manager::AiModelScope::Image,
-                Some(payload),
-            );
-            resolve_image_provider_model(
-                route
-                    .as_ref()
-                    .map(|route| route.model_name.clone())
-                    .filter(|value| !value.trim().is_empty())
-                    .or_else(|| payload_string(&settings, "image_model")),
+            let model = resolve_image_provider_model(
+                configured_image_model_from_settings(&settings),
                 payload_string(payload, "model"),
-            )?
+            )?;
+            if model.is_none() {
+                return Err(
+                    "生图默认模型未初始化，请重新登录官方账号或在设置中选择生图模型".to_string(),
+                );
+            }
+            model
         }
         "audio" | "audio_sequence" => {
             let route = crate::ai_model_manager::AiModelManager::resolve(
@@ -1549,16 +1538,13 @@ fn resolve_provider_metadata(
                 .or_else(|| payload_string(&settings, "voice_clone_model"))
         }
         "video" if is_video_retalk_request(payload, None) => Some("videoretalk".to_string()),
-        _ => {
-            if provider == "redbox-official" {
-                Some("seedance-2.0".to_string())
-            } else {
-                normalize_optional_string(payload_string(payload, "model")).or_else(|| {
-                    resolve_video_generation_settings_with_override(&settings, Some(payload))
-                        .map(|(_, _, model)| model)
-                })
-            }
+        "video_sequence" if is_video_retalk_request(payload, None) => {
+            Some("videoretalk".to_string())
         }
+        _ => normalize_optional_string(payload_string(payload, "model")).or_else(|| {
+            resolve_video_generation_settings_with_override(&settings, Some(payload))
+                .map(|(_, _, model)| model)
+        }),
     };
     Ok((provider, model))
 }
@@ -1579,6 +1565,39 @@ fn is_video_retalk_request(payload: &Value, provider_model: Option<&str>) -> boo
     model == "videoretalk" || mode == "video-retalk" || mode == "videoretalk"
 }
 
+fn payload_i64_any(payload: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        payload_field(payload, key).and_then(|value| {
+            value.as_i64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<i64>().ok())
+            })
+        })
+    })
+}
+
+fn video_sequence_requested(payload: &Value) -> bool {
+    payload
+        .get("videoSegments")
+        .or_else(|| payload.get("segments"))
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.len() > 1)
+        || payload_i64_any(
+            payload,
+            &["durationSeconds", "duration_seconds", "duration", "seconds"],
+        )
+        .is_some_and(|seconds| seconds > MAX_VIDEO_SEGMENT_SECONDS)
+}
+
+fn effective_media_job_kind(kind: &str, payload: &Value) -> String {
+    if kind == "video" && video_sequence_requested(payload) {
+        "video_sequence".to_string()
+    } else {
+        kind.to_string()
+    }
+}
+
 pub(crate) fn submit_media_job(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -1586,10 +1605,12 @@ pub(crate) fn submit_media_job(
     payload: &Value,
 ) -> Result<Value, String> {
     ensure_media_runtime_ready(state)?;
+    let kind = effective_media_job_kind(kind, payload);
+    let kind = kind.as_str();
     let payload = normalize_media_job_file_references(state, kind, payload)?;
     let source = infer_job_source(&payload);
     let priority = infer_job_priority(&source, &payload);
-    let (provider_key, provider_model) = resolve_provider_metadata(state, kind, &payload)?;
+    let (provider_key, provider_model) = resolve_provider_metadata(app, state, kind, &payload)?;
     let conn = open_media_runtime_connection(state)?;
     let job_id = create_media_job_with_connection(
         &conn,
@@ -1644,7 +1665,7 @@ fn normalize_media_job_file_references(
             )?;
             normalize_media_reference_array(state, &session_id, &mut normalized, "images")?;
         }
-        "video" => {
+        "video" | "video_sequence" => {
             normalize_media_reference_array(
                 state,
                 &session_id,
@@ -1757,6 +1778,9 @@ pub(crate) fn list_media_jobs(
         normalize_optional_string(payload_string(payload, "videoProjectPath"));
     let owner_session_id_filter =
         normalize_optional_string(payload_string(payload, "ownerSessionId"));
+    let include_archived = payload_field(payload, "includeArchived")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut statement = conn
         .prepare(
             "SELECT job_id FROM media_jobs
@@ -1766,8 +1790,9 @@ pub(crate) fn list_media_jobs(
                AND (?4 IS NULL OR manuscript_path = ?4)
                AND (?5 IS NULL OR video_project_path = ?5)
                AND (?6 IS NULL OR owner_session_id = ?6)
+               AND (?7 OR archived_at IS NULL)
              ORDER BY updated_at DESC, job_id DESC
-             LIMIT ?7",
+             LIMIT ?8",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -1779,6 +1804,7 @@ pub(crate) fn list_media_jobs(
                 manuscript_path_filter.as_deref(),
                 video_project_path_filter.as_deref(),
                 owner_session_id_filter.as_deref(),
+                include_archived,
                 limit
             ],
             |row| row.get::<_, String>(0),
@@ -1809,6 +1835,9 @@ pub(crate) fn list_media_job_summaries(
     let source_filter = normalize_optional_string(payload_string(payload, "source"));
     let owner_session_id_filter =
         normalize_optional_string(payload_string(payload, "ownerSessionId"));
+    let include_archived = payload_field(payload, "includeArchived")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut statement = conn
         .prepare(
             "SELECT job_id FROM media_jobs
@@ -1816,8 +1845,9 @@ pub(crate) fn list_media_job_summaries(
                AND (?2 IS NULL OR status = ?2)
                AND (?3 IS NULL OR source = ?3)
                AND (?4 IS NULL OR owner_session_id = ?4)
+               AND (?5 OR archived_at IS NULL)
              ORDER BY updated_at DESC, job_id DESC
-             LIMIT ?5",
+             LIMIT ?6",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -1827,6 +1857,7 @@ pub(crate) fn list_media_job_summaries(
                 status_filter.as_deref(),
                 source_filter.as_deref(),
                 owner_session_id_filter.as_deref(),
+                include_archived,
                 limit
             ],
             |row| row.get::<_, String>(0),
@@ -1934,6 +1965,91 @@ pub(crate) fn cancel_media_job(
     }))
 }
 
+pub(crate) fn delete_media_job(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    job_id: &str,
+) -> Result<Value, String> {
+    ensure_media_runtime_ready(state)?;
+    let conn = open_media_runtime_connection(state)?;
+    let Some(loaded) = load_job_with_current_attempt(&conn, job_id)? else {
+        return Err("media job not found".to_string());
+    };
+    let now_iso = now_iso();
+    let active = matches!(
+        loaded.job.status.as_str(),
+        "submitting" | "polling" | "downloading" | "binding"
+    );
+    let queued = matches!(
+        loaded.job.status.as_str(),
+        "queued" | "accepted" | "submitted"
+    );
+    let next_status = if active {
+        "cancel_requested"
+    } else if queued {
+        "cancelled"
+    } else {
+        loaded.job.status.as_str()
+    };
+    conn.execute(
+        r#"
+        UPDATE media_jobs
+        SET status = ?1,
+            cancel_reason = CASE WHEN ?2 THEN 'User archived media job' ELSE cancel_reason END,
+            archived_at = ?3,
+            archive_reason = ?4,
+            updated_at = ?3,
+            completed_at = CASE WHEN ?1 = 'cancelled' THEN ?3 ELSE completed_at END
+        WHERE job_id = ?5
+        "#,
+        params![
+            next_status,
+            active || queued,
+            now_iso,
+            "User archived media job",
+            job_id
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    if active || queued {
+        conn.execute(
+            r#"
+            UPDATE media_job_attempts
+            SET status = ?1,
+                last_error = 'User archived media job',
+                updated_at = ?2
+            WHERE attempt_id = ?3
+            "#,
+            params![
+                if active {
+                    "cancel_requested"
+                } else {
+                    "cancelled"
+                },
+                now_iso,
+                loaded.attempt.attempt_id
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let archive_payload = json!({ "status": next_status });
+    append_event_with_connection(
+        &conn,
+        job_id,
+        Some(&loaded.attempt.attempt_id),
+        "archived",
+        "Media generation job archived",
+        Some(&archive_payload),
+    )?;
+    emit_job_updated(app, state, job_id);
+    Ok(json!({
+        "success": true,
+        "jobId": job_id,
+        "status": next_status,
+        "archivedAt": now_iso,
+    }))
+}
+
 pub(crate) fn retry_media_job(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -1976,6 +2092,8 @@ pub(crate) fn retry_media_job(
         SET status = 'queued',
             current_attempt_no = ?1,
             cancel_reason = NULL,
+            archived_at = NULL,
+            archive_reason = NULL,
             completed_at = NULL,
             updated_at = ?2
         WHERE job_id = ?3
@@ -2163,7 +2281,7 @@ fn slot_has_capacity(slots: &RuntimeSlots, loaded: &LoadedJob, stage: &str) -> b
                 .unwrap_or(0)
                 < IMAGE_SUBMIT_LIMIT_PER_PROVIDER
         }
-        "video-submit" => {
+        "video-submit" | "video-sequence-submit" => {
             slots
                 .video_submit_by_provider
                 .get(&provider_key)
@@ -2216,7 +2334,7 @@ fn reserve_slot(slots: &Arc<Mutex<RuntimeSlots>>, loaded: &LoadedJob, stage: &st
                 .entry(provider_key)
                 .or_insert(0) += 1;
         }
-        "video-submit" => {
+        "video-submit" | "video-sequence-submit" => {
             *guard
                 .video_submit_by_provider
                 .entry(provider_key)
@@ -2261,7 +2379,9 @@ fn release_slot(slots: &Arc<Mutex<RuntimeSlots>>, loaded: &LoadedJob, stage: &st
     };
     match stage {
         "image-submit" => decrement(&mut guard.image_submit_by_provider, provider_key),
-        "video-submit" => decrement(&mut guard.video_submit_by_provider, provider_key),
+        "video-submit" | "video-sequence-submit" => {
+            decrement(&mut guard.video_submit_by_provider, provider_key)
+        }
         "audio-submit" | "audio-sequence-submit" => {
             decrement(&mut guard.audio_submit_by_provider, provider_key)
         }
@@ -2860,6 +2980,41 @@ fn remove_existing_audio_sequence_artifacts(
     .map_err(|error| error.to_string())?;
     let work_dir = media_runtime_root(state)?
         .join("audio-sequences")
+        .join(job_id);
+    let _ = fs::remove_dir_all(work_dir);
+    Ok(())
+}
+
+fn remove_existing_video_sequence_artifacts(
+    state: &State<'_, AppState>,
+    job_id: &str,
+) -> Result<(), String> {
+    let conn = open_media_runtime_connection(state)?;
+    let mut statement = conn
+        .prepare(
+            r#"
+            SELECT absolute_path
+            FROM media_job_artifacts
+            WHERE job_id = ?1 AND kind IN ('media', 'video_segment')
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let paths = statement
+        .query_map(params![job_id], |row| row.get::<_, Option<String>>(0))
+        .map_err(|error| error.to_string())?
+        .filter_map(|row| row.ok().flatten())
+        .collect::<Vec<_>>();
+    drop(statement);
+    for path in paths {
+        let _ = fs::remove_file(path);
+    }
+    conn.execute(
+        "DELETE FROM media_job_artifacts WHERE job_id = ?1 AND kind IN ('media', 'video_segment')",
+        params![job_id],
+    )
+    .map_err(|error| error.to_string())?;
+    let work_dir = media_runtime_root(state)?
+        .join("video-sequences")
         .join(job_id);
     let _ = fs::remove_dir_all(work_dir);
     Ok(())
@@ -3597,6 +3752,20 @@ fn transition_video_job_to_downloading(
     Ok(())
 }
 
+async fn video_ready_bytes(
+    inline_base64: Option<String>,
+    download_url: Option<String>,
+) -> Result<Vec<u8>, String> {
+    if let Some(b64) = inline_base64 {
+        decode_base64_bytes(&b64)
+    } else if let Some(url) = download_url {
+        media_runtime_bytes_request("GET", &url, None, &[], None, Some(Duration::from_secs(120)))
+            .await
+    } else {
+        Err("video job did not contain a ready artifact".to_string())
+    }
+}
+
 async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
     let conn = open_media_runtime_connection(&state)?;
@@ -3615,14 +3784,7 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
         .get("downloadUrl")
         .and_then(Value::as_str)
         .map(|value| value.to_string());
-    let bytes = if let Some(b64) = inline_base64 {
-        decode_base64_bytes(&b64)?
-    } else if let Some(url) = download_url {
-        media_runtime_bytes_request("GET", &url, None, &[], None, Some(Duration::from_secs(120)))
-            .await?
-    } else {
-        return Err("video job did not contain a ready artifact".to_string());
-    };
+    let bytes = video_ready_bytes(inline_base64, download_url).await?;
     let (relative_path, absolute_path, preview_url) =
         write_video_bytes_to_generated_path(&state, &bytes)?;
     let thumbnail_url =
@@ -3760,6 +3922,407 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
         Some(&metadata),
     )?;
     emit_job_updated(app, &state, job_id);
+    Ok(())
+}
+
+fn video_sequence_segments(request: &Value) -> Result<Vec<Value>, String> {
+    let explicit_segments = request
+        .get("videoSegments")
+        .or_else(|| request.get("segments"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !explicit_segments.is_empty() {
+        let total = explicit_segments.len();
+        return explicit_segments
+            .into_iter()
+            .enumerate()
+            .map(|(index, segment)| {
+                let mut payload = request.clone();
+                if let (Some(base), Some(patch)) = (payload.as_object_mut(), segment.as_object()) {
+                    for (key, value) in patch {
+                        base.insert(key.clone(), value.clone());
+                    }
+                }
+                let prompt = payload_string(&segment, "prompt")
+                    .or_else(|| payload_string(&segment, "text"))
+                    .or_else(|| payload_string(&segment, "description"))
+                    .or_else(|| payload_string(request, "prompt"))
+                    .unwrap_or_default();
+                if prompt.trim().is_empty() {
+                    return Err(format!(
+                        "video sequence segment {} is missing prompt",
+                        index + 1
+                    ));
+                }
+                let duration = payload_i64_any(
+                    &segment,
+                    &["durationSeconds", "duration_seconds", "duration", "seconds"],
+                )
+                .or_else(|| {
+                    payload_i64_any(
+                        request,
+                        &["durationSeconds", "duration_seconds", "duration", "seconds"],
+                    )
+                })
+                .unwrap_or(MAX_VIDEO_SEGMENT_SECONDS)
+                .clamp(1, MAX_VIDEO_SEGMENT_SECONDS);
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("prompt".to_string(), json!(prompt));
+                    object.insert("durationSeconds".to_string(), json!(duration));
+                    object.insert("segmentIndex".to_string(), json!(index));
+                    object.insert("segmentNumber".to_string(), json!(index + 1));
+                    object.insert("segmentTotal".to_string(), json!(total));
+                    object.remove("videoSegments");
+                    object.remove("segments");
+                }
+                Ok(payload)
+            })
+            .collect();
+    }
+
+    let total_duration = payload_i64_any(
+        request,
+        &["durationSeconds", "duration_seconds", "duration", "seconds"],
+    )
+    .unwrap_or(MAX_VIDEO_SEGMENT_SECONDS)
+    .max(1);
+    let segment_count = ((total_duration + MAX_VIDEO_SEGMENT_SECONDS - 1)
+        / MAX_VIDEO_SEGMENT_SECONDS)
+        .max(1) as usize;
+    let base_prompt = payload_string(request, "prompt").unwrap_or_default();
+    if base_prompt.trim().is_empty() {
+        return Err("video sequence requires prompt".to_string());
+    }
+    let mut remaining = total_duration;
+    let mut segments = Vec::with_capacity(segment_count);
+    for index in 0..segment_count {
+        let duration = remaining.min(MAX_VIDEO_SEGMENT_SECONDS).max(1);
+        remaining -= duration;
+        let mut payload = request.clone();
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                "prompt".to_string(),
+                json!(format!(
+                    "{base_prompt}\n\nThis is segment {}/{} of one continuous video. Keep visual continuity and pacing with the surrounding segments.",
+                    index + 1,
+                    segment_count
+                )),
+            );
+            object.insert("durationSeconds".to_string(), json!(duration));
+            object.insert("segmentIndex".to_string(), json!(index));
+            object.insert("segmentNumber".to_string(), json!(index + 1));
+            object.insert("segmentTotal".to_string(), json!(segment_count));
+        }
+        segments.push(payload);
+    }
+    Ok(segments)
+}
+
+async fn run_video_segment_generation(
+    settings: &Value,
+    loaded: &LoadedJob,
+    payload: &Value,
+) -> Result<(Value, Vec<u8>), String> {
+    if is_video_retalk_request(payload, loaded.job.provider_model.as_deref()) {
+        return Err("video sequence does not support VideoRetalk segments yet".to_string());
+    }
+    let (endpoint, api_key, default_model) =
+        resolve_video_generation_settings_with_override(settings, Some(payload))
+            .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
+    let effective_model = loaded
+        .job
+        .provider_model
+        .clone()
+        .unwrap_or_else(|| default_model.clone());
+    let response = run_video_generation_request_async(
+        &endpoint,
+        api_key.as_deref(),
+        &effective_model,
+        payload,
+    )
+    .await?;
+    if let Some(item) = extract_first_media_result(&response) {
+        if let Some(b64) = item.get("b64_json").and_then(Value::as_str) {
+            let bytes = video_ready_bytes(Some(b64.to_string()), None).await?;
+            return Ok((response, bytes));
+        }
+    }
+    if let Some(url) = extract_media_url(&response) {
+        let bytes = video_ready_bytes(None, Some(url)).await?;
+        return Ok((response, bytes));
+    }
+    let Some((provider_task_id, _)) = extract_task_id_details(&response) else {
+        return Err("视频片段任务创建失败：provider 未返回 taskId。".to_string());
+    };
+    let provider_status_url = extract_status_url(&response);
+    let deadline = now_i64() + VIDEO_JOB_TIMEOUT_MS;
+    loop {
+        if now_i64() > deadline {
+            return Err("video sequence segment timed out while polling provider".to_string());
+        }
+        tokio::time::sleep(Duration::from_millis(DEFAULT_POLL_INTERVAL_MS as u64)).await;
+        match poll_video_generation_once(
+            &endpoint,
+            api_key.as_deref(),
+            &effective_model,
+            &provider_task_id,
+            provider_status_url.as_deref(),
+        )
+        .await?
+        {
+            VideoPollState::Pending { .. } => {}
+            VideoPollState::Ready {
+                response,
+                inline_base64,
+                download_url,
+            } => {
+                let bytes = video_ready_bytes(inline_base64, download_url).await?;
+                return Ok((response, bytes));
+            }
+            VideoPollState::Failed { message, .. } => return Err(message),
+        }
+    }
+}
+
+fn write_video_sequence_segment_bytes(
+    state: &State<'_, AppState>,
+    job_id: &str,
+    index: usize,
+    bytes: &[u8],
+) -> Result<(String, String, String, PathBuf), String> {
+    let relative_path = format!("generated/video-sequences/{job_id}/segment-{index:03}.mp4");
+    let absolute_path = media_root(state)?.join(&relative_path);
+    let temp_path = absolute_path.with_extension("mp4.tmp");
+    if let Some(parent) = temp_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    {
+        let mut file = File::create(&temp_path).map_err(|error| error.to_string())?;
+        use std::io::Write as _;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+    }
+    fs::rename(&temp_path, &absolute_path).map_err(|error| error.to_string())?;
+    Ok((
+        relative_path,
+        absolute_path.display().to_string(),
+        file_url_for_path(&absolute_path),
+        absolute_path,
+    ))
+}
+
+fn video_sequence_output_paths(
+    state: &State<'_, AppState>,
+    job_id: &str,
+) -> Result<(String, PathBuf), String> {
+    let relative_path = format!("generated/video-sequences/{job_id}/final.mp4");
+    let absolute_path = media_root(state)?.join(&relative_path);
+    if let Some(parent) = absolute_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    Ok((relative_path, absolute_path))
+}
+
+fn merge_video_sequence_with_ffmpeg(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    job_id: &str,
+    segment_paths: &[PathBuf],
+) -> Result<(String, PathBuf), String> {
+    if segment_paths.is_empty() {
+        return Err("video sequence has no segments to merge".to_string());
+    }
+    let work_dir = media_runtime_root(state)?
+        .join("video-sequences")
+        .join(job_id);
+    fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
+    let list_path = work_dir.join("concat.txt");
+    let list_body = segment_paths
+        .iter()
+        .map(concat_list_line)
+        .collect::<String>();
+    fs::write(&list_path, list_body).map_err(|error| error.to_string())?;
+    let (relative_path, absolute_path) = video_sequence_output_paths(state, job_id)?;
+    let temp_path = absolute_path.with_extension("mp4.tmp");
+    let output = background_command(ffmpeg_program(Some(app))?)
+        .arg("-y")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-f")
+        .arg("concat")
+        .arg("-safe")
+        .arg("0")
+        .arg("-i")
+        .arg(&list_path)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-map")
+        .arg("0:a?")
+        .arg("-c:v")
+        .arg("libx264")
+        .arg("-pix_fmt")
+        .arg("yuv420p")
+        .arg("-c:a")
+        .arg("aac")
+        .arg("-movflags")
+        .arg("+faststart")
+        .arg(&temp_path)
+        .output()
+        .map_err(|error| format!("video sequence merge could not start ffmpeg: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let _ = fs::remove_file(&temp_path);
+        return Err(if detail.is_empty() {
+            "video sequence merge failed".to_string()
+        } else {
+            format!("video sequence merge failed: {detail}")
+        });
+    }
+    fs::rename(&temp_path, &absolute_path).map_err(|error| error.to_string())?;
+    Ok((relative_path, absolute_path))
+}
+
+fn register_video_sequence_asset(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    loaded: &LoadedJob,
+    relative_path: String,
+    absolute_path: PathBuf,
+) -> Result<Value, String> {
+    let absolute_path_text = absolute_path.display().to_string();
+    let preview_url = file_url_for_path(&absolute_path);
+    let thumbnail_url = ensure_video_thumbnail_for_path(Some(app), state, &absolute_path);
+    let metadata = create_video_artifact_metadata(
+        loaded,
+        &relative_path,
+        &absolute_path_text,
+        &preview_url,
+        thumbnail_url.as_deref(),
+    );
+    let media_asset = MediaAssetRecord {
+        id: metadata
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        source: "generated".to_string(),
+        source_domain: None,
+        source_link: None,
+        project_id: loaded.job.project_id.clone(),
+        title: metadata
+            .get("title")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        prompt: loaded
+            .job
+            .request_json
+            .get("prompt")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        provider: Some(loaded.job.provider_key.clone()),
+        provider_template: Some("video.sequence".to_string()),
+        model: loaded.job.provider_model.clone(),
+        aspect_ratio: loaded
+            .job
+            .request_json
+            .get("aspectRatio")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        size: loaded
+            .job
+            .request_json
+            .get("resolution")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        quality: None,
+        mime_type: Some("video/mp4".to_string()),
+        content_hash: file_content_hash(&absolute_path).ok(),
+        relative_path: Some(relative_path.clone()),
+        bound_manuscript_path: loaded.job.manuscript_path.clone(),
+        created_at: now_iso(),
+        updated_at: now_iso(),
+        absolute_path: Some(absolute_path_text.clone()),
+        preview_url: Some(preview_url.clone()),
+        thumbnail_url,
+        exists: absolute_path.is_file(),
+    };
+    with_store_mut(state, |store| {
+        store.media_assets.push(media_asset.clone());
+        store.work_items.push(create_work_item(
+            "video-generation",
+            media_asset
+                .title
+                .clone()
+                .unwrap_or_else(|| "视频生成".to_string()),
+            Some(format!(
+                "{} 已通过独立媒体 runtime 完成长视频拼接。",
+                app_brand_display_name()
+            )),
+            media_asset.prompt.clone(),
+            Some(json!({
+                "jobId": loaded.job.job_id,
+                "generationChannel": "video.sequence",
+                "providerKey": loaded.job.provider_key,
+                "relativePath": relative_path,
+            })),
+            2,
+        ));
+        Ok(())
+    })?;
+    persist_media_workspace_catalog(state)?;
+    Ok(metadata)
+}
+
+fn complete_video_sequence_job(
+    app: &AppHandle,
+    loaded: &LoadedJob,
+    result: &Value,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let conn = open_media_runtime_connection(&state)?;
+    let Some(current) = load_job_with_current_attempt(&conn, &loaded.job.job_id)? else {
+        return Ok(());
+    };
+    let asset = result.get("asset").cloned().unwrap_or(Value::Null);
+    insert_artifact_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        "media",
+        result
+            .get("relativePath")
+            .and_then(Value::as_str)
+            .or_else(|| asset.get("relativePath").and_then(Value::as_str)),
+        result
+            .get("path")
+            .and_then(Value::as_str)
+            .or_else(|| asset.get("absolutePath").and_then(Value::as_str)),
+        Some("video/mp4"),
+        asset.get("previewUrl").and_then(Value::as_str),
+        Some(&asset),
+    )?;
+    update_job_result_json(&conn, &loaded.job.job_id, result, true)?;
+    set_attempt_details(
+        &conn,
+        &current,
+        "completed",
+        current.attempt.provider_task_id.as_deref(),
+        current.attempt.provider_status_url.as_deref(),
+        None,
+        Some(result),
+        None,
+        true,
+    )?;
+    append_event_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        Some(&current.attempt.attempt_id),
+        "completed",
+        "Video sequence generation completed",
+        Some(result),
+    )?;
+    emit_job_updated(app, &state, &loaded.job.job_id);
     Ok(())
 }
 
@@ -4122,6 +4685,136 @@ fn run_voice_clone_submit_worker(
     release_slot(&slots, &loaded, "voice-clone-submit");
 }
 
+async fn run_video_sequence_submit_worker(
+    app: AppHandle,
+    loaded: LoadedJob,
+    slots: Arc<Mutex<RuntimeSlots>>,
+) {
+    let result = async {
+        let state = app.state::<AppState>();
+        let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+        remove_existing_video_sequence_artifacts(&state, &loaded.job.job_id)?;
+        let segments = video_sequence_segments(&loaded.job.request_json)?;
+        if segments.len() <= 1 {
+            return Err("video sequence requires more than one segment".to_string());
+        }
+        let total = segments.len();
+        let mut segment_results = Vec::<Value>::with_capacity(total);
+        let mut segment_paths = Vec::<PathBuf>::with_capacity(total);
+
+        for (index, segment_payload) in segments.iter().enumerate() {
+            if get_media_job_projection(&state, &loaded.job.job_id)?
+                .get("status")
+                .and_then(Value::as_str)
+                == Some("cancel_requested")
+            {
+                return complete_job_cancelled(
+                    &app,
+                    &loaded.job.job_id,
+                    "User requested cancellation",
+                );
+            }
+            let (provider_response, bytes) =
+                run_video_segment_generation(&settings, &loaded, segment_payload).await?;
+            let (relative_path, absolute_path, preview_url, segment_path) =
+                write_video_sequence_segment_bytes(&state, &loaded.job.job_id, index + 1, &bytes)?;
+            let metadata = json!({
+                "segmentIndex": index,
+                "segmentNumber": index + 1,
+                "segmentTotal": total,
+                "durationSeconds": payload_i64_any(segment_payload, &["durationSeconds", "duration_seconds", "duration", "seconds"]),
+                "prompt": payload_string(segment_payload, "prompt"),
+                "providerResponse": provider_response,
+            });
+            let conn = open_media_runtime_connection(&state)?;
+            insert_artifact_with_connection(
+                &conn,
+                &loaded.job.job_id,
+                "video_segment",
+                Some(&relative_path),
+                Some(&absolute_path),
+                Some("video/mp4"),
+                Some(&preview_url),
+                Some(&metadata),
+            )?;
+            segment_paths.push(segment_path);
+            segment_results.push(json!({
+                "segmentIndex": index,
+                "segmentNumber": index + 1,
+                "relativePath": relative_path,
+                "path": absolute_path,
+                "previewUrl": preview_url,
+                "metadata": metadata,
+            }));
+            let progress = json!({
+                "progress": {
+                    "completedSegments": index + 1,
+                    "expectedSegments": total,
+                },
+                "segments": segment_results.clone(),
+            });
+            update_job_result_json(&conn, &loaded.job.job_id, &progress, false)?;
+            append_event_with_connection(
+                &conn,
+                &loaded.job.job_id,
+                Some(&loaded.attempt.attempt_id),
+                "segment_completed",
+                &format!("Video segment {}/{} completed", index + 1, total),
+                Some(&progress),
+            )?;
+            drop(conn);
+            emit_job_updated(&app, &state, &loaded.job.job_id);
+        }
+
+        if get_media_job_projection(&state, &loaded.job.job_id)?
+            .get("status")
+            .and_then(Value::as_str)
+            == Some("cancel_requested")
+        {
+            return complete_job_cancelled(&app, &loaded.job.job_id, "User requested cancellation");
+        }
+
+        let (relative_path, absolute_path) =
+            merge_video_sequence_with_ffmpeg(&app, &state, &loaded.job.job_id, &segment_paths)?;
+        let asset = register_video_sequence_asset(
+            &app,
+            &state,
+            &loaded,
+            relative_path.clone(),
+            absolute_path.clone(),
+        )?;
+        let result = json!({
+            "success": true,
+            "asset": asset,
+            "path": absolute_path.display().to_string(),
+            "relativePath": relative_path,
+            "segments": segment_results,
+            "progress": {
+                "completedSegments": total,
+                "expectedSegments": total,
+            },
+        });
+        complete_video_sequence_job(&app, &loaded, &result)
+    }
+    .await;
+    if let Err(error) = result {
+        let _ = schedule_stage_retry_or_dead_letter(
+            &app,
+            &loaded.job.job_id,
+            "video-sequence-submit",
+            &error,
+            None,
+        );
+        emit_job_log(
+            &app,
+            &loaded.job.job_id,
+            &format!("video sequence submit failed: {error}"),
+            None,
+        );
+    }
+    release_slot(&slots, &loaded, "video-sequence-submit");
+}
+
 async fn run_video_submit_worker(
     app: AppHandle,
     loaded: LoadedJob,
@@ -4171,15 +4864,11 @@ async fn run_video_submit_worker(
             Some(&loaded.job.request_json),
         )
         .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
-        let effective_model = if crate::media_generation::is_redbox_compatible_endpoint(&endpoint) {
-            "seedance-2.0".to_string()
-        } else {
-            loaded
-                .job
-                .provider_model
-                .clone()
-                .unwrap_or_else(|| default_model.clone())
-        };
+        let effective_model = loaded
+            .job
+            .provider_model
+            .clone()
+            .unwrap_or_else(|| default_model.clone());
         let response = run_video_generation_request_async(
             &endpoint,
             api_key.as_deref(),
@@ -4476,6 +5165,11 @@ fn spawn_worker(
                 run_voice_clone_submit_worker(app_handle, loaded, slots)
             });
         }
+        "video-sequence-submit" => {
+            tauri::async_runtime::spawn(async move {
+                run_video_sequence_submit_worker(app_handle, loaded, slots).await;
+            });
+        }
         "video-submit" => {
             tauri::async_runtime::spawn(async move {
                 run_video_submit_worker(app_handle, loaded, slots).await;
@@ -4519,6 +5213,7 @@ fn dispatch_stage(
             match stage {
                 "image-submit"
                 | "video-submit"
+                | "video-sequence-submit"
                 | "audio-submit"
                 | "audio-sequence-submit"
                 | "voice-clone-submit" => "submitting",
@@ -4573,6 +5268,16 @@ fn run_media_generation_dispatcher(
                 "video-submit",
                 false,
                 "media-runtime:video-submit",
+            );
+            let _ = dispatch_stage(
+                &app,
+                &state,
+                &slots,
+                "video_sequence",
+                &["queued"],
+                "video-sequence-submit",
+                false,
+                "media-runtime:video-sequence-submit",
             );
             let _ = dispatch_stage(
                 &app,
@@ -4679,6 +5384,8 @@ mod tests {
                 owner_session_id: None,
                 current_attempt_no: 1,
                 cancel_reason: None,
+                archived_at: None,
+                archive_reason: None,
                 created_at: now_iso(),
                 updated_at: now_iso(),
                 completed_at: None,
@@ -4734,11 +5441,42 @@ mod tests {
     #[test]
     fn image_jobs_ignore_requested_model_and_use_configured_default() {
         let resolved = resolve_image_provider_model(
-            Some("gpt-image-1".to_string()),
+            Some("gpt-image-2-cheap".to_string()),
             Some("seedance-2.0".to_string()),
         )
         .expect("configured image model should be used");
-        assert_eq!(resolved, Some("gpt-image-1".to_string()));
+        assert_eq!(resolved, Some("gpt-image-2-cheap".to_string()));
+    }
+
+    #[test]
+    fn image_jobs_do_not_invent_default_model() {
+        let resolved = resolve_image_provider_model(None, None)
+            .expect("missing config should be handled by the caller");
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn configured_image_model_comes_from_settings_route_or_legacy_field() {
+        let route_settings = json!({
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "image": {
+                    "mode": "official",
+                    "sourceId": "redbox_official_auto",
+                    "model": "gpt-image-2-cheap"
+                }
+            })).unwrap(),
+            "image_model": "legacy-image-model"
+        });
+        assert_eq!(
+            configured_image_model_from_settings(&route_settings).as_deref(),
+            Some("gpt-image-2-cheap")
+        );
+
+        let legacy_settings = json!({ "image_model": "legacy-image-model" });
+        assert_eq!(
+            configured_image_model_from_settings(&legacy_settings).as_deref(),
+            Some("legacy-image-model")
+        );
     }
 
     #[test]
@@ -4781,10 +5519,10 @@ mod tests {
             retry_policy_for_stage("image-submit"),
             Some(("queued", "retry_image_submit", 3, 1_500))
         );
-        assert_eq!(
-            retry_policy_for_stage("video-poll"),
-            Some(("polling", "retry_video_poll", 20, 2_500))
-        );
+        assert_eq!(retry_policy_for_stage("video-submit"), None);
+        assert_eq!(retry_policy_for_stage("video-sequence-submit"), None);
+        assert_eq!(retry_policy_for_stage("video-poll"), None);
+        assert_eq!(retry_policy_for_stage("video-download"), None);
         assert_eq!(retry_policy_for_stage("unknown-stage"), None);
     }
 
