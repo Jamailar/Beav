@@ -43,56 +43,14 @@ fn normalize_transcript_format(value: Option<&str>) -> (&'static str, &'static s
     }
 }
 
-fn json_setting(settings: &Value, key: &str) -> Option<Value> {
-    payload_string(settings, key).and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-}
-
-fn source_is_official_managed(source: &Value) -> bool {
-    let id = source
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    let preset_id = source
-        .get("presetId")
-        .or_else(|| source.get("preset_id"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    id == "redbox_official_auto" || id.ends_with("_official_auto") || preset_id == "redbox-official"
-}
-
 fn transcription_route_uses_official_source(settings: &Value) -> bool {
-    let Some(routes) = json_setting(settings, "ai_model_routes_json") else {
-        return false;
-    };
-    let Some(source_id) = routes
-        .get("transcription")
-        .and_then(|route| route.get("sourceId").or_else(|| route.get("source_id")))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return false;
-    };
-    if source_id == "redbox_official_auto" || source_id.ends_with("_official_auto") {
-        return true;
-    }
-    json_setting(settings, "ai_sources_json")
-        .and_then(|sources| sources.as_array().cloned())
-        .map(|sources| {
-            sources.iter().any(|source| {
-                source
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(|id| id.trim() == source_id)
-                    .unwrap_or(false)
-                    && source_is_official_managed(source)
-            })
-        })
-        .unwrap_or(false)
+    crate::ai_model_manager::AiModelManager::resolve(
+        settings,
+        crate::ai_model_manager::AiModelScope::Transcription,
+        None,
+    )
+    .map(|route| route.is_official)
+    .unwrap_or(false)
 }
 
 fn resolve_agent_srt_transcription_model(

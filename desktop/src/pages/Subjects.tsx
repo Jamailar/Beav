@@ -196,6 +196,14 @@ type VoiceCloneModelOption = {
     description?: string;
 };
 
+type VoiceRouteOverride = {
+    sourceId?: string;
+    baseURL?: string;
+    apiKey?: string;
+    presetId?: string;
+    protocol?: string;
+};
+
 const categoryIconForName = (name: string) => {
     const normalized = name.trim();
     if (normalized === '角色' || normalized === '人物') return UserRound;
@@ -403,6 +411,49 @@ function sourceModelDescriptors(source: AiSourceConfig): AiModelDescriptor[] {
         ...(Array.isArray(source.models) ? source.models : []),
         source.model,
     ]);
+}
+
+function sourceSupportsVoiceTtsModel(source: AiSourceConfig, modelId: string): boolean {
+    const target = modelId.trim();
+    if (!target) return false;
+    const descriptors = sourceModelDescriptors(source);
+    const ttsModels = filterAiModelsByCapability(descriptors, 'tts');
+    const audioModels = ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(descriptors, 'audio');
+    return audioModels.some((model) => model.id === target);
+}
+
+function sourceToVoiceRouteOverride(source: AiSourceConfig | undefined): VoiceRouteOverride {
+    if (!source) return {};
+    return {
+        sourceId: source.id || undefined,
+        baseURL: source.baseURL || undefined,
+        apiKey: source.apiKey || undefined,
+        presetId: source.presetId || undefined,
+        protocol: source.protocol || undefined,
+    };
+}
+
+function resolveVoiceTtsModelOverride(settings: Record<string, unknown>, modelId: string): VoiceRouteOverride {
+    const selectedModel = modelId.trim();
+    if (!selectedModel) return {};
+    const aiSources = parseAiSources(typeof settings.ai_sources_json === 'string' ? settings.ai_sources_json : undefined);
+    const candidates = aiSources.filter((source) => sourceSupportsVoiceTtsModel(source, selectedModel));
+    if (!candidates.length) return {};
+
+    const routes = parseJsonObject(settings.ai_model_routes_json);
+    const voiceRoute = parseJsonObject(routes.voiceTts);
+    const routeSourceId = String(voiceRoute.sourceId || voiceRoute.source_id || '').trim();
+    const routeModel = String(voiceRoute.model || voiceRoute.modelName || voiceRoute.model_name || '').trim();
+    const defaultSourceId = String(settings.default_ai_source_id || '').trim();
+    const source = (
+        routeSourceId && (!routeModel || routeModel === selectedModel)
+            ? candidates.find((item) => item.id === routeSourceId)
+            : undefined
+    )
+        || (defaultSourceId ? candidates.find((item) => item.id === defaultSourceId) : undefined)
+        || candidates[0];
+
+    return sourceToVoiceRouteOverride(source);
 }
 
 function buildVoiceCloneModelOptions(settings: Record<string, unknown>): { options: VoiceCloneModelOption[]; selectedModel: string } {
@@ -734,6 +785,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [recordingHint, setRecordingHint] = useState('');
     const [voiceCloneModelOptions, setVoiceCloneModelOptions] = useState<VoiceCloneModelOption[]>([]);
     const [selectedVoiceCloneTtsModel, setSelectedVoiceCloneTtsModel] = useState(DEFAULT_VOICE_TTS_MODEL);
+    const [voiceModelSettingsSnapshot, setVoiceModelSettingsSnapshot] = useState<Record<string, unknown>>({});
     const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
     const recordingIntervalRef = useRef<number | null>(null);
     const hasLoadedSnapshotRef = useRef(false);
@@ -844,9 +896,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             }
             if (requestId !== loadDataRequestRef.current) return;
             const nextCategories = Array.isArray(categoriesResult.categories) ? categoriesResult.categories : [];
-            const voiceModelSettings = buildVoiceCloneModelOptions(settingsResult as Record<string, unknown>);
+            const settingsSnapshot = settingsResult as Record<string, unknown>;
+            const voiceModelSettings = buildVoiceCloneModelOptions(settingsSnapshot);
             setCategories(nextCategories);
             setSubjects(Array.isArray(subjectsResult.subjects) ? subjectsResult.subjects : []);
+            setVoiceModelSettingsSnapshot(settingsSnapshot);
             setVoiceCloneModelOptions(voiceModelSettings.options);
             setSelectedVoiceCloneTtsModel((current) => (
                 current && voiceModelSettings.options.some((option) => option.value === current)
@@ -1198,11 +1252,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         try {
             const targetTtsModel = selectedVoiceCloneTtsModel || DEFAULT_VOICE_TTS_MODEL;
             const cloneModel = cloneModelForTargetTtsModel(targetTtsModel);
+            const routeOverride = resolveVoiceTtsModelOverride(voiceModelSettingsSnapshot, targetTtsModel);
             const result = await window.ipcRenderer.voice.clone({
                 ownerAssetId: subject.id,
                 samplePath: subject.voicePath,
                 name: subject.name,
                 model: cloneModel,
+                ...routeOverride,
                 cloneModel,
                 targetTtsModel,
                 target_tts_model: targetTtsModel,
@@ -1223,7 +1279,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         } finally {
             setRetryingVoiceSubjectId(null);
         }
-    }, [loadData, selectedVoiceCloneTtsModel]);
+    }, [loadData, selectedVoiceCloneTtsModel, voiceModelSettingsSnapshot]);
 
     const saveVoiceDataUrl = useCallback(async (dataUrl: string, fileName: string) => {
         const duration = await getAudioDurationSeconds(dataUrl);

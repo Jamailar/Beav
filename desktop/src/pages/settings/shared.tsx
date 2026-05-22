@@ -448,81 +448,6 @@ export const inferImageTemplateByProvider = (provider: string, currentTemplate =
   return 'openai-images';
 };
 
-export const resolveImageModelFetchProtocol = (template: string): AiProtocol => {
-  const normalized = String(template || '').trim();
-  if (normalized === 'gemini-openai-images' || normalized === 'gemini-imagen-native' || normalized === 'gemini-generate-content') {
-    return 'gemini';
-  }
-  return 'openai';
-};
-
-export const resolveImageModelFetchPresetId = (provider: string, template: string, endpoint: string): string | undefined => {
-  const normalizedProvider = String(provider || '').trim().toLowerCase();
-  const normalizedTemplate = String(template || '').trim().toLowerCase();
-  const normalizedEndpoint = String(endpoint || '').trim().toLowerCase();
-  const merged = `${normalizedProvider} ${normalizedTemplate} ${normalizedEndpoint}`;
-
-  if (merged.includes('buts')) return 'buts';
-  if (
-    normalizedTemplate === 'dashscope-wan-native' ||
-    merged.includes('dashscope') ||
-    merged.includes('bailian') ||
-    merged.includes('wan')
-  ) {
-    return 'dashscope';
-  }
-  if (
-    normalizedTemplate === 'ark-seedream-native' ||
-    merged.includes('ark') ||
-    merged.includes('volc') ||
-    merged.includes('seedream') ||
-    merged.includes('doubao') ||
-    merged.includes('jimeng')
-  ) {
-    return 'ark';
-  }
-  if (
-    normalizedTemplate === 'gemini-openai-images' ||
-    normalizedTemplate === 'gemini-imagen-native' ||
-    normalizedTemplate === 'gemini-generate-content' ||
-    merged.includes('gemini') ||
-    merged.includes('generativelanguage.googleapis.com')
-  ) {
-    return 'gemini';
-  }
-  if (merged.includes('openrouter')) return 'openrouter';
-  if (merged.includes('deepseek')) return 'deepseek';
-  if (merged.includes('minimax')) return 'minimax-cn';
-  if (merged.includes('api.openai.com') || normalizedTemplate === 'openai-images') return 'openai';
-  return undefined;
-};
-
-export const normalizeImageModelFetchBaseURL = (baseURL: string, template: string): string => {
-  const normalizedBase = String(baseURL || '').trim().replace(/\/+$/, '');
-  if (!normalizedBase) return '';
-  if (template === 'gemini-openai-images' && /generativelanguage\.googleapis\.com/i.test(normalizedBase)) {
-    return normalizedBase.replace(/\/openai(?:\/.*)?$/i, '');
-  }
-  if (template === 'dashscope-wan-native') {
-    const stripped = normalizedBase
-      .replace(/\/compatible-mode\/v\d+(\.\d+)?(?:\/.*)?$/i, '')
-      .replace(/\/api\/v1(?:\/.*)?$/i, '')
-      .replace(/\/v1(?:\/.*)?$/i, '');
-    return `${stripped}/compatible-mode/v1`;
-  }
-  return normalizedBase;
-};
-
-export const isLikelyLocalEndpoint = (baseURL: string): boolean => {
-  const normalized = String(baseURL || '').toLowerCase();
-  return (
-    normalized.includes('127.0.0.1') ||
-    normalized.includes('localhost') ||
-    normalized.includes('0.0.0.0') ||
-    normalized.includes('::1')
-  );
-};
-
 export const AI_PRESET_LOGO_BY_ID: Record<string, string> = {
   'redbox-official': REDBOX_OFFICIAL_LOGO_URL,
   [OFFICIAL_AUTO_SOURCE_ID]: REDBOX_OFFICIAL_LOGO_URL,
@@ -1035,18 +960,6 @@ export const resolveDefaultImageEndpoint = (provider: string, template: string):
     return IMAGE_TEMPLATE_DEFAULT_ENDPOINTS[normalizedTemplate];
   }
   return IMAGE_TEMPLATE_DEFAULT_ENDPOINTS['openai-images'];
-};
-
-export const isImageTemplateRemoteModelFetchEnabled = (template: string): boolean => {
-  const normalized = String(template || '').trim();
-  return (
-    normalized === 'openai-images' ||
-    normalized === 'gemini-openai-images' ||
-    normalized === 'gemini-imagen-native' ||
-    normalized === 'gemini-generate-content' ||
-    normalized === 'dashscope-wan-native' ||
-    normalized === 'ark-seedream-native'
-  );
 };
 
 export const IMAGE_ASPECT_RATIO_OPTIONS = [

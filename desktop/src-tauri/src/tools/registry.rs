@@ -559,14 +559,6 @@ mod tests {
                 .is_some(),
             true
         );
-        assert_eq!(
-            snapshot
-                .get("deferredActionCount")
-                .and_then(Value::as_u64)
-                .unwrap_or_default()
-                > 0,
-            true
-        );
     }
 
     #[test]

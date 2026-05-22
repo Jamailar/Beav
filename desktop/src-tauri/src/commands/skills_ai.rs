@@ -148,50 +148,6 @@ fn resolve_market_install_entry(
     Ok(entries.into_iter().find(|entry| entry.id == id))
 }
 
-fn is_likely_image_model_id(model_id: &str) -> bool {
-    let normalized = model_id.trim().to_lowercase();
-    if normalized.is_empty() {
-        return false;
-    }
-    [
-        "image",
-        "dall-e",
-        "dalle",
-        "wan",
-        "seedream",
-        "jimeng",
-        "imagen",
-        "flux",
-        "stable-diffusion",
-        "sdxl",
-        "midjourney",
-        "mj",
-    ]
-    .iter()
-    .any(|keyword| normalized.contains(keyword))
-}
-
-fn maybe_filter_models_by_purpose(models: Vec<Value>, purpose: Option<&str>) -> Vec<Value> {
-    if purpose != Some("image") {
-        return models;
-    }
-    let filtered = models
-        .iter()
-        .filter(|item| {
-            item.get("id")
-                .and_then(Value::as_str)
-                .map(is_likely_image_model_id)
-                .unwrap_or(false)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if filtered.is_empty() {
-        models
-    } else {
-        filtered
-    }
-}
-
 fn requested_skill_name(payload: &Value) -> String {
     payload_string(payload, "name")
         .or_else(|| payload_string(payload, "skill"))
@@ -235,7 +191,6 @@ pub fn handle_skills_ai_channel(
             | "ai:roles:list"
             | "ai:detect-protocol"
             | "ai:test-connection"
-            | "ai:fetch-models"
     ) {
         return None;
     }
@@ -620,28 +575,31 @@ pub fn handle_skills_ai_channel(
                 let preset_id = payload_string(payload, "presetId");
                 let explicit = payload_string(payload, "protocol");
                 let protocol = infer_protocol(&base_url, preset_id.as_deref(), explicit.as_deref());
-                let models = maybe_filter_models_by_purpose(
-                    fetch_models_by_protocol(&protocol, &base_url, api_key.as_deref())?,
-                    payload_string(payload, "purpose").as_deref(),
-                );
+                if base_url.trim().is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "protocol": protocol,
+                        "models": [],
+                        "message": "API Base URL is required"
+                    }));
+                }
+                if api_key.as_deref().unwrap_or_default().trim().is_empty()
+                    && !base_url.contains("localhost")
+                    && !base_url.contains("127.0.0.1")
+                {
+                    return Ok(json!({
+                        "success": false,
+                        "protocol": protocol,
+                        "models": [],
+                        "message": "API Key is required for remote providers"
+                    }));
+                }
                 Ok(json!({
                     "success": true,
                     "protocol": protocol,
-                    "models": models,
-                    "message": format!("连接成功，发现 {} 个模型", models.len())
+                    "models": [],
+                    "message": "配置已通过本地校验；模型路由由 ai_model_manager 解析"
                 }))
-            }
-            "ai:fetch-models" => {
-                let base_url = payload_string(payload, "baseURL").unwrap_or_default();
-                let api_key = payload_string(payload, "apiKey");
-                let preset_id = payload_string(payload, "presetId");
-                let explicit = payload_string(payload, "protocol");
-                let protocol = infer_protocol(&base_url, preset_id.as_deref(), explicit.as_deref());
-                let purpose = payload_string(payload, "purpose");
-                Ok(json!(maybe_filter_models_by_purpose(
-                    fetch_models_by_protocol(&protocol, &base_url, api_key.as_deref())?,
-                    purpose.as_deref()
-                )))
             }
             _ => unreachable!(),
         }

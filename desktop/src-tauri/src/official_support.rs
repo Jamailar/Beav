@@ -6,7 +6,7 @@ use crate::{
     app_brand_display_name, app_brand_slug, append_debug_trace_global, escape_html,
     format_http_error_message, http_error_debug_line, http_error_details_from_value,
     normalize_anthropic_base_url, normalize_base_url, now_ms, payload_field, payload_string,
-    run_curl_json, run_curl_json_response,
+    run_curl_json_response,
 };
 
 const REDBOX_OFFICIAL_CN_GATEWAY_ROOT: &str = "https://api.ziz.hk";
@@ -50,169 +50,6 @@ pub(crate) fn gemini_url(base_url: &str, path: &str, api_key: Option<&str>) -> S
         Some(key) => format!("{base}{path}?key={key}"),
         None => format!("{base}{path}"),
     }
-}
-
-fn build_openai_model_endpoint_candidates(base_url: &str) -> Vec<String> {
-    let normalized = normalize_base_url(base_url);
-    if normalized.is_empty() {
-        return Vec::new();
-    }
-    let mut candidates = vec![
-        format!("{normalized}/models"),
-        format!("{normalized}/v1/models"),
-    ];
-    if let Ok(parsed) = url::Url::parse(&normalized) {
-        let origin = format!(
-            "{}://{}",
-            parsed.scheme(),
-            parsed.host_str().unwrap_or_default()
-        );
-        let path = parsed.path().trim_end_matches('/');
-        for hint in [
-            "/v1",
-            "/openai",
-            "/api/v1",
-            "/openai/v1",
-            "/compatible-mode/v1",
-            "/compatible-mode",
-            "/compatibility/v1",
-            "/v2",
-            "/api/v3",
-            "/v1beta/openai",
-            "/api/paas/v4",
-        ] {
-            candidates.push(format!("{origin}{hint}/models"));
-        }
-        if !path.is_empty() && path != "/" {
-            candidates.push(format!("{origin}{path}/models"));
-        }
-    }
-    candidates.retain(|item| !item.trim().is_empty());
-    candidates.dedup();
-    candidates
-}
-
-fn response_model_items(response: &Value) -> Vec<Value> {
-    let data_items = response
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let fallback_items = response
-        .get("models")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    data_items.into_iter().chain(fallback_items).collect()
-}
-
-pub(crate) fn fetch_openai_models(
-    base_url: &str,
-    api_key: Option<&str>,
-) -> Result<Vec<Value>, String> {
-    let mut last_error = String::new();
-    for endpoint in build_openai_model_endpoint_candidates(base_url) {
-        match run_curl_json("GET", &endpoint, api_key, &[], None) {
-            Ok(response) => {
-                let models = response_model_items(&response)
-                    .into_iter()
-                    .filter_map(|item| {
-                        let id = item
-                            .get("id")
-                            .or_else(|| item.get("name"))
-                            .or_else(|| item.get("model"))
-                            .and_then(Value::as_str)?
-                            .trim()
-                            .to_string();
-                        if id.is_empty() {
-                            return None;
-                        }
-                        Some(json!({ "id": id }))
-                    })
-                    .collect::<Vec<_>>();
-                if !models.is_empty() {
-                    return Ok(models);
-                }
-                last_error = format!("empty model list from {endpoint}");
-            }
-            Err(error) => {
-                last_error = format!("{endpoint}: {error}");
-            }
-        }
-    }
-    Err(if last_error.is_empty() {
-        "failed to fetch OpenAI-compatible models".to_string()
-    } else {
-        format!("failed to fetch OpenAI-compatible models: {last_error}")
-    })
-}
-
-pub(crate) fn fetch_anthropic_models(
-    base_url: &str,
-    api_key: Option<&str>,
-) -> Result<Vec<Value>, String> {
-    let response = run_curl_json(
-        "GET",
-        &format!("{}/models", normalize_anthropic_base_url(base_url)),
-        None,
-        &[
-            ("x-api-key", api_key.unwrap_or_default().to_string()),
-            ("anthropic-version", "2023-06-01".to_string()),
-        ],
-        None,
-    )?;
-    let items = response
-        .get("data")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    Ok(items
-        .into_iter()
-        .filter_map(|item| {
-            let id = item
-                .get("id")
-                .and_then(|value| value.as_str())?
-                .trim()
-                .to_string();
-            if id.is_empty() {
-                return None;
-            }
-            Some(json!({ "id": id }))
-        })
-        .collect())
-}
-
-pub(crate) fn fetch_gemini_models(
-    base_url: &str,
-    api_key: Option<&str>,
-) -> Result<Vec<Value>, String> {
-    let response = run_curl_json(
-        "GET",
-        &gemini_url(base_url, "/models", api_key),
-        None,
-        &[],
-        None,
-    )?;
-    let items = response
-        .get("models")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    Ok(items
-        .into_iter()
-        .filter_map(|item| {
-            let raw_name = item.get("name").and_then(|value| value.as_str())?.trim();
-            let id = raw_name
-                .strip_prefix("models/")
-                .unwrap_or(raw_name)
-                .trim()
-                .to_string();
-            if id.is_empty() {
-                return None;
-            }
-            Some(json!({ "id": id }))
-        })
-        .collect())
 }
 
 pub(crate) fn invoke_openai_chat(
@@ -686,18 +523,6 @@ fn openai_chat_message_content(response: &Value) -> String {
                 .join("")
         })
         .unwrap_or_default()
-}
-
-pub(crate) fn fetch_models_by_protocol(
-    protocol: &str,
-    base_url: &str,
-    api_key: Option<&str>,
-) -> Result<Vec<Value>, String> {
-    match protocol {
-        "anthropic" => fetch_anthropic_models(base_url, api_key),
-        "gemini" => fetch_gemini_models(base_url, api_key),
-        _ => fetch_openai_models(base_url, api_key),
-    }
 }
 
 pub(crate) fn official_fallback_products() -> Vec<Value> {
@@ -1178,7 +1003,7 @@ pub(crate) fn choose_preferred_official_chat_model(
         .unwrap_or_else(|| preserve_non_empty_model(current, fallback))
 }
 
-fn model_defaults_initialized(settings: &Value) -> bool {
+pub(crate) fn model_defaults_initialized(settings: &Value) -> bool {
     payload_string(settings, AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false)
@@ -1205,8 +1030,9 @@ pub(crate) fn official_sync_source_into_settings(
     let defaults_initialized = model_defaults_initialized(settings);
     let current_default_is_official = current_default_source_id.trim() == "redbox_official_auto";
     let should_sync_official_route = seed_default_routes
+        && !defaults_initialized
         && (current_default_source_id.trim().is_empty()
-            || (current_default_is_official && !defaults_initialized)
+            || current_default_is_official
             || !current_default_source_exists);
     let existing_source = sources
         .iter()
@@ -1493,6 +1319,9 @@ pub(crate) fn seed_official_default_models_into_settings(
     default_slots: &[Value],
     catalog_models: &[Value],
 ) -> bool {
+    if model_defaults_initialized(settings) {
+        return false;
+    }
     let mut default_models = Vec::<Value>::new();
     let mut routes = serde_json::Map::new();
     for slot in default_slots {
@@ -1548,6 +1377,7 @@ pub(crate) fn seed_official_default_models_into_settings(
             ),
         );
     }
+    crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
     true
 }
 
@@ -1856,6 +1686,67 @@ mod tests {
             payload_string(&settings, AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY)
                 .map(|value| !value.trim().is_empty())
                 .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn seed_official_default_models_does_not_override_initialized_user_routes() {
+        let user_routes = json!({
+            "chat": { "mode": "custom", "sourceId": "custom-source", "model": "user-chat" },
+            "image": { "mode": "custom", "sourceId": "custom-source", "model": "user-image" },
+            "video": { "mode": "custom", "sourceId": "custom-source", "model": "user-video" }
+        });
+        let mut settings = json!({
+            "default_ai_source_id": "custom-source",
+            "api_endpoint": "https://custom.example/v1",
+            "api_key": "custom-key",
+            "model_name": "user-chat",
+            "image_model": "user-image",
+            "video_model": "user-video",
+            AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY: "2026-05-19T00:00:00Z",
+            "ai_model_routes_json": serde_json::to_string(&user_routes).unwrap(),
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "custom-source",
+                "name": "Custom",
+                "presetId": "custom",
+                "baseURL": "https://custom.example/v1",
+                "apiKey": "custom-key",
+                "model": "user-chat",
+                "protocol": "openai"
+            })])
+            .unwrap(),
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
+        });
+        let default_slots = vec![json!({
+            "slot_key": "reasoning",
+            "effective_model": { "model_key": "qwen3.5-plus", "capability": "chat", "is_active": true }
+        })];
+
+        assert!(!seed_official_default_models_into_settings(
+            &mut settings,
+            &default_slots,
+            &official_models_fixture()
+        ));
+
+        let routes = payload_string(&settings, "ai_model_routes_json")
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .unwrap_or_else(|| json!({}));
+        assert_eq!(routes, user_routes);
+        assert_eq!(
+            payload_string(&settings, "default_ai_source_id").as_deref(),
+            Some("custom-source")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name").as_deref(),
+            Some("user-chat")
+        );
+        assert_eq!(
+            payload_string(&settings, "image_model").as_deref(),
+            Some("user-image")
+        );
+        assert_eq!(
+            payload_string(&settings, "video_model").as_deref(),
+            Some("user-video")
         );
     }
 }

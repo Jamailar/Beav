@@ -471,7 +471,8 @@ pub(crate) fn generate_image_assets(
             .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
         crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime)
     };
-    let real_image_config = resolve_image_generation_settings(&settings_snapshot);
+    let real_image_config =
+        resolve_image_generation_settings_with_override(&settings_snapshot, Some(payload));
     let used_configured_endpoint = real_image_config.is_some();
     let effective_image_prompt = prompt.clone();
     let placeholder_fallback_allowed = allow_placeholder_fallback(payload);
@@ -937,12 +938,12 @@ pub fn handle_generation_channel(
             crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime)
         };
         let real_image_config = if channel == "image-gen:generate" {
-            resolve_image_generation_settings(&settings_snapshot)
+            resolve_image_generation_settings_with_override(&settings_snapshot, Some(payload))
         } else {
             None
         };
         let real_video_config = if channel == "video-gen:generate" {
-            resolve_video_generation_settings(&settings_snapshot)
+            resolve_video_generation_settings_with_override(&settings_snapshot, Some(payload))
         } else {
             None
         };

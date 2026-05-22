@@ -1502,22 +1502,60 @@ fn resolve_provider_metadata(
         _ => payload_string(payload, "provider").unwrap_or_else(|| "redbox-official".to_string()),
     };
     let model = match kind {
-        "image" => resolve_image_provider_model(
-            payload_string(&settings, "image_model"),
-            payload_string(payload, "model"),
-        )?,
-        "audio" | "audio_sequence" => normalize_optional_string(payload_string(payload, "model"))
-            .or_else(|| payload_string(&settings, "voice_tts_model"))
-            .or_else(|| payload_string(&settings, "tts_model")),
-        "voice_clone" => normalize_optional_string(payload_string(payload, "model"))
-            .or_else(|| payload_string(&settings, "voice_clone_model")),
+        "image" => {
+            let route = crate::ai_model_manager::AiModelManager::resolve(
+                &settings,
+                crate::ai_model_manager::AiModelScope::Image,
+                Some(payload),
+            );
+            resolve_image_provider_model(
+                route
+                    .as_ref()
+                    .map(|route| route.model_name.clone())
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| payload_string(&settings, "image_model")),
+                payload_string(payload, "model"),
+            )?
+        }
+        "audio" | "audio_sequence" => {
+            let route = crate::ai_model_manager::AiModelManager::resolve(
+                &settings,
+                crate::ai_model_manager::AiModelScope::VoiceTts,
+                Some(payload),
+            );
+            normalize_optional_string(payload_string(payload, "model"))
+                .or_else(|| {
+                    route
+                        .as_ref()
+                        .map(|route| route.model_name.clone())
+                        .filter(|value| !value.trim().is_empty())
+                })
+                .or_else(|| payload_string(&settings, "voice_tts_model"))
+                .or_else(|| payload_string(&settings, "tts_model"))
+        }
+        "voice_clone" => {
+            let route = crate::ai_model_manager::AiModelManager::resolve(
+                &settings,
+                crate::ai_model_manager::AiModelScope::VoiceClone,
+                Some(payload),
+            );
+            normalize_optional_string(payload_string(payload, "model"))
+                .or_else(|| {
+                    route
+                        .as_ref()
+                        .map(|route| route.model_name.clone())
+                        .filter(|value| !value.trim().is_empty())
+                })
+                .or_else(|| payload_string(&settings, "voice_clone_model"))
+        }
         "video" if is_video_retalk_request(payload, None) => Some("videoretalk".to_string()),
         _ => {
             if provider == "redbox-official" {
                 Some("seedance-2.0".to_string())
             } else {
                 normalize_optional_string(payload_string(payload, "model")).or_else(|| {
-                    resolve_video_generation_settings(&settings).map(|(_, _, model)| model)
+                    resolve_video_generation_settings_with_override(&settings, Some(payload))
+                        .map(|(_, _, model)| model)
                 })
             }
         }
@@ -3108,16 +3146,29 @@ async fn run_video_generation_request_async(
 }
 
 fn resolve_video_retalk_settings(settings: &Value) -> (String, Option<String>) {
-    let endpoint = payload_string(settings, "video_endpoint")
+    let resolved = crate::ai_model_manager::AiModelManager::resolve(
+        settings,
+        crate::ai_model_manager::AiModelScope::Video,
+        None,
+    );
+    let endpoint = resolved
+        .as_ref()
+        .map(|route| route.base_url.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "video_endpoint"))
         .map(|value| normalize_base_url(&value))
         .unwrap_or_else(|| crate::official_base_url_from_settings(settings));
     let api_key = if crate::media_generation::is_redbox_official_endpoint(&endpoint) {
         crate::official_access_token_from_settings(settings)
+            .or_else(|| resolved.as_ref().and_then(|route| route.api_key.clone()))
             .or_else(|| payload_string(settings, "video_api_key"))
             .or_else(|| crate::official_ai_api_key_from_settings(settings))
             .or_else(|| payload_string(settings, "api_key"))
     } else {
-        payload_string(settings, "video_api_key")
+        resolved
+            .as_ref()
+            .and_then(|route| route.api_key.clone())
+            .or_else(|| payload_string(settings, "video_api_key"))
             .or_else(|| crate::official_ai_api_key_from_settings(settings))
             .or_else(|| payload_string(settings, "api_key"))
     };
@@ -4115,8 +4166,11 @@ async fn run_video_submit_worker(
                 &response,
             );
         }
-        let (endpoint, api_key, default_model) = resolve_video_generation_settings(&settings)
-            .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
+        let (endpoint, api_key, default_model) = resolve_video_generation_settings_with_override(
+            &settings,
+            Some(&loaded.job.request_json),
+        )
+        .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
         let effective_model = if crate::media_generation::is_redbox_compatible_endpoint(&endpoint) {
             "seedance-2.0".to_string()
         } else {
@@ -4269,8 +4323,11 @@ async fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mut
                 }
             }
         }
-        let (endpoint, api_key, default_model) = resolve_video_generation_settings(&settings)
-            .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
+        let (endpoint, api_key, default_model) = resolve_video_generation_settings_with_override(
+            &settings,
+            Some(&loaded.job.request_json),
+        )
+        .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
         let model = loaded.job.provider_model.clone().unwrap_or(default_model);
         let Some(provider_task_id) = loaded.attempt.provider_task_id.clone() else {
             let message = "视频任务状态损坏：缺少 provider taskId，已停止轮询。".to_string();

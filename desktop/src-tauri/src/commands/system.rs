@@ -421,6 +421,7 @@ fn payload_updates_ai_model_selection(payload: &Value) -> bool {
                 | "transcription_model"
                 | "embedding_model"
                 | "image_model"
+                | "video_model"
                 | "visual_index_model"
                 | "video_analysis_model"
                 | "voice_tts_model"
@@ -516,8 +517,8 @@ pub fn handle_system_channel(
         | "app:open-knowledge-api-guide"
         | "app:open-path"
         | "settings:pick-workspace-dir"
-        | "model-config:read"
-        | "model-config:effective"
+        | "ai-model-manager:snapshot"
+        | "ai-model-manager:resolve"
         | "db:get-settings"
         | "db:save-settings"
         | "debug:get-status"
@@ -577,20 +578,55 @@ pub fn handle_system_channel(
                         "path": path,
                     }))
                 }
-                "model-config:read" => with_store(state, |store| {
-                    Ok(crate::model_config::model_config_diagnostics_value(
-                        &state.store_path,
-                        &store.settings,
+                "ai-model-manager:snapshot" => with_store(state, |store| {
+                    let runtime = state
+                        .auth_runtime
+                        .lock()
+                        .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+                    let projected =
+                        crate::auth::project_settings_for_runtime(&store.settings, &runtime);
+                    serde_json::to_value(crate::ai_model_manager::AiModelManager::snapshot(
+                        &projected,
                     ))
+                    .map_err(|error| error.to_string())
                 }),
-                "model-config:effective" => {
+                "ai-model-manager:resolve" => {
                     let runtime_mode = payload_string(payload, "runtimeMode")
                         .or_else(|| payload_string(payload, "runtime_mode"));
+                    let scope = payload_string(payload, "scope");
+                    let action = payload_string(payload, "action");
                     with_store(state, |store| {
-                        Ok(crate::model_config::effective_model_config_value(
-                            &store.settings,
-                            runtime_mode.as_deref(),
-                        ))
+                        let runtime = state
+                            .auth_runtime
+                            .lock()
+                            .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+                        let projected =
+                            crate::auth::project_settings_for_runtime(&store.settings, &runtime);
+                        let resolved = if let Some(action) = action.as_deref() {
+                            crate::ai_model_manager::AiModelManager::resolve_for_tool(
+                                &projected,
+                                action,
+                                Some(payload),
+                            )
+                        } else {
+                            let scope = scope
+                                .as_deref()
+                                .map(crate::ai_model_manager::AiModelScope::from_route_scope)
+                                .unwrap_or_else(|| {
+                                    crate::ai_model_manager::scope_for_runtime_mode(
+                                        runtime_mode.as_deref(),
+                                    )
+                                });
+                            crate::ai_model_manager::AiModelManager::resolve(
+                                &projected,
+                                scope,
+                                Some(payload),
+                            )
+                        };
+                        Ok(resolved
+                            .as_ref()
+                            .map(crate::ai_model_manager::resolved_value_for_debug)
+                            .unwrap_or_else(|| json!({ "success": false, "error": "unresolved" })))
                     })
                 }
                 "db:get-settings" => with_store(state, |store| {
@@ -600,6 +636,9 @@ pub fn handle_system_channel(
                         .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
                     let mut projected =
                         crate::auth::project_settings_for_runtime(&store.settings, &runtime);
+                    crate::ai_model_manager::legacy_projection::normalize_settings_projection(
+                        &mut projected,
+                    );
                     normalize_default_ai_route_settings(&mut projected);
                     Ok(projected)
                 }),
@@ -614,9 +653,12 @@ pub fn handle_system_channel(
                     })?;
                     let (active_space_id, settings_snapshot) = with_store_mut(state, |store| {
                         store.settings = merged_settings_payload(&store.settings, payload);
+                        crate::ai_model_manager::legacy_projection::normalize_settings_projection(
+                            &mut store.settings,
+                        );
                         Ok((store.active_space_id.clone(), store.settings.clone()))
                     })?;
-                    crate::model_config::sync_model_config_file(
+                    crate::ai_model_manager::store::sync_model_config_file(
                         &state.store_path,
                         &settings_snapshot,
                     )?;

@@ -309,14 +309,38 @@ fn resolve_voice_config(
     payload: Option<&Value>,
 ) -> Result<VoiceGatewayConfig, String> {
     let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let tts_route = crate::ai_model_manager::AiModelManager::resolve(
+        &settings,
+        crate::ai_model_manager::AiModelScope::VoiceTts,
+        payload,
+    );
+    let clone_route = crate::ai_model_manager::AiModelManager::resolve(
+        &settings,
+        crate::ai_model_manager::AiModelScope::VoiceClone,
+        payload,
+    );
     let base_url = payload
         .and_then(|value| payload_string_alias(value, &["baseUrl", "base_url", "endpoint"]))
+        .or_else(|| {
+            tts_route
+                .as_ref()
+                .map(|route| route.base_url.clone())
+                .filter(|value| !value.trim().is_empty())
+        })
+        .or_else(|| {
+            clone_route
+                .as_ref()
+                .map(|route| route.base_url.clone())
+                .filter(|value| !value.trim().is_empty())
+        })
         .or_else(|| payload_string(&settings, "voice_endpoint"))
         .or_else(|| payload_string(&settings, "tts_endpoint"))
         .or_else(|| payload_string(&settings, "api_endpoint"))
         .unwrap_or_else(|| official_base_url_from_settings(&settings));
     let api_key = payload
         .and_then(|value| payload_string_alias(value, &["apiKey", "api_key"]))
+        .or_else(|| tts_route.as_ref().and_then(|route| route.api_key.clone()))
+        .or_else(|| clone_route.as_ref().and_then(|route| route.api_key.clone()))
         .or_else(|| payload_string(&settings, "voice_api_key"))
         .or_else(|| payload_string(&settings, "tts_api_key"))
         .or_else(|| payload_string(&settings, "api_key"))
@@ -325,6 +349,12 @@ fn resolve_voice_config(
         .filter(|value| !value.is_empty());
     let clone_model = payload
         .and_then(|value| payload_string_alias(value, &["cloneModel", "clone_model"]))
+        .or_else(|| {
+            clone_route
+                .as_ref()
+                .map(|route| route.model_name.clone())
+                .filter(|value| !value.trim().is_empty())
+        })
         .or_else(|| payload_string(&settings, "voice_clone_model"))
         .unwrap_or_else(|| DEFAULT_CLONE_MODEL.to_string());
     let tts_model = payload
@@ -333,6 +363,12 @@ fn resolve_voice_config(
                 value,
                 &["ttsModel", "tts_model", "voiceTtsModel", "voice_tts_model"],
             )
+        })
+        .or_else(|| {
+            tts_route
+                .as_ref()
+                .map(|route| route.model_name.clone())
+                .filter(|value| !value.trim().is_empty())
         })
         .or_else(|| payload_string(&settings, "voice_tts_model"))
         .or_else(|| payload_string(&settings, "tts_model"))

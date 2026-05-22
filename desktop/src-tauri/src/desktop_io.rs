@@ -516,11 +516,27 @@ fn value_type_name(value: &Value) -> &'static str {
 pub(crate) fn resolve_transcription_settings(
     settings: &Value,
 ) -> Option<(String, Option<String>, String)> {
-    let endpoint = payload_string(settings, "transcription_endpoint")
+    let resolved = crate::ai_model_manager::AiModelManager::resolve(
+        settings,
+        crate::ai_model_manager::AiModelScope::Transcription,
+        None,
+    );
+    let endpoint = resolved
+        .as_ref()
+        .map(|route| route.base_url.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "transcription_endpoint"))
         .or_else(|| payload_string(settings, "api_endpoint"))?;
-    let model_name = payload_string(settings, "transcription_model")
+    let model_name = resolved
+        .as_ref()
+        .map(|route| route.model_name.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "transcription_model"))
         .or_else(|| Some("whisper-1".to_string()))?;
-    let api_key = payload_string(settings, "transcription_key")
+    let api_key = resolved
+        .as_ref()
+        .and_then(|route| route.api_key.clone())
+        .or_else(|| payload_string(settings, "transcription_key"))
         .or_else(|| payload_string(settings, "api_key"));
     Some((endpoint, api_key, model_name))
 }

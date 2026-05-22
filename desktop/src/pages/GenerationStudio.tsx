@@ -46,6 +46,8 @@ type SettingsShape = {
     api_endpoint?: string;
     api_key?: string;
     ai_sources_json?: string;
+    ai_model_routes_json?: string;
+    default_ai_source_id?: string;
     image_provider?: string;
     image_endpoint?: string;
     image_api_key?: string;
@@ -1777,6 +1779,14 @@ type PickerOption = {
     tone?: 'danger';
 };
 
+type ModelRouteOverride = {
+    sourceId?: string;
+    baseURL?: string;
+    apiKey?: string;
+    presetId?: string;
+    protocol?: string;
+};
+
 type VoiceListItem = {
     id: string;
     name: string;
@@ -1909,6 +1919,78 @@ function buildAudioModelOptions(settings: SettingsShape): PickerOption[] {
         label: option.label,
         description: option.sourceLabels.join(' / '),
     }));
+}
+
+function parseAiModelRoutes(settings: SettingsShape): Record<string, unknown> {
+    const raw = settings.ai_model_routes_json;
+    if (!raw) return {};
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : {};
+    } catch {
+        return {};
+    }
+}
+
+function sourceContainsModel(source: AiSourceConfig, capability: 'image' | 'tts' | 'audio', modelId: string): boolean {
+    const target = modelId.trim();
+    if (!target) return false;
+    const descriptors = getAiSourceModelDescriptors(source);
+    const scoped = capability === 'tts'
+        ? (
+            filterAiModelsByCapability(descriptors, 'tts').length > 0
+                ? filterAiModelsByCapability(descriptors, 'tts')
+                : filterAiModelsByCapability(descriptors, 'audio')
+        )
+        : capability === 'audio'
+            ? filterAiModelsByCapability(descriptors, 'audio')
+            : filterAiModelsByCapability(descriptors, capability);
+    return scoped.some((model) => model.id === target);
+}
+
+function aiSourceToRouteOverride(source: AiSourceConfig | null | undefined): ModelRouteOverride {
+    if (!source) return {};
+    return {
+        sourceId: source.id || undefined,
+        baseURL: source.baseURL || undefined,
+        apiKey: source.apiKey || undefined,
+        presetId: source.presetId || undefined,
+        protocol: source.protocol || undefined,
+    };
+}
+
+function resolveSelectedModelOverride(
+    settings: SettingsShape,
+    scope: 'image' | 'voiceTts',
+    capability: 'image' | 'tts' | 'audio',
+    modelId: string,
+): ModelRouteOverride {
+    const selectedModel = modelId.trim();
+    if (!selectedModel) return {};
+    const sources = parseAiSources(settings.ai_sources_json);
+    const candidates = sources.filter((source) => sourceContainsModel(source, capability, selectedModel));
+    if (candidates.length === 0) return {};
+
+    const routes = parseAiModelRoutes(settings);
+    const route = routes[scope];
+    const routeRecord = route && typeof route === 'object' && !Array.isArray(route)
+        ? route as Record<string, unknown>
+        : {};
+    const routeSourceId = String(routeRecord.sourceId || routeRecord.source_id || '').trim();
+    const routeModel = String(routeRecord.model || routeRecord.modelName || routeRecord.model_name || '').trim();
+    const defaultSourceId = String(settings.default_ai_source_id || '').trim();
+
+    const selectedSource = (
+        routeSourceId && (!routeModel || routeModel === selectedModel)
+            ? candidates.find((source) => source.id === routeSourceId)
+            : null
+    )
+        || (defaultSourceId ? candidates.find((source) => source.id === defaultSourceId) : null)
+        || candidates[0];
+
+    return aiSourceToRouteOverride(selectedSource);
 }
 
 function extractVoiceListItems(value: unknown): unknown[] {
@@ -3722,6 +3804,7 @@ export function GenerationStudio({
 
         void (async () => {
             try {
+                const modelRouteOverride = resolveSelectedModelOverride(settings, 'image', 'image', request.model);
                 const result = await window.ipcRenderer.generation.submitImage({
                     clientRequestId: entry.id,
                     prompt: request.prompt.trim(),
@@ -3732,6 +3815,7 @@ export function GenerationStudio({
                     referenceImages: request.referenceItems.map((item) => item.dataUrl),
                     count: request.count,
                     model: request.model.trim() || undefined,
+                    ...modelRouteOverride,
                     provider: settings.image_provider || undefined,
                     providerTemplate: settings.image_provider_template || undefined,
                     aspectRatio: request.aspectRatio.trim() || '1:1',
@@ -3765,6 +3849,7 @@ export function GenerationStudio({
         createFeedEntry,
         hasImageConfig,
         contextIntent?.source,
+        settings,
         settings.image_provider,
         settings.image_provider_template,
         updateFeedEntries,
@@ -3862,6 +3947,7 @@ export function GenerationStudio({
         void (async () => {
             try {
                 const speed = Number(request.speed || '1');
+                const modelRouteOverride = resolveSelectedModelOverride(settings, 'voiceTts', 'tts', request.model);
                 const result = await window.ipcRenderer.generation.submitAudio({
                     clientRequestId: entry.id,
                     source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
@@ -3871,6 +3957,7 @@ export function GenerationStudio({
                     voiceId: request.voiceId.trim(),
                     voice_id: request.voiceId.trim(),
                     model: request.model.trim() || undefined,
+                    ...modelRouteOverride,
                     languageBoost: request.languageBoost.trim() || undefined,
                     speed: Number.isFinite(speed) ? speed : undefined,
                     emotion: request.emotion.trim() || undefined,
@@ -4022,6 +4109,7 @@ export function GenerationStudio({
         createFeedEntry,
         effectiveAudioModel,
         hasVoiceConfig,
+        settings,
         updateFeedEntries,
         uploadDigitalHumanMedia,
     ]);
@@ -4046,6 +4134,7 @@ export function GenerationStudio({
 
         void (async () => {
             try {
+                const modelRouteOverride = resolveSelectedModelOverride(settings, 'image', 'image', request.model);
                 const result = await window.ipcRenderer.invoke('cover:generate', {
                     templateImage: request.templateImage?.dataUrl,
                     baseImage: request.baseImage?.dataUrl,
@@ -4056,6 +4145,7 @@ export function GenerationStudio({
                     templateName: request.title.trim() || undefined,
                     count: request.count,
                     model: request.model.trim() || undefined,
+                    ...modelRouteOverride,
                     provider: settings.image_provider || undefined,
                     providerTemplate: settings.image_provider_template || undefined,
                     quality: request.quality.trim() || 'medium',
@@ -4084,6 +4174,7 @@ export function GenerationStudio({
     }, [
         createFeedEntry,
         hasImageConfig,
+        settings,
         settings.image_provider,
         settings.image_provider_template,
         updateFeedEntries,

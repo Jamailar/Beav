@@ -10,7 +10,7 @@
 ## Characteristics
 
 - 状态复杂
-- 与登录态、积分、模型列表、调用记录等宿主数据绑定较深
+- 与登录态、积分、调用记录等宿主数据绑定较深；模型配置只从 `ai_model_manager` 派生
 - 必须遵守 stale-while-revalidate，不能因为刷新把整个面板清空
 
 ## Verification
