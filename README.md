@@ -143,6 +143,44 @@
 
 ## 更新日志
 
+### v2.2.0 (2026-05-22)
+
+RedBox 2.2.0 重点增强面向东南亚、欧洲和跨境电商平台的多国家、多语言商品详情页创作。现在可以围绕品牌、商品、平台版本和目标语言组织素材，由 AI Agent 生成适合不同市场的详情页图片，并把生成结果继续沉淀到商品素材工作区复用。
+
+#### 商品详情页创作
+
+- 新增品牌商品素材工作区，支持按品牌、商品、平台和详情页版本管理图片素材。
+- 商品详情页支持通过 AI Agent 生成，围绕当前商品资料、平台定位和版本要求自动产出详情页图片。
+- 平台版本会自动带入目标市场和语言要求，更适合东南亚、欧洲及跨境电商多国家铺货场景。
+- 支持从媒体库和生成结果中回收图片素材，生成后的图片可以直接进入商品详情页工作区继续编辑和复用。
+
+![RedBox 2.2.0 多语言商品详情页创作](https://github.com/Jamailar/RedBox/releases/download/v2.2.0/redbox-2.2.0-multilingual-product-detail-pages.gif)
+
+#### 支持的电商平台
+
+淘宝 / 天猫、京东 JD、拼多多 Pinduoduo、抖音电商 / 抖店、快手小店、1688、小红书店铺、唯品会、Alibaba.com、Shopee、Lazada、TikTok Shop、Tokopedia、Bukalapak、Blibli、Tiki、Sendo、ZALORA、Amazon EU/UK、eBay、Etsy、Zalando、ABOUT YOU、Allegro、bol.com、Cdiscount / Octopia、OTTO Market、Kaufland Global Marketplace、eMAG、ManoMano、Temu、SHEIN Marketplace、AliExpress、Trendyol、Kaspi.kz、Ozon、Wildberries、Uzum Market、Satu.kz。
+
+#### 支持的详情页语言
+
+英语、德语、法语、西班牙语、马来语、泰语、繁体中文、印尼语、越南语、葡萄牙语、意大利语、日语、阿拉伯语、荷兰语、波兰语、瑞典语、丹麦语、芬兰语、挪威语、捷克语、斯洛伐克语、斯洛文尼亚语、克罗地亚语、匈牙利语、罗马尼亚语、爱沙尼亚语、拉脱维亚语、立陶宛语、保加利亚语、土耳其语、俄语、韩语、阿塞拜疆语、哈萨克语、亚美尼亚语、吉尔吉斯语、乌兹别克语、格鲁吉亚语、塔吉克语。
+
+#### 生成工作台与稳定性
+
+- 生成工作台拆分出更稳定的请求校验、提交 payload、Agent 上下文和数字人音频解析模块。
+- Agent 模式会带上更明确的当前请求、最近资产、可用音色和模糊引用策略，减少“上一张图”“刚才的音频”等上下文丢失。
+- 媒体任务支持归档删除，生成历史补齐 `video_sequence` 等任务类型识别，视频序列类结果可以更稳定地回到生成工作台。
+- 视频生成时长范围扩展到 1-15 秒，短片段和稍长片段都能走统一任务链路。
+- 官方 AI 默认模型缺失后会自动补齐，图片、视频、Embedding、转写、TTS、音色克隆等能力不再误用聊天模型兜底。
+- VideoRetalk 参考视频预处理拆分为独立模块，数字人流程的音频生成、参考视频准备和视频提交链路进一步收口。
+
+#### 下载
+
+v2.2.0 已发布为正式版，提供 macOS 与 Windows 安装包：
+
+- [查看 v2.2.0 Release](https://github.com/Jamailar/RedBox/releases/tag/v2.2.0)
+- macOS：`RedBox_2.2.0_aarch64.dmg`、`RedBox_2.2.0_x64.dmg`
+- Windows：`RedBox_2.2.0_x64-setup.exe`、`RedBox_2.2.0_arm64-setup.exe`、`RedBox_2.2.0_x86-setup.exe`
+
 ### v2.0.0 (2026-05-14)
 
 RedBox 2.0 是一次面向「AI 内容创作工作台」的重大升级。这个版本不再只是单点生成工具，而是把账号定位、角色克隆、角色卡片、素材理解、图文生成、视频生成、剪辑分析、音频克隆和 Agent 连续执行串成一条完整创作链路。
