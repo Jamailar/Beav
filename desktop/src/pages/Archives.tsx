@@ -185,7 +185,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
             setIsLoadingProfiles(true);
         }
         try {
-            const result = await window.ipcRenderer.invoke('archives:list') as ArchiveProfileRecord[];
+            const result = await window.ipcRenderer.archives.list() as ArchiveProfileRecord[];
             if (requestId !== loadProfilesRequestRef.current) return;
             const list = (result || []).map(normalizeProfile);
             setProfiles(list);
@@ -213,7 +213,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
 
     const loadAccounts = useCallback(async () => {
         try {
-            const result = await window.ipcRenderer.invoke('accounts:list') as { accounts?: AccountSummaryRecord[] };
+            const result = await window.ipcRenderer.accounts.list() as { accounts?: AccountSummaryRecord[] };
             setAccounts(Array.isArray(result?.accounts) ? result.accounts : []);
         } catch (error) {
             console.error('Failed to load account profiles:', error);
@@ -229,7 +229,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
             setIsLoadingSamples(true);
         }
         try {
-            const result = await window.ipcRenderer.invoke('archives:samples:list', profileId) as ArchiveSampleRecord[];
+            const result = await window.ipcRenderer.archives.samples.list(profileId) as ArchiveSampleRecord[];
             if (requestId !== loadSamplesRequestRef.current) return;
             const list = (result || []).map(normalizeSample);
             setSamples(list);
@@ -305,7 +305,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
         if (!profileForm.name.trim()) return;
 
         if (editingProfile) {
-            await window.ipcRenderer.invoke('archives:update', {
+            await window.ipcRenderer.archives.update({
                 id: editingProfile.id,
                 name: profileForm.name.trim(),
                 platform: profileForm.platform.trim(),
@@ -315,7 +315,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 toneTags
             });
         } else {
-            const created = await window.ipcRenderer.invoke('archives:create', {
+            const created = await window.ipcRenderer.archives.create({
                 name: profileForm.name.trim(),
                 platform: profileForm.platform.trim(),
                 goal: profileForm.goal.trim(),
@@ -336,7 +336,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     const deleteProfile = async () => {
         if (!selectedProfile) return;
         if (!(await appConfirm(`确定删除档案“${selectedProfile.name}”及其样本吗？`, { title: '删除档案', confirmLabel: '删除', tone: 'danger' }))) return;
-        await window.ipcRenderer.invoke('archives:delete', selectedProfile.id);
+        await window.ipcRenderer.archives.delete(selectedProfile.id);
         await loadProfiles();
     };
 
@@ -376,7 +376,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
             .filter(Boolean);
 
         if (editingSample) {
-            await window.ipcRenderer.invoke('archives:samples:update', {
+            await window.ipcRenderer.archives.samples.update({
                 id: editingSample.id,
                 profileId: selectedProfile.id,
                 title: sampleForm.title.trim(),
@@ -387,7 +387,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 isFeatured: sampleForm.isFeatured
             });
         } else {
-            await window.ipcRenderer.invoke('archives:samples:create', {
+            await window.ipcRenderer.archives.samples.create({
                 profileId: selectedProfile.id,
                 title: sampleForm.title.trim(),
                 content: sampleForm.content.trim(),
@@ -405,13 +405,13 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     const deleteSample = async () => {
         if (!selectedSample) return;
         if (!(await appConfirm(`确定删除样本“${selectedSample.title}”吗？`, { title: '删除样本', confirmLabel: '删除', tone: 'danger' }))) return;
-        await window.ipcRenderer.invoke('archives:samples:delete', selectedSample.id);
+        await window.ipcRenderer.archives.samples.delete(selectedSample.id);
         await loadSamples(selectedProfileId);
     };
 
     const markFeatured = async () => {
         if (!selectedSample || !selectedProfile) return;
-        await window.ipcRenderer.invoke('archives:samples:update', {
+        await window.ipcRenderer.archives.samples.update({
             id: selectedSample.id,
             profileId: selectedProfile.id,
             title: selectedSample.title,

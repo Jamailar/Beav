@@ -7,7 +7,7 @@
 | Channel | References |
 | --- | ---: |
 | `accounts:get` | 1 |
-| `accounts:list` | 2 |
+| `accounts:list` | 1 |
 | `advisors:changed` | 1 |
 | `advisors:create` | 1 |
 | `advisors:delete` | 1 |
@@ -55,7 +55,7 @@
 | `archives:samples:create` | 1 |
 | `archives:samples:delete` | 1 |
 | `archives:samples:list` | 1 |
-| `archives:samples:update` | 2 |
+| `archives:samples:update` | 1 |
 | `archives:update` | 1 |
 | `assistant:daemon-log` | 1 |
 | `assistant:daemon-set-config` | 1 |
@@ -364,14 +364,14 @@
 | `similarity:get-cache` | 1 |
 | `similarity:get-knowledge-version` | 1 |
 | `similarity:save-cache` | 1 |
-| `skills:create` | 2 |
+| `skills:create` | 1 |
 | `skills:disable` | 1 |
 | `skills:enable` | 1 |
 | `skills:install-from-repo` | 1 |
 | `skills:list` | 1 |
 | `skills:market-install` | 1 |
 | `skills:marketplace` | 1 |
-| `skills:save` | 2 |
+| `skills:save` | 1 |
 | `skills:uninstall` | 1 |
 | `skip` | 1 |
 | `space:changed` | 6 |

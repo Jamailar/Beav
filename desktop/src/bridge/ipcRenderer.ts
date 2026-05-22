@@ -1,9 +1,13 @@
+import { createAccountsBridge } from './domains/accountsBridge';
+import { createArchivesBridge } from './domains/archivesBridge';
 import { createBridgeCore } from './core';
 import { createGenerationBridge } from './domains/generationBridge';
 import { createKnowledgeBridge } from './domains/knowledgeBridge';
 import { createManuscriptsBridge } from './domains/manuscriptsBridge';
 import { createMediaBridge } from './domains/mediaBridge';
+import { createSkillsBridge } from './domains/skillsBridge';
 import { createSystemBridge } from './domains/systemBridge';
+import { createWanderBridge } from './domains/wanderBridge';
 import type { InvokeGuardOptions, Listener } from './types';
 import { preflightInlineAttachmentPayload } from '../utils/mediaReferencePreflight';
 
@@ -95,8 +99,12 @@ function createIpcRenderer() {
     },
 
     ...createKnowledgeBridge(core),
+    ...createAccountsBridge(core),
+    ...createArchivesBridge(core),
     ...createMediaBridge(core),
     ...createManuscriptsBridge(core),
+    ...createSkillsBridge(core),
+    ...createWanderBridge(core),
 
     ...createSystemBridge(core),
     officialAuth: {
@@ -535,26 +543,6 @@ function createIpcRenderer() {
       createDraft: (payload: Record<string, unknown>) => invokeChannel('wechat-official:create-draft', payload)
     },
     listSkills: () => invokeChannel('skills:list'),
-    skills: {
-      save: (payload: Record<string, unknown>) => invokeChannel('skills:save', payload),
-      create: (payload: { name: string }) => invokeChannel('skills:create', payload),
-      enable: (payload: { name: string }) => invokeChannel('skills:enable', payload),
-      disable: (payload: { name: string }) => invokeChannel('skills:disable', payload),
-      uninstall: (payload: { name: string; scope?: 'user' | 'workspace' | string }) => invokeChannel('skills:uninstall', payload),
-      marketplace: (payload?: { url?: string }) => invokeChannel('skills:marketplace', payload || {}),
-      marketInstall: (payload: { slug?: string; id?: string; repo?: string; tag?: string; ref?: string; refName?: string }) =>
-        invokeChannel('skills:market-install', payload),
-      installFromRepo: (payload: {
-        source?: string;
-        url?: string;
-        repo?: string;
-        ref?: string;
-        refName?: string;
-        path?: string;
-        paths?: string[];
-        scope?: 'user' | 'workspace' | string;
-      }) => invokeChannel('skills:install-from-repo', payload),
-    },
     toolDiagnostics: {
       list: () => invokeChannel('tools:diagnostics:list'),
       runDirect: (toolName: string) => invokeChannel('tools:diagnostics:run-direct', { toolName }),

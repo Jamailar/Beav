@@ -1646,6 +1646,9 @@ Verification:
 
 - `pnpm exec tsc --noEmit`
 - `pnpm build`
+- `cargo check`
+- `git diff --check`
+- `pnpm build`
 - `pnpm build`
 
 Remaining in this slice:
@@ -1772,3 +1775,20 @@ Remaining in this slice:
 
 - Add dedicated bridge facades for Wander, Archives/accounts, and Skills before migrating their remaining direct invoke calls.
 - Keep `features/official/generatedOfficialAiPanel.tsx` dynamic invoker until that generated surface has a typed channel map.
+
+### 2026-05-22 Wander Archives Skills Bridge Slice Started
+
+Completed:
+
+- Added `accountsBridge`, `archivesBridge`, `wanderBridge`, and `skillsBridge` domain facades.
+- Migrated Wander history/guided/random calls, Archives profile/sample CRUD, CreatorProfiles account reads, and Skills save/create/enable/disable calls off raw page-level `window.ipcRenderer.invoke(...)`.
+- Reduced direct renderer `window.ipcRenderer.invoke(...)` call sites from 20 to 1. The only remaining call is `features/official/generatedOfficialAiPanel.tsx`, which intentionally dispatches a generated official-control channel map dynamically.
+- Kept all channel names and payload shapes stable.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+
+Remaining in this slice:
+
+- Replace `features/official/generatedOfficialAiPanel.tsx` dynamic invoker only after the generated official panel has a typed channel map or generated bridge contract.
