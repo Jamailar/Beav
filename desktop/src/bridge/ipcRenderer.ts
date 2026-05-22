@@ -340,6 +340,14 @@ function createIpcRenderer() {
         delete: (payload: { id: string }) => invokeChannel('subjects:categories:delete', payload)
       }
     },
+    brandWorkspace: {
+      list: () => invokeChannel('brand-workspace:list'),
+      get: (payload: { id: string }) => invokeChannel('brand-workspace:get', payload),
+      upsertBrand: (payload: unknown) => invokeChannel('brand-workspace:brand:upsert', payload),
+      upsertProduct: (payload: unknown) => invokeChannel('brand-workspace:product:upsert', payload),
+      upsertSku: (payload: unknown) => invokeChannel('brand-workspace:sku:upsert', payload),
+      rebuildAiIndex: () => invokeChannel('brand-workspace:rebuild-ai-index')
+    },
     voice: {
       list: (payload?: Record<string, unknown>) => invokeChannel('voice:list', payload || {}),
       get: (payload: { voiceId: string }) => invokeChannel('voice:get', payload),
