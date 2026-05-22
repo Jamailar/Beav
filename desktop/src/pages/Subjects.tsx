@@ -103,7 +103,6 @@ interface BrandWorkspaceProduct {
     brandId: string;
     name: string;
     description?: string;
-    productFamily?: string;
     updatedAt: string;
     createdAt: string;
 }
@@ -112,7 +111,7 @@ interface BrandWorkspaceSku {
     id: string;
     productId: string;
     name: string;
-    variantValues?: Record<string, unknown>;
+    variantText?: string;
 }
 
 interface BrandWorkspaceProductBundle {
@@ -147,8 +146,13 @@ interface BrandWorkspaceProductDraft {
     brandId: string;
     name: string;
     description: string;
-    productFamily: string;
-    skus: SubjectSku[];
+    skus: BrandWorkspaceSkuDraft[];
+}
+
+interface BrandWorkspaceSkuDraft {
+    id: string;
+    name: string;
+    variantText: string;
 }
 
 interface SubjectImageDraft {
@@ -858,31 +862,11 @@ function getBrandWorkspaceBridge(): BrandWorkspaceBridge | null {
     return ((window.ipcRenderer as typeof window.ipcRenderer & { brandWorkspace?: BrandWorkspaceBridge }).brandWorkspace || null);
 }
 
-function variantValuesToAttributes(value?: Record<string, unknown>): SubjectAttribute[] {
-    if (!value || typeof value !== 'object') return [{ key: '规格', value: '' }];
-    const attributes = Object.entries(value)
-        .map(([key, item]) => ({ key, value: typeof item === 'string' ? item : String(item ?? '') }))
-        .filter((item) => item.key.trim() || item.value.trim());
-    return attributes.length > 0 ? attributes : [{ key: '规格', value: '' }];
-}
-
-function attributesToVariantValues(attributes: SubjectAttribute[]): Record<string, string> {
-    return attributes.reduce<Record<string, string>>((result, attribute) => {
-        const key = attribute.key.trim();
-        const value = attribute.value.trim();
-        if (key && value) {
-            result[key] = value;
-        }
-        return result;
-    }, {});
-}
-
 function createEmptyProductDraft(brandId = ''): BrandWorkspaceProductDraft {
     return {
         brandId,
         name: '',
         description: '',
-        productFamily: '',
         skus: [],
     };
 }
@@ -893,11 +877,10 @@ function productBundleToDraft(bundle: BrandWorkspaceProductBundle): BrandWorkspa
         brandId: bundle.product.brandId,
         name: bundle.product.name,
         description: bundle.product.description || '',
-        productFamily: bundle.product.productFamily || '',
         skus: bundle.skus.map((sku) => ({
             id: sku.id,
             name: sku.name,
-            attributes: variantValuesToAttributes(sku.variantValues),
+            variantText: sku.variantText || '',
         })),
     };
 }
@@ -1224,10 +1207,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 bundle.products.map((productBundle) => [
                     productBundle.product.name,
                     productBundle.product.description || '',
-                    productBundle.product.productFamily || '',
                     productBundle.skus.map((sku) => [
                         sku.name,
-                        Object.entries(sku.variantValues || {}).map(([key, value]) => `${key} ${value}`).join(' '),
+                        sku.variantText || '',
                     ].join(' ')).join(' '),
                 ].join(' ')).join(' '),
             ].join('\n').toLowerCase();
@@ -1317,52 +1299,15 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             ...current,
             skus: [
                 ...current.skus,
-                { id: createDraftSkuId(), name: '', attributes: [{ key: '规格', value: '' }] },
+                { id: createDraftSkuId(), name: '', variantText: '' },
             ],
         }));
     }, []);
 
-    const handleProductSkuChange = useCallback((index: number, patch: Partial<SubjectSku>) => {
+    const handleProductSkuChange = useCallback((index: number, patch: Partial<BrandWorkspaceSkuDraft>) => {
         setProductDraft((current) => ({
             ...current,
             skus: current.skus.map((sku, skuIndex) => skuIndex === index ? { ...sku, ...patch } : sku),
-        }));
-    }, []);
-
-    const handleProductSkuAttributeChange = useCallback((skuIndex: number, attributeIndex: number, patch: Partial<SubjectAttribute>) => {
-        setProductDraft((current) => ({
-            ...current,
-            skus: current.skus.map((sku, currentSkuIndex) => {
-                if (currentSkuIndex !== skuIndex) return sku;
-                return {
-                    ...sku,
-                    attributes: sku.attributes.map((attribute, currentAttributeIndex) => (
-                        currentAttributeIndex === attributeIndex ? { ...attribute, ...patch } : attribute
-                    )),
-                };
-            }),
-        }));
-    }, []);
-
-    const handleAddProductSkuAttribute = useCallback((skuIndex: number) => {
-        setProductDraft((current) => ({
-            ...current,
-            skus: current.skus.map((sku, currentSkuIndex) => (
-                currentSkuIndex === skuIndex
-                    ? { ...sku, attributes: [...sku.attributes, { key: '', value: '' }] }
-                    : sku
-            )),
-        }));
-    }, []);
-
-    const handleRemoveProductSkuAttribute = useCallback((skuIndex: number, attributeIndex: number) => {
-        setProductDraft((current) => ({
-            ...current,
-            skus: current.skus.map((sku, currentSkuIndex) => (
-                currentSkuIndex === skuIndex
-                    ? { ...sku, attributes: sku.attributes.filter((_, index) => index !== attributeIndex) }
-                    : sku
-            )),
         }));
     }, []);
 
@@ -1392,13 +1337,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 brandId: productDraft.brandId,
                 name,
                 description: productDraft.description.trim() || undefined,
-                productFamily: productDraft.productFamily.trim() || name,
                 skus: productDraft.skus
                     .filter((sku) => sku.name.trim())
                     .map((sku) => ({
                         id: sku.id.startsWith('draft-sku-') ? undefined : sku.id,
                         name: sku.name.trim(),
-                        variantValues: attributesToVariantValues(sku.attributes),
+                        variantText: sku.variantText.trim(),
                     })),
             };
             const result = await brandWorkspaceBridge.upsertProduct(payload);
@@ -2807,15 +2751,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 />
                             </label>
                             <label className="block">
-                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品线/品类</div>
-                                <input
-                                    value={productDraft.productFamily}
-                                    onChange={(event) => updateProductDraft({ productFamily: event.target.value })}
-                                    placeholder="如口红、香水、运动鞋"
-                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
-                                />
-                            </label>
-                            <label className="block">
                                 <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品描述</div>
                                 <textarea
                                     value={productDraft.description}
@@ -2862,40 +2797,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                         <X className="h-4 w-4" />
                                                     </button>
                                                 </div>
-                                                <div className="mt-2 space-y-2">
-                                                    {sku.attributes.map((attribute, attributeIndex) => (
-                                                        <div key={`${sku.id}-${attributeIndex}`} className="grid grid-cols-[minmax(0,120px)_minmax(0,1fr)_32px] gap-2">
-                                                            <input
-                                                                value={attribute.key}
-                                                                onChange={(event) => handleProductSkuAttributeChange(skuIndex, attributeIndex, { key: event.target.value })}
-                                                                placeholder="属性"
-                                                                className="h-8 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-2.5 text-xs text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                                            />
-                                                            <input
-                                                                value={attribute.value}
-                                                                onChange={(event) => handleProductSkuAttributeChange(skuIndex, attributeIndex, { value: event.target.value })}
-                                                                placeholder="值"
-                                                                className="h-8 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-2.5 text-xs text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                                            />
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleRemoveProductSkuAttribute(skuIndex, attributeIndex)}
-                                                                className="inline-flex h-8 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-red-50 hover:text-red-600"
-                                                                aria-label="删除 SKU 属性"
-                                                            >
-                                                                <X className="h-3.5 w-3.5" />
-                                                            </button>
-                                                        </div>
-                                                    ))}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleAddProductSkuAttribute(skuIndex)}
-                                                        className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
-                                                    >
-                                                        <Plus className="h-3.5 w-3.5" />
-                                                        属性
-                                                    </button>
-                                                </div>
+                                                <textarea
+                                                    value={sku.variantText}
+                                                    onChange={(event) => handleProductSkuChange(skuIndex, { variantText: event.target.value.slice(0, 160) })}
+                                                    rows={2}
+                                                    maxLength={160}
+                                                    placeholder="规格描述，如：颜色：樱桃红；容量：3.5g"
+                                                    className="mt-2 min-h-[58px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2 text-xs leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
+                                                />
                                             </div>
                                         ))}
                                     </div>

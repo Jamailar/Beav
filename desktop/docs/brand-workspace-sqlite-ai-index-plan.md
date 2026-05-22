@@ -10,7 +10,7 @@ last_updated: 2026-05-22
 
 Only brand, product, and SKU assets use this workspace. Other asset library types remain in the existing subject catalog.
 
-SQLite is the canonical source for brand/product/SKU relationships. Generated JSON files under `assets/brand-workspace/ai-index/` are read-only projections for AI retrieval. Code and agents must not treat those projection files as writable source data.
+SQLite is the canonical source for brand/product/SKU relationships. Generated Markdown files under `assets/brand-workspace/ai-index/` are read-only projections for AI retrieval. Code and agents must not treat those projection files as writable source data.
 
 ## Storage
 
@@ -20,8 +20,8 @@ Canonical database:
 
 AI-readable projection:
 
-- `assets/brand-workspace/ai-index/brands.index.json`
-- `assets/brand-workspace/ai-index/brand_{brandId}.context.json`
+- `assets/brand-workspace/ai-index/brands.index.md`
+- `assets/brand-workspace/ai-index/brand_{brandId}.md`
 
 The projection includes `generated: true`, `readOnly: true`, and `canonicalSource: "brand-workspace.sqlite"` so an agent can quickly understand that writes must go through tools or IPC.
 
@@ -29,11 +29,11 @@ The projection includes `generated: true`, `readOnly: true`, and `canonicalSourc
 
 `brand_records` stores one row per brand. The first phase keeps only user-entered basics: name, description, and timestamps.
 
-`product_records` stores one row per product. Each product has exactly one `brand_id`, enforced by the product row and foreign key. The first phase keeps name, description, product family, and timestamps.
+`product_records` stores one row per product. Each product has exactly one `brand_id`, enforced by the product row and foreign key. The first phase keeps name, description, and timestamps.
 
-`product_skus` stores product variants. Each SKU belongs to one product and keeps variant attributes in `variant_values_json`, such as color, size, material, or package.
+`product_skus` stores product variants. Each SKU belongs to one product and keeps a user-entered `variant_text`, such as `颜色：樱桃红；容量：3.5g`.
 
-`brand_assets` and `sku_reference_images` are reserved for later binding of brand logos, product references, and SKU-specific images without changing the core relationship model.
+`asset_refs` stores file references for brands, products, and SKUs without mixing file paths into free-text descriptions.
 
 ## UI Contract
 
@@ -46,7 +46,7 @@ The brand category view is not a card grid. It renders a collapsible list:
 
 ## AI Contract
 
-AI reads from the generated projection because JSON is easier to inspect and summarize. The projection only contains user-entered brand, product, and SKU data in the first phase. AI writes must use structured operations:
+AI reads from the generated Markdown projection because natural language is easier to inspect and summarize. The projection only contains user-entered brand, product, and SKU data in the first phase. AI writes must use structured operations:
 
 - `brand-workspace:brand:upsert`
 - `brand-workspace:product:upsert`
