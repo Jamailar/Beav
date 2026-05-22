@@ -2697,6 +2697,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     if (productDetailContext && activeDetailBrandBundle && activeDetailProductBundle) {
         const productCover = activeDetailProductBundle.assets.find((asset) => asset.role === 'image');
+        const productInfoImages = (productCover
+            ? [productCover, ...activeDetailProductBundle.assets.filter((asset) => asset.id !== productCover.id)]
+            : activeDetailProductBundle.assets
+        ).filter((asset) => asset.path).slice(0, 4);
         const detailPages = activeDetailPages;
         const hasPlatforms = enabledEcommercePlatforms.length > 0;
         return (
@@ -2956,12 +2960,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     <aside className="h-fit rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-3 xl:sticky xl:top-5">
                                         <div className="mb-3 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">商品资料</div>
                                         <div className="grid grid-cols-4 gap-1.5">
-                                            {[productCover, ...activeDetailProductBundle.assets.filter((asset) => asset.id !== productCover?.id)].slice(0, 4).map((asset) => (
+                                            {productInfoImages.map((asset) => (
                                                 <div key={asset.id} className="aspect-square overflow-hidden rounded-lg bg-white">
                                                     <img src={resolveAssetUrl(asset.path)} alt="" className="h-full w-full object-cover" />
                                                 </div>
                                             ))}
-                                            {!productCover && activeDetailProductBundle.assets.length === 0 && (
+                                            {productInfoImages.length === 0 && (
                                                 <div className="col-span-4 flex aspect-[4/3] items-center justify-center rounded-lg bg-white text-[rgb(var(--color-text-tertiary))]">
                                                     <Package className="h-6 w-6" />
                                                 </div>
