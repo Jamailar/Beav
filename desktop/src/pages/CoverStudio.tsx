@@ -363,7 +363,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
 
     const loadRecentAssets = useCallback(async () => {
         try {
-            const result = await window.ipcRenderer.invoke('cover:list', { limit: 120 }) as CoverListResponse;
+            const result = await window.ipcRenderer.cover.list({ limit: 120 }) as CoverListResponse;
             if (!result?.success) {
                 setRecentAssets([]);
                 return;
@@ -625,7 +625,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
 
         void (async () => {
             try {
-                const result = await window.ipcRenderer.invoke('cover:generate', {
+                const result = await window.ipcRenderer.cover.generate({
                     templateImage: templateImage.dataUrl,
                     baseImage: baseImage.dataUrl,
                     titles: normalizedTitles,
@@ -795,7 +795,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
                             <h1 className="text-lg font-semibold text-text-primary">封面</h1>
                             <div className="ml-auto flex items-center gap-2">
                                 <button
-                                    onClick={() => void window.ipcRenderer.invoke('cover:open-root')}
+                                    onClick={() => void window.ipcRenderer.cover.openRoot()}
                                     className="px-2 py-1 text-[11px] rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
                                 >
                                     <span className="inline-flex items-center gap-1">
@@ -1146,7 +1146,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
                                                                 <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>
                                                                 <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || '3:4'} · {asset.quality || ''}</div>
                                                                 <button
-                                                                    onClick={() => void window.ipcRenderer.invoke('cover:open', { assetId: asset.id })}
+                                                                    onClick={() => void window.ipcRenderer.cover.open({ assetId: asset.id })}
                                                                     className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
                                                                 >
                                                                     <span className="inline-flex items-center gap-1">
@@ -1174,7 +1174,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
                                     {recentAssets.map((asset) => (
                                         <button
                                             key={asset.id}
-                                            onClick={() => void window.ipcRenderer.invoke('cover:open', { assetId: asset.id })}
+                                            onClick={() => void window.ipcRenderer.cover.open({ assetId: asset.id })}
                                             className="text-left border border-border rounded-lg overflow-hidden bg-surface-primary hover:shadow-sm transition-shadow"
                                         >
                                             {asset.previewUrl && asset.exists ? (

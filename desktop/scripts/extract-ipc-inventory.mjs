@@ -6,12 +6,24 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const rendererSrc = path.join(repoRoot, 'desktop', 'src');
-const bridgeFile = path.join(rendererSrc, 'bridge', 'ipcRenderer.ts');
+const bridgeCoreFile = path.join(rendererSrc, 'bridge', 'core.ts');
 const hostSrc = path.join(repoRoot, 'desktop', 'src-tauri', 'src');
 const outputPath = path.resolve(__dirname, '..', 'docs', 'ipc-inventory.md');
 
 function run(command) {
   return execSync(command, { cwd: repoRoot, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function readPreservedContractNotes() {
+  if (!fs.existsSync(outputPath)) {
+    return [];
+  }
+  const existing = fs.readFileSync(outputPath, 'utf8');
+  const match = existing.match(/^## Contract Notes\n[\s\S]*?(?=^## |\s*$)/m);
+  if (!match) {
+    return [];
+  }
+  return [match[0].trimEnd(), ''];
 }
 
 const frontendChannels = run(
@@ -37,7 +49,7 @@ const backendChannels = run(
   }, new Map());
 
 const explicitCommandRoutes = run(
-  `rg -o "'([^']+)'\\s*:\\s*'([^']+)'" "${bridgeFile}"`,
+  `rg -o "'([^']+)'\\s*:\\s*'([^']+)'" "${bridgeCoreFile}"`,
 )
   .split('\n')
   .map((line) => {
@@ -52,6 +64,7 @@ const explicitCommandRoutes = run(
 const lines = [
   '# IPC Inventory',
   '',
+  ...readPreservedContractNotes(),
   '## Frontend referenced channels',
   '',
   '| Channel | References |',
