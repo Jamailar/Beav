@@ -382,6 +382,8 @@ interface StructuredChatErrorNotice {
   hint?: string;
   detail?: string;
   metaParts?: string[];
+  tone: 'neutral' | 'warning' | 'danger';
+  kind: 'billing' | 'auth' | 'rate-limit' | 'network' | 'model' | 'attachment' | 'critical' | 'generic';
   action?: {
     label: string;
     target: 'settings-login';
@@ -389,6 +391,7 @@ interface StructuredChatErrorNotice {
 }
 
 const CHAT_ERROR_NOTICE_AUTO_DISMISS_MS = 6500;
+const CHAT_ERROR_NOTICE_ACTION_AUTO_DISMISS_MS = 15000;
 
 function stripTransientAttachmentPreview(
   attachment?: UploadedFileAttachment,
@@ -936,27 +939,95 @@ function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null
     ? payload
     : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
   const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
-  const title = String(data.title || data.message || '').trim() || '请求失败';
-  const normalizedTitle = title.replace(/\s+/g, '');
+  const sourceTitle = String(data.title || data.message || '').trim();
   const detail = String(data.detail || data.raw || '').trim();
   const hint = String(data.hint || '').trim();
   const layer = String(data.layer || data.category || '').trim();
+  const statusCode = data.httpStatus || data.statusCode;
+  const errorCode = String(data.errorCode || '').trim();
+  const searchable = [
+    sourceTitle,
+    detail,
+    hint,
+    layer,
+    errorCode,
+  ].join(' ').replace(/\s+/g, ' ').trim();
+  const normalizedSearchable = searchable.replace(/\s+/g, '').toLowerCase();
+  const includesAny = (patterns: Array<string | RegExp>) => patterns.some((pattern) => (
+    typeof pattern === 'string'
+      ? normalizedSearchable.includes(pattern.toLowerCase())
+      : pattern.test(searchable)
+  ));
+  const isBilling = includesAny([
+    '余额不足',
+    '积分不足',
+    '额度不足',
+    'insufficientbalance',
+    'insufficientcredit',
+    'insufficientquota',
+    'notenoughpoints',
+    'pointsnotenough',
+  ]);
+  const isAuth = includesAny(['登陆失效', '登录失效', '未登录', '请先登录', 'unauthorized', 'invalidtoken', 'tokenexpired']);
+  const isRateLimit = statusCode === 429 || includesAny(['ratelimit', 'toomanyrequests', '请求过于频繁', '限流']);
+  const isNetwork = [408, 500, 502, 503, 504].includes(Number(statusCode || 0))
+    || includesAny(['timeout', 'timedout', 'fetchfailed', 'badgateway', 'gatewaytimeout', 'serviceunavailable', 'operationwasaborted', '网络']);
+  const isModel = includesAny(['modelnotfound', 'unsupportedmodel', '模型不可用', '模型不支持', 'modelunavailable']);
+  const isAttachment = includesAny(['attachment', 'filetoolarge', 'unsupportedfile', '不支持该文件', '附件']);
+  const isCritical = !isBilling && !isAuth && !isRateLimit && !isNetwork && !isModel && !isAttachment
+    && includesAny(['permissiondenied', 'forbidden', '安全策略', '数据损坏', 'fatal', 'panic']);
+  const kind: StructuredChatErrorNotice['kind'] = isBilling
+    ? 'billing'
+    : isAuth
+      ? 'auth'
+      : isRateLimit
+        ? 'rate-limit'
+        : isNetwork
+          ? 'network'
+          : isModel
+            ? 'model'
+            : isAttachment
+              ? 'attachment'
+              : isCritical
+                ? 'critical'
+                : 'generic';
+  const tone: StructuredChatErrorNotice['tone'] = kind === 'critical' ? 'danger' : kind === 'billing' || kind === 'rate-limit' ? 'warning' : 'neutral';
+  const title = (() => {
+    if (kind === 'billing') return '余额不足';
+    if (kind === 'auth') return '账号需要确认';
+    if (kind === 'rate-limit') return '请求太频繁';
+    if (kind === 'network') return '服务暂时不可用';
+    if (kind === 'model') return '当前模型不可用';
+    if (kind === 'attachment') return '附件暂时无法处理';
+    return sourceTitle || '请求没有完成';
+  })();
+  const friendlyHint = (() => {
+    if (hint) return hint;
+    if (kind === 'billing') return '积分不够，本次请求没有继续执行。';
+    if (kind === 'auth') return '登录状态可能已过期，确认账号后可以继续。';
+    if (kind === 'rate-limit') return '稍等一下再试即可。';
+    if (kind === 'network') return '上游服务短暂不可用，可以稍后重试。';
+    if (kind === 'model') return '换一个可用模型后再发送。';
+    if (kind === 'attachment') return '可以换一个模型或移除这个附件后重试。';
+    return '';
+  })();
   const metaParts = [
-    (data.httpStatus || data.statusCode) ? `HTTP ${data.httpStatus || data.statusCode}` : '',
-    data.errorCode ? String(data.errorCode) : '',
+    statusCode ? `HTTP ${statusCode}` : '',
+    errorCode,
     layer || '',
     data.transportMode ? `transport:${String(data.transportMode)}` : '',
     data.retryable ? '可重试' : '',
   ].filter(Boolean);
   return {
     title,
-    hint: hint || undefined,
+    hint: friendlyHint || undefined,
     detail: detail || undefined,
+    tone,
+    kind,
     metaParts: metaParts.length > 0 ? metaParts : undefined,
-    action: normalizedTitle.includes('余额不足')
+    action: kind === 'billing'
       ? { label: '去充值', target: 'settings-login' }
-      : normalizedTitle.includes('登陆失效')
-      || normalizedTitle.includes('登录失效')
+      : kind === 'auth'
       ? { label: '查看账号', target: 'settings-login' }
       : undefined,
   };
@@ -1111,9 +1182,13 @@ export function Chat({
 
   useEffect(() => {
     if (!errorNotice) return undefined;
+    const structuredNotice = typeof errorNotice === 'string' ? null : errorNotice;
+    const dismissAfter = structuredNotice?.action
+      ? CHAT_ERROR_NOTICE_ACTION_AUTO_DISMISS_MS
+      : CHAT_ERROR_NOTICE_AUTO_DISMISS_MS;
     const timer = window.setTimeout(() => {
       setErrorNotice(null);
-    }, CHAT_ERROR_NOTICE_AUTO_DISMISS_MS);
+    }, dismissAfter);
     return () => window.clearTimeout(timer);
   }, [errorNotice]);
 
@@ -4346,8 +4421,6 @@ export function Chat({
                       const noticeTitle = structuredNotice?.title || '请求失败';
                       const noticeBody = String(structuredNotice
                         ? structuredNotice.hint
-                          || structuredNotice.detail
-                          || structuredNotice.metaParts?.join(' · ')
                           || ''
                         : errorNotice);
                       const reportContent = structuredNotice
@@ -4355,45 +4428,66 @@ export function Chat({
                           .filter(Boolean)
                           .join('\n\n') || noticeTitle
                         : errorNotice;
+                      const noticeTone = structuredNotice?.tone || 'danger';
+                      const noticeClass = noticeTone === 'danger'
+                        ? 'border-red-500/25 bg-red-500/[0.07] text-red-700 dark:text-red-300'
+                        : noticeTone === 'warning'
+                          ? 'border-amber-500/25 bg-amber-500/[0.08] text-amber-800 dark:text-amber-200'
+                          : 'border-border/80 bg-surface-secondary/70 text-text-secondary';
+                      const detailClass = noticeTone === 'danger'
+                        ? 'text-red-700/75 dark:text-red-300/80'
+                        : noticeTone === 'warning'
+                          ? 'text-amber-800/75 dark:text-amber-200/80'
+                          : 'text-text-tertiary';
+                      const actionClass = noticeTone === 'danger'
+                        ? 'border-red-500/25 bg-red-500/10 text-red-700 hover:bg-red-500/15 dark:text-red-200'
+                        : noticeTone === 'warning'
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 hover:bg-amber-500/15 dark:text-amber-100'
+                          : 'border-border bg-surface-primary/80 text-text-secondary hover:border-accent-primary/30 hover:text-text-primary';
+                      const closeClass = noticeTone === 'danger'
+                        ? 'text-red-700/65 hover:bg-red-500/10 hover:text-red-800 dark:text-red-200/75 dark:hover:text-red-100'
+                        : noticeTone === 'warning'
+                          ? 'text-amber-800/65 hover:bg-amber-500/10 hover:text-amber-900 dark:text-amber-100/80 dark:hover:text-amber-50'
+                          : 'text-text-tertiary hover:bg-surface-primary hover:text-text-primary';
                       return (
-                        <div className="flex max-h-24 items-start gap-2 overflow-hidden rounded-xl border border-red-500/25 bg-red-500/[0.08] px-3 py-2 text-sm text-red-700 shadow-sm dark:text-red-300">
+                        <div className={clsx('flex min-h-9 items-center gap-2 overflow-hidden rounded-lg border px-2.5 py-1.5 text-[12px] shadow-sm', noticeClass)}>
                           <div className="min-w-0 flex-1">
-                            <div className="truncate font-medium">{noticeTitle}</div>
+                            <div className="truncate font-medium leading-5">{noticeTitle}</div>
                             {noticeBody && (
-                              <div className="mt-0.5 line-clamp-2 text-xs leading-5 text-red-700/80 dark:text-red-300/85">
-                                {truncateErrorDetail(noticeBody, 180)}
+                              <div className={clsx('truncate text-[11px] leading-4', detailClass)}>
+                                {truncateErrorDetail(noticeBody, 110)}
                               </div>
                             )}
-                            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                              {structuredNotice?.action?.target === 'settings-login' && (
-                                <button
-                                  type="button"
-                                  onClick={handleOpenSettingsLogin}
-                                  className="inline-flex items-center rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
-                                >
-                                  {structuredNotice.action.label}
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
-                                  detail: {
-                                    title: noticeTitle,
-                                    content: reportContent,
-                                    sourcePage: 'chat',
-                                    operation: 'chat_request',
-                                  },
-                                }))}
-                                className="inline-flex items-center rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
-                              >
-                                反馈问题
-                              </button>
-                            </div>
                           </div>
+                          {structuredNotice?.action?.target === 'settings-login' && (
+                            <button
+                              type="button"
+                              onClick={handleOpenSettingsLogin}
+                              className={clsx('inline-flex h-7 shrink-0 items-center rounded-md border px-2 text-[11px] font-medium transition-colors', actionClass)}
+                            >
+                              {structuredNotice.action.label}
+                            </button>
+                          )}
+                          {structuredNotice?.tone === 'danger' && (
+                            <button
+                              type="button"
+                              onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+                                detail: {
+                                  title: noticeTitle,
+                                  content: reportContent,
+                                  sourcePage: 'chat',
+                                  operation: 'chat_request',
+                                },
+                              }))}
+                              className={clsx('inline-flex h-7 shrink-0 items-center rounded-md border px-2 text-[11px] font-medium transition-colors', actionClass)}
+                            >
+                              反馈
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => setErrorNotice(null)}
-                            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-red-700/70 transition-colors hover:bg-red-500/10 hover:text-red-800 dark:text-red-200/75 dark:hover:text-red-100"
+                            className={clsx('inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors', closeClass)}
                             aria-label="关闭错误提示"
                           >
                             <X className="h-3.5 w-3.5" />
