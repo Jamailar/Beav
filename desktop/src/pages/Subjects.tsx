@@ -261,6 +261,7 @@ interface MediaAssetContextMenuState {
 const UNCATEGORIZED_FILTER = '__uncategorized__';
 const DEFAULT_SUBJECT_CATEGORY_NAMES = ['品牌', '角色', '物品', '商品', '场景'];
 const VISIBLE_SUBJECT_CATEGORY_NAMES = DEFAULT_SUBJECT_CATEGORY_NAMES.filter((name) => name !== '商品');
+const HIDDEN_SUBJECT_CATEGORY_NAMES = new Set(['商品', '人物']);
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。请用自然稳定的语速朗读这段文字，保持音量一致、停顿清晰，让系统更好地学习你的声音特点和语气节奏。';
 const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 30;
 const SUBJECT_AUTOSAVE_DELAY_MS = 600;
@@ -1304,7 +1305,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         return subjects.filter((subject) => {
             if (['品牌', '商品'].includes(subjectCategoryName(subject))) return false;
             if (categoryFilter === UNCATEGORIZED_FILTER && subject.categoryId) return false;
-            if (categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER && subject.categoryId !== categoryFilter) return false;
+            if (categoryFilter !== UNCATEGORIZED_FILTER && subject.categoryId !== categoryFilter) return false;
             if (!keyword) return true;
             const haystack = [
                 subject.name,
@@ -1453,7 +1454,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             return;
         }
         const nextDraft = createEmptyDraft();
-        if (categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER) {
+        if (categoryFilter !== UNCATEGORIZED_FILTER) {
             nextDraft.categoryId = categoryFilter;
         }
         autosaveLastPayloadRef.current = null;
@@ -2326,9 +2327,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [loadData]);
 
     const categoryTabs = useMemo<SubjectCategoryTab[]>(() => {
-        const customCategories = categories.filter((category) => !DEFAULT_SUBJECT_CATEGORY_NAMES.includes(category.name.trim()));
+        const customCategories = categories.filter((category) => {
+            const name = category.name.trim();
+            return !DEFAULT_SUBJECT_CATEGORY_NAMES.includes(name) && !HIDDEN_SUBJECT_CATEGORY_NAMES.has(name);
+        });
         return [
-            { id: 'all', label: '资产', icon: Package },
             ...VISIBLE_SUBJECT_CATEGORY_NAMES.map((name) => {
                 const category = categories.find((item) => item.name.trim() === name);
                 return {
