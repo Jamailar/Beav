@@ -11,7 +11,7 @@ export type NotificationAction =
         view: NotificationView;
         docketId?: string;
         escalationId?: string;
-        settingsTab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+        settingsTab?: 'general' | 'ai' | 'platforms' | 'tools' | 'profile' | 'remote' | 'experimental';
         aiModelSubTab?: 'custom' | 'login';
       };
     }

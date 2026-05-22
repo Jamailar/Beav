@@ -80,6 +80,15 @@ import {
   type RedclawOnboardingState,
 } from './redclaw/onboardingState';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
+import {
+  ECOMMERCE_PLATFORM_GROUPS,
+  ECOMMERCE_PLATFORM_IDS,
+  createDefaultEcommercePlatformsSettings,
+  ecommercePlatformIconPath,
+  normalizeEcommercePlatformsSettings,
+  serializeEcommercePlatformsSettings,
+  type EcommercePlatformsSettings,
+} from '../features/ecommerce-platforms/catalog';
 import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import { useI18n, type I18nKey } from '../i18n';
 import {
@@ -316,7 +325,7 @@ const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
   },
 ];
 
-type SettingsTab = 'general' | 'ai' | 'team' | 'skills' | 'mcp' | 'tools' | 'profile' | 'remote' | 'experimental';
+type SettingsTab = 'general' | 'ai' | 'team' | 'platforms' | 'skills' | 'mcp' | 'tools' | 'profile' | 'remote' | 'experimental';
 type SettingsNavigationTarget = {
   tab?: SettingsTab;
   aiModelSubTab?: 'custom' | 'login';
@@ -651,6 +660,85 @@ function TeamSettingsSection({
             })}
           </div>
         )}
+      </div>
+    </section>
+  );
+}
+
+function EcommercePlatformsSettingsSection({
+  settings,
+  onTogglePlatform,
+}: {
+  settings: EcommercePlatformsSettings;
+  onTogglePlatform: (platformId: string, enabled: boolean) => void;
+}) {
+  const enabledCount = ECOMMERCE_PLATFORM_IDS.filter((id) => settings.enabledById[id] !== false).length;
+  return (
+    <section className="space-y-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-lg font-medium text-text-primary">电商平台</h2>
+          <p className="mt-1 text-sm text-text-tertiary">启用的平台会作为后续目标平台生成的候选范围。</p>
+        </div>
+        <div className="shrink-0 rounded-full border border-border bg-surface-secondary px-3 py-1 text-xs font-medium text-text-secondary">
+          {enabledCount}/{ECOMMERCE_PLATFORM_IDS.length} 已开启
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {ECOMMERCE_PLATFORM_GROUPS.map((group) => {
+          const groupEnabledCount = group.platforms.filter((platform) => settings.enabledById[platform.id] !== false).length;
+          return (
+            <div key={group.region} className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+              <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-surface-secondary/40 px-4 py-3">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-text-primary">{group.region}</h3>
+                </div>
+                <span className="shrink-0 text-xs text-text-tertiary">{groupEnabledCount}/{group.platforms.length}</span>
+              </div>
+              <div className="divide-y divide-border/70">
+                {group.platforms.map((platform) => {
+                  const enabled = settings.enabledById[platform.id] !== false;
+                  const iconPath = ecommercePlatformIconPath(platform.id);
+                  return (
+                    <div key={platform.id} className="flex items-center gap-3 px-4 py-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-secondary">
+                        {iconPath ? (
+                          <img src={iconPath} alt="" className="h-6 w-6 object-contain" loading="lazy" />
+                        ) : (
+                          <Store className="h-4 w-4 text-text-tertiary" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-text-primary">{platform.name}</div>
+                        <div className="mt-0.5 truncate text-xs text-text-tertiary">
+                          {platform.market} · {platform.platformType}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onTogglePlatform(platform.id, !enabled)}
+                        className={clsx(
+                          'relative h-7 w-[3.25rem] shrink-0 rounded-full transition-colors duration-200',
+                          enabled ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
+                        )}
+                        title={enabled ? '已开启' : '已关闭'}
+                        aria-label={`${enabled ? '关闭' : '开启'} ${platform.name}`}
+                      >
+                        <span
+                          className={clsx(
+                            'absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.22)] transition-transform duration-200',
+                            enabled ? 'translate-x-6' : 'translate-x-0'
+                          )}
+                        />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -1179,6 +1267,7 @@ export function Settings({
     developer_mode_enabled: false,
     developer_mode_unlocked_at: '',
     ai_model_routes_json: JSON.stringify(DEFAULT_AI_MODEL_ROUTES),
+    ecommerce_platforms_json: serializeEcommercePlatformsSettings(createDefaultEcommercePlatformsSettings()),
   });
   const [aiModelRoutes, setAiModelRoutes] = useState<AiModelRoutes>(DEFAULT_AI_MODEL_ROUTES);
   const [aiSources, setAiSources] = useState<AiSourceConfig[]>([]);
@@ -1276,6 +1365,24 @@ export function Settings({
     () => spaces.find((space) => space.id === currentSpaceId)?.name || currentSpaceId,
     [currentSpaceId, spaces],
   );
+  const ecommercePlatformsSettings = useMemo(
+    () => normalizeEcommercePlatformsSettings(formData.ecommerce_platforms_json),
+    [formData.ecommerce_platforms_json],
+  );
+
+  const handleToggleEcommercePlatform = useCallback((platformId: string, enabled: boolean) => {
+    setFormData((prev: any) => {
+      const nextSettings = normalizeEcommercePlatformsSettings(prev.ecommerce_platforms_json);
+      nextSettings.enabledById = {
+        ...nextSettings.enabledById,
+        [platformId]: enabled,
+      };
+      return {
+        ...prev,
+        ecommerce_platforms_json: serializeEcommercePlatformsSettings(nextSettings),
+      };
+    });
+  }, []);
 
   const updateRuntimePerfRun = useCallback((runId: string, updater: (run: RuntimePerfRunResult) => RuntimePerfRunResult) => {
     setRuntimePerfResults((prev) =>
@@ -1463,6 +1570,7 @@ export function Settings({
     general: false,
     ai: false,
     team: false,
+    platforms: false,
     skills: false,
     mcp: false,
     tools: false,
@@ -1474,6 +1582,7 @@ export function Settings({
     general: false,
     ai: false,
     team: false,
+    platforms: false,
     skills: false,
     mcp: false,
     tools: false,
@@ -4141,6 +4250,9 @@ export function Settings({
           developer_mode_enabled: developerModeEnabled,
           developer_mode_unlocked_at: developerModeEnabled ? unlockedAt : '',
           ai_model_routes_json: JSON.stringify(nextModelRoutes),
+          ecommerce_platforms_json: serializeEcommercePlatformsSettings(
+            normalizeEcommercePlatformsSettings(settings.ecommerce_platforms_json)
+          ),
         });
 
         if (Boolean(settings.developer_mode_enabled) && !developerModeEnabled) {
@@ -5403,7 +5515,7 @@ export function Settings({
     const handleSettingsUpdated = () => {
       // Preserve local edits on form-driven tabs; otherwise external auth sync can
       // reload persisted settings and wipe unsaved AI source/model changes.
-      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai' || activeTab === 'experimental';
+      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai' || activeTab === 'platforms' || activeTab === 'experimental';
       if (!preserveLocalFormState) {
         void ensureBaseSettingsLoaded(true);
       }
@@ -5976,6 +6088,9 @@ export function Settings({
         developer_mode_unlocked_at: formData.developer_mode_enabled
           ? (formData.developer_mode_unlocked_at || new Date().toISOString())
           : null,
+        ecommerce_platforms_json: serializeEcommercePlatformsSettings(
+          normalizeEcommercePlatformsSettings(formData.ecommerce_platforms_json)
+        ),
         chat_max_tokens_default: chatMaxTokensDefault,
         chat_max_tokens_deepseek: chatMaxTokensDeepseek,
       });
@@ -6508,6 +6623,7 @@ export function Settings({
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
     { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
     { id: 'team', labelKey: 'settings.tabs.team', icon: Users },
+    { id: 'platforms', labelKey: 'settings.tabs.platforms', icon: Store },
     { id: 'skills', labelKey: 'settings.tabs.skills', icon: Star },
     { id: 'mcp', labelKey: 'settings.tabs.mcp', icon: Server },
     { id: 'profile', labelKey: 'settings.tabs.profile', icon: FileText },
@@ -6555,7 +6671,12 @@ export function Settings({
 
       {/* Content */}
       <div className="min-w-0 flex-1 overflow-auto">
-        <div className={clsx('mx-auto px-8 py-8 pb-32', activeTab === 'ai' ? 'max-w-5xl' : 'max-w-2xl')}>
+        <div
+          className={clsx(
+            'mx-auto px-8 py-8 pb-32',
+            activeTab === 'ai' ? 'max-w-5xl' : activeTab === 'platforms' ? 'max-w-3xl' : 'max-w-2xl'
+          )}
+        >
           <form onSubmit={handleSave} className="space-y-10">
 
             {/* General Tab */}
@@ -6598,6 +6719,13 @@ export function Settings({
               <ExperimentalSettingsSection
                 formData={formData}
                 setFormData={setFormData}
+              />
+            )}
+
+            {activeTab === 'platforms' && (
+              <EcommercePlatformsSettingsSection
+                settings={ecommercePlatformsSettings}
+                onTogglePlatform={handleToggleEcommercePlatform}
               />
             )}
 

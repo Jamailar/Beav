@@ -33,7 +33,7 @@ type SidebarNavItem = {
   labelKey: I18nKey;
   icon: typeof MessageSquare;
   redclawAction?: 'new';
-  settingsTab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+  settingsTab?: 'general' | 'ai' | 'platforms' | 'tools' | 'profile' | 'remote' | 'experimental';
   primary?: boolean;
 };
 
