@@ -179,7 +179,7 @@ export function CreatorProfilesPanel({ isActive = true, embedded = false }: Crea
         }
         setError('');
         try {
-            const result = await window.ipcRenderer.invoke('accounts:list') as { accounts?: AccountSummary[] };
+            const result = await window.ipcRenderer.accounts.list() as { accounts?: AccountSummary[] };
             if (requestId !== loadAccountsRequestRef.current) return;
             const list = Array.isArray(result?.accounts) ? result.accounts : [];
             setAccounts(list);
@@ -209,7 +209,7 @@ export function CreatorProfilesPanel({ isActive = true, embedded = false }: Crea
         setLoadingDetail(true);
         setError('');
         try {
-            const result = await window.ipcRenderer.invoke('accounts:get', { accountId }) as AccountDetail;
+            const result = await window.ipcRenderer.accounts.get({ accountId }) as AccountDetail;
             if (requestId !== loadDetailRequestRef.current) return;
             setDetail(result || null);
         } catch (loadError) {

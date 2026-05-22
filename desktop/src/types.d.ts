@@ -1966,6 +1966,28 @@ declare global {
         openRoot: <T = unknown>() => Promise<T>;
         importFiles: <T = unknown>() => Promise<T>;
       };
+      accounts: {
+        list: <T = unknown>() => Promise<T>;
+        get: <T = unknown>(payload: { accountId: string }) => Promise<T>;
+      };
+      archives: {
+        list: <T = unknown>() => Promise<T>;
+        create: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        update: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        delete: <T = unknown>(profileId: string) => Promise<T>;
+        samples: {
+          list: <T = unknown>(profileId: string) => Promise<T>;
+          create: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+          update: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+          delete: <T = unknown>(sampleId: string) => Promise<T>;
+        };
+      };
+      wander: {
+        listHistory: <T = unknown>() => Promise<T>;
+        deleteHistory: (id: string) => Promise<unknown>;
+        getGuidedItems: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        getRandom: <T = unknown>() => Promise<T>;
+      };
       imageGeneration: {
         generate: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
       };

@@ -97,7 +97,7 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
         if (!selectedSkill) return;
 
         try {
-            await window.ipcRenderer.invoke('skills:save', {
+            await window.ipcRenderer.skills.save({
                 location: selectedSkill.location,
                 content: editContent
             });
@@ -135,7 +135,7 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
         }
 
         try {
-            const result = await window.ipcRenderer.invoke('skills:create', { name }) as { success: boolean; error?: string; location?: string };
+            const result = await window.ipcRenderer.skills.create({ name }) as { success: boolean; error?: string; location?: string };
 
             if (result.success) {
                 handleCloseCreateModal();
@@ -152,8 +152,11 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
     const handleToggleSkill = async () => {
         if (!selectedSkill) return;
         try {
-            const channel = selectedSkill.disabled ? 'skills:enable' : 'skills:disable';
-            const result = await window.ipcRenderer.invoke(channel, { name: selectedSkill.name }) as { success?: boolean; error?: string };
+            const result = await (
+                selectedSkill.disabled
+                    ? window.ipcRenderer.skills.enable({ name: selectedSkill.name })
+                    : window.ipcRenderer.skills.disable({ name: selectedSkill.name })
+            ) as { success?: boolean; error?: string };
             if (!result?.success) {
                 return;
             }

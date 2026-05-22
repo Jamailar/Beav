@@ -843,7 +843,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   // 加载历史记录列表
   const loadHistoryList = useCallback(async () => {
     try {
-      const list = await window.ipcRenderer.invoke('wander:list-history') as WanderHistoryRecord[];
+      const list = await window.ipcRenderer.wander.listHistory() as WanderHistoryRecord[];
       const normalized = Array.isArray(list) ? list : [];
       setHistoryList(normalized);
       return normalized;
@@ -884,7 +884,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   // 删除历史记录
   const deleteHistory = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await window.ipcRenderer.invoke('wander:delete-history', id);
+    await window.ipcRenderer.wander.deleteHistory(id);
     const newList = historyList.filter(h => h.id !== id);
     setHistoryList(newList);
     if (currentHistoryId === id) {
@@ -1105,7 +1105,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
           activeRequestIdRef.current = '';
           return;
         }
-        const guided = await window.ipcRenderer.invoke('wander:get-guided-items', {
+        const guided = await window.ipcRenderer.wander.getGuidedItems({
           topic: guidedSourceMode === 'topic' ? guidedTopic.trim() : '',
           seedText: '',
           anchorItem: guidedSourceMode === 'anchor' ? selectedAnchor : null,
@@ -1126,7 +1126,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
           return;
         }
       } else {
-        nextItems = await window.ipcRenderer.invoke('wander:get-random') as WanderItem[];
+        nextItems = await window.ipcRenderer.wander.getRandom() as WanderItem[];
       }
       setItems(nextItems);
       activeItemsRef.current = nextItems;
