@@ -977,6 +977,19 @@ function enabledEcommercePlatformsFromSettings(settings: Record<string, unknown>
     return ALL_ECOMMERCE_PLATFORMS.filter((platform) => normalized.enabledById[platform.id] !== false);
 }
 
+function isMainlandChinaPlatform(platform?: Pick<EcommercePlatformRecord, 'market'> | null): boolean {
+    return platform?.market.trim() === '中国大陆';
+}
+
+function productDetailVersionForPlatform(
+    version: ProductDetailVersionDraft,
+    platform?: EcommercePlatformRecord | null,
+): ProductDetailVersionDraft {
+    return isMainlandChinaPlatform(platform)
+        ? { ...version, market: '', locale: '' }
+        : version;
+}
+
 function detailVersionKey(market = '', locale = ''): string {
     const cleanMarket = market.trim();
     const cleanLocale = locale.trim();
@@ -1054,7 +1067,8 @@ function buildProductDetailGenerationAgentMessage(
     platform: EcommercePlatformRecord,
     version: ProductDetailVersionDraft,
 ): string {
-    const title = version.title.trim() || `${productBundle.product.name} ${platform.name} 详情页`;
+    const effectiveVersion = productDetailVersionForPlatform(version, platform);
+    const title = effectiveVersion.title.trim() || `${productBundle.product.name} ${platform.name} 详情页`;
     return [
         prompt,
         '[GenerationAgentContext]',
@@ -1081,8 +1095,8 @@ function buildProductDetailGenerationAgentMessage(
                 productId: productBundle.product.id,
                 brandId: brand.id,
                 platformId: platform.id,
-                market: version.market.trim(),
-                locale: version.locale.trim(),
+                market: effectiveVersion.market.trim(),
+                locale: effectiveVersion.locale.trim(),
             },
             executionExpectation: '请直接调用 image.generate 生成 1 张商品详情页长图。生成完成后不需要保存到资产库，宿主页面会从本次图片生成任务的 artifacts 中取回图片并保存。',
         }, null, 2),
@@ -1149,7 +1163,10 @@ function buildProductDetailGenerationPrompt(
         })
         .filter(Boolean)
         .join('；') || '未填写';
-    const marketText = [version.market.trim(), version.locale.trim()].filter(Boolean).join(' / ') || '默认市场';
+    const effectiveVersion = productDetailVersionForPlatform(version, platform);
+    const marketText = isMainlandChinaPlatform(platform)
+        ? '中国大陆 / 汉语'
+        : ([effectiveVersion.market.trim(), effectiveVersion.locale.trim()].filter(Boolean).join(' / ') || '默认市场');
     return [
         `为电商平台 ${platform.name} 生成一张商品详情页长图。`,
         `品牌：${brand.name}`,
@@ -1545,6 +1562,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const activeDetailPlatform = useMemo(() => (
         enabledEcommercePlatforms.find((platform) => platform.id === selectedDetailPlatformId) || enabledEcommercePlatforms[0] || null
     ), [enabledEcommercePlatforms, selectedDetailPlatformId]);
+    const hideDetailMarketLocaleFields = isMainlandChinaPlatform(activeDetailPlatform);
     const activeDetailPages = useMemo(() => (
         activeDetailProductBundle && activeDetailPlatform
             ? (activeDetailProductBundle.detailPages || []).filter((page) => page.platform === activeDetailPlatform.id)
@@ -1861,20 +1879,21 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setIsDetailPageSubmitting(true);
         setError('');
         try {
+            const effectiveVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
             const result = await brandWorkspaceBridge.upsertProductDetailPage({
                 id: activeDetailPage?.id,
                 productId: activeDetailProductBundle.product.id,
                 platform: activeDetailPlatform.id,
-                market: detailVersionDraft.market.trim(),
-                locale: detailVersionDraft.locale.trim(),
-                title: detailVersionDraft.title.trim() || undefined,
+                market: effectiveVersion.market.trim(),
+                locale: effectiveVersion.locale.trim(),
+                title: effectiveVersion.title.trim() || undefined,
                 images: imageDraftPayload(detailImageDrafts),
             });
             if (!result?.success) {
                 throw new Error(result?.error || '保存商品详情图失败');
             }
             await loadData();
-            setSelectedDetailVersionKey(detailVersionKey(detailVersionDraft.market, detailVersionDraft.locale));
+            setSelectedDetailVersionKey(detailVersionKey(effectiveVersion.market, effectiveVersion.locale));
         } catch (e) {
             console.error('Failed to save product detail page:', e);
             setError(e instanceof Error ? e.message : '保存商品详情图失败');
@@ -1891,13 +1910,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         if (!brandWorkspaceBridge?.upsertProductDetailPage) {
             throw new Error('商品详情图保存接口不可用');
         }
+        const effectiveVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
         const result = await brandWorkspaceBridge.upsertProductDetailPage({
             id: activeDetailPage?.id,
             productId: activeDetailProductBundle.product.id,
             platform: activeDetailPlatform.id,
-            market: detailVersionDraft.market.trim(),
-            locale: detailVersionDraft.locale.trim(),
-            title: detailVersionDraft.title.trim() || undefined,
+            market: effectiveVersion.market.trim(),
+            locale: effectiveVersion.locale.trim(),
+            title: effectiveVersion.title.trim() || undefined,
             images: imageDraftPayload(images),
         });
         if (!result?.success) {
@@ -1913,17 +1933,18 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setIsGeneratingDetailPage(true);
         setError('');
         try {
+            const effectiveVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
             const prompt = buildProductDetailGenerationPrompt(
                 activeDetailBrandBundle.brand,
                 activeDetailProductBundle,
                 activeDetailPlatform,
-                detailVersionDraft,
+                effectiveVersion,
             );
             const projectId = `brand-workspace:${activeDetailProductBundle.product.id}`;
             const contextId = buildProductDetailGenerationAgentContextId(
                 activeDetailProductBundle.product.id,
                 activeDetailPlatform.id,
-                detailVersionDraft,
+                effectiveVersion,
             );
             const session = await window.ipcRenderer.chat.getOrCreateContextSession({
                 contextId,
@@ -1958,7 +1979,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 activeDetailBrandBundle.brand,
                 activeDetailProductBundle,
                 activeDetailPlatform,
-                detailVersionDraft,
+                effectiveVersion,
             );
             const agentResult = await window.ipcRenderer.runtime.query({
                 sessionId: session.id,
@@ -1982,7 +2003,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             setDetailImageDrafts(nextImages);
             await persistDetailPageImages(nextImages);
             await loadData();
-            setSelectedDetailVersionKey(detailVersionKey(detailVersionDraft.market, detailVersionDraft.locale));
+            setSelectedDetailVersionKey(detailVersionKey(effectiveVersion.market, effectiveVersion.locale));
         } catch (e) {
             console.error('Failed to generate product detail page:', e);
             setError(e instanceof Error ? e.message : 'AI 生成商品详情页失败');
@@ -2886,6 +2907,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         ).filter((asset) => asset.path).slice(0, 4);
         const detailPages = activeDetailPages;
         const hasPlatforms = enabledEcommercePlatforms.length > 0;
+        const displayDetailVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
         return (
             <div className="fixed inset-0 z-[10020] flex min-h-0 flex-col bg-white">
                 <div className={clsx('shrink-0 border-b border-[rgb(var(--color-border))] bg-white', isModalVariant ? 'px-5 pb-4 pt-14' : 'px-8 pb-5 pt-14')}>
@@ -3043,7 +3065,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             </button>
                                         </div>
 
-                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                                        <div className={clsx(
+                                            'grid grid-cols-1 gap-3',
+                                            hideDetailMarketLocaleFields
+                                                ? 'md:grid-cols-[minmax(0,1fr)]'
+                                                : 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]',
+                                        )}>
                                             <label className="block">
                                                 <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">标题</div>
                                                 <input
@@ -3053,24 +3080,28 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
                                                 />
                                             </label>
-                                            <label className="block">
-                                                <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">国家 / 市场</div>
-                                                <input
-                                                    value={detailVersionDraft.market}
-                                                    onChange={(event) => setDetailVersionDraft((current) => ({ ...current, market: event.target.value }))}
-                                                    placeholder="例如 US、JP、泰国；国内平台可留空"
-                                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                                />
-                                            </label>
-                                            <label className="block">
-                                                <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">语言</div>
-                                                <input
-                                                    value={detailVersionDraft.locale}
-                                                    onChange={(event) => setDetailVersionDraft((current) => ({ ...current, locale: event.target.value }))}
-                                                    placeholder="例如 en-US、ja-JP、th-TH"
-                                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                                />
-                                            </label>
+                                            {!hideDetailMarketLocaleFields && (
+                                                <>
+                                                    <label className="block">
+                                                        <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">国家 / 市场</div>
+                                                        <input
+                                                            value={detailVersionDraft.market}
+                                                            onChange={(event) => setDetailVersionDraft((current) => ({ ...current, market: event.target.value }))}
+                                                            placeholder="例如 US、JP、泰国"
+                                                            className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                        />
+                                                    </label>
+                                                    <label className="block">
+                                                        <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">语言</div>
+                                                        <input
+                                                            value={detailVersionDraft.locale}
+                                                            onChange={(event) => setDetailVersionDraft((current) => ({ ...current, locale: event.target.value }))}
+                                                            placeholder="例如 en-US、ja-JP、th-TH"
+                                                            className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                        />
+                                                    </label>
+                                                </>
+                                            )}
                                         </div>
 
                                         <section className="space-y-3">
@@ -3178,7 +3209,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 ))}
                                             </div>
                                             <div className="rounded-lg bg-white px-2.5 py-2 text-[11px] leading-5 text-[rgb(var(--color-text-secondary))]">
-                                                {activeDetailPlatform.name} · {detailVersionLabel(detailVersionDraft)}
+                                                {activeDetailPlatform.name} · {detailVersionLabel(displayDetailVersion)}
                                             </div>
                                         </div>
                                     </aside>
