@@ -1048,6 +1048,10 @@ function detailVersionKey(market = '', locale = ''): string {
     return cleanMarket || cleanLocale ? `${cleanMarket}__${cleanLocale}` : '__default__';
 }
 
+function productDetailGenerationKey(productId: string, platformId: string, version: ProductDetailVersionDraft): string {
+    return [productId, platformId, detailVersionKey(version.market, version.locale)].join('__');
+}
+
 function detailVersionLabel(page?: Pick<ProductDetailVersionDraft, 'market' | 'locale'>): string {
     if (!page) return '默认版本';
     const parts = [page.market, page.locale].map((value) => value.trim()).filter(Boolean);
@@ -1359,7 +1363,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [detailVersionDraft, setDetailVersionDraft] = useState<ProductDetailVersionDraft>({ market: '', locale: '', title: '' });
     const [detailImageDrafts, setDetailImageDrafts] = useState<BrandWorkspaceImageDraft[]>([]);
     const [isDetailPageSubmitting, setIsDetailPageSubmitting] = useState(false);
-    const [isGeneratingDetailPage, setIsGeneratingDetailPage] = useState(false);
+    const [generatingDetailPageKeys, setGeneratingDetailPageKeys] = useState<string[]>([]);
     const [initialVoicePresent, setInitialVoicePresent] = useState(false);
     const [initialVideoPresent, setInitialVideoPresent] = useState(false);
     const [recordingError, setRecordingError] = useState('');
@@ -1628,6 +1632,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             || null
     ), [detailVersionOptions, selectedDetailVersionKey]);
     const activeDetailPage = activeDetailVersionOption?.page || null;
+    const activeDetailGenerationKey = activeDetailProductBundle && activeDetailPlatform
+        ? productDetailGenerationKey(activeDetailProductBundle.product.id, activeDetailPlatform.id, detailVersionDraft)
+        : '';
+    const isActiveDetailPageGenerating = Boolean(activeDetailGenerationKey && generatingDetailPageKeys.includes(activeDetailGenerationKey));
+    const activeDetailSelectionRef = useRef('');
+    useEffect(() => {
+        activeDetailSelectionRef.current = activeDetailGenerationKey;
+    }, [activeDetailGenerationKey]);
     const productDetailThumbnailsByProductId = useMemo(() => {
         const result = new Map<string, BrandWorkspaceAssetRef[]>();
         for (const brandBundle of brandWorkspaceBrands) {
@@ -1891,12 +1903,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [enabledEcommercePlatforms]);
 
     const closeProductDetailPage = useCallback(() => {
-        if (isDetailPageSubmitting || isGeneratingDetailPage) return;
+        if (isDetailPageSubmitting) return;
         setProductDetailContext(null);
         setSelectedDetailVersionKey('__default__');
         setDetailVersionDraft({ market: '', locale: '', title: '' });
         setDetailImageDrafts([]);
-    }, [isDetailPageSubmitting, isGeneratingDetailPage]);
+    }, [isDetailPageSubmitting]);
 
     const handleRemoveDetailImage = useCallback((index: number) => {
         setDetailImageDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
@@ -1976,21 +1988,23 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             void appAlert('请选择商品和电商平台');
             return;
         }
-        setIsGeneratingDetailPage(true);
+        const taskVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
+        const taskKey = productDetailGenerationKey(activeDetailProductBundle.product.id, activeDetailPlatform.id, taskVersion);
+        if (generatingDetailPageKeys.includes(taskKey)) return;
+        setGeneratingDetailPageKeys((current) => current.includes(taskKey) ? current : [...current, taskKey]);
         setError('');
         try {
-            const effectiveVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
             const prompt = buildProductDetailGenerationPrompt(
                 activeDetailBrandBundle.brand,
                 activeDetailProductBundle,
                 activeDetailPlatform,
-                effectiveVersion,
+                taskVersion,
             );
             const projectId = `brand-workspace:${activeDetailProductBundle.product.id}`;
             const contextId = buildProductDetailGenerationAgentContextId(
                 activeDetailProductBundle.product.id,
                 activeDetailPlatform.id,
-                effectiveVersion,
+                taskVersion,
             );
             const session = await window.ipcRenderer.chat.getOrCreateContextSession({
                 contextId,
@@ -2025,7 +2039,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 activeDetailBrandBundle.brand,
                 activeDetailProductBundle,
                 activeDetailPlatform,
-                effectiveVersion,
+                taskVersion,
             );
             const agentResult = await window.ipcRenderer.runtime.query({
                 sessionId: session.id,
@@ -2046,17 +2060,21 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 throw new Error('Agent 已执行完成，但没有找到可保存的商品详情图');
             }
             const nextImages = [...detailImageDrafts, ...generatedImages];
-            setDetailImageDrafts(nextImages);
             await persistDetailPageImages(nextImages);
             await loadData();
-            setSelectedDetailVersionKey(detailVersionKey(effectiveVersion.market, effectiveVersion.locale));
+            if (activeDetailSelectionRef.current === taskKey) {
+                setDetailImageDrafts(nextImages);
+                setSelectedDetailVersionKey(detailVersionKey(taskVersion.market, taskVersion.locale));
+            }
         } catch (e) {
             console.error('Failed to generate product detail page:', e);
-            setError(e instanceof Error ? e.message : 'AI 生成商品详情页失败');
+            if (activeDetailSelectionRef.current === taskKey) {
+                setError(e instanceof Error ? e.message : 'AI 生成商品详情页失败');
+            }
         } finally {
-            setIsGeneratingDetailPage(false);
+            setGeneratingDetailPageKeys((current) => current.filter((key) => key !== taskKey));
         }
-    }, [activeDetailBrandBundle, activeDetailPlatform, activeDetailProductBundle, detailImageDrafts, detailVersionDraft, loadData, persistDetailPageImages]);
+    }, [activeDetailBrandBundle, activeDetailPlatform, activeDetailProductBundle, detailImageDrafts, detailVersionDraft, generatingDetailPageKeys, loadData, persistDetailPageImages]);
 
     const closeProductModal = useCallback(() => {
         if (isProductModalSubmitting) return;
@@ -3139,11 +3157,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 <button
                                                     type="button"
                                                     onClick={() => void handleGenerateDetailPage()}
-                                                    disabled={isGeneratingDetailPage || isDetailPageSubmitting}
+                                                    disabled={isActiveDetailPageGenerating || isDetailPageSubmitting}
                                                     className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
-                                                    <Sparkles className={clsx('h-3.5 w-3.5', isGeneratingDetailPage && 'animate-pulse')} />
-                                                    {isGeneratingDetailPage ? '生成中' : 'AI生成详情页'}
+                                                    <Sparkles className={clsx('h-3.5 w-3.5', isActiveDetailPageGenerating && 'animate-pulse')} />
+                                                    {isActiveDetailPageGenerating ? '生成中' : 'AI生成详情页'}
                                                 </button>
                                             </div>
 
@@ -3154,11 +3172,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     <button
                                                         type="button"
                                                         onClick={() => void handleGenerateDetailPage()}
-                                                        disabled={isGeneratingDetailPage || isDetailPageSubmitting}
+                                                        disabled={isActiveDetailPageGenerating || isDetailPageSubmitting}
                                                         className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
                                                     >
-                                                        <Sparkles className={clsx('h-3.5 w-3.5', isGeneratingDetailPage && 'animate-pulse')} />
-                                                        {isGeneratingDetailPage ? '生成中' : 'AI生成详情页'}
+                                                        <Sparkles className={clsx('h-3.5 w-3.5', isActiveDetailPageGenerating && 'animate-pulse')} />
+                                                        {isActiveDetailPageGenerating ? '生成中' : 'AI生成详情页'}
                                                     </button>
                                                 </div>
                                             ) : (
@@ -3186,11 +3204,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     <button
                                                         type="button"
                                                         onClick={() => void handleGenerateDetailPage()}
-                                                        disabled={isGeneratingDetailPage || isDetailPageSubmitting}
+                                                        disabled={isActiveDetailPageGenerating || isDetailPageSubmitting}
                                                         className="flex min-h-[220px] items-center justify-center gap-1.5 rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-xs font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))] disabled:cursor-not-allowed disabled:opacity-50"
                                                     >
-                                                        <Sparkles className={clsx('h-4 w-4', isGeneratingDetailPage && 'animate-pulse')} />
-                                                        {isGeneratingDetailPage ? '生成中' : '再生成一版'}
+                                                        <Sparkles className={clsx('h-4 w-4', isActiveDetailPageGenerating && 'animate-pulse')} />
+                                                        {isActiveDetailPageGenerating ? '生成中' : '再生成一版'}
                                                     </button>
                                                 </div>
                                             )}
