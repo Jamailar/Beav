@@ -921,6 +921,62 @@ function imageDraftPayload(images: BrandWorkspaceImageDraft[]) {
     }));
 }
 
+async function imageFilesToDrafts(files: FileList | null): Promise<BrandWorkspaceImageDraft[]> {
+    const nextFiles = Array.from(files || []);
+    const invalid = nextFiles.find((file) => !file.type.startsWith('image/'));
+    if (invalid) {
+        throw new Error('仅支持图片文件');
+    }
+    return Promise.all(nextFiles.map(async (file) => {
+        const dataUrl = await readFileAsDataUrl(file);
+        return {
+            name: file.name,
+            previewUrl: dataUrl,
+            dataUrl,
+        };
+    }));
+}
+
+interface BrandWorkspaceImageGridProps {
+    images: BrandWorkspaceImageDraft[];
+    onAdd: (files: FileList | null) => void;
+    onRemove: (index: number) => void;
+    label: string;
+}
+
+function BrandWorkspaceImageGrid({ images, onAdd, onRemove, label }: BrandWorkspaceImageGridProps) {
+    return (
+        <div className="grid grid-cols-5 gap-2 sm:grid-cols-6">
+            {images.map((image, index) => (
+                <div key={`${image.path || image.name}-${index}`} className="group relative aspect-square overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                    <img src={resolveAssetUrl(image.previewUrl)} alt={image.name} className="h-full w-full object-cover" />
+                    <button
+                        type="button"
+                        onClick={() => onRemove(index)}
+                        className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                        aria-label="删除图片"
+                    >
+                        <X className="h-3 w-3" />
+                    </button>
+                </div>
+            ))}
+            <label className="flex aspect-square cursor-pointer items-center justify-center rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-[rgb(var(--color-text-tertiary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]" aria-label={label} title={label}>
+                <Plus className="h-5 w-5" />
+                <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                        onAdd(event.target.files);
+                        event.currentTarget.value = '';
+                    }}
+                />
+            </label>
+        </div>
+    );
+}
+
 function productBundleToDraft(bundle: BrandWorkspaceProductBundle): BrandWorkspaceProductDraft {
     return {
         id: bundle.product.id,
@@ -1375,21 +1431,20 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [brandDraft, closeBrandModal, loadData]);
 
     const handleBrandImageInput = useCallback(async (files: FileList | null) => {
-        const file = files?.[0];
-        if (!file) return;
-        if (!file.type.startsWith('image/')) {
-            void appAlert('品牌图片仅支持图片文件');
-            return;
+        try {
+            const images = await imageFilesToDrafts(files);
+            if (!images.length) return;
+            setBrandDraft((current) => ({ ...current, images: [...current.images, ...images] }));
+        } catch (e) {
+            void appAlert(e instanceof Error ? e.message : '品牌图片仅支持图片文件');
         }
-        const dataUrl = await readFileAsDataUrl(file);
-        setBrandDraft((current) => ({
-            ...current,
-            images: [{ name: file.name, previewUrl: dataUrl, dataUrl }],
-        }));
     }, []);
 
-    const handleRemoveBrandImage = useCallback(() => {
-        setBrandDraft((current) => ({ ...current, images: [] }));
+    const handleRemoveBrandImage = useCallback((index: number) => {
+        setBrandDraft((current) => ({
+            ...current,
+            images: current.images.filter((_, itemIndex) => itemIndex !== index),
+        }));
     }, []);
 
     const openCreateModal = useCallback(() => {
@@ -1472,46 +1527,44 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, []);
 
     const handleProductImageInput = useCallback(async (files: FileList | null) => {
-        const file = files?.[0];
-        if (!file) return;
-        if (!file.type.startsWith('image/')) {
-            void appAlert('商品图片仅支持图片文件');
-            return;
+        try {
+            const images = await imageFilesToDrafts(files);
+            if (!images.length) return;
+            setProductDraft((current) => ({ ...current, images: [...current.images, ...images] }));
+        } catch (e) {
+            void appAlert(e instanceof Error ? e.message : '商品图片仅支持图片文件');
         }
-        const dataUrl = await readFileAsDataUrl(file);
-        setProductDraft((current) => ({
-            ...current,
-            images: [{ name: file.name, previewUrl: dataUrl, dataUrl }],
-        }));
     }, []);
 
-    const handleRemoveProductImage = useCallback(() => {
-        setProductDraft((current) => ({ ...current, images: [] }));
+    const handleRemoveProductImage = useCallback((index: number) => {
+        setProductDraft((current) => ({
+            ...current,
+            images: current.images.filter((_, itemIndex) => itemIndex !== index),
+        }));
     }, []);
 
     const handleProductSkuImageInput = useCallback(async (index: number, files: FileList | null) => {
-        const file = files?.[0];
-        if (!file) return;
-        if (!file.type.startsWith('image/')) {
-            void appAlert('SKU 图片仅支持图片文件');
-            return;
+        try {
+            const images = await imageFilesToDrafts(files);
+            if (!images.length) return;
+            setProductDraft((current) => ({
+                ...current,
+                skus: current.skus.map((sku, skuIndex) => (
+                    skuIndex === index ? { ...sku, images: [...sku.images, ...images] } : sku
+                )),
+            }));
+        } catch (e) {
+            void appAlert(e instanceof Error ? e.message : 'SKU 图片仅支持图片文件');
         }
-        const dataUrl = await readFileAsDataUrl(file);
-        setProductDraft((current) => ({
-            ...current,
-            skus: current.skus.map((sku, skuIndex) => (
-                skuIndex === index
-                    ? { ...sku, images: [{ name: file.name, previewUrl: dataUrl, dataUrl }] }
-                    : sku
-            )),
-        }));
     }, []);
 
-    const handleRemoveProductSkuImage = useCallback((index: number) => {
+    const handleRemoveProductSkuImage = useCallback((skuIndex: number, imageIndex: number) => {
         setProductDraft((current) => ({
             ...current,
-            skus: current.skus.map((sku, skuIndex) => (
-                skuIndex === index ? { ...sku, images: [] } : sku
+            skus: current.skus.map((sku, currentSkuIndex) => (
+                currentSkuIndex === skuIndex
+                    ? { ...sku, images: sku.images.filter((_, currentImageIndex) => currentImageIndex !== imageIndex) }
+                    : sku
             )),
         }));
     }, []);
@@ -2949,32 +3002,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             </label>
                             <div className="space-y-2">
                                 <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">品牌图片</div>
-                                {brandDraft.images[0] ? (
-                                    <div className="group relative h-36 overflow-hidden rounded-xl bg-[rgb(var(--color-surface-secondary))]">
-                                        <img src={resolveAssetUrl(brandDraft.images[0].previewUrl)} alt={brandDraft.images[0].name} className="h-full w-full object-cover" />
-                                        <button
-                                            type="button"
-                                            onClick={handleRemoveBrandImage}
-                                            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
-                                            aria-label="删除品牌图片"
-                                        >
-                                            <X className="h-3.5 w-3.5" />
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <label className="flex h-24 cursor-pointer items-center justify-center rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]">
-                                        上传品牌图片
-                                        <input
-                                            type="file"
-                                            accept="image/*"
-                                            className="hidden"
-                                            onChange={(event) => {
-                                                void handleBrandImageInput(event.target.files);
-                                                event.currentTarget.value = '';
-                                            }}
-                                        />
-                                    </label>
-                                )}
+                                <BrandWorkspaceImageGrid
+                                    images={brandDraft.images}
+                                    onAdd={(files) => void handleBrandImageInput(files)}
+                                    onRemove={handleRemoveBrandImage}
+                                    label="上传品牌图片"
+                                />
                             </div>
                         </div>
                         <div className="flex justify-end gap-2 border-t border-[rgb(var(--color-border))] px-6 py-4">
@@ -3049,32 +3082,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             </label>
                             <div className="space-y-2">
                                 <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品图片</div>
-                                {productDraft.images[0] ? (
-                                    <div className="group relative h-36 overflow-hidden rounded-xl bg-[rgb(var(--color-surface-secondary))]">
-                                        <img src={resolveAssetUrl(productDraft.images[0].previewUrl)} alt={productDraft.images[0].name} className="h-full w-full object-cover" />
-                                        <button
-                                            type="button"
-                                            onClick={handleRemoveProductImage}
-                                            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
-                                            aria-label="删除商品图片"
-                                        >
-                                            <X className="h-3.5 w-3.5" />
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <label className="flex h-24 cursor-pointer items-center justify-center rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]">
-                                        上传商品图片
-                                        <input
-                                            type="file"
-                                            accept="image/*"
-                                            className="hidden"
-                                            onChange={(event) => {
-                                                void handleProductImageInput(event.target.files);
-                                                event.currentTarget.value = '';
-                                            }}
-                                        />
-                                    </label>
-                                )}
+                                <BrandWorkspaceImageGrid
+                                    images={productDraft.images}
+                                    onAdd={(files) => void handleProductImageInput(files)}
+                                    onRemove={handleRemoveProductImage}
+                                    label="上传商品图片"
+                                />
                             </div>
                             <div className="space-y-2 rounded-xl bg-[rgb(var(--color-surface-primary))] p-4">
                                 <div className="flex items-center justify-between">
@@ -3120,33 +3133,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     placeholder="规格描述，如：颜色：樱桃红；容量：3.5g"
                                                     className="mt-2 min-h-[58px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2 text-xs leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
                                                 />
-                                                <div className="mt-2">
-                                                    {sku.images[0] ? (
-                                                        <div className="group relative h-24 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
-                                                            <img src={resolveAssetUrl(sku.images[0].previewUrl)} alt={sku.images[0].name} className="h-full w-full object-cover" />
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleRemoveProductSkuImage(skuIndex)}
-                                                                className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
-                                                                aria-label="删除 SKU 图片"
-                                                            >
-                                                                <X className="h-3 w-3" />
-                                                            </button>
-                                                        </div>
-                                                    ) : (
-                                                        <label className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]">
-                                                            上传 SKU 图片
-                                                            <input
-                                                                type="file"
-                                                                accept="image/*"
-                                                                className="hidden"
-                                                                onChange={(event) => {
-                                                                    void handleProductSkuImageInput(skuIndex, event.target.files);
-                                                                    event.currentTarget.value = '';
-                                                                }}
-                                                            />
-                                                        </label>
-                                                    )}
+                                                <div className="mt-2 space-y-2">
+                                                    <div className="text-xs font-semibold text-[rgb(var(--color-text-primary))]">SKU 图片</div>
+                                                    <BrandWorkspaceImageGrid
+                                                        images={sku.images}
+                                                        onAdd={(files) => void handleProductSkuImageInput(skuIndex, files)}
+                                                        onRemove={(imageIndex) => handleRemoveProductSkuImage(skuIndex, imageIndex)}
+                                                        label="上传 SKU 图片"
+                                                    />
                                                 </div>
                                             </div>
                                         ))}
