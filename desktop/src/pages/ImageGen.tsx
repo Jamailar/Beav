@@ -99,7 +99,7 @@ export function ImageGen() {
             const effectiveMode = referenceImages.length > 0
                 ? generationMode
                 : 'text-to-image';
-            const result = await window.ipcRenderer.invoke('image-gen:generate', {
+            const result = await window.ipcRenderer.imageGeneration.generate({
                 prompt,
                 bypassPromptOptimizer: true,
                 projectId: projectId.trim() || undefined,
@@ -175,7 +175,7 @@ export function ImageGen() {
                         </span>
                     </button>
                     <button
-                        onClick={() => void window.ipcRenderer.invoke('media:open-root')}
+                        onClick={() => void window.ipcRenderer.media.openRoot()}
                         className="px-3 py-1.5 text-xs rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
                     >
                         <span className="inline-flex items-center gap-1.5">
@@ -356,7 +356,7 @@ export function ImageGen() {
                                         <div className="text-[11px] text-text-tertiary truncate">{asset.projectId || '(无项目ID)'}</div>
                                         <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || asset.size || ''} · {asset.quality || ''}</div>
                                         <button
-                                            onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                            onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
                                             className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
                                         >
                                             <span className="inline-flex items-center gap-1">

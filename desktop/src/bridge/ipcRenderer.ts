@@ -1,6 +1,8 @@
 import { createBridgeCore } from './core';
 import { createGenerationBridge } from './domains/generationBridge';
 import { createKnowledgeBridge } from './domains/knowledgeBridge';
+import { createManuscriptsBridge } from './domains/manuscriptsBridge';
+import { createMediaBridge } from './domains/mediaBridge';
 import { createSystemBridge } from './domains/systemBridge';
 import type { InvokeGuardOptions, Listener } from './types';
 import { preflightInlineAttachmentPayload } from '../utils/mediaReferencePreflight';
@@ -93,11 +95,19 @@ function createIpcRenderer() {
     },
 
     ...createKnowledgeBridge(core),
+    ...createMediaBridge(core),
+    ...createManuscriptsBridge(core),
 
     ...createSystemBridge(core),
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh'),
+      getConfig: () => invokeChannel('redbox-auth:get-config'),
+      getWechatStatus: (payload: { sessionId: string }) => invokeChannel('redbox-auth:wechat-status', payload),
+      getWechatUrl: (payload?: { state?: string }) => invokeChannel('redbox-auth:wechat-url', payload || {}),
+      sendSmsCode: (payload: { phone: string }) => invokeChannel('redbox-auth:send-sms-code', payload),
+      loginSms: (payload: { phone: string; code: string; inviteCode?: string }) => invokeChannel('redbox-auth:login-sms', payload),
+      registerSms: (payload: { phone: string; code: string; inviteCode?: string }) => invokeChannel('redbox-auth:register-sms', payload),
       getPricing: () => invokeChannel('redbox-auth:pricing'),
       refreshPricing: () => invokeChannel('redbox-auth:pricing-refresh')
     },
@@ -441,11 +451,8 @@ function createIpcRenderer() {
       clearMessages: (sessionId: string) => invokeChannel('chat:clear-messages', sessionId),
       compactContext: (sessionId: string) => invokeChannel('chat:compact-context', sessionId),
       getContextUsage: (sessionId: string) => invokeChannel('chat:get-context-usage', sessionId),
-      getRuntimeState: (sessionId: string) => invokeChannel('chat:get-runtime-state', sessionId)
-    },
-    manuscripts: {
-      confirmPackageScript: (payload: { filePath: string }) =>
-        invokeChannel('manuscripts:confirm-package-script', payload),
+      getRuntimeState: (sessionId: string) => invokeChannel('chat:get-runtime-state', sessionId),
+      bindEditorSession: (payload: Record<string, unknown>) => invokeChannel('chat:bind-editor-session', payload)
     },
     ...createGenerationBridge(core),
     redclawRunner: {

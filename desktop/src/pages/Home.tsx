@@ -359,8 +359,8 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
             const [knowledgeResult, subjectsResult, mediaResult, manuscriptTree, approvalStats] = await Promise.all([
                 window.ipcRenderer.knowledge.listPage<KnowledgeCountResponse>({ limit: 1 }),
                 window.ipcRenderer.subjects.list({ limit: 500 }) as Promise<SubjectListResponse>,
-                window.ipcRenderer.invoke('media:list', { limit: 500 }) as Promise<MediaListResponse>,
-                window.ipcRenderer.invoke('manuscripts:list') as Promise<FileNode[]>,
+                window.ipcRenderer.media.list({ limit: 500 }) as Promise<MediaListResponse>,
+                window.ipcRenderer.manuscripts.list() as Promise<FileNode[]>,
                 window.ipcRenderer.teamRuntime.reviewDocketStats() as Promise<ReviewDocketStats>,
             ]);
             if (requestId !== requestIdRef.current) return;

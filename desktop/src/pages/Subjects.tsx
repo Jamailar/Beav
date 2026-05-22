@@ -1817,7 +1817,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     brandWorkspaceBridge
                         ? brandWorkspaceBridge.list()
                         : Promise.resolve({ success: false, error: '品牌工作区不可用', brands: [] }),
-                    window.ipcRenderer.invoke('media:list', { limit: 500 }) as Promise<{ success?: boolean; error?: string; assets?: MediaAsset[] }>,
+                    window.ipcRenderer.media.list({ limit: 500 }) as Promise<{ success?: boolean; error?: string; assets?: MediaAsset[] }>,
                     window.ipcRenderer.getSettings().catch(() => ({})),
                 ])
             ), { requestId });
@@ -3316,7 +3316,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         const label = asset.title || asset.id;
         if (!(await appConfirm(`删除媒体“${label}”？`, { title: '删除媒体', confirmLabel: '删除', tone: 'danger' }))) return;
         try {
-            const result = await window.ipcRenderer.invoke('media:delete', { assetId: asset.id }) as { success?: boolean; error?: string };
+            const result = await window.ipcRenderer.media.delete({ assetId: asset.id }) as { success?: boolean; error?: string };
             if (!result?.success) {
                 void appAlert(result?.error || '删除失败');
                 return;
@@ -3922,12 +3922,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         key={asset.id}
                                         role="button"
                                         tabIndex={0}
-                                        onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                        onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
                                         onContextMenu={(event) => openMediaContextMenu(event, asset)}
                                         onKeyDown={(event) => {
                                             if (event.key !== 'Enter' && event.key !== ' ') return;
                                             event.preventDefault();
-                                            void window.ipcRenderer.invoke('media:open', { assetId: asset.id });
+                                            void window.ipcRenderer.media.open({ assetId: asset.id });
                                         }}
                                         className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
                                     >
@@ -3974,7 +3974,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     <button
                                         key={asset.id}
                                         type="button"
-                                        onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                        onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
                                         onContextMenu={(event) => openMediaContextMenu(event, asset)}
                                         className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
                                     >

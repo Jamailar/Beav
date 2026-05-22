@@ -1747,3 +1747,28 @@ Verification:
 
 - `pnpm exec tsc --noEmit`
 - `cargo check`
+
+### 2026-05-22 App Shell Capture And Domain Bridge Slice Started
+
+Completed:
+
+- Added `src/features/capture/useClipboardCapturePrompt.ts` as the App Shell module boundary for YouTube clipboard detection, polling, duplicate suppression, save confirmation, and status state.
+- Removed clipboard polling and YouTube save orchestration from `src/App.tsx` while keeping the existing capture prompt UI and user flow unchanged.
+- Added `window.ipcRenderer.capture.saveYoutubeNote(...)` and moved the capture path off raw `window.ipcRenderer.invoke(...)`.
+- Added official auth facade methods used by the login gate: config loading, WeChat URL/status, SMS send, SMS login and SMS registration.
+- Added `src/bridge/domains/mediaBridge.ts` and `src/bridge/domains/manuscriptsBridge.ts` for media assets, image/video generation aliases, and manuscript tree/package/editor commands.
+- Migrated Home, Media Library, Subjects, ImageGen, RedClaw manuscript drawer, graph layout, manuscript editor, and chat open-path calls to domain bridge helpers where the helper exists.
+- Reduced direct renderer `window.ipcRenderer.invoke(...)` call sites from the baseline 118 noted above to 20 current call sites; remaining calls are concentrated in Wander, Archives/accounts, Skills, and the generated official AI panel dynamic invoker.
+- Kept public channel names and payloads stable; this slice is a facade/module extraction only.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `pnpm build`
+- `cargo check`
+- `git diff --check`
+
+Remaining in this slice:
+
+- Add dedicated bridge facades for Wander, Archives/accounts, and Skills before migrating their remaining direct invoke calls.
+- Keep `features/official/generatedOfficialAiPanel.tsx` dynamic invoker until that generated surface has a typed channel map.

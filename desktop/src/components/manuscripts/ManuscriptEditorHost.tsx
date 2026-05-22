@@ -950,7 +950,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         const requestId = ++treeRequestIdRef.current;
         try {
             const treeResult = await uiMeasure('manuscripts', 'load_tree', async () => (
-                window.ipcRenderer.invoke('manuscripts:list') as Promise<FileNode[]>
+                window.ipcRenderer.manuscripts.list() as Promise<FileNode[]>
             ), { requestId, mode, isActive });
             if (requestId !== treeRequestIdRef.current) return;
             setTree(Array.isArray(treeResult) ? treeResult : []);
@@ -969,7 +969,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         const requestId = ++assetsRequestIdRef.current;
         try {
             const mediaResult = await uiMeasure('manuscripts', 'load_assets', async () => (
-                window.ipcRenderer.invoke('media:list', { limit }) as Promise<{ success?: boolean; assets?: MediaAsset[]; error?: string }>
+                window.ipcRenderer.media.list({ limit }) as Promise<{ success?: boolean; assets?: MediaAsset[]; error?: string }>
             ), { requestId, mode, isActive, limit });
             if (requestId !== assetsRequestIdRef.current) return;
             if (!mediaResult?.success) {
@@ -1014,7 +1014,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const handleImportMediaFiles = useCallback(async () => {
         setWorkingId('media-import');
         try {
-            const result = await window.ipcRenderer.invoke('media:import-files') as {
+            const result = await window.ipcRenderer.media.importFiles() as {
                 success?: boolean;
                 canceled?: boolean;
                 error?: string;
@@ -1242,7 +1242,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             setEditorFile(filePath);
             setMode('editor');
             try {
-                const result = await window.ipcRenderer.invoke('manuscripts:read', filePath) as ManuscriptReadResult;
+                const result = await window.ipcRenderer.manuscripts.read(filePath) as ManuscriptReadResult;
                 const metadata = (result?.metadata || {}) as Record<string, unknown>;
                 if (isRemovedMediaDraftType(metadata.draftType)) {
                     setMode('list');
@@ -1339,7 +1339,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         try {
             const storageName = buildDraftStorageName();
             const draftTitle = DEFAULT_UNTITLED_DRAFT_TITLE;
-            const result = await window.ipcRenderer.invoke('manuscripts:create-file', {
+            const result = await window.ipcRenderer.manuscripts.createFile({
                 parentPath: activeFolder,
                 name: ensureDraftFileName(storageName, kind),
                 title: draftTitle,
@@ -1367,7 +1367,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!normalizedName) return;
         setIsCreating(true);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:create-folder', {
+            const result = await window.ipcRenderer.manuscripts.createFolder({
                 parentPath: activeFolder,
                 name: normalizedName,
             }) as { success?: boolean; error?: string };
@@ -1405,7 +1405,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         setFolderContextMenu((prev) => ({ ...prev, visible: false }));
         setWorkingId(folderPath);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:delete', folderPath) as { success?: boolean; error?: string };
+            const result = await window.ipcRenderer.manuscripts.delete(folderPath) as { success?: boolean; error?: string };
             if (!result?.success) throw new Error(result?.error || '删除文件夹失败');
             if (isSameOrNestedPath(folderPath, activeFolder)) {
                 setActiveFolder(getParentFolderPath(folderPath));
@@ -1432,7 +1432,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!newName || !folderRenamePath) return;
         setIsCreating(true);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:rename', {
+            const result = await window.ipcRenderer.manuscripts.rename({
                 oldPath: folderRenamePath,
                 newName,
             }) as { success?: boolean; error?: string; newPath?: string };
@@ -1468,7 +1468,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!assetRenameId || !nextTitle) return;
         setIsCreating(true);
         try {
-            const result = await window.ipcRenderer.invoke('media:update', {
+            const result = await window.ipcRenderer.media.update({
                 assetId: assetRenameId,
                 title: nextTitle,
             }) as { success?: boolean; error?: string };
@@ -1501,7 +1501,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!draftRenamePath || !nextName) return;
         setIsCreating(true);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:rename', {
+            const result = await window.ipcRenderer.manuscripts.rename({
                 oldPath: draftRenamePath,
                 newName: nextName,
             }) as { success?: boolean; error?: string; newPath?: string };
@@ -1550,7 +1550,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             const nextName = isPackageDraftPath(editorFile)
                 ? nextTitle
                 : renameManuscriptKeepingExtension(pathBasenameSafe(editorFile), normalizeDraftFileName(nextTitle));
-            const result = await window.ipcRenderer.invoke('manuscripts:rename', {
+            const result = await window.ipcRenderer.manuscripts.rename({
                 oldPath: editorFile,
                 newName: nextName,
             }) as { success?: boolean; error?: string; newPath?: string };
@@ -1587,7 +1587,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const handleDeleteDraft = useCallback(async (targetPath: string) => {
         setWorkingId(targetPath);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:delete', targetPath) as { success?: boolean; error?: string };
+            const result = await window.ipcRenderer.manuscripts.delete(targetPath) as { success?: boolean; error?: string };
             if (!result?.success) throw new Error(result?.error || '删除失败');
             if (isSameOrNestedPath(targetPath, activeFolder)) {
                 setActiveFolder('');
@@ -1608,7 +1608,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!(await appConfirm('确认删除这个媒体资产吗？', { title: '删除媒体资产', confirmLabel: '删除', tone: 'danger' }))) return;
         setWorkingId(assetId);
         try {
-            const result = await window.ipcRenderer.invoke('media:delete', { assetId }) as { success?: boolean; error?: string };
+            const result = await window.ipcRenderer.media.delete({ assetId }) as { success?: boolean; error?: string };
             if (!result?.success) throw new Error(result?.error || '删除媒体失败');
             await loadData();
         } catch (deleteError) {
@@ -1637,7 +1637,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             return;
         }
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:read', targetPath) as ManuscriptReadResult;
+            const result = await window.ipcRenderer.manuscripts.read(targetPath) as ManuscriptReadResult;
             const metadata = (result?.metadata || {}) as Record<string, unknown>;
             if (isRemovedMediaDraftType(metadata.draftType)) {
                 setMode('list');
@@ -1674,7 +1674,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             setPackageState(null);
             return;
         }
-        const result = await window.ipcRenderer.invoke('manuscripts:get-package-state', targetPath) as {
+        const result = await window.ipcRenderer.manuscripts.getPackageState(targetPath) as {
             success?: boolean;
             state?: PackageState;
         };
@@ -1752,7 +1752,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
 
         setIsSavingEditorBody(true);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:save', {
+            const result = await window.ipcRenderer.manuscripts.save({
                 path: snapshotFile,
                 content: snapshotContent,
                 metadata: snapshotMetadata,
@@ -1836,7 +1836,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!editorFile) return;
         setWorkingId('media-import-bind');
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:attach-external-files', {
+            const result = await window.ipcRenderer.manuscripts.attachExternalFiles({
                 filePath: editorFile,
             }) as {
                 success?: boolean;
@@ -1867,7 +1867,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video') return;
         setIsGeneratingRemotion(true);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:generate-remotion-scene', {
+            const result = await window.ipcRenderer.manuscripts.generateRemotionScene({
                 filePath: editorFile,
                 instructions: instructionsOverride || editorBody,
             }) as { success?: boolean; state?: PackageState; error?: string };
@@ -1885,7 +1885,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const handleSaveRemotionScene = useCallback(async (scene: Record<string, unknown>) => {
         if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video') return;
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:save-remotion-scene', {
+            const result = await window.ipcRenderer.manuscripts.saveRemotionScene({
                 filePath: editorFile,
                 scene,
             }) as { success?: boolean; state?: PackageState; error?: string };
@@ -1909,7 +1909,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const handlePickExportVideoPath = useCallback(async () => {
         if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video' || isRenderingRemotion) return;
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:pick-export-path', {
+            const result = await window.ipcRenderer.manuscripts.pickExportPath({
                 filePath: editorFile,
                 resolutionPreset: exportVideoResolution,
                 renderMode: 'full',
@@ -1929,7 +1929,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video' || isRenderingRemotion) return;
         let outputPath = exportVideoPath.trim();
         if (!outputPath) {
-            const picked = await window.ipcRenderer.invoke('manuscripts:pick-export-path', {
+            const picked = await window.ipcRenderer.manuscripts.pickExportPath({
                 filePath: editorFile,
                 resolutionPreset: exportVideoResolution,
                 renderMode: 'full',
@@ -1949,7 +1949,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         setExportVideoStage('准备导出');
         setExportVideoProgress(0);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:render-remotion-video', {
+            const result = await window.ipcRenderer.manuscripts.renderRemotionVideo({
                 filePath: editorFile,
                 renderMode: 'full',
                 outputPath,
@@ -1978,7 +1978,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         const outputPath = packageState?.videoProject?.renderOutput || packageState?.remotion?.render?.outputPath;
         if (!outputPath) return;
         try {
-            await window.ipcRenderer.invoke('app:open-path', { path: outputPath });
+            await window.ipcRenderer.openPath(outputPath);
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '打开导出文件失败');
         }
@@ -2025,7 +2025,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             return;
         }
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:get-write-proposal', {
+            const result = await window.ipcRenderer.manuscripts.getWriteProposal({
                 filePath,
             }) as { success?: boolean; proposal?: ManuscriptWriteProposal | null };
             setEditorWriteProposal(result?.proposal || null);
@@ -2048,7 +2048,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         let cancelled = false;
         void (async () => {
             try {
-                const result = await window.ipcRenderer.invoke('manuscripts:read', editorFile) as ManuscriptReadResult;
+                const result = await window.ipcRenderer.manuscripts.read(editorFile) as ManuscriptReadResult;
                 if (cancelled) return;
                 const nextContent = String(result?.content || '');
                 const { body, frontmatterBlock } = splitWritingDraftContent(nextContent, editorDescriptor?.draftType);
@@ -2186,7 +2186,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
         setEditorChatSessionReady(false);
         let cancelled = false;
-        void window.ipcRenderer.invoke('chat:bind-editor-session', editorChatBinding)
+        void window.ipcRenderer.chat.bindEditorSession(editorChatBinding)
             .then((session) => {
                 const sessionRecord = session as { id?: string } | null;
                 if (cancelled || !sessionRecord?.id) return;
@@ -2234,7 +2234,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 reviewBody,
                 proposedDraft.frontmatterBlock
             );
-            const result = await window.ipcRenderer.invoke('manuscripts:accept-write-proposal', {
+            const result = await window.ipcRenderer.manuscripts.acceptWriteProposal({
                 filePath: editorFile,
                 proposedContentOverride,
             }) as { success?: boolean; error?: string; content?: string; state?: PackageState };
@@ -2261,7 +2261,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         if (!editorFile || !editorWriteProposal) return;
         setIsRejectingWriteProposal(true);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:reject-write-proposal', {
+            const result = await window.ipcRenderer.manuscripts.rejectWriteProposal({
                 filePath: editorFile,
             }) as { success?: boolean; error?: string };
             if (!result?.success) {
@@ -2308,7 +2308,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const handleBindAssetToPackage = useCallback(async (assetId: string) => {
         if (!editorFile) return;
         try {
-            const result = await window.ipcRenderer.invoke('media:bind', {
+            const result = await window.ipcRenderer.media.bind({
                 assetId,
                 manuscriptPath: editorFile,
                 role: bindAssetRole,

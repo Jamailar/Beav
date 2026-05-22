@@ -1114,7 +1114,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     let cancelled = false;
     const loadConfig = async () => {
       try {
-        const result = await window.ipcRenderer.invoke('redbox-auth:get-config') as {
+        const result = await window.ipcRenderer.officialAuth.getConfig() as {
           success?: boolean;
           activeRealm?: OfficialAuthRealm;
         };
@@ -1145,7 +1145,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     const run = async () => {
       if (wechatPollTokenRef.current !== token) return;
       try {
-        const result = await window.ipcRenderer.invoke('redbox-auth:wechat-status', { sessionId }) as {
+        const result = await window.ipcRenderer.officialAuth.getWechatStatus({ sessionId }) as {
           success?: boolean;
           data?: {
             status?: string;
@@ -1191,7 +1191,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     setWechatBusy(true);
     stopWechatPolling();
     try {
-      const result = await window.ipcRenderer.invoke('redbox-auth:wechat-url', { state: 'redconvert-desktop' }) as {
+      const result = await window.ipcRenderer.officialAuth.getWechatUrl({ state: 'redconvert-desktop' }) as {
         success?: boolean;
         data?: {
           sessionId?: string;
@@ -1233,7 +1233,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     }
     setSmsBusy(true);
     try {
-      const result = await window.ipcRenderer.invoke('redbox-auth:send-sms-code', { phone }) as {
+      const result = await window.ipcRenderer.officialAuth.sendSmsCode({ phone }) as {
         success?: boolean;
         error?: string;
       };
@@ -1257,9 +1257,10 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     }
     setSmsBusy(true);
     try {
-      const result = await window.ipcRenderer.invoke(
-        mode === 'login' ? 'redbox-auth:login-sms' : 'redbox-auth:register-sms',
-        { phone, code, inviteCode: smsForm.inviteCode.trim() || undefined },
+      const result = await (
+        mode === 'login'
+          ? window.ipcRenderer.officialAuth.loginSms({ phone, code, inviteCode: smsForm.inviteCode.trim() || undefined })
+          : window.ipcRenderer.officialAuth.registerSms({ phone, code, inviteCode: smsForm.inviteCode.trim() || undefined })
       ) as {
         success?: boolean;
         session?: unknown;
