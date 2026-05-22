@@ -2953,6 +2953,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         ).filter((asset) => asset.path).slice(0, 4);
         const hasPlatforms = enabledEcommercePlatforms.length > 0;
         const displayDetailVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
+        const activeDetailPlatformIcon = activeDetailPlatform ? ecommercePlatformIconPath(activeDetailPlatform.id) : '';
         return (
             <div className="fixed inset-0 z-[10020] flex min-h-0 flex-col bg-white">
                 <div className={clsx('shrink-0 border-b border-[rgb(var(--color-border))] bg-white', isModalVariant ? 'px-5 pb-4 pt-14' : 'px-8 pb-5 pt-14')}>
@@ -2984,6 +2985,25 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 {activeDetailProductBundle.product.name}
                             </h2>
                         </div>
+                        {activeDetailPlatform && (
+                            <div className="hidden min-w-0 max-w-[280px] items-center gap-2 rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] px-3 py-2 lg:flex">
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white">
+                                    {activeDetailPlatformIcon ? (
+                                        <img src={activeDetailPlatformIcon} alt="" className="h-5 w-5 object-contain" />
+                                    ) : (
+                                        <Box className="h-4 w-4 text-[rgb(var(--color-text-tertiary))]" />
+                                    )}
+                                </span>
+                                <div className="min-w-0">
+                                    <div className="truncate text-[11px] font-semibold text-[rgb(var(--color-text-secondary))]">
+                                        {detailVersionLabel(displayDetailVersion)}
+                                    </div>
+                                    <div className="mt-0.5 truncate text-sm font-semibold leading-none text-[rgb(var(--color-text-primary))]">
+                                        {activeDetailPlatform.name}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         <button
                             type="button"
                             onClick={() => void handleSaveDetailPage()}
@@ -3013,12 +3033,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 setSelectedDetailVersionKey('__default__');
                                             }}
                                             className={clsx(
-                                                'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold transition',
+                                                'relative flex h-11 w-full items-center gap-2 rounded-xl border px-2.5 text-left text-xs font-semibold transition',
                                                 active
-                                                    ? 'bg-white text-[rgb(var(--color-text-primary))] shadow-sm'
-                                                    : 'text-[rgb(var(--color-text-secondary))] hover:bg-white hover:text-[rgb(var(--color-text-primary))]'
+                                                    ? 'border-black bg-white text-[rgb(var(--color-text-primary))] shadow-sm'
+                                                    : 'border-transparent text-[rgb(var(--color-text-secondary))] hover:border-[rgb(var(--color-border))] hover:bg-white hover:text-[rgb(var(--color-text-primary))]'
                                             )}
                                         >
+                                            {active && <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-black" />}
                                             <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white">
                                                 {iconPath ? (
                                                     <img src={iconPath} alt="" className="h-4 w-4 object-contain" />
@@ -3053,8 +3074,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 setSelectedDetailVersionKey('__default__');
                                             }}
                                             className={clsx(
-                                                'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition',
-                                                active ? 'bg-black text-white' : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))]'
+                                                'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition',
+                                                active
+                                                    ? 'border-black bg-black text-white shadow-sm'
+                                                    : 'border-transparent bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))]'
                                             )}
                                         >
                                             {iconPath && <img src={iconPath} alt="" className="h-4 w-4 rounded-sm object-contain" />}
