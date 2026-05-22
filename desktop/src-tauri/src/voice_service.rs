@@ -2348,6 +2348,8 @@ mod tests {
             video_path: None,
             voice_script: None,
             voice: Some(voice),
+            brand_id: None,
+            skus: Vec::new(),
             created_at: "2026-05-19T00:00:00Z".to_string(),
             updated_at: "2026-05-19T00:00:00Z".to_string(),
             absolute_image_paths: Vec::new(),

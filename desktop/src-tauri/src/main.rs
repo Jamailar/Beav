@@ -135,6 +135,14 @@ struct SubjectAttribute {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SubjectSku {
+    id: String,
+    name: String,
+    attributes: Vec<SubjectAttribute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SubjectCategory {
     id: String,
     name: String,
@@ -156,6 +164,10 @@ struct SubjectRecord {
     video_path: Option<String>,
     voice_script: Option<String>,
     voice: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brand_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skus: Vec<SubjectSku>,
     created_at: String,
     updated_at: String,
     absolute_image_paths: Vec<String>,
@@ -861,6 +873,8 @@ struct SubjectMutationInput {
     images: Option<Vec<SubjectMediaInput>>,
     voice: Option<SubjectVoiceInput>,
     video: Option<SubjectMediaInput>,
+    brand_id: Option<String>,
+    skus: Option<Vec<SubjectSku>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1732,7 +1746,7 @@ mod tests {
         validate_runtime_tool_message_sequence, workspace_read_directory_response,
         GeneratedMediaPreview, InteractiveExecutionContract, InteractiveExecutionProgress,
         SubjectAttribute, SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord,
-        SubjectVoiceInput,
+        SubjectSku, SubjectVoiceInput,
     };
     use serde_json::{json, Value};
     use std::fs;
@@ -1938,6 +1952,8 @@ mod tests {
                 data_url: Some("data:video/mp4;base64,aGVsbG8=".to_string()),
                 name: Some("talking-head.mp4".to_string()),
             }),
+            brand_id: None,
+            skus: None,
         };
         let subject =
             build_subject_record_for_workspace(&subjects_root, input, None).expect("build subject");
@@ -1962,6 +1978,51 @@ mod tests {
         assert!(subjects[0].primary_preview_url.is_some());
         assert!(subjects[0].voice_preview_url.is_some());
         assert!(subjects[0].video_preview_url.is_some());
+        let product = SubjectRecord {
+            id: "subject-product".to_string(),
+            name: "测试商品".to_string(),
+            category_id: Some("category-test".to_string()),
+            description: None,
+            tags: Vec::new(),
+            attributes: Vec::new(),
+            image_paths: Vec::new(),
+            voice_path: None,
+            video_path: None,
+            voice_script: None,
+            voice: None,
+            brand_id: Some("subject-test".to_string()),
+            skus: vec![SubjectSku {
+                id: "sku-red".to_string(),
+                name: "红色款".to_string(),
+                attributes: vec![SubjectAttribute {
+                    key: "颜色".to_string(),
+                    value: "红色".to_string(),
+                }],
+            }],
+            created_at: "2026-04-28T00:00:00Z".to_string(),
+            updated_at: "2026-04-28T00:00:00Z".to_string(),
+            absolute_image_paths: Vec::new(),
+            preview_urls: Vec::new(),
+            primary_preview_url: None,
+            absolute_voice_path: None,
+            voice_preview_url: None,
+            absolute_video_path: None,
+            video_preview_url: None,
+        };
+        persist_subjects_workspace(
+            &subjects_root,
+            &[category.clone()],
+            &[subject.clone(), product],
+        )
+        .expect("persist subject relationship");
+        let subjects = crate::workspace_loaders::load_subjects_from_fs(&subjects_root);
+        let product = subjects
+            .iter()
+            .find(|item| item.id == "subject-product")
+            .expect("product should reload");
+        assert_eq!(product.brand_id.as_deref(), Some("subject-test"));
+        assert_eq!(product.skus.len(), 1);
+        assert_eq!(product.skus[0].attributes[0].key, "颜色");
 
         let updated = SubjectRecord {
             name: "更新资产".to_string(),
@@ -2024,6 +2085,8 @@ mod tests {
                     video_path: None,
                     voice_script: None,
                     voice: None,
+                    brand_id: None,
+                    skus: Vec::new(),
                     created_at: "2026-04-28T00:00:00Z".to_string(),
                     updated_at: "2026-04-28T00:00:00Z".to_string(),
                     absolute_image_paths: Vec::new(),
@@ -9765,6 +9828,8 @@ fn subject_catalog_item(record: &SubjectRecord) -> Value {
         "videoPath": record.video_path,
         "voiceScript": record.voice_script,
         "voice": record.voice,
+        "brandId": record.brand_id,
+        "skus": record.skus,
         "createdAt": record.created_at,
         "updatedAt": record.updated_at,
     })
@@ -9879,6 +9944,32 @@ fn build_subject_record_for_workspace(
         video_path,
         voice_script,
         voice,
+        brand_id: input.brand_id.filter(|item| !item.trim().is_empty()),
+        skus: input
+            .skus
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| !item.name.trim().is_empty())
+            .map(|item| SubjectSku {
+                id: if item.id.trim().is_empty() {
+                    make_id("sku")
+                } else {
+                    item.id.trim().to_string()
+                },
+                name: item.name.trim().to_string(),
+                attributes: item
+                    .attributes
+                    .into_iter()
+                    .filter(|attribute| {
+                        !attribute.key.trim().is_empty() || !attribute.value.trim().is_empty()
+                    })
+                    .map(|attribute| SubjectAttribute {
+                        key: attribute.key.trim().to_string(),
+                        value: attribute.value.trim().to_string(),
+                    })
+                    .collect(),
+            })
+            .collect(),
         created_at,
         updated_at: now_iso(),
         absolute_image_paths: Vec::new(),
@@ -9890,6 +9981,63 @@ fn build_subject_record_for_workspace(
         video_preview_url: None,
     };
     Ok(hydrated_subject_record(subjects_root, record))
+}
+
+fn subject_category_name<'a>(
+    categories: &'a [SubjectCategory],
+    category_id: Option<&str>,
+) -> Option<&'a str> {
+    let category_id = category_id?;
+    categories
+        .iter()
+        .find(|item| item.id == category_id)
+        .map(|item| item.name.trim())
+}
+
+fn validate_subject_brand_binding(
+    input: &SubjectMutationInput,
+    categories: &[SubjectCategory],
+    subjects: &[SubjectRecord],
+) -> Result<(), String> {
+    let category_name = subject_category_name(categories, input.category_id.as_deref());
+    let is_product = category_name == Some("商品");
+    if !is_product {
+        if input
+            .brand_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err("只有商品资产可以绑定品牌".to_string());
+        }
+        if input
+            .skus
+            .as_ref()
+            .is_some_and(|items| items.iter().any(|item| !item.name.trim().is_empty()))
+        {
+            return Err("只有商品资产可以创建 SKU".to_string());
+        }
+        return Ok(());
+    }
+
+    let Some(brand_id) = input
+        .brand_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(brand) = subjects.iter().find(|subject| subject.id == brand_id) else {
+        return Err("绑定的品牌不存在".to_string());
+    };
+    let brand_category_name = subject_category_name(categories, brand.category_id.as_deref());
+    if brand_category_name != Some("品牌") {
+        return Err("商品只能绑定品牌类资产".to_string());
+    }
+    if input.id.as_deref() == Some(brand_id) {
+        return Err("商品不能绑定自身为品牌".to_string());
+    }
+    Ok(())
 }
 
 fn handle_subject_category_create(
@@ -10027,6 +10175,9 @@ fn handle_subject_create(
             return Ok(json!({ "success": false, "error": "分类不存在" }));
         }
     }
+    if let Err(error) = validate_subject_brand_binding(&input, &categories, &subjects) {
+        return Ok(json!({ "success": false, "error": error }));
+    }
     let record = build_subject_record_for_workspace(&subjects_root, input, None)?;
     subjects.push(record.clone());
     persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
@@ -10069,6 +10220,9 @@ fn handle_subject_update(
     let Some(index) = subjects.iter().position(|item| item.id == id) else {
         return Ok(json!({ "success": false, "error": "资产不存在" }));
     };
+    if let Err(error) = validate_subject_brand_binding(&input, &categories, &subjects) {
+        return Ok(json!({ "success": false, "error": error }));
+    }
     let existing = subjects.get(index).cloned();
     let record = build_subject_record_for_workspace(&subjects_root, input, existing)?;
     subjects[index] = record.clone();
@@ -10091,6 +10245,17 @@ fn handle_subject_delete(payload: Value, state: &State<'_, AppState>) -> Result<
     let (categories, mut subjects) = with_store(state, |store| {
         Ok((store.categories.clone(), store.subjects.clone()))
     })?;
+    let deleting_subject = subjects.iter().find(|item| item.id == id).cloned();
+    if deleting_subject
+        .as_ref()
+        .and_then(|subject| subject_category_name(&categories, subject.category_id.as_deref()))
+        == Some("品牌")
+        && subjects
+            .iter()
+            .any(|subject| subject.brand_id.as_deref() == Some(id.as_str()))
+    {
+        return Ok(json!({ "success": false, "error": "仍有商品绑定该品牌，无法删除" }));
+    }
     let before = subjects.len();
     subjects.retain(|item| item.id != id);
     if subjects.len() == before {
