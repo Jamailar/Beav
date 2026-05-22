@@ -273,25 +273,60 @@ const stringifyCliCommand = (argv?: string[], fallback?: string): string => {
 const shouldShowLoginSettingsAction = (title: string): boolean => {
   const normalized = title.replace(/\s+/g, '');
   return normalized.includes('余额不足')
+    || normalized.includes('积分不足')
+    || normalized.toLowerCase().includes('insufficientbalance')
+    || normalized.toLowerCase().includes('insufficientquota')
     || normalized.includes('登陆失效')
     || normalized.includes('登录失效');
 };
 
 const getLoginSettingsActionLabel = (title: string): string => {
   const normalized = title.replace(/\s+/g, '');
-  return normalized.includes('余额不足') ? '去充值' : '查看账号';
+  return normalized.includes('余额不足') || normalized.includes('积分不足') || normalized.toLowerCase().includes('insufficient')
+    ? '去充值'
+    : '查看账号';
+};
+
+const shouldUseDangerForError = (title: string, detail: string): boolean => {
+  const normalized = `${title} ${detail}`.replace(/\s+/g, '').toLowerCase();
+  if (
+    normalized.includes('余额不足')
+    || normalized.includes('积分不足')
+    || normalized.includes('insufficientbalance')
+    || normalized.includes('insufficientquota')
+    || normalized.includes('登录失效')
+    || normalized.includes('登陆失效')
+    || normalized.includes('ratelimit')
+    || normalized.includes('timeout')
+    || normalized.includes('fetchfailed')
+    || normalized.includes('badgateway')
+    || normalized.includes('gatewaytimeout')
+    || normalized.includes('serviceunavailable')
+    || normalized.includes('模型不可用')
+    || normalized.includes('模型不支持')
+    || normalized.includes('附件')
+  ) {
+    return false;
+  }
+  return normalized.includes('permissiondenied')
+    || normalized.includes('forbidden')
+    || normalized.includes('fatal')
+    || normalized.includes('panic')
+    || normalized.includes('安全策略')
+    || normalized.includes('数据损坏');
 };
 
 const buildStatusLine = (item: ProcessItem): StatusLine | null => {
   if (item.type === 'error') {
     const title = item.title || 'AI 请求失败';
+    const detail = truncateDetail(item.content || '');
     return {
       id: item.id,
       status: 'failed',
       text: title,
-      detail: truncateDetail(item.content || ''),
+      detail,
       preserveDetail: true,
-      forceDanger: true,
+      forceDanger: shouldUseDangerForError(title, detail),
       action: shouldShowLoginSettingsAction(title)
         ? { label: getLoginSettingsActionLabel(title), target: 'settings-login' }
         : undefined,
