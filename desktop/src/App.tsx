@@ -407,14 +407,10 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   }, []);
 
   const navigateToView = useCallback((view: ViewType) => {
-    if (view === 'subjects') {
-      openSubjectsModal();
-      return;
-    }
     setActiveManuscriptEditorFile(null);
     setImmersiveMode(false);
     setCurrentView(view);
-  }, [openSubjectsModal]);
+  }, []);
 
   const openFeedbackReport = useCallback((context?: FeedbackReportContext | null) => {
     setFeedbackReportContext({
@@ -1078,6 +1074,16 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
               <MediaLibraryPage
                 isActive={currentView === 'media-library'}
                 onNavigateToGenerationStudio={navigateToGenerationStudio}
+              />
+            </Suspense>
+          </div>
+        )}
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'subjects') && (
+          <div className={currentView === 'subjects' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'subjects' ? <ViewLoadingFallback /> : null}>
+              <SubjectsPage
+                isActive={currentView === 'subjects'}
+                variant="page"
               />
             </Suspense>
           </div>
