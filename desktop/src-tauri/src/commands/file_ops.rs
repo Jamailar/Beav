@@ -114,7 +114,10 @@ fn resolve_local_path_with_encoded_fallback(source: &str) -> Option<PathBuf> {
         .or(Some(primary))
 }
 
-fn resolve_file_action_path(state: &State<'_, AppState>, source: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_file_action_path(
+    state: &State<'_, AppState>,
+    source: &str,
+) -> Result<PathBuf, String> {
     if let Some(path) = resolve_virtual_resource_path(state, source)? {
         if path.exists() {
             return Ok(path);

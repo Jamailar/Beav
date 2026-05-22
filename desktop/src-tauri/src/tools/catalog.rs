@@ -65,19 +65,15 @@ const ALL_APP_RUNTIME_MODES: &[&str] = &[
     "knowledge",
     "redclaw",
     "background-maintenance",
-    "video-editor",
-    "audio-editor",
     "diagnostics",
 ];
-const ALL_EDITOR_RUNTIME_MODES: &[&str] = &["video-editor", "audio-editor", "diagnostics"];
+const ALL_EDITOR_RUNTIME_MODES: &[&str] = &[];
 const ALL_FILE_SYSTEM_RUNTIME_MODES: &[&str] = &[
     "wander",
     "team",
     "image-generation",
     "knowledge",
     "redclaw",
-    "video-editor",
-    "audio-editor",
     "diagnostics",
 ];
 const REDCLAW_RUNTIME_MODES: &[&str] = &[
@@ -5517,22 +5513,6 @@ mod tests {
     }
 
     #[test]
-    fn redbox_editor_schema_hides_compat_only_actions() {
-        let schema = schema_for_tool_for_runtime_mode("editor", Some("video-editor"))
-            .expect("editor schema should exist");
-        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
-            .as_array()
-            .expect("action enum")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(actions.contains(&"script_read"));
-        assert!(actions.contains(&"ffmpeg_edit"));
-        assert!(!actions.contains(&"timeline_read"));
-        assert!(!actions.contains(&"undo"));
-    }
-
-    #[test]
     fn redbox_fs_schema_uses_explicit_action_variants() {
         let schema = schema_for_tool_for_runtime_mode("resource", Some("team"))
             .expect("resource schema should exist");
@@ -5560,7 +5540,6 @@ mod tests {
             ("Operate", Some("redclaw")),
             ("workflow", Some("redclaw")),
             ("resource", Some("wander")),
-            ("editor", Some("video-editor")),
         ] {
             let schema = schema_for_tool_for_runtime_mode(tool_name, runtime_mode)
                 .unwrap_or_else(|| panic!("schema should exist for {tool_name}"));

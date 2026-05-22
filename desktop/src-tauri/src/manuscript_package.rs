@@ -2485,7 +2485,7 @@ pub(crate) fn render_remotion_video(
         state,
         CliExecuteRequest {
             session_id: Some(session_id),
-            runtime_id: Some("video-editor".to_string()),
+            runtime_id: Some("remotion-render".to_string()),
             tool_id: Some("node".to_string()),
             argv,
             cwd: Some(project_root.display().to_string()),

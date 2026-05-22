@@ -2717,12 +2717,6 @@ export function ToolsSettingsSection({
         if (runtimeMode === 'team' || runtimeMode === 'chatroom' || contextType === 'team' || contextType === 'chatroom' || session.id.startsWith('chatroom:')) {
             return 'team';
         }
-        if (runtimeMode === 'video-editor') {
-            return 'video';
-        }
-        if (runtimeMode === 'audio-editor') {
-            return 'audio';
-        }
         if (contextType === 'file' || contextType === 'theme' || contextType === 'project') {
             return contextType;
         }

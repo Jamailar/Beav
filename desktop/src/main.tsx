@@ -5,14 +5,14 @@ import App from './App'
 import 'tippy.js/dist/tippy.css'
 import './index.css'
 import { APP_BRAND } from './config/brand'
-import { applyAppTheme, readThemeMode } from './config/theme'
+import { applyAppTheme, readThemePreference, resolveThemeMode } from './config/theme'
 import { appAlert, appConfirm } from './utils/appDialogs'
 import { installRendererDiagnostics, reportRendererError } from './logging/client'
 import { I18nProvider } from './i18n'
 
 const initializeThemeMode = () => {
   try {
-    applyAppTheme(readThemeMode());
+    applyAppTheme(resolveThemeMode(readThemePreference()));
   } catch {
     applyAppTheme('light');
   }

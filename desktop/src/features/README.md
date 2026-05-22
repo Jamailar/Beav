@@ -5,7 +5,6 @@
 ## Current Areas
 
 - `official/`: 官方发布相关 UI
-- `video-editor/`: 视频编辑器局部状态和后续特性收敛点
 
 ## Rule Of Thumb
 

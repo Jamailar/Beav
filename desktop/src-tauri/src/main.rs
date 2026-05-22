@@ -3898,7 +3898,7 @@ fn execute_interactive_tool_call(
                 };
                 let reject_video_timeline_action = |legacy_action: &str| -> Result<Value, String> {
                     Err(format!(
-                        "视频稿件已切换到 AI 简化编辑流，`{legacy_action}` 不再可用。请改用 `project_read` 读取工程，或用 `ffmpeg_edit` 执行受控剪辑。"
+                        "旧稿件时间线编辑动作 `{legacy_action}` 已移除。请在 AI 对话中使用可用的视频分析、字幕提取或媒体处理工具。"
                     ))
                 };
                 match action.as_str() {
@@ -4843,60 +4843,7 @@ contentPath: {content_path}\n\
     if matches!(runtime_mode, "team" | "chatroom") {
         return String::new();
     }
-    if !matches!(runtime_mode, "video-editor" | "audio-editor") {
-        return String::new();
-    }
-    let file_path = payload_string(&metadata, "associatedFilePath")
-        .or_else(|| payload_string(&metadata, "contextId"))
-        .unwrap_or_default();
-    let package_root = PathBuf::from(&file_path);
-    let manifest_path = package_manifest_path(&package_root).display().to_string();
-    let editor_project_path = package_editor_project_path(&package_root)
-        .display()
-        .to_string();
-    let timeline_path = package_timeline_path(&package_root).display().to_string();
-    let track_ui_path = package_track_ui_path(&package_root).display().to_string();
-    let scene_ui_path = package_scene_ui_path(&package_root).display().to_string();
-    let assets_path = package_assets_path(&package_root).display().to_string();
-    let title = payload_string(&metadata, "associatedPackageTitle").unwrap_or_default();
-    let package_kind = payload_string(&metadata, "associatedPackageKind").unwrap_or_default();
-    let clips = metadata
-        .get("associatedPackageClips")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-    let track_names = metadata
-        .get("associatedPackageTrackNames")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-    format!(
-        "\n\n## 当前剪辑工程上下文\n\
-runtime_mode: {runtime_mode}\n\
-filePath: {file_path}\n\
-packageRoot: {}\n\
-title: {title}\n\
-packageKind: {package_kind}\n\
-trackNames: {}\n\
-clips: {}\n\
-\n\
-## 工程关键文件\n\
-manifest: {manifest_path}\n\
-editorProject: {editor_project_path}\n\
-timelineOtio: {timeline_path}\n\
-trackUi: {track_ui_path}\n\
-sceneUi: {scene_ui_path}\n\
-assets: {assets_path}\n\
-\n\
-## 工程理解规则\n\
-- 视频稿件当前以 `manifest.json` + entry 脚本 + `editor.project.json` 为主。脚本确认状态存放在 `manifest.json.videoAi.scriptApproval`。\n\
-- AI 剪辑完成后，应把基础视频产物写回当前视频工程状态。\n\
-- `timeline.otio.json` 在视频稿件里只作为 legacy 兼容输入，不再是新的写入目标；音频稿件仍可继续使用旧编辑路径。\n\
-- `track-ui.json` / `scene-ui.json` 不是视频 AI 工作流的主真相，不要把它们误当成正文内容。\n\
-\n\
-工具规则：使用 `editor` 读取和修改当前工程，但必须遵守 script-first 协议。先调用 `script_read` 读取当前脚本与确认状态；如果用户要求改节奏、改镜头、做剪辑或导出，先用 `script_update` 把新的完整脚本草案写回脚本区，让用户阅读；只有用户明确确认后，才能调用 `script_confirm`。视频稿件确认后，先用 `project_read` 读取最新 `videoProject`，再用 `ffmpeg_edit` 执行受控剪辑，最后按需 `export`。不要再使用 `timeline_read`、`track_add`、`clip_*`、`marker_*`、`undo`、`redo` 这些旧时间轴动作编辑视频。修改脚本或基础剪辑后，最终回答要简要说明改动与脚本确认状态。",
-        package_root.display(),
-        serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
-        serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),
-    )
+    String::new()
 }
 
 #[derive(Default)]
@@ -10369,11 +10316,6 @@ fn handle_channel(
     }
     if let Some(result) =
         commands::manuscripts::handle_manuscripts_channel(app, state, channel, &payload)
-    {
-        return result;
-    }
-    if let Some(result) =
-        commands::video_editor_v2::handle_video_editor_v2_channel(app, state, channel, &payload)
     {
         return result;
     }

@@ -315,12 +315,7 @@ pub fn resolve_runtime_mode_for_session(store: &AppStore, session_id: &str) -> S
     if let Some(agent_profile) = session_metadata
         .and_then(|metadata| metadata.get("agentProfile"))
         .and_then(|value| value.as_str())
-        .filter(|value| {
-            matches!(
-                *value,
-                "video-editor" | "audio-editor" | "manuscript-editor"
-            )
-        })
+        .filter(|value| *value == "manuscript-editor")
     {
         return agent_profile.to_string();
     }

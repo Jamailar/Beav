@@ -1,4 +1,5 @@
 import { Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
@@ -6,7 +7,7 @@ import remarkGfm from 'remark-gfm';
 import type { ImmersiveMode, ViewType } from '../App';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
 import { APP_BRAND } from '../config/brand';
-import { applyAppTheme, CUSTOM_THEME_CHANGED_EVENT, readThemeMode, THEME_MODE_STORAGE_KEY, type ThemeMode } from '../config/theme';
+import { applyAppTheme, CUSTOM_THEME_CHANGED_EVENT, readThemePreference, resolveThemeMode, writeThemePreference, type ThemeMode, type ThemePreference } from '../config/theme';
 import { useI18n, type I18nKey } from '../i18n';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
@@ -88,9 +89,20 @@ const GLOBAL_SEARCH_ANIMATION_MS = 220;
 const GLOBAL_KNOWLEDGE_SEARCH_EVENT = 'redbox:global-knowledge-search';
 const GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY = 'redbox:global-knowledge-search-query';
 
-function readInitialThemeMode(): ThemeMode {
+function readInitialThemePreference(): ThemePreference {
   if (typeof window === 'undefined') return 'light';
-  return readThemeMode();
+  return readThemePreference();
+}
+
+function subscribeToSystemThemeChange(listener: () => void): () => void {
+  if (typeof window === 'undefined' || !window.matchMedia) return () => {};
+  const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  if (typeof mediaQuery.addEventListener === 'function') {
+    mediaQuery.addEventListener('change', listener);
+    return () => mediaQuery.removeEventListener('change', listener);
+  }
+  mediaQuery.addListener(listener);
+  return () => mediaQuery.removeListener(listener);
 }
 
 function shouldShowAppUpdateNotice(payload: AppUpdateNoticePayload): boolean {
@@ -153,7 +165,7 @@ function AppTitleBar({
   unreadNotificationCount,
   toggleNotificationDrawer,
   themeMode,
-  setThemeMode,
+  setManualThemeMode,
   extraActions,
 }: {
   immersiveMode: ImmersiveMode;
@@ -167,7 +179,7 @@ function AppTitleBar({
   unreadNotificationCount: number;
   toggleNotificationDrawer: () => void;
   themeMode: ThemeMode;
-  setThemeMode: Dispatch<SetStateAction<ThemeMode>>;
+  setManualThemeMode: Dispatch<SetStateAction<ThemeMode>>;
   extraActions: ReactNode;
 }) {
   const { t } = useI18n();
@@ -252,7 +264,7 @@ function AppTitleBar({
         </button>
         <button
           type="button"
-          onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+          onClick={() => setManualThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
           className="app-titlebar-button"
           title={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
           aria-label={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
@@ -307,7 +319,8 @@ function AppTitleBar({
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const { t } = useI18n();
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
-  const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(readInitialThemePreference);
+  const [systemThemeMode, setSystemThemeMode] = useState<ThemeMode>(() => resolveThemeMode('system'));
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readInitialSidebarCollapsed);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
   const [isSidebarAnimating, setIsSidebarAnimating] = useState(false);
@@ -344,6 +357,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const titleBarPlatform = getAppTitleBarPlatform();
   const usesAppTitleBar = titleBarPlatform !== null;
   const hasGlobalSidebar = !immersiveMode && !hideGlobalSidebar;
+  const themeMode = themePreference === 'system' ? systemThemeMode : themePreference;
   const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
   const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
@@ -353,6 +367,15 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     () => spaces.find((space) => space.id === activeSpaceId)?.name || t('layout.defaultSpaceName'),
     [activeSpaceId, spaces, t]
   );
+
+  const setManualThemeMode = useCallback<Dispatch<SetStateAction<ThemeMode>>>((nextMode) => {
+    setThemePreference((currentPreference) => {
+      const currentMode = currentPreference === 'system' ? resolveThemeMode('system') : currentPreference;
+      const resolvedMode = typeof nextMode === 'function' ? nextMode(currentMode) : nextMode;
+      writeThemePreference(resolvedMode);
+      return resolvedMode;
+    });
+  }, []);
 
   const closeGlobalSearch = useCallback(() => {
     if (!isGlobalSearchOpen || isGlobalSearchClosing) return;
@@ -419,10 +442,18 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [isSpaceMenuOpen]);
 
   useEffect(() => {
+    setSystemThemeMode(resolveThemeMode('system'));
+    return subscribeToSystemThemeChange(() => setSystemThemeMode(resolveThemeMode('system')));
+  }, []);
+
+  useEffect(() => {
     const effectiveTheme = immersiveMode === 'dark' ? 'dark' : themeMode;
+    const windowTheme = immersiveMode === 'dark' ? effectiveTheme : themePreference === 'system' ? null : effectiveTheme;
     applyAppTheme(effectiveTheme);
-    window.localStorage.setItem(THEME_MODE_STORAGE_KEY, themeMode);
-  }, [immersiveMode, themeMode]);
+    void getCurrentWindow().setTheme(windowTheme).catch((error) => {
+      console.warn(`[${APP_BRAND.displayName}] failed to apply window theme:`, error);
+    });
+  }, [immersiveMode, themeMode, themePreference]);
 
   useEffect(() => {
     const handleCustomThemeChanged = () => {
@@ -916,7 +947,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         unreadNotificationCount={unreadNotificationCount}
         toggleNotificationDrawer={toggleNotificationDrawer}
         themeMode={themeMode}
-        setThemeMode={setThemeMode}
+        setManualThemeMode={setManualThemeMode}
         extraActions={titleBarActions}
       />
 
@@ -1003,7 +1034,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                   </button>
                   <button
                     type="button"
-                    onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+                    onClick={() => setManualThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
                     className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
                     title={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
                     aria-label={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}

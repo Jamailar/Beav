@@ -7,6 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::commands::file_ops::resolve_file_action_path;
 use crate::logging::event::LogLevel;
 use crate::logging::{
     create_feedback_report, create_report_from_trigger, dismiss_pending_report,
@@ -566,8 +567,14 @@ pub fn handle_system_channel(
                     let path = payload_string(payload, "path")
                         .or_else(|| payload_value_as_string(payload))
                         .ok_or_else(|| "path is required".to_string())?;
-                    open::that(&path).map_err(|error| error.to_string())?;
-                    Ok(json!({ "success": true, "path": path }))
+                    if is_http_url(&path) {
+                        open::that(&path).map_err(|error| error.to_string())?;
+                        return Ok(json!({ "success": true, "path": path }));
+                    }
+                    let open_target = resolve_file_action_path(state, &path)
+                        .unwrap_or_else(|_| PathBuf::from(&path));
+                    open::that(&open_target).map_err(|error| error.to_string())?;
+                    Ok(json!({ "success": true, "path": open_target }))
                 }
                 "settings:pick-workspace-dir" => {
                     let selected = pick_files_native("选择工作区目录", true, false)?;

@@ -885,12 +885,6 @@ fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
         "image-generation" => {
             load_redbox_prompt("runtime/agents/image_generation/base.txt").unwrap_or_default()
         }
-        "video-editor" => {
-            load_redbox_prompt("runtime/agents/video_editor/base.txt").unwrap_or_default()
-        }
-        "audio-editor" => {
-            load_redbox_prompt("runtime/agents/audio_editor/base.txt").unwrap_or_default()
-        }
         _ => String::new(),
     };
     if matches!(runtime_mode, "redclaw" | "image-generation") {

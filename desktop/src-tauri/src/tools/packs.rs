@@ -7,7 +7,6 @@ pub enum ToolPack {
     Knowledge,
     Redclaw,
     BackgroundMaintenance,
-    Editor,
     Diagnostics,
 }
 
@@ -20,7 +19,6 @@ pub fn pack_by_name(name: &str) -> Option<ToolPack> {
         "knowledge" => Some(ToolPack::Knowledge),
         "redclaw" => Some(ToolPack::Redclaw),
         "background-maintenance" => Some(ToolPack::BackgroundMaintenance),
-        "editor" | "video-editor" | "audio-editor" => Some(ToolPack::Editor),
         "diagnostics" => Some(ToolPack::Diagnostics),
         _ => None,
     }
@@ -33,7 +31,6 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
         "image-generation" | "image_generation" => ToolPack::ImageGeneration,
         "knowledge" => ToolPack::Knowledge,
         "redclaw" => ToolPack::Redclaw,
-        "video-editor" | "audio-editor" => ToolPack::Editor,
         "background-maintenance" => ToolPack::BackgroundMaintenance,
         "diagnostics" => ToolPack::Diagnostics,
         "team" | "chatroom" | "default" | "chat" => ToolPack::Team,
@@ -56,8 +53,7 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
             }
         }
         ToolPack::BackgroundMaintenance => &["shell", "workflow"],
-        ToolPack::Editor => &["shell", "resource", "workflow", "editor"],
-        ToolPack::Diagnostics => &["shell", "resource", "workflow", "editor"],
+        ToolPack::Diagnostics => &["shell", "resource", "workflow"],
     }
 }
 
@@ -76,7 +72,6 @@ pub fn visible_tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
             }
         }
         ToolPack::BackgroundMaintenance => &["Read", "List", "Search", "Operate", "shell"],
-        ToolPack::Editor => &["Read", "List", "Search", "Write", "Operate", "shell"],
         ToolPack::Diagnostics => &["Read", "List", "Search", "Write", "Operate", "shell"],
     }
 }
@@ -92,18 +87,6 @@ pub fn visible_tool_names_for_runtime_mode(runtime_mode: &str) -> &'static [&'st
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn video_editor_runtime_includes_editor_tool_pack() {
-        let tools = tool_names_for_runtime_mode("video-editor");
-        assert!(tools.contains(&"editor"));
-    }
-
-    #[test]
-    fn audio_editor_runtime_includes_editor_tool_pack() {
-        let tools = tool_names_for_runtime_mode("audio-editor");
-        assert!(tools.contains(&"editor"));
-    }
 
     #[test]
     fn manuscript_editor_runtime_only_exposes_bound_write() {
