@@ -5250,13 +5250,13 @@ export function ToolsSettingsSection({
 }
 
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'team' | 'skills' | 'mcp' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
+    activeTab: 'general' | 'ai' | 'team' | 'platforms' | 'skills' | 'mcp' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
     const { t } = useI18n();
-    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile' && activeTab !== 'experimental') {
+    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile' && activeTab !== 'platforms' && activeTab !== 'experimental') {
         return null;
     }
 
