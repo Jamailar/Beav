@@ -31,7 +31,6 @@ import {
     Sparkles,
     Tag,
     Trash2,
-    Upload,
     UserRound,
     X,
     type LucideIcon,
@@ -2092,6 +2091,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             })),
         ];
     }, [categories]);
+    const activeCategoryTab = categoryTabs.find((item) => item.id === categoryFilter) || categoryTabs[0];
+    const createAssetButtonLabel = `创建${activeCategoryTab?.label || '资产'}`;
 
     const draftCategoryName = categoryNameMap.get(draft.categoryId || '') || '';
     const draftEntityLabel = draftCategoryName || '资产';
@@ -2135,20 +2136,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         </button>
                     )}
                     <h1 className={clsx('leading-none font-semibold tracking-[0.01em] text-[rgb(var(--color-text-primary))]', isModalVariant ? 'text-[20px]' : 'text-[26px]')}>资产库</h1>
-                    {showAssetControls && (
-                        <button
-                            onClick={openCreateModal}
-                            className={clsx(
-                                'inline-flex items-center gap-2 rounded-xl bg-black text-sm font-semibold text-white shadow-[0_8px_24px_rgba(0,0,0,0.14)] transition hover:bg-black/88',
-                                isModalVariant ? 'h-9 px-3' : 'h-10 px-4'
-                            )}
-                        >
-                            <Upload className="h-4 w-4" />
-                            新增
-                            <ChevronDown className="h-3.5 w-3.5 opacity-80" />
-                        </button>
-                    )}
-
                     <div className="ml-auto flex items-center gap-3">
                         <button
                             onClick={() => void loadData()}
@@ -2283,15 +2270,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     <div className="h-4 w-px bg-[rgb(var(--color-surface-tertiary))]" />
                     <button
                         type="button"
-                        onClick={() => setFilterOpen((value) => !value)}
-                        className={clsx(
-                            'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition',
-                            filterOpen || query ? 'bg-[rgb(var(--color-surface-tertiary))]' : 'bg-[rgb(var(--color-surface-secondary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
-                        )}
+                        onClick={openCreateModal}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-sm font-semibold text-white transition hover:bg-black/88"
                     >
-                        <SlidersHorizontal className="h-4 w-4" />
-                        筛选
-                        <ChevronDown className="h-3.5 w-3.5" />
+                        <Plus className="h-4 w-4" />
+                        {createAssetButtonLabel}
                     </button>
                 </div>
             </div>
