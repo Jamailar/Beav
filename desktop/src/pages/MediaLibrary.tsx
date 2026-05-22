@@ -477,8 +477,8 @@ export function MediaLibrary({
         setError('');
         try {
             const [mediaResult, tree] = await Promise.all([
-                window.ipcRenderer.invoke('media:list', { limit: 500 }) as Promise<MediaListResponse>,
-                window.ipcRenderer.invoke('manuscripts:list') as Promise<FileNode[]>,
+                window.ipcRenderer.media.list({ limit: 500 }) as Promise<MediaListResponse>,
+                window.ipcRenderer.manuscripts.list() as Promise<FileNode[]>,
             ]);
             if (requestId !== loadDataRequestRef.current) return;
 
@@ -689,7 +689,7 @@ export function MediaLibrary({
         const draft = getDraft(asset);
         setWorkingId(asset.id);
         try {
-            const result = await window.ipcRenderer.invoke('media:update', {
+            const result = await window.ipcRenderer.media.update({
                 assetId: asset.id,
                 title: draft.title,
                 projectId: draft.projectId,
@@ -716,7 +716,7 @@ export function MediaLibrary({
         }
         setWorkingId(asset.id);
         try {
-            const result = await window.ipcRenderer.invoke('media:bind', {
+            const result = await window.ipcRenderer.media.bind({
                 assetId: asset.id,
                 manuscriptPath,
             }) as { success?: boolean; error?: string };
@@ -743,7 +743,7 @@ export function MediaLibrary({
         if (!confirmed) return;
         setWorkingId(asset.id);
         try {
-            const result = await window.ipcRenderer.invoke('media:delete', {
+            const result = await window.ipcRenderer.media.delete({
                 assetId: asset.id,
             }) as { success?: boolean; error?: string };
             if (!result?.success) {
@@ -832,7 +832,7 @@ export function MediaLibrary({
             const effectiveMode = referenceImages.length > 0
                 ? generationMode
                 : 'text-to-image';
-            const result = await window.ipcRenderer.invoke('image-gen:generate', {
+            const result = await window.ipcRenderer.imageGeneration.generate({
                 prompt,
                 bypassPromptOptimizer: true,
                 projectId: genProjectId.trim() || undefined,
@@ -928,7 +928,7 @@ export function MediaLibrary({
         setIsGeneratingVideo(true);
         setVideoGenError('');
         try {
-            const result = await window.ipcRenderer.invoke('video-gen:generate', {
+            const result = await window.ipcRenderer.videoGeneration.generate({
                 prompt: videoPrompt,
                 projectId: videoProjectId.trim() || undefined,
                 title: videoTitle.trim() || undefined,
@@ -1087,7 +1087,7 @@ export function MediaLibrary({
                             </span>
                         </button>
                         <button
-                            onClick={() => void window.ipcRenderer.invoke('media:open-root')}
+                            onClick={() => void window.ipcRenderer.media.openRoot()}
                             className="h-7 px-2.5 text-[11px] rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
                         >
                             <span className="inline-flex items-center gap-1">
@@ -1606,7 +1606,7 @@ export function MediaLibrary({
                                                     <div className="text-[11px] text-text-tertiary truncate">{asset.projectId || '(无项目ID)'}</div>
                                                     <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || asset.size || ''} · {asset.quality || ''}</div>
                                                     <button
-                                                        onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                                        onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
                                                         className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
                                                     >
                                                         <span className="inline-flex items-center gap-1">
@@ -1951,7 +1951,7 @@ export function MediaLibrary({
                                                     <div className="text-[11px] text-text-tertiary truncate">{asset.projectId || '(无项目ID)'}</div>
                                                     <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || ''} · {asset.size || ''}</div>
                                                     <button
-                                                        onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                                        onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
                                                         className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
                                                     >
                                                         <span className="inline-flex items-center gap-1">

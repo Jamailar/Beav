@@ -4262,7 +4262,7 @@ export function Chat({
     }
     if (action.url) {
       try {
-        await window.ipcRenderer.invoke('app:open-path', { path: action.url });
+        await window.ipcRenderer.openPath(action.url);
       } catch (error) {
         console.error('Failed to open welcome action url:', error);
       }

@@ -1133,6 +1133,39 @@ declare global {
           data?: Record<string, unknown> | null;
           error?: string;
         }>;
+        getConfig: () => Promise<{
+          success?: boolean;
+          activeRealm?: 'cn' | 'global';
+          error?: string;
+        }>;
+        getWechatStatus: (payload: { sessionId: string }) => Promise<{
+          success?: boolean;
+          data?: {
+            status?: string;
+            session?: unknown;
+          };
+          error?: string;
+        }>;
+        getWechatUrl: (payload?: { state?: string }) => Promise<{
+          success?: boolean;
+          data?: {
+            sessionId?: string;
+            qrContentUrl?: string;
+            url?: string;
+          };
+          error?: string;
+        }>;
+        sendSmsCode: (payload: { phone: string }) => Promise<{ success?: boolean; error?: string }>;
+        loginSms: (payload: { phone: string; code: string; inviteCode?: string }) => Promise<{
+          success?: boolean;
+          session?: unknown;
+          error?: string;
+        }>;
+        registerSms: (payload: { phone: string; code: string; inviteCode?: string }) => Promise<{
+          success?: boolean;
+          session?: unknown;
+          error?: string;
+        }>;
         getPricing: () => Promise<{
           success: boolean;
           pricing?: Record<string, unknown> | null;
@@ -1922,6 +1955,44 @@ declare global {
           partialResponse: string;
           updatedAt: number;
         }>;
+        bindEditorSession: (payload: Record<string, unknown>) => Promise<unknown>;
+      };
+      media: {
+        list: <T = unknown>(payload?: Record<string, unknown>) => Promise<T>;
+        update: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        bind: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        delete: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        open: <T = unknown>(payload: { assetId: string }) => Promise<T>;
+        openRoot: <T = unknown>() => Promise<T>;
+        importFiles: <T = unknown>() => Promise<T>;
+      };
+      imageGeneration: {
+        generate: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+      };
+      videoGeneration: {
+        generate: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+      };
+      manuscripts: {
+        list: <T = unknown>() => Promise<T>;
+        read: <T = unknown>(filePath: string) => Promise<T>;
+        save: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        createFile: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        createFolder: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        rename: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        move: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        delete: <T = unknown>(targetPath: string) => Promise<T>;
+        attachExternalFiles: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        getPackageState: <T = unknown>(targetPath: string) => Promise<T>;
+        generateRemotionScene: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        saveRemotionScene: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        pickExportPath: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        renderRemotionVideo: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        getWriteProposal: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        acceptWriteProposal: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        rejectWriteProposal: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        confirmPackageScript: <T = unknown>(payload: { filePath: string }) => Promise<T>;
+        getLayout: <T = unknown>() => Promise<T>;
+        saveLayout: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
       };
       generation: {
         submitImage: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;

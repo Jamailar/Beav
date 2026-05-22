@@ -171,7 +171,7 @@ function GraphContent({ files, onOpenFile, onCreateFile, onRenameFile }: GraphVi
         let isMounted = true;
         const loadLayout = async () => {
             try {
-                const layout = (await window.ipcRenderer.invoke('manuscripts:get-layout') || {}) as Record<string, { x: number, y: number }>;
+                const layout = (await window.ipcRenderer.manuscripts.getLayout() || {}) as Record<string, { x: number, y: number }>;
 
                 if (!isMounted) return;
 
@@ -235,12 +235,12 @@ function GraphContent({ files, onOpenFile, onCreateFile, onRenameFile }: GraphVi
 
     // Save layout on drag stop
     const onNodeDragStop = useCallback((event: any, node: Node) => {
-        window.ipcRenderer.invoke('manuscripts:get-layout').then((currentLayout: any) => {
+        window.ipcRenderer.manuscripts.getLayout().then((currentLayout: any) => {
             const newLayout = {
                 ...currentLayout,
                 [node.id]: node.position
             };
-            window.ipcRenderer.invoke('manuscripts:save-layout', newLayout);
+            window.ipcRenderer.manuscripts.saveLayout(newLayout);
         });
     }, []);
 

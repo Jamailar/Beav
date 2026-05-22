@@ -320,7 +320,7 @@ export function RedClawHistorySidebarSection({
         setManuscriptsLoading(true);
         setManuscriptsError('');
         try {
-            const tree = await window.ipcRenderer.invoke('manuscripts:list') as RedClawManuscriptNode[];
+            const tree = await window.ipcRenderer.manuscripts.list() as RedClawManuscriptNode[];
             if (requestId !== manuscriptRequestIdRef.current) return;
             const items = Array.isArray(tree) ? tree : [];
             setManuscriptTree(items);
@@ -437,7 +437,7 @@ export function RedClawHistorySidebarSection({
         try {
             let result: unknown;
             if (manuscriptDialog.mode === 'create-folder') {
-                result = await window.ipcRenderer.invoke('manuscripts:create-folder', {
+                result = await window.ipcRenderer.manuscripts.createFolder({
                     parentPath: manuscriptDialog.parentPath,
                     name,
                 });
@@ -446,7 +446,7 @@ export function RedClawHistorySidebarSection({
                 const fileName = draftKind.extension && !name.endsWith(draftKind.extension)
                     ? `${name}${draftKind.extension}`
                     : name;
-                result = await window.ipcRenderer.invoke('manuscripts:create-file', {
+                result = await window.ipcRenderer.manuscripts.createFile({
                     parentPath: manuscriptDialog.parentPath,
                     name: fileName,
                     kind: draftKind.kind,
@@ -455,7 +455,7 @@ export function RedClawHistorySidebarSection({
                 });
                 expandManuscriptPath(manuscriptDialog.parentPath);
             } else {
-                result = await window.ipcRenderer.invoke('manuscripts:rename', {
+                result = await window.ipcRenderer.manuscripts.rename({
                     oldPath: manuscriptDialog.node.path,
                     newName: name,
                 });
@@ -491,7 +491,7 @@ export function RedClawHistorySidebarSection({
         );
         if (!confirmed) return;
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:delete', node.path);
+            const result = await window.ipcRenderer.manuscripts.delete(node.path);
             const error = manuscriptResultError(result);
             if (error) {
                 void appAlert(error);
@@ -508,7 +508,7 @@ export function RedClawHistorySidebarSection({
         setMenuTarget(null);
         setMovingManuscriptPath(sourcePath);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:move', {
+            const result = await window.ipcRenderer.manuscripts.move({
                 sourcePath,
                 targetDir,
             });
