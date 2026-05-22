@@ -16,14 +16,6 @@ pub(crate) struct BrandWorkspaceBrand {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub target_markets: Vec<String>,
-    pub category: Option<String>,
-    pub product_lines: Vec<String>,
-    pub customer_profile: Option<String>,
-    pub market_visual_preferences: Value,
-    pub visual_dna: Option<String>,
-    pub safety_rules: Vec<String>,
-    pub source: Value,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -36,11 +28,6 @@ pub(crate) struct BrandWorkspaceProduct {
     pub name: String,
     pub description: Option<String>,
     pub product_family: Option<String>,
-    pub source_url: Option<String>,
-    pub source_platform: Option<String>,
-    pub source_product_id: Option<String>,
-    pub source_shop_id: Option<String>,
-    pub price_signal: Value,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -52,8 +39,6 @@ pub(crate) struct BrandWorkspaceSku {
     pub product_id: String,
     pub name: String,
     pub variant_values: Value,
-    pub creative_signals: Value,
-    pub price_signal: Value,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -90,14 +75,6 @@ struct BrandMutationInput {
     id: Option<String>,
     name: String,
     description: Option<String>,
-    target_markets: Option<Vec<String>>,
-    category: Option<String>,
-    product_lines: Option<Vec<String>>,
-    customer_profile: Option<String>,
-    market_visual_preferences: Option<Value>,
-    visual_dna: Option<String>,
-    safety_rules: Option<Vec<String>>,
-    source: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,11 +85,6 @@ struct ProductMutationInput {
     name: String,
     description: Option<String>,
     product_family: Option<String>,
-    source_url: Option<String>,
-    source_platform: Option<String>,
-    source_product_id: Option<String>,
-    source_shop_id: Option<String>,
-    price_signal: Option<Value>,
     skus: Option<Vec<SkuMutationInput>>,
 }
 
@@ -123,23 +95,12 @@ struct SkuMutationInput {
     product_id: Option<String>,
     name: String,
     variant_values: Option<Value>,
-    creative_signals: Option<Value>,
-    price_signal: Option<Value>,
 }
 
 fn clean_string(value: Option<String>) -> Option<String> {
     value
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
-}
-
-fn clean_strings(values: Option<Vec<String>>) -> Vec<String> {
-    values
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
 }
 
 fn json_text(value: &Value) -> String {
@@ -183,14 +144,6 @@ fn open_connection(state: &State<'_, AppState>) -> Result<Connection, String> {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT,
-            target_markets_json TEXT NOT NULL DEFAULT '[]',
-            category TEXT,
-            product_lines_json TEXT NOT NULL DEFAULT '[]',
-            customer_profile TEXT,
-            market_visual_preferences_json TEXT NOT NULL DEFAULT '{}',
-            visual_dna TEXT,
-            safety_rules_json TEXT NOT NULL DEFAULT '[]',
-            source_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -212,27 +165,17 @@ fn open_connection(state: &State<'_, AppState>) -> Result<Connection, String> {
             name TEXT NOT NULL,
             description TEXT,
             product_family TEXT,
-            source_url TEXT,
-            source_platform TEXT,
-            source_product_id TEXT,
-            source_shop_id TEXT,
-            price_signal_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(brand_id) REFERENCES brand_records(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_products_brand_id
             ON product_records(brand_id, updated_at DESC, id);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_products_source
-            ON product_records(source_platform, source_product_id)
-            WHERE source_platform IS NOT NULL AND source_product_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS product_skus (
             id TEXT PRIMARY KEY,
             product_id TEXT NOT NULL,
             name TEXT NOT NULL,
             variant_values_json TEXT NOT NULL DEFAULT '{}',
-            creative_signals_json TEXT NOT NULL DEFAULT '{}',
-            price_signal_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(product_id) REFERENCES product_records(id) ON DELETE CASCADE
@@ -261,19 +204,8 @@ fn row_to_brand(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceBrand, rusqlite
         id: row.get(0)?,
         name: row.get(1)?,
         description: row.get(2)?,
-        target_markets: serde_json::from_str::<Vec<String>>(&row.get::<_, String>(3)?)
-            .unwrap_or_default(),
-        category: row.get(4)?,
-        product_lines: serde_json::from_str::<Vec<String>>(&row.get::<_, String>(5)?)
-            .unwrap_or_default(),
-        customer_profile: row.get(6)?,
-        market_visual_preferences: parse_json_text(row.get(7)?),
-        visual_dna: row.get(8)?,
-        safety_rules: serde_json::from_str::<Vec<String>>(&row.get::<_, String>(9)?)
-            .unwrap_or_default(),
-        source: parse_json_text(row.get(10)?),
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
     })
 }
 
@@ -284,13 +216,8 @@ fn row_to_product(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceProduct, rusq
         name: row.get(2)?,
         description: row.get(3)?,
         product_family: row.get(4)?,
-        source_url: row.get(5)?,
-        source_platform: row.get(6)?,
-        source_product_id: row.get(7)?,
-        source_shop_id: row.get(8)?,
-        price_signal: parse_json_text(row.get(9)?),
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
     })
 }
 
@@ -300,10 +227,8 @@ fn row_to_sku(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceSku, rusqlite::Er
         product_id: row.get(1)?,
         name: row.get(2)?,
         variant_values: parse_json_text(row.get(3)?),
-        creative_signals: parse_json_text(row.get(4)?),
-        price_signal: parse_json_text(row.get(5)?),
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
     })
 }
 
@@ -322,9 +247,7 @@ fn row_to_sku_image(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceSkuImage, r
 fn select_brands(conn: &Connection) -> Result<Vec<BrandWorkspaceBrand>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, description, target_markets_json, category, product_lines_json,
-             customer_profile, market_visual_preferences_json, visual_dna, safety_rules_json,
-             source_json, created_at, updated_at
+            "SELECT id, name, description, created_at, updated_at
              FROM brand_records ORDER BY updated_at DESC, name ASC",
         )
         .map_err(|error| error.to_string())?;
@@ -341,8 +264,7 @@ fn select_products_for_brand(
 ) -> Result<Vec<BrandWorkspaceProduct>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, brand_id, name, description, product_family, source_url, source_platform,
-             source_product_id, source_shop_id, price_signal_json, created_at, updated_at
+            "SELECT id, brand_id, name, description, product_family, created_at, updated_at
              FROM product_records WHERE brand_id = ?1 ORDER BY updated_at DESC, name ASC",
         )
         .map_err(|error| error.to_string())?;
@@ -359,8 +281,7 @@ fn select_skus_for_product(
 ) -> Result<Vec<BrandWorkspaceSku>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, product_id, name, variant_values_json, creative_signals_json,
-             price_signal_json, created_at, updated_at
+            "SELECT id, product_id, name, variant_values_json, created_at, updated_at
              FROM product_skus WHERE product_id = ?1 ORDER BY updated_at DESC, name ASC",
         )
         .map_err(|error| error.to_string())?;
@@ -417,13 +338,6 @@ fn brand_bundle(
     })
 }
 
-fn brand_source_from_subject(subject: &SubjectRecord) -> Value {
-    json!({
-        "importedFrom": "assets.catalog.json",
-        "assetId": subject.id,
-    })
-}
-
 fn subject_category_name(subject: &SubjectRecord, categories: &[(String, String)]) -> String {
     let Some(category_id) = subject.category_id.as_deref() else {
         return String::new();
@@ -452,23 +366,18 @@ fn sync_subject_brands(conn: &Connection, state: &State<'_, AppState>) -> Result
         if subject_category_name(subject, &categories) != "品牌" {
             continue;
         }
-        let source = brand_source_from_subject(subject);
         conn.execute(
             "INSERT INTO brand_records (
-                id, name, description, target_markets_json, category, product_lines_json,
-                customer_profile, market_visual_preferences_json, visual_dna, safety_rules_json,
-                source_json, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, '[]', NULL, '[]', NULL, '{}', NULL, '[]', ?4, ?5, ?6)
+                id, name, description, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
-                source_json = excluded.source_json,
                 updated_at = excluded.updated_at",
             params![
                 subject.id,
                 subject.name,
                 subject.description,
-                json_text(&source),
                 subject.created_at,
                 now,
             ],
@@ -496,9 +405,8 @@ fn sync_subject_brands(conn: &Connection, state: &State<'_, AppState>) -> Result
         }
         conn.execute(
             "INSERT INTO product_records (
-                id, brand_id, name, description, product_family, source_url, source_platform,
-                source_product_id, source_shop_id, price_signal_json, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 'assets_catalog', ?1, NULL, '{}', ?6, ?7)
+                id, brand_id, name, description, product_family, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
                 brand_id = excluded.brand_id,
                 name = excluded.name,
@@ -524,9 +432,8 @@ fn sync_subject_brands(conn: &Connection, state: &State<'_, AppState>) -> Result
                 .collect::<serde_json::Map<String, Value>>());
             conn.execute(
                 "INSERT INTO product_skus (
-                    id, product_id, name, variant_values_json, creative_signals_json,
-                    price_signal_json, created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, '{}', '{}', ?5, ?6)
+                    id, product_id, name, variant_values_json, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(id) DO UPDATE SET
                     product_id = excluded.product_id,
                     name = excluded.name,
@@ -566,44 +473,15 @@ fn upsert_brand(
         .optional()
         .map_err(|error| error.to_string())?;
     let created_at = existing_created_at.unwrap_or_else(|| now.clone());
-    let target_markets = clean_strings(input.target_markets);
-    let product_lines = clean_strings(input.product_lines);
-    let safety_rules = clean_strings(input.safety_rules);
-    let market_visual_preferences = input.market_visual_preferences.unwrap_or_else(|| json!({}));
-    let source = input.source.unwrap_or_else(|| json!({}));
     conn.execute(
         "INSERT INTO brand_records (
-            id, name, description, target_markets_json, category, product_lines_json,
-            customer_profile, market_visual_preferences_json, visual_dna, safety_rules_json,
-            source_json, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            id, name, description, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
-            target_markets_json = excluded.target_markets_json,
-            category = excluded.category,
-            product_lines_json = excluded.product_lines_json,
-            customer_profile = excluded.customer_profile,
-            market_visual_preferences_json = excluded.market_visual_preferences_json,
-            visual_dna = excluded.visual_dna,
-            safety_rules_json = excluded.safety_rules_json,
-            source_json = excluded.source_json,
             updated_at = excluded.updated_at",
-        params![
-            id,
-            name,
-            clean_string(input.description),
-            serde_json::to_string(&target_markets).unwrap_or_else(|_| "[]".to_string()),
-            clean_string(input.category),
-            serde_json::to_string(&product_lines).unwrap_or_else(|_| "[]".to_string()),
-            clean_string(input.customer_profile),
-            json_text(&market_visual_preferences),
-            clean_string(input.visual_dna),
-            serde_json::to_string(&safety_rules).unwrap_or_else(|_| "[]".to_string()),
-            json_text(&source),
-            created_at,
-            now,
-        ],
+        params![id, name, clean_string(input.description), created_at, now],
     )
     .map_err(|error| error.to_string())?;
     get_brand(conn, &id)
@@ -640,22 +518,15 @@ fn upsert_product(
         .optional()
         .map_err(|error| error.to_string())?;
     let created_at = existing_created_at.unwrap_or_else(|| now.clone());
-    let price_signal = input.price_signal.unwrap_or_else(|| json!({}));
     conn.execute(
         "INSERT INTO product_records (
-            id, brand_id, name, description, product_family, source_url, source_platform,
-            source_product_id, source_shop_id, price_signal_json, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            id, brand_id, name, description, product_family, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(id) DO UPDATE SET
             brand_id = excluded.brand_id,
             name = excluded.name,
             description = excluded.description,
             product_family = excluded.product_family,
-            source_url = excluded.source_url,
-            source_platform = excluded.source_platform,
-            source_product_id = excluded.source_product_id,
-            source_shop_id = excluded.source_shop_id,
-            price_signal_json = excluded.price_signal_json,
             updated_at = excluded.updated_at",
         params![
             id,
@@ -663,11 +534,6 @@ fn upsert_product(
             name,
             clean_string(input.description),
             clean_string(input.product_family).or_else(|| Some(name.clone())),
-            clean_string(input.source_url),
-            clean_string(input.source_platform),
-            clean_string(input.source_product_id),
-            clean_string(input.source_shop_id),
-            json_text(&price_signal),
             created_at,
             now,
         ],
@@ -723,29 +589,22 @@ fn upsert_sku_for_product(
         .map_err(|error| error.to_string())?;
     let created_at = existing_created_at.unwrap_or_else(|| now.clone());
     let variant_values = input.variant_values.unwrap_or_else(|| json!({}));
-    let creative_signals = input.creative_signals.unwrap_or_else(|| json!({}));
-    let price_signal = input.price_signal.unwrap_or_else(|| json!({}));
     conn.execute(
         "INSERT INTO product_skus (
-            id, product_id, name, variant_values_json, creative_signals_json,
-            price_signal_json, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            id, product_id, name, variant_values_json, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(id) DO UPDATE SET
             product_id = excluded.product_id,
             name = excluded.name,
             variant_values_json = excluded.variant_values_json,
-            creative_signals_json = excluded.creative_signals_json,
-            price_signal_json = excluded.price_signal_json,
             updated_at = excluded.updated_at",
         params![
             id,
             product_id,
             name,
             json_text(&variant_values),
-            json_text(&creative_signals),
-            json_text(&price_signal),
             created_at,
-            now,
+            now
         ],
     )
     .map_err(|error| error.to_string())?;
@@ -754,9 +613,7 @@ fn upsert_sku_for_product(
 
 fn get_brand(conn: &Connection, id: &str) -> Result<BrandWorkspaceBrand, String> {
     conn.query_row(
-        "SELECT id, name, description, target_markets_json, category, product_lines_json,
-         customer_profile, market_visual_preferences_json, visual_dna, safety_rules_json,
-         source_json, created_at, updated_at
+        "SELECT id, name, description, created_at, updated_at
          FROM brand_records WHERE id = ?1",
         params![id],
         row_to_brand,
@@ -766,8 +623,7 @@ fn get_brand(conn: &Connection, id: &str) -> Result<BrandWorkspaceBrand, String>
 
 fn get_product(conn: &Connection, id: &str) -> Result<BrandWorkspaceProduct, String> {
     conn.query_row(
-        "SELECT id, brand_id, name, description, product_family, source_url, source_platform,
-         source_product_id, source_shop_id, price_signal_json, created_at, updated_at
+        "SELECT id, brand_id, name, description, product_family, created_at, updated_at
          FROM product_records WHERE id = ?1",
         params![id],
         row_to_product,
@@ -777,8 +633,7 @@ fn get_product(conn: &Connection, id: &str) -> Result<BrandWorkspaceProduct, Str
 
 fn get_sku(conn: &Connection, id: &str) -> Result<BrandWorkspaceSku, String> {
     conn.query_row(
-        "SELECT id, product_id, name, variant_values_json, creative_signals_json,
-         price_signal_json, created_at, updated_at
+        "SELECT id, product_id, name, variant_values_json, created_at, updated_at
          FROM product_skus WHERE id = ?1",
         params![id],
         row_to_sku,

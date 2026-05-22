@@ -27,9 +27,9 @@ The projection includes `generated: true`, `readOnly: true`, and `canonicalSourc
 
 ## Schema
 
-`brand_records` stores one row per brand, including market, visual, safety, and source metadata fields as JSON where the structure may evolve.
+`brand_records` stores one row per brand. The first phase keeps only user-entered basics: name, description, and timestamps.
 
-`product_records` stores one row per product. Each product has exactly one `brand_id`, enforced by the product row and foreign key.
+`product_records` stores one row per product. Each product has exactly one `brand_id`, enforced by the product row and foreign key. The first phase keeps name, description, product family, and timestamps.
 
 `product_skus` stores product variants. Each SKU belongs to one product and keeps variant attributes in `variant_values_json`, such as color, size, material, or package.
 
@@ -46,7 +46,7 @@ The brand category view is not a card grid. It renders a collapsible list:
 
 ## AI Contract
 
-AI reads from the generated projection because JSON is easier to inspect and summarize. AI writes must use structured operations:
+AI reads from the generated projection because JSON is easier to inspect and summarize. The projection only contains user-entered brand, product, and SKU data in the first phase. AI writes must use structured operations:
 
 - `brand-workspace:brand:upsert`
 - `brand-workspace:product:upsert`
