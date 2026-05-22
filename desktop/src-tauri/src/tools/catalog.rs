@@ -1197,6 +1197,58 @@ fn voice_get_input_schema() -> Value {
     )
 }
 
+fn generation_job_list_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "kind",
+                json!({
+                    "type": "string",
+                    "enum": ["image", "video", "video_sequence", "audio", "audio_sequence", "voice_clone"],
+                    "description": "Optional media generation job kind filter."
+                }),
+            ),
+            (
+                "status",
+                json!({
+                    "type": "string",
+                    "enum": ["accepted", "queued", "submitting", "submitted", "polling", "downloading", "persisting", "binding", "completed", "failed", "cancel_requested", "cancelled", "dead_lettered"],
+                    "description": "Optional media generation job status filter."
+                }),
+            ),
+            (
+                "source",
+                string_schema("Optional source filter, such as generation_studio, tool, or brand-workspace-product-detail."),
+            ),
+            (
+                "ownerSessionId",
+                string_schema("Optional owner chat/session id filter."),
+            ),
+            (
+                "limit",
+                integer_schema("Maximum jobs to return, newest first.", 1, 50),
+            ),
+            (
+                "includeArchived",
+                bool_schema("Include archived/deleted jobs."),
+            ),
+        ],
+        &[],
+        Some("List recent media generation jobs and their status. Use this to answer image/video generation progress questions."),
+    )
+}
+
+fn generation_job_get_input_schema() -> Value {
+    object_schema(
+        &[(
+            "jobId",
+            string_schema("Media generation job id, for example media-job-1779456047692."),
+        )],
+        &["jobId"],
+        Some("Read one media generation job with status, progress, recent events, attempts, and artifacts."),
+    )
+}
+
 fn voice_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
@@ -2980,6 +3032,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "image",
             "video",
             "voice",
+            "generation",
             "media",
             "session",
             "web",
@@ -3054,6 +3107,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "image" => Some("image"),
         "video" => Some("video"),
         "voice" => Some("voice"),
+        "generation" => Some("generation"),
         "media" => Some("media"),
         "session" => Some("session"),
         "web" => Some("web"),
@@ -4369,6 +4423,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "generation.job.list",
+        namespace: "generation.job",
+        description: "List recent media generation jobs and status. Use this for user questions like 图片生成进度, video generation progress, latest media job status, or to find the newest image/video job before answering. Do not start a new generation when the user only asks for progress.",
+        input_schema: generation_job_list_input_schema,
+        output_schema: media_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "generation.job.get",
+        namespace: "generation.job",
+        description: "Read one media generation job by jobId, including current status, progress, attempt details, recent events, and generated artifacts. Use this before telling the user a job failed, is still running, or completed.",
+        input_schema: generation_job_get_input_schema,
+        output_schema: media_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {

@@ -508,6 +508,8 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "assets.search",
     "assets.get",
     "assets.categories.list",
+    "generation.job.list",
+    "generation.job.get",
     "assets.categories.create",
     "assets.create",
     "assets.update",
