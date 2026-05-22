@@ -1,6 +1,7 @@
 import { APP_BRAND, type AppBrandTheme, type AppBrandThemeModeTokens } from './brand';
 
 export type ThemeMode = 'light' | 'dark';
+export type ThemePreference = 'system' | ThemeMode;
 
 export type CustomThemePreference = {
   enabled: boolean;
@@ -125,11 +126,33 @@ export function normalizeAccentHex(value: string): string {
   return `#${rgb.map((channel) => clampChannel(channel).toString(16).padStart(2, '0')).join('')}`;
 }
 
-export function readThemeMode(): ThemeMode {
+export function readSystemThemeMode(): ThemeMode {
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+export function readThemePreference(): ThemePreference {
   if (typeof window === 'undefined') return 'light';
   const saved = String(window.localStorage.getItem(THEME_MODE_STORAGE_KEY) || '').trim().toLowerCase();
   if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return 'system';
+}
+
+export function writeThemePreference(preference: ThemePreference) {
+  if (typeof window === 'undefined') return;
+  if (preference === 'system') {
+    window.localStorage.removeItem(THEME_MODE_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(THEME_MODE_STORAGE_KEY, preference);
+}
+
+export function resolveThemeMode(preference: ThemePreference): ThemeMode {
+  return preference === 'system' ? readSystemThemeMode() : preference;
+}
+
+export function readThemeMode(): ThemeMode {
+  return resolveThemeMode(readThemePreference());
 }
 
 export function readCustomThemePreference(): CustomThemePreference {

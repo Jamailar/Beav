@@ -1,8 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
-    AudioLines,
-    Clapperboard,
-    FileAudio,
     FileText,
     Folder,
     FolderOpen,
@@ -12,7 +9,6 @@ import {
     ImagePlus,
     Loader2,
     Plus,
-    Play,
     RefreshCw,
     Search,
     Trash2,
@@ -33,8 +29,6 @@ import { usePageRefresh } from '../../hooks/usePageRefresh';
 import { composeMarkdownWithFrontmatter, parseMarkdownFrontmatter } from '../../utils/markdownFrontmatter';
 import { uiDebug, uiMeasure } from '../../utils/uiDebug';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../../shared/redboxVideo';
-import type { RemotionCompositionConfig } from './remotion/types';
-import type { EditorProjectFile } from './editorProject';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
 import { buildEditorSessionBinding, type EditorAiWorkspaceMode } from '../../features/chat/editorSessionBinding';
 import {
@@ -43,16 +37,13 @@ import {
     stripManuscriptExtension,
 } from '../../../shared/manuscriptFiles';
 
-const AudioDraftWorkbench = lazy(async () => ({
-    default: (await import('./AudioDraftWorkbench')).AudioDraftWorkbench,
-}));
 const WritingDraftWorkbench = lazy(async () => ({
     default: (await import('./WritingDraftWorkbench')).WritingDraftWorkbench,
 }));
 
 type DraftFilter = 'all' | 'drafts' | 'media' | 'image' | 'video' | 'audio' | 'folders';
 type DraftLayout = 'gallery' | 'list';
-type CreateKind = 'folder' | 'longform' | 'video' | 'audio';
+type CreateKind = 'folder' | 'longform';
 type FileNode = {
     name: string;
     path: string;
@@ -216,23 +207,27 @@ type VideoProjectState = {
         updatedAt?: number | null;
     };
     ffmpegRecipeSummary?: string | null;
-    remotion?: RemotionCompositionConfig | null;
+    remotion?: RemotionState | null;
     renderOutput?: string | null;
     legacy?: Record<string, unknown>;
 };
+
+type RemotionState = {
+    width?: number | string | null;
+    height?: number | string | null;
+    render?: {
+        outputPath?: string | null;
+        renderedAt?: number;
+        durationInFrames?: number;
+    } | null;
+} & Record<string, unknown>;
 
 type PackageState = {
     manifest?: Record<string, unknown>;
     assets?: { items?: Array<Record<string, unknown>> };
     cover?: Record<string, unknown>;
     images?: { items?: Array<Record<string, unknown>> };
-    remotion?: RemotionCompositionConfig & {
-        render?: {
-            outputPath?: string;
-            renderedAt?: number;
-            durationInFrames?: number;
-        };
-    };
+    remotion?: RemotionState | null;
     timelineSummary?: {
         trackCount?: number;
         clipCount?: number;
@@ -241,7 +236,16 @@ type PackageState = {
         trackNames?: string[];
         trackUi?: Record<string, unknown>;
     };
-    editorProject?: EditorProjectFile | null;
+    editorProject?: {
+        script?: {
+            body?: string | null;
+        } | null;
+        ai?: {
+            scriptApproval?: {
+                status?: string | null;
+            } | null;
+        } | null;
+    } | null;
     videoProject?: VideoProjectState | null;
     contentMapExists?: boolean;
     contentMapFile?: string | null;
@@ -252,7 +256,7 @@ type ExportVideoResolution = 'source' | '1080p' | '720p';
 
 const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
 function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
-    if (kind === 'longform' || kind === 'video' || kind === 'audio') return '';
+    if (kind === 'longform') return '';
     return '.md';
 }
 
@@ -306,8 +310,6 @@ interface ManuscriptEditorHostProps {
 
 const CREATE_KIND_OPTIONS: Array<{ id: CreateKind; label: string; icon: typeof FileText; accentClass: string; available: boolean; unavailableHint?: string }> = [
     { id: 'longform', label: '长文', icon: FileText, accentClass: 'from-[#E8D9FF] via-[#F6EEFF] to-white text-[#7C57C8]', available: true },
-    { id: 'video', label: '视频', icon: Clapperboard, accentClass: 'from-[#D6E7FF] via-[#EEF5FF] to-white text-[#4C76D8]', available: false, unavailableHint: '正在开发中' },
-    { id: 'audio', label: '音频', icon: AudioLines, accentClass: 'from-[#D8F6E8] via-[#EFFCF5] to-white text-[#2E8B65]', available: false, unavailableHint: '正在开发中' },
 ];
 
 const CREATE_KIND_OPTION_MAP: Record<CreateKind, (typeof CREATE_KIND_OPTIONS)[number]> = CREATE_KIND_OPTIONS.reduce((acc, option) => {
@@ -468,15 +470,7 @@ function buildMediaFolderTree(assets: MediaAsset[]): FileNode[] {
 function buildDraftTemplate(title: string, kind: Exclude<CreateKind, 'folder'>): string {
     const ts = Date.now();
     const safeTitle = title.trim() || DEFAULT_UNTITLED_DRAFT_TITLE;
-    const sectionTitle = kind === 'video'
-        ? '视频脚本'
-        : kind === 'audio'
-            ? '音频脚本'
-            : '长文草稿';
-
-    if (kind === 'video' || kind === 'audio') {
-        return `# ${safeTitle}\n\n## ${sectionTitle}\n\n## 剪辑目标\n\n\n## 时间线规划\n\n\n## 素材备注\n\n`;
-    }
+    const sectionTitle = '长文草稿';
 
     const quotedTitle = JSON.stringify(safeTitle);
 
@@ -484,7 +478,8 @@ function buildDraftTemplate(title: string, kind: Exclude<CreateKind, 'folder'>):
 }
 
 function shouldHideFrontmatterInEditor(draftType: CreateKind | 'unknown' | null | undefined): boolean {
-    return draftType !== 'video' && draftType !== 'audio';
+    void draftType;
+    return true;
 }
 
 function splitWritingDraftContent(content: string, draftType: CreateKind | 'unknown' | null | undefined) {
@@ -647,31 +642,21 @@ function formatDateLabel(input?: string | number): string {
 
 function resolveDraftTypeLabel(type: CreateKind | 'unknown'): string {
     if (type === 'longform') return '长文';
-    if (type === 'video') return '视频';
-    if (type === 'audio') return '音频';
     return '稿件';
 }
 
 function resolveDraftTypeStyle(type: CreateKind | 'unknown'): { chip: string; tile: string; iconWrap: string } {
-    if (type === 'video') {
-        return {
-            chip: 'bg-rose-500/10 text-rose-600 border border-rose-200/80',
-            tile: 'bg-[linear-gradient(135deg,#231942_0%,#5e548e_52%,#9f86c0_100%)] text-white',
-            iconWrap: 'bg-white/15 text-white',
-        };
-    }
-    if (type === 'audio') {
-        return {
-            chip: 'bg-emerald-500/10 text-emerald-700 border border-emerald-200/90',
-            tile: 'bg-[linear-gradient(135deg,#113c37_0%,#1f7a72_50%,#91e5d8_100%)] text-white',
-            iconWrap: 'bg-white/15 text-white',
-        };
-    }
+    void type;
     return {
         chip: 'bg-sky-500/10 text-sky-700 border border-sky-200/90',
         tile: 'bg-[linear-gradient(135deg,#10253f_0%,#315e8f_54%,#d6ecff_100%)] text-white',
         iconWrap: 'bg-white/15 text-white',
     };
+}
+
+function isRemovedMediaDraftType(type: unknown): boolean {
+    const normalized = String(type || '').trim();
+    return normalized === 'video' || normalized === 'audio';
 }
 
 function summaryFromContent(content: string): string {
@@ -706,7 +691,7 @@ function collectFileMetaMap(nodes: FileNode[]): Record<string, FileCardMeta> {
 }
 
 export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigateToGenerationStudio, isActive = false, onClose, onImmersiveModeChange }: ManuscriptEditorHostProps) {
-    const [mode, setMode] = useState<'editor'>('editor');
+    const [mode, setMode] = useState<'editor' | 'list'>('editor');
     const [editorFile, setEditorFile] = useState<string | null>(null);
     const [editorDescriptor, setEditorDescriptor] = useState<EditorDescriptor | null>(null);
     const [tree, setTree] = useState<FileNode[]>([]);
@@ -1259,6 +1244,13 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             try {
                 const result = await window.ipcRenderer.invoke('manuscripts:read', filePath) as ManuscriptReadResult;
                 const metadata = (result?.metadata || {}) as Record<string, unknown>;
+                if (isRemovedMediaDraftType(metadata.draftType)) {
+                    setMode('list');
+                    setEditorFile('');
+                    setEditorDescriptor(null);
+                    void appAlert('视频稿件和音频稿件编辑页面已移除。请在 AI 对话中直接上传素材并使用视频分析、字幕提取或音频整理能力。');
+                    return;
+                }
                 setEditorDescriptor({
                     title: String(metadata.title || '').trim() || DEFAULT_UNTITLED_DRAFT_TITLE,
                     draftType: (String(metadata.draftType || '').trim() as CreateKind | '') || 'unknown',
@@ -1297,6 +1289,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         return currentNestedDraftFiles.filter((item) => {
             if (isInternalPackageFile(item.path)) return false;
             const meta = fileMetaMap[item.path];
+            if (isRemovedMediaDraftType(meta?.draftType)) return false;
             const haystack = `${item.name} ${meta?.title || ''} ${meta?.summary || ''}`.toLowerCase();
             return !normalizedQuery || haystack.includes(normalizedQuery);
         }).sort((left, right) => {
@@ -1630,6 +1623,13 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         setMode('editor');
         const cached = fileMetaMap[targetPath];
         if (cached) {
+            if (isRemovedMediaDraftType(cached.draftType)) {
+                setMode('list');
+                setEditorFile('');
+                setEditorDescriptor(null);
+                void appAlert('视频稿件和音频稿件编辑页面已移除。请在 AI 对话中直接上传素材并使用视频分析、字幕提取或音频整理能力。');
+                return;
+            }
             setEditorDescriptor({
                 title: cached.title,
                 draftType: cached.draftType,
@@ -1639,6 +1639,13 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         try {
             const result = await window.ipcRenderer.invoke('manuscripts:read', targetPath) as ManuscriptReadResult;
             const metadata = (result?.metadata || {}) as Record<string, unknown>;
+            if (isRemovedMediaDraftType(metadata.draftType)) {
+                setMode('list');
+                setEditorFile('');
+                setEditorDescriptor(null);
+                void appAlert('视频稿件和音频稿件编辑页面已移除。请在 AI 对话中直接上传素材并使用视频分析、字幕提取或音频整理能力。');
+                return;
+            }
             setEditorDescriptor({
                 title: String(metadata.title || '').trim() || DEFAULT_UNTITLED_DRAFT_TITLE,
                 draftType: (String(metadata.draftType || '').trim() as CreateKind | '') || 'unknown',
@@ -1857,7 +1864,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [applyPackageState, editorFile, refreshPackageState]);
 
     const handleGenerateRemotionScene = useCallback(async (instructionsOverride?: string) => {
-        if (!editorFile || editorDescriptor?.draftType !== 'video') return;
+        if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video') return;
         setIsGeneratingRemotion(true);
         try {
             const result = await window.ipcRenderer.invoke('manuscripts:generate-remotion-scene', {
@@ -1875,8 +1882,8 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, [editorBody, editorDescriptor?.draftType, editorFile]);
 
-    const handleSaveRemotionScene = useCallback(async (scene: RemotionCompositionConfig) => {
-        if (!editorFile || editorDescriptor?.draftType !== 'video') return;
+    const handleSaveRemotionScene = useCallback(async (scene: Record<string, unknown>) => {
+        if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video') return;
         try {
             const result = await window.ipcRenderer.invoke('manuscripts:save-remotion-scene', {
                 filePath: editorFile,
@@ -1892,7 +1899,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [editorDescriptor?.draftType, editorFile]);
 
     const handleRenderRemotionVideo = useCallback(() => {
-        if (!editorFile || editorDescriptor?.draftType !== 'video' || isRenderingRemotion) return;
+        if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video' || isRenderingRemotion) return;
         setExportVideoError('');
         setExportVideoStage('');
         setExportVideoProgress(0);
@@ -1900,7 +1907,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [editorDescriptor?.draftType, editorFile, isRenderingRemotion]);
 
     const handlePickExportVideoPath = useCallback(async () => {
-        if (!editorFile || editorDescriptor?.draftType !== 'video' || isRenderingRemotion) return;
+        if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video' || isRenderingRemotion) return;
         try {
             const result = await window.ipcRenderer.invoke('manuscripts:pick-export-path', {
                 filePath: editorFile,
@@ -1919,7 +1926,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [editorDescriptor?.draftType, editorFile, exportVideoResolution, isRenderingRemotion]);
 
     const handleConfirmExportVideo = useCallback(async () => {
-        if (!editorFile || editorDescriptor?.draftType !== 'video' || isRenderingRemotion) return;
+        if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video' || isRenderingRemotion) return;
         let outputPath = exportVideoPath.trim();
         if (!outputPath) {
             const picked = await window.ipcRenderer.invoke('manuscripts:pick-export-path', {
@@ -2271,7 +2278,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
 
     useEffect(() => {
         const nextImmersiveMode: ImmersiveMode = mode === 'editor'
-            ? (editorDescriptor?.draftType === 'video' || editorDescriptor?.draftType === 'audio' ? 'dark' : 'theme')
+            ? 'theme'
             : false;
         onImmersiveModeChange?.(nextImmersiveMode);
         return () => {
@@ -2280,7 +2287,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [editorDescriptor?.draftType, mode, onImmersiveModeChange]);
 
     const handleConfirmEditorScript = useCallback(async () => {
-        if (!editorFile || (editorDescriptor?.draftType !== 'video' && editorDescriptor?.draftType !== 'audio')) return;
+        if (!editorFile || !isRemovedMediaDraftType(editorDescriptor?.draftType)) return;
         if (editorBodyDirty || isSavingEditorBody) {
             void appAlert('脚本正在保存或仍有未保存改动，请稍后再确认。');
             return;
@@ -2449,7 +2456,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 generateAudio: false,
                 source: 'manuscripts',
                 manuscriptPath: editorFile || undefined,
-                videoProjectPath: editorDescriptor?.draftType === 'video' ? editorFile || undefined : undefined,
+                videoProjectPath: undefined,
             }) as { success?: boolean; error?: string; jobId?: string };
 
             if (!result?.success || !result?.jobId) {
@@ -2577,12 +2584,8 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         };
         const draftType = currentDescriptor.draftType;
         const draftStyle = resolveDraftTypeStyle(draftType);
-        const isVideoDraft = draftType === 'video';
-        const isAudioDraft = draftType === 'audio';
         const isImmersiveWorkbench = mode === 'editor';
         const isArticlePackage = draftType === 'longform';
-        const isVideoPackage = draftType === 'video';
-        const isAudioPackage = draftType === 'audio';
         const isScriptConfirmed = (
             packageState?.videoProject?.scriptApproval?.status
             || packageState?.editorProject?.ai?.scriptApproval?.status
@@ -2671,11 +2674,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         const packageTrackNames = Array.isArray(timelineSummary?.trackNames)
             ? timelineSummary.trackNames.map((item) => String(item || '').trim()).filter(Boolean)
             : [];
-        const fallbackTrackNames = isAudioDraft
-            ? ['A1']
-            : isVideoDraft
-                ? ['V1', 'A1']
-                : ['V1', 'T1'];
+        const fallbackTrackNames = ['V1', 'T1'];
         const timelineTrackNames = Array.from(new Set([
             ...packageTrackNames,
             ...timelineClips.map((item) => String(item.track || '').trim()).filter(Boolean),
@@ -2746,23 +2745,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                         </div>
                     </div>
                     <div className="flex items-center gap-1.5">
-                        {isAudioDraft && (
-                            <div className="mr-2 flex items-center gap-1 rounded-xl border border-border bg-surface-secondary/50 px-1 py-1">
-                                <EditorLayoutToggleButton
-                                    kind="timeline"
-                                    collapsed={immersiveTimelineCollapsed}
-                                    onClick={() => setImmersiveTimelineCollapsed((value) => !value)}
-                                    title={immersiveTimelineCollapsed ? '展开时间轴' : '折叠时间轴'}
-                                />
-                                <EditorLayoutToggleButton
-                                    kind="materials"
-                                    collapsed={immersiveMaterialsCollapsed}
-                                    onClick={() => setImmersiveMaterialsCollapsed((value) => !value)}
-                                    title={immersiveMaterialsCollapsed ? '展开素材栏' : '折叠素材栏'}
-                                />
-                            </div>
-                        )}
-                        
                         {isArticlePackage && (
                             <div className="flex items-center gap-1">
                                 <button
@@ -2800,80 +2782,40 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                             </div>
                         )}
 
-                        {isAudioPackage && (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    void handleImportAndBindAssetsToPackage();
-                                }}
-                                className="inline-flex items-center gap-2 rounded-xl bg-accent-primary px-4 py-2 text-[12px] font-bold text-white shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
-                            >
-                                <Upload className="h-3.5 w-3.5" />
-                                导入素材
-                            </button>
-                        )}
                     </div>
                 </div>
-                {isAudioDraft ? (
-                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">音频工作台加载中...</div>}>
-                        <AudioDraftWorkbench
-                            editorFile={editorFile}
-                            packageAssets={packageAssets}
-                            packagePreviewAssets={packagePreviewAssets}
-                            primaryAudioAsset={primaryAudioAsset}
-                            timelineClipCount={timelineClipCount}
-                            timelineTrackNames={timelineTrackNames}
-                            timelineClips={timelineClips}
-                            editorBody={editorBody}
-                            editorBodyDirty={editorBodyDirty}
-                            isSavingEditorBody={isSavingEditorBody}
-                            materialsCollapsed={immersiveMaterialsCollapsed}
-                            timelineCollapsed={immersiveTimelineCollapsed}
-                            editorChatSessionId={editorChatSessionId}
-                            onEditorBodyChange={(value) => {
-                                setEditorBody(value);
-                                setEditorBodyDirty(true);
-                            }}
-                            onOpenBindAssets={() => {
-                                void handleImportAndBindAssetsToPackage();
-                            }}
-                            onPackageStateChange={(state) => applyPackageState(editorFile, state as PackageState)}
-                        />
-                    </Suspense>
-                ) : (
-                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">写作工作台加载中...</div>}>
-                        <WritingDraftWorkbench
-                            isActive={isActive}
-                            draftType={draftType === 'longform' ? 'longform' : 'unknown'}
-                            title={currentDescriptor.title}
-                            filePath={editorFile}
-                            editorBody={editorWriteProposalView ? editorReviewBody : editorBody}
-                            writeProposal={editorWriteProposalView}
-                            editorBodyDirty={editorBodyDirty}
-                            isSavingEditorBody={isSavingEditorBody}
-                            isApplyingWriteProposal={isApplyingWriteProposal}
-                            isRejectingWriteProposal={isRejectingWriteProposal}
-                            editorChatSessionId={editorChatSessionId}
-                            editorChatReady={editorChatSessionReady}
-                            editorSessionMetadata={editorChatBinding?.metadata ?? null}
-                            onEditorBodyChange={(value) => {
-                                if (editorWriteProposalView) {
-                                    setEditorReviewBody(value);
-                                    return;
-                                }
-                                setEditorBody(value);
-                                setEditorBodyDirty(true);
-                            }}
-                            onAcceptWriteProposal={() => {
-                                void handleAcceptEditorWriteProposal();
-                            }}
-                            onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
-                            onRejectWriteProposal={() => {
-                                void handleRejectEditorWriteProposal();
-                            }}
-                        />
-                    </Suspense>
-                )}
+                <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">写作工作台加载中...</div>}>
+                    <WritingDraftWorkbench
+                        isActive={isActive}
+                        draftType={draftType === 'longform' ? 'longform' : 'unknown'}
+                        title={currentDescriptor.title}
+                        filePath={editorFile}
+                        editorBody={editorWriteProposalView ? editorReviewBody : editorBody}
+                        writeProposal={editorWriteProposalView}
+                        editorBodyDirty={editorBodyDirty}
+                        isSavingEditorBody={isSavingEditorBody}
+                        isApplyingWriteProposal={isApplyingWriteProposal}
+                        isRejectingWriteProposal={isRejectingWriteProposal}
+                        editorChatSessionId={editorChatSessionId}
+                        editorChatReady={editorChatSessionReady}
+                        editorSessionMetadata={editorChatBinding?.metadata ?? null}
+                        onEditorBodyChange={(value) => {
+                            if (editorWriteProposalView) {
+                                setEditorReviewBody(value);
+                                return;
+                            }
+                            setEditorBody(value);
+                            setEditorBodyDirty(true);
+                        }}
+                        onAcceptWriteProposal={() => {
+                            void handleAcceptEditorWriteProposal();
+                        }}
+                        onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
+                        onRejectWriteProposal={() => {
+                            void handleRejectEditorWriteProposal();
+                        }}
+                    />
+                </Suspense>
             </div>
         );
     }

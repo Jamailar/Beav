@@ -64,41 +64,16 @@ function makeNotificationId(source: string, entityId: string, eventKey: string, 
   return `${source}:${entityId}:${eventKey}:${createdAt}`;
 }
 
-function summarizeRuntimeMode(runtimeMode: string): string {
-  if (runtimeMode === 'redclaw') return APP_BRAND.aiDisplayName;
-  if (runtimeMode === 'team' || runtimeMode === 'chatroom') return '团队';
-  if (runtimeMode === 'knowledge') return '知识库';
-  if (runtimeMode === 'diagnostics') return '诊断';
-  return runtimeMode || '运行时';
-}
-
-function withinQuietHours(settings: NotificationSettings, now: Date): boolean {
-  if (!settings.quietHours.enabled) return false;
-  const [startHour, startMinute] = settings.quietHours.start.split(':').map((value) => Number(value) || 0);
-  const [endHour, endMinute] = settings.quietHours.end.split(':').map((value) => Number(value) || 0);
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const startMinutes = startHour * 60 + startMinute;
-  const endMinutes = endHour * 60 + endMinute;
-  if (startMinutes === endMinutes) return false;
-  if (startMinutes < endMinutes) {
-    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
-  }
-  return currentMinutes >= startMinutes || currentMinutes < endMinutes;
-}
-
 function resolveSound(
   level: NotificationEnvelope['level'],
-  source: NotificationEnvelope['source'],
+  _source: NotificationEnvelope['source'],
   _context: NotificationContextSnapshot,
-  settings: NotificationSettings,
+  _settings: NotificationSettings,
 ): NotificationSound {
-  const quiet = withinQuietHours(settings, new Date());
   if (level === 'error') return 'failure';
   if (level === 'attention') return 'attention';
   if (level === 'success') {
-    if (quiet) return 'none';
-    if (source !== 'runtime' && source !== 'redclaw') return 'none';
-    return 'success';
+    return 'none';
   }
   return 'none';
 }
@@ -122,41 +97,12 @@ export function shouldShowSystemNotification(
 
 export function mapRuntimeDoneToNotification(
   payload: RuntimeDonePayload,
-  context: NotificationContextSnapshot,
-  settings: NotificationSettings,
+  _context: NotificationContextSnapshot,
+  _settings: NotificationSettings,
 ): NotificationEnvelope | null {
   const normalizedStatus = String(payload.status || '').trim().toLowerCase();
   if (normalizedStatus !== 'completed' && normalizedStatus !== 'success') return null;
-  if (!settings.rules.runtimeBackgroundDone) return null;
-
-  const createdAt = Date.now();
-  const runtimeLabel = summarizeRuntimeMode(payload.runtimeMode);
-  const notification: NotificationEnvelope = {
-    id: makeNotificationId('runtime', payload.sessionId || 'runtime', 'done', createdAt),
-    source: 'runtime',
-    entityId: payload.sessionId || 'runtime',
-    eventKey: 'done',
-    level: 'success',
-    title: `${runtimeLabel}任务已完成`,
-    body: payload.reason || '后台任务已完成。',
-    sound: 'none',
-    sticky: false,
-    createdAt,
-    showInCenter: false,
-    actions: [
-      {
-        id: 'open-runtime',
-        label: '查看',
-        action: 'navigate',
-        payload: { view: 'redclaw' },
-      },
-    ],
-    meta: {
-      sessionId: payload.sessionId,
-      runtimeMode: payload.runtimeMode,
-    },
-  };
-  return { ...notification, sound: resolveSound(notification.level, notification.source, context, settings) };
+  return null;
 }
 
 export function mapRuntimeTaskNodeFailureToNotification(
@@ -324,7 +270,7 @@ export function mapGenerationProjectionToNotification(
   settings: NotificationSettings,
 ): NotificationEnvelope | null {
   const normalizedStatus = String(projection.status || '').trim().toLowerCase();
-  if (normalizedStatus === 'completed' && !settings.rules.generationCompleted) return null;
+  if (normalizedStatus === 'completed') return null;
   if ((normalizedStatus === 'failed' || normalizedStatus === 'dead_lettered') && !settings.rules.generationFailed) return null;
   if (normalizedStatus !== 'completed' && normalizedStatus !== 'failed' && normalizedStatus !== 'dead_lettered') return null;
 
@@ -407,7 +353,7 @@ export function mapRedclawTaskEventToNotification(
   const isFailed = normalizedEventType === 'task_failed';
   const needsConfirmation = normalizedEventType === 'task_waiting_confirmation';
 
-  if (isCompleted && !settings.rules.redclawCompleted) return null;
+  if (isCompleted) return null;
   if (isFailed && !settings.rules.redclawFailed) return null;
   if (!isCompleted && !isFailed && !needsConfirmation) return null;
 

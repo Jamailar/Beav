@@ -6085,7 +6085,7 @@ fn run_ffmpeg_args(
         state,
         CliExecuteRequest {
             session_id: Some(session_id.to_string()),
-            runtime_id: Some("video-editor".to_string()),
+            runtime_id: Some("media-edit".to_string()),
             tool_id: Some("ffmpeg".to_string()),
             argv,
             cwd: Some(cwd.to_string_lossy().to_string()),

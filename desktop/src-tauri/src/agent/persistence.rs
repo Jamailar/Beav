@@ -443,7 +443,7 @@ fn session_runtime_mode(session: &ChatSessionRecord) -> String {
         .as_ref()
         .and_then(|metadata| metadata.get("agentProfile"))
         .and_then(|value| value.as_str())
-        .filter(|value| matches!(*value, "video-editor" | "audio-editor"))
+        .filter(|value| *value == "manuscript-editor")
         .map(ToString::to_string)
         .unwrap_or_else(|| {
             let context_type = session
@@ -515,7 +515,7 @@ mod tests {
             created_at: "1".to_string(),
             updated_at: "1".to_string(),
             metadata: Some(json!({
-                "agentProfile": "video-editor",
+                "agentProfile": "manuscript-editor",
                 "contextType": "chat"
             })),
             starred: false,
@@ -523,6 +523,6 @@ mod tests {
             archived_at: None,
             deleted_at: None,
         };
-        assert_eq!(session_runtime_mode(&session), "video-editor");
+        assert_eq!(session_runtime_mode(&session), "manuscript-editor");
     }
 }

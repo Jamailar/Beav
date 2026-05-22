@@ -1,7 +1,7 @@
 ---
 name: tts-director
 description: Use when generating expressive TTS, short-video voiceover, self-media narration, product explanation, ads, livestream clips, character speech, podcast-style voiceover, or any speech request that needs tone, speed, pitch, rhythm, pauses, or multi-segment delivery. For ordinary chat/audio work this skill is the TTS entrypoint. CosyVoice SSML is not a general entrypoint: only activate `cosyvoice-ssml` inside a video-director managed digital-human / VideoRetalk / asset-library talking-head video flow. MiniMax uses ordered segments with emotion controls. Do not call TTS repeatedly or hand-merge audio.
-allowedRuntimeModes: [chatroom, redclaw, image-generation, audio-editor]
+allowedRuntimeModes: [chatroom, redclaw, image-generation]
 allowedTools: [workflow]
 activationScope: turn
 autoActivate: false

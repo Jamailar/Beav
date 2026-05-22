@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { flushSync } from 'react-dom';
 import { Sparkles, Trash2, X } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -264,6 +264,7 @@ export interface ChatShortcut {
   text: string;
   displayContent?: string;
   action?: 'send' | 'inject';
+  attachments?: UploadedFileAttachment[];
 }
 
 export interface ChatShortcutContext {
@@ -546,6 +547,28 @@ function createAttachmentPayload(attachments: UploadedFileAttachment[]): Message
   return attachments[0] as Message['attachment'];
 }
 
+function uploadedAttachmentsFromMessage(message: Message): UploadedFileAttachment[] {
+  const items = message.attachments && message.attachments.length > 0
+    ? message.attachments
+    : message.attachment
+      ? [message.attachment]
+      : [];
+  return items.filter((attachment): attachment is UploadedFileAttachment => (
+    Boolean(attachment) && attachment.type === 'uploaded-file'
+  ));
+}
+
+function latestReusableVideoAttachments(messages: Message[]): UploadedFileAttachment[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const videoAttachments = uploadedAttachmentsFromMessage(messages[index])
+      .filter((attachment) => attachmentShortcutKind(attachment) === 'video');
+    if (videoAttachments.length > 0) {
+      return videoAttachments;
+    }
+  }
+  return [];
+}
+
 type FixedSessionWarmSnapshot = {
   messages: Message[];
   contextUsage: ChatContextUsage | null;
@@ -677,6 +700,7 @@ function defaultComposerShortcuts(context: ChatShortcutContext): ChatShortcut[] 
           '3. 标出最可能带来完播、收藏、评论或转发的片段，并说明原因。',
           '4. 判断当前视频的主要问题：开头、节奏、信息密度、表达顺序、画面素材、字幕或结尾行动号召。',
           '5. 输出一版爆款改造方案：新标题、开头重写、结构调整、剪辑节奏、字幕策略和发布建议。',
+          '6. 不要声称分析报告已保存；只有在工具成功写入文件并返回路径后，才能输出“已保存”和对应路径。',
         ].join('\n'),
       },
       {
@@ -703,6 +727,7 @@ function defaultComposerShortcuts(context: ChatShortcutContext): ChatShortcut[] 
           '3. 选择最值得产出的片段，调用可用的视频处理能力把这些片段剪辑成独立视频文件。',
           '4. 每个成片都要尽量保留上下文完整性，不要只剪一句没有前后语义的话。',
           '5. 最终输出切片清单、生成后的文件路径、推荐发布顺序和每个切片的标题建议。',
+          '6. 只使用工具返回的真实文件路径，不要编造只有文件名的链接。',
         ].join('\n'),
       },
     ];
@@ -3859,11 +3884,17 @@ export function Chat({
     });
   };
 
+  const reusableVideoAttachments = useMemo(
+    () => pendingAttachments.length > 0 ? [] : latestReusableVideoAttachments(messages),
+    [messages, pendingAttachments.length],
+  );
+  const shortcutAttachment = pendingAttachment || reusableVideoAttachments[0] || null;
+  const shortcutAttachments = pendingAttachments.length > 0 ? pendingAttachments : reusableVideoAttachments;
   const shortcutContext: ChatShortcutContext = {
     input,
     hasInput: Boolean(input.trim()),
-    attachment: pendingAttachment,
-    attachments: pendingAttachments,
+    attachment: shortcutAttachment,
+    attachments: shortcutAttachments,
     selectedMemberMention,
     selectedKnowledgeMentions,
   };
@@ -3872,7 +3903,11 @@ export function Chat({
     shortcutsProp,
     defaultComposerShortcuts(shortcutContext),
     shortcutContext,
-  );
+  ).map((shortcut) => (
+    !pendingAttachment && shortcutAttachments.length > 0 && shortcut.action === 'send'
+      ? { ...shortcut, attachments: shortcutAttachments }
+      : shortcut
+  ));
 
   const welcomeShortcuts = resolveChatShortcutProvider(welcomeShortcutsProp, [
     { label: '📄 阅读稿件', text: '请帮我阅读并理解当前的稿件内容。' },
@@ -3898,8 +3933,28 @@ export function Chat({
       }
       return;
     }
+    if (shortcut.attachments && shortcut.attachments.length > 0) {
+      void sendMessage(
+        shortcut.text,
+        shortcut.attachments,
+        selectedMemberMention || fixedMemberMention,
+        selectedKnowledgeMentions,
+        selectedSkillMentions,
+        selectedAssetMentions,
+        shortcut.displayContent || shortcut.label,
+      );
+      return;
+    }
     void sendMessage(shortcut.text);
-  }, [activateComposerInput, sendMessage]);
+  }, [
+    activateComposerInput,
+    fixedMemberMention,
+    selectedAssetMentions,
+    selectedKnowledgeMentions,
+    selectedMemberMention,
+    selectedSkillMentions,
+    sendMessage,
+  ]);
 
   const currentAttachmentActionKey = attachmentActionKey(pendingAttachments);
   const attachmentActionKindValue = attachmentShortcutKind(pendingAttachment);

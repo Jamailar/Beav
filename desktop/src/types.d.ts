@@ -1621,6 +1621,20 @@ declare global {
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
       openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
       clipboardReadText: () => Promise<string>;
+      capture: {
+        saveYoutubeNote: (payload: {
+          videoId: string;
+          videoUrl: string;
+          title: string;
+          description?: string;
+          thumbnailUrl?: string;
+        }) => Promise<{
+          success?: boolean;
+          duplicate?: boolean;
+          error?: string;
+          noteId?: string;
+        } | null>;
+      };
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       plugins: {
         list: () => Promise<{ success: boolean; schemaVersion: number; root: string; plugins: ThrivePluginSummary[]; error?: string }>;

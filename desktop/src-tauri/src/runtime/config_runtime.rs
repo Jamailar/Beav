@@ -60,8 +60,8 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
         "wander" => "wander",
         "redclaw" => "redclaw",
         "generation-agent" | "image-generation" | "image_generation" => "image-generation",
-        "video-editor" | "video_editor" | "video-draft" => "video-editor",
-        "audio-editor" | "audio_editor" | "audio-draft" => "audio-editor",
+        "video-editor" | "video_editor" | "video-draft" | "audio-editor" | "audio_editor"
+        | "audio-draft" => "team",
         "diagnostics" | "debug" | "debugger" => "diagnostics",
         "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
         | "wechat-article" | "zhihu-answer" | "zhihu-article" | "xiaohongshu_note"

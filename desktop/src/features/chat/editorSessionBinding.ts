@@ -69,10 +69,6 @@ function resolveModeLabel(params: BuildEditorSessionBindingParams): string {
   const workspaceModeLabel = text(params.editorAiWorkspaceMode.label);
   if (workspaceModeLabel) return workspaceModeLabel;
   switch (params.draftType) {
-    case 'video':
-      return '视频编辑';
-    case 'audio':
-      return '音频编辑';
     case 'longform':
       return '长文编辑';
     default:
@@ -82,10 +78,6 @@ function resolveModeLabel(params: BuildEditorSessionBindingParams): string {
 
 function resolveTargetTypeLabel(params: BuildEditorSessionBindingParams): string {
   switch (params.draftType) {
-    case 'video':
-      return '视频工程';
-    case 'audio':
-      return '音频工程';
     case 'longform':
       return '长文稿件';
     default:
@@ -112,11 +104,6 @@ function resolveMediaSummaries(params: BuildEditorSessionBindingParams) {
 }
 
 function resolveScriptApprovalStatus(params: BuildEditorSessionBindingParams): string {
-  if (params.draftType === 'video' || params.draftType === 'audio') {
-    return text(params.packageState?.videoProject?.scriptApproval?.status)
-      || text(params.packageState?.editorProject?.ai?.scriptApproval?.status)
-      || 'pending';
-  }
   return params.editorBodyDirty ? 'pending' : 'draft';
 }
 
@@ -127,12 +114,11 @@ export function buildEditorSessionBinding(
   if (!editorFile) return null;
 
   const draftType = text(params.draftType) || 'unknown';
-  const { packageAssets, timelineClips, timelineTrackNames } = resolveMediaSummaries(params);
+  const { packageAssets } = resolveMediaSummaries(params);
   const modeLabel = resolveModeLabel(params);
   const targetTypeLabel = resolveTargetTypeLabel(params);
   const associatedFilePath = editorFile;
   const currentTitle = pickDraftTitle(params);
-  const isMediaDraft = draftType === 'video' || draftType === 'audio';
 
   const metadata: Record<string, unknown> = {
     editorBindingVersion: 1,
@@ -146,13 +132,7 @@ export function buildEditorSessionBinding(
     writeTarget: 'manuscripts://current',
     allowedWriteTargets: ['manuscripts://current'],
     associatedFilePath,
-    agentProfile: draftType === 'video'
-      ? 'video-editor'
-      : draftType === 'audio'
-        ? 'audio-editor'
-        : draftType === 'longform'
-          ? 'manuscript-editor'
-          : 'default',
+    agentProfile: 'manuscript-editor',
     sourceManuscriptPath: editorFile,
     sourceManuscriptTitle: currentTitle,
     sourceManuscriptDraftType: draftType,
@@ -163,34 +143,11 @@ export function buildEditorSessionBinding(
     editorWorkspaceMode: text(params.editorAiWorkspaceMode.id),
     editorWorkspaceModeLabel: text(params.editorAiWorkspaceMode.label),
     mediaAssetCount: packageAssets.length,
-    mediaClipCount: isMediaDraft ? Number(params.packageState?.timelineSummary?.clipCount || timelineClips.length || 0) : 0,
+    mediaClipCount: 0,
     editorApprovalStatus: resolveScriptApprovalStatus(params),
-    mediaTrackNames: isMediaDraft ? timelineTrackNames : [],
-    mediaClips: isMediaDraft
-      ? timelineClips.slice(0, 12).map((item) => ({
-          assetId: item?.assetId,
-          name: item?.name,
-          track: item?.track,
-          order: item?.order,
-          durationMs: item?.durationMs,
-          trimInMs: item?.trimInMs,
-          trimOutMs: item?.trimOutMs,
-          enabled: item?.enabled,
-        }))
-      : [],
+    mediaTrackNames: [],
+    mediaClips: [],
   };
-
-  if (isMediaDraft) {
-    metadata.associatedPackageFilePath = editorFile;
-    metadata.associatedPackageKind = draftType;
-    metadata.associatedPackageTitle = currentTitle;
-    metadata.associatedPackageWorkspaceMode = text(params.editorAiWorkspaceMode.id);
-    metadata.associatedPackageWorkspaceModeLabel = text(params.editorAiWorkspaceMode.label);
-    metadata.associatedPackageClipCount = metadata.mediaClipCount;
-    metadata.associatedPackageScriptApprovalStatus = metadata.editorApprovalStatus;
-    metadata.associatedPackageTrackNames = metadata.mediaTrackNames;
-    metadata.associatedPackageClips = metadata.mediaClips;
-  }
 
   return {
     session: {

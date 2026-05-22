@@ -83,7 +83,7 @@ type HistoryItemMenuTarget =
     | { type: 'session'; id: string }
     | { type: 'manuscript'; path: string };
 
-type ManuscriptDraftKind = 'longform' | 'post' | 'video' | 'audio';
+type ManuscriptDraftKind = 'longform' | 'post';
 
 type ManuscriptDialogState =
     | { mode: 'create-folder'; parentPath: string }
@@ -100,8 +100,6 @@ type ManuscriptContextMenuState = {
 const MANUSCRIPT_DRAFT_KIND_OPTIONS: Array<{ id: ManuscriptDraftKind; label: string; extension: string; kind?: string; disabled?: boolean }> = [
     { id: 'longform', label: '长文', extension: '', kind: 'longform' },
     { id: 'post', label: '图文稿', extension: '', kind: 'post' },
-    { id: 'video', label: '视频脚本', extension: '', kind: 'video', disabled: true },
-    { id: 'audio', label: '音频脚本', extension: '', kind: 'audio', disabled: true },
 ];
 
 function buildDefaultManuscriptTitle(label: string): string {
