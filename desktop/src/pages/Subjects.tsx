@@ -2595,7 +2595,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         const hasPlatforms = enabledEcommercePlatforms.length > 0;
         return (
             <div className="fixed inset-0 z-[10020] flex min-h-0 flex-col bg-white">
-                <div className={clsx('shrink-0 border-b border-[rgb(var(--color-border))] bg-white', isModalVariant ? 'px-5 py-4' : 'px-8 py-5')}>
+                <div className={clsx('shrink-0 border-b border-[rgb(var(--color-border))] bg-white', isModalVariant ? 'px-5 pb-4 pt-14' : 'px-8 pb-5 pt-14')}>
                     <div className="flex min-w-0 items-center gap-3">
                         <button
                             type="button"
