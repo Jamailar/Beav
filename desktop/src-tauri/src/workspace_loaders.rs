@@ -310,6 +310,67 @@ pub(crate) fn load_subjects_from_fs(subjects_root: &Path) -> Vec<SubjectRecord> 
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
                 voice: item.get("voice").cloned(),
+                brand_id: item
+                    .get("brandId")
+                    .or_else(|| item.get("brand_id"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                skus: item
+                    .get("skus")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|sku| {
+                                let id = sku
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string();
+                                let name = sku
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string();
+                                if name.is_empty() {
+                                    return None;
+                                }
+                                let attributes = sku
+                                    .get("attributes")
+                                    .and_then(|v| v.as_array())
+                                    .map(|attributes| {
+                                        attributes
+                                            .iter()
+                                            .filter_map(|attribute| {
+                                                Some(SubjectAttribute {
+                                                    key: attribute
+                                                        .get("key")?
+                                                        .as_str()?
+                                                        .to_string(),
+                                                    value: attribute
+                                                        .get("value")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("")
+                                                        .to_string(),
+                                                })
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                Some(crate::SubjectSku {
+                                    id: if id.is_empty() {
+                                        crate::make_id("sku")
+                                    } else {
+                                        id
+                                    },
+                                    name,
+                                    attributes,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 created_at: item
                     .get("createdAt")
                     .or_else(|| item.get("created_at"))

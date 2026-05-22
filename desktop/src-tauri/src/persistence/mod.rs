@@ -1771,6 +1771,8 @@ mod tests {
             video_path: None,
             voice_script: None,
             voice: None,
+            brand_id: None,
+            skus: Vec::new(),
             created_at: "1".to_string(),
             updated_at: "1".to_string(),
             absolute_image_paths: Vec::new(),

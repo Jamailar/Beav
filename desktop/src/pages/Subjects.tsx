@@ -59,6 +59,12 @@ interface SubjectAttribute {
     value: string;
 }
 
+interface SubjectSku {
+    id: string;
+    name: string;
+    attributes: SubjectAttribute[];
+}
+
 interface SubjectRecord {
     id: string;
     name: string;
@@ -71,6 +77,8 @@ interface SubjectRecord {
     videoPath?: string;
     voiceScript?: string;
     voice?: Record<string, unknown>;
+    brandId?: string;
+    skus?: SubjectSku[];
     createdAt: string;
     updatedAt: string;
     absoluteImagePaths?: string[];
@@ -97,6 +105,8 @@ interface SubjectDraft {
     tagsText: string;
     attributes: SubjectAttribute[];
     images: SubjectImageDraft[];
+    brandId: string;
+    skus: SubjectSku[];
     voice?: {
         name: string;
         previewUrl: string;
@@ -156,7 +166,8 @@ interface MediaAssetContextMenuState {
 }
 
 const UNCATEGORIZED_FILTER = '__uncategorized__';
-const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '场景'];
+const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '商品', '场景'];
+const VISIBLE_SUBJECT_CATEGORY_NAMES = DEFAULT_SUBJECT_CATEGORY_NAMES.filter((name) => name !== '商品');
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。请用自然稳定的语速朗读这段文字，保持音量一致、停顿清晰，让系统更好地学习你的声音特点和语气节奏。';
 const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 30;
 const SUBJECT_AUTOSAVE_DELAY_MS = 600;
@@ -209,6 +220,7 @@ const categoryIconForName = (name: string) => {
     if (normalized === '角色' || normalized === '人物') return UserRound;
     if (normalized === '物品' || normalized === '资产') return Package;
     if (normalized === '品牌') return Building2;
+    if (normalized === '商品') return Package;
     if (normalized === '场景') return Box;
     return Tag;
 };
@@ -236,6 +248,8 @@ function createEmptyDraft(): SubjectDraft {
         tagsText: '',
         attributes: [],
         images: [],
+        brandId: '',
+        skus: [],
         voice: undefined,
     };
 }
@@ -256,6 +270,16 @@ function toDraft(subject?: SubjectRecord | null): SubjectDraft {
             previewUrl,
             relativePath: subject.imagePaths[index],
         })),
+        brandId: subject.brandId || '',
+        skus: Array.isArray(subject.skus)
+            ? subject.skus.map((sku) => ({
+                id: sku.id || createDraftSkuId(),
+                name: sku.name || '',
+                attributes: Array.isArray(sku.attributes)
+                    ? sku.attributes.map((item) => ({ key: item.key || '', value: item.value || '' }))
+                    : [],
+            }))
+            : [],
         voice: subject.voicePreviewUrl ? {
             name: subject.voicePath?.split('/').pop() || 'voice-reference',
             previewUrl: subject.voicePreviewUrl,
@@ -306,9 +330,12 @@ function subjectDraftVideoPayload(draft: SubjectDraft, categories: SubjectCatego
 
 function subjectDraftPayload(
     draft: SubjectDraft,
+    categories: SubjectCategory[],
     voicePayload?: Record<string, unknown>,
     videoPayload?: Record<string, unknown>,
 ) {
+    const categoryName = categories.find((item) => item.id === draft.categoryId)?.name.trim() || '';
+    const isProduct = categoryName === '商品';
     return {
         id: draft.id,
         name: draft.name.trim(),
@@ -321,6 +348,8 @@ function subjectDraftPayload(
             : { dataUrl: image.dataUrl, name: image.name }),
         voice: voicePayload,
         video: videoPayload,
+        brandId: isProduct && draft.brandId ? draft.brandId : undefined,
+        skus: isProduct ? normalizeSkus(draft.skus) : [],
     };
 }
 
@@ -332,6 +361,7 @@ function subjectDraftPayloadSnapshot(
 ): string {
     return JSON.stringify(subjectDraftPayload(
         draft,
+        categories,
         subjectDraftVoicePayload(draft, categories, initialVoicePresent),
         subjectDraftVideoPayload(draft, categories, initialVideoPresent),
     ));
@@ -341,6 +371,20 @@ function normalizeAttributes(attributes: SubjectAttribute[]): SubjectAttribute[]
     return attributes
         .map((item) => ({ key: String(item.key || '').trim(), value: String(item.value || '').trim() }))
         .filter((item) => item.key || item.value);
+}
+
+function createDraftSkuId(): string {
+    return `sku-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeSkus(skus: SubjectSku[]): SubjectSku[] {
+    return skus
+        .map((sku) => ({
+            id: sku.id || createDraftSkuId(),
+            name: String(sku.name || '').trim(),
+            attributes: normalizeAttributes(sku.attributes || []),
+        }))
+        .filter((sku) => sku.name);
 }
 
 function normalizeMediaSource(source: unknown): MediaAssetSource {
@@ -779,6 +823,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [categoryDialogTargetId, setCategoryDialogTargetId] = useState<string | null>(null);
     const [isCategoryDialogSubmitting, setIsCategoryDialogSubmitting] = useState(false);
     const [draft, setDraft] = useState<SubjectDraft>(createEmptyDraft);
+    const [expandedBrandIds, setExpandedBrandIds] = useState<Set<string>>(() => new Set());
     const [initialVoicePresent, setInitialVoicePresent] = useState(false);
     const [initialVideoPresent, setInitialVideoPresent] = useState(false);
     const [recordingError, setRecordingError] = useState('');
@@ -980,6 +1025,36 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [isActive, loadData, voiceJobs]);
 
     const categoryNameMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+    const subjectCategoryName = useCallback((subject: SubjectRecord) => (
+        categoryNameMap.get(subject.categoryId || '')?.trim() || ''
+    ), [categoryNameMap]);
+    const brandSubjects = useMemo(
+        () => subjects.filter((subject) => subjectCategoryName(subject) === '品牌'),
+        [subjectCategoryName, subjects],
+    );
+    const subjectNameMap = useMemo(() => new Map(subjects.map((subject) => [subject.id, subject.name])), [subjects]);
+    const productCountByBrandId = useMemo(() => {
+        const counts = new Map<string, number>();
+        for (const subject of subjects) {
+            if (subjectCategoryName(subject) === '商品' && subject.brandId) {
+                counts.set(subject.brandId, (counts.get(subject.brandId) || 0) + 1);
+            }
+        }
+        return counts;
+    }, [subjectCategoryName, subjects]);
+    const productsByBrandId = useMemo(() => {
+        const products = new Map<string, SubjectRecord[]>();
+        for (const subject of subjects) {
+            if (subjectCategoryName(subject) !== '商品' || !subject.brandId) continue;
+            const items = products.get(subject.brandId) || [];
+            items.push(subject);
+            products.set(subject.brandId, items);
+        }
+        for (const items of products.values()) {
+            items.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+        }
+        return products;
+    }, [subjectCategoryName, subjects]);
     const activeDraftSubject = useMemo(
         () => draft.id ? subjects.find((subject) => subject.id === draft.id) || null : null,
         [draft.id, subjects],
@@ -1012,6 +1087,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const filteredSubjects = useMemo(() => {
         const keyword = query.trim().toLowerCase();
         return subjects.filter((subject) => {
+            if (subjectCategoryName(subject) === '商品') return false;
             if (categoryFilter === UNCATEGORIZED_FILTER && subject.categoryId) return false;
             if (categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER && subject.categoryId !== categoryFilter) return false;
             if (!keyword) return true;
@@ -1020,11 +1096,38 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 subject.description || '',
                 subject.tags.join(' '),
                 subject.attributes.map((item) => `${item.key} ${item.value}`).join(' '),
+                subject.brandId ? subjectNameMap.get(subject.brandId) || '' : '',
+                (subject.skus || []).map((sku) => [
+                    sku.name,
+                    ...(sku.attributes || []).map((item) => `${item.key} ${item.value}`),
+                ].join(' ')).join(' '),
                 categoryNameMap.get(subject.categoryId || '') || '',
             ].join('\n').toLowerCase();
             return haystack.includes(keyword);
         });
-    }, [categoryFilter, categoryNameMap, query, subjects]);
+    }, [categoryFilter, categoryNameMap, query, subjectCategoryName, subjectNameMap, subjects]);
+
+    const isBrandCategoryView = categoryNameMap.get(categoryFilter)?.trim() === '品牌';
+    const filteredBrandSubjects = useMemo(() => {
+        const keyword = query.trim().toLowerCase();
+        return brandSubjects.filter((brand) => {
+            if (!keyword) return true;
+            const products = productsByBrandId.get(brand.id) || [];
+            const haystack = [
+                brand.name,
+                brand.description || '',
+                brand.tags.join(' '),
+                brand.attributes.map((item) => `${item.key} ${item.value}`).join(' '),
+                products.map((product) => [
+                    product.name,
+                    product.description || '',
+                    product.tags.join(' '),
+                    (product.skus || []).map((sku) => sku.name).join(' '),
+                ].join(' ')).join(' '),
+            ].join('\n').toLowerCase();
+            return haystack.includes(keyword);
+        });
+    }, [brandSubjects, productsByBrandId, query]);
 
     const filteredMediaAssets = useMemo(() => {
         const keyword = query.trim().toLowerCase();
@@ -1075,6 +1178,27 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setIsDraftCategoryMenuOpen(false);
         openAssetModalSurface();
     }, [openAssetModalSurface]);
+
+    const openCreateProductModal = useCallback((brand: SubjectRecord) => {
+        const productCategory = categories.find((item) => item.name.trim() === '商品');
+        if (!productCategory) {
+            void appAlert('商品分类尚未初始化，请刷新后重试');
+            return;
+        }
+        autosaveLastPayloadRef.current = null;
+        setDraft({
+            ...createEmptyDraft(),
+            categoryId: productCategory.id,
+            brandId: brand.id,
+            skus: [],
+        });
+        setInitialVoicePresent(false);
+        setInitialVideoPresent(false);
+        setError('');
+        setIsDraftCategoryMenuOpen(false);
+        setExpandedBrandIds((current) => new Set(current).add(brand.id));
+        openAssetModalSurface();
+    }, [categories, openAssetModalSurface]);
 
     const openCreateCategoryDialog = useCallback(() => {
         setCategoryDialogMode('create');
@@ -1131,6 +1255,83 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             ...current,
             attributes: current.attributes.filter((_, itemIndex) => itemIndex !== index),
         }));
+    }, []);
+
+    const handleAddSku = useCallback(() => {
+        setDraft((current) => ({
+            ...current,
+            skus: [
+                ...current.skus,
+                {
+                    id: createDraftSkuId(),
+                    name: '',
+                    attributes: [{ key: '规格', value: '' }],
+                },
+            ],
+        }));
+    }, []);
+
+    const handleSkuChange = useCallback((index: number, patch: Partial<SubjectSku>) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, skuIndex) => skuIndex === index ? { ...sku, ...patch } : sku),
+        }));
+    }, []);
+
+    const handleSkuAttributeChange = useCallback((skuIndex: number, attributeIndex: number, patch: Partial<SubjectAttribute>) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, currentSkuIndex) => {
+                if (currentSkuIndex !== skuIndex) return sku;
+                return {
+                    ...sku,
+                    attributes: sku.attributes.map((attribute, currentAttributeIndex) => (
+                        currentAttributeIndex === attributeIndex ? { ...attribute, ...patch } : attribute
+                    )),
+                };
+            }),
+        }));
+    }, []);
+
+    const handleAddSkuAttribute = useCallback((skuIndex: number) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, currentSkuIndex) => (
+                currentSkuIndex === skuIndex
+                    ? { ...sku, attributes: [...sku.attributes, { key: '', value: '' }] }
+                    : sku
+            )),
+        }));
+    }, []);
+
+    const handleRemoveSkuAttribute = useCallback((skuIndex: number, attributeIndex: number) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, currentSkuIndex) => (
+                currentSkuIndex === skuIndex
+                    ? { ...sku, attributes: sku.attributes.filter((_, index) => index !== attributeIndex) }
+                    : sku
+            )),
+        }));
+    }, []);
+
+    const handleRemoveSku = useCallback((index: number) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.filter((_, skuIndex) => skuIndex !== index),
+        }));
+    }, []);
+
+    const toggleBrandExpanded = useCallback((brandId: string) => {
+        setExpandedBrandIds((current) => {
+            const next = new Set(current);
+            if (next.has(brandId)) {
+                next.delete(brandId);
+            } else {
+                next.add(brandId);
+            }
+            return next;
+        });
     }, []);
 
     const handleNamedAttributeChange = useCallback((key: string, value: string) => {
@@ -1207,7 +1408,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, []);
 
     const buildSubjectPayload = useCallback((voicePayload?: Record<string, unknown>, videoPayload?: Record<string, unknown>) => ({
-        ...subjectDraftPayload(draft, voicePayload, videoPayload ?? subjectDraftVideoPayload(draft, categories, initialVideoPresent)),
+        ...subjectDraftPayload(draft, categories, voicePayload, videoPayload ?? subjectDraftVideoPayload(draft, categories, initialVideoPresent)),
     }), [categories, draft, initialVideoPresent]);
 
     const persistVoiceChange = useCallback(async (voicePayload: Record<string, unknown>, successHint: string) => {
@@ -1362,6 +1563,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             categoryId,
             voice: nextCategoryName === '角色' ? current.voice : undefined,
             video: nextCategoryName === '角色' ? current.video : undefined,
+            brandId: nextCategoryName === '商品' ? current.brandId : '',
+            skus: nextCategoryName === '商品' ? current.skus : [],
         }));
     }, [categories, stopRecordingSession]);
 
@@ -1563,6 +1766,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         const version = autosaveVersionRef.current;
         const payload = subjectDraftPayload(
             draft,
+            categories,
             subjectDraftVoicePayload(draft, categories, initialVoicePresent),
             subjectDraftVideoPayload(draft, categories, initialVideoPresent),
         );
@@ -1713,7 +1917,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         const customCategories = categories.filter((category) => !DEFAULT_SUBJECT_CATEGORY_NAMES.includes(category.name.trim()));
         return [
             { id: 'all', label: '资产', icon: Package },
-            ...DEFAULT_SUBJECT_CATEGORY_NAMES.map((name) => {
+            ...VISIBLE_SUBJECT_CATEGORY_NAMES.map((name) => {
                 const category = categories.find((item) => item.name.trim() === name);
                 return {
                     id: category?.id || `preset:${name}`,
@@ -1733,6 +1937,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const draftCategoryName = categoryNameMap.get(draft.categoryId || '') || '';
     const draftEntityLabel = draftCategoryName || '资产';
     const isRoleDraft = draftCategoryName.trim() === '角色';
+    const isBrandDraft = draftCategoryName.trim() === '品牌';
+    const isProductDraft = draftCategoryName.trim() === '商品';
+    const selectedBrandName = subjectNameMap.get(draft.brandId) || '';
     const draftPreviewImage = draft.images[0]?.previewUrl || '';
     const draftAttributeValue = (key: string) => draft.attributes.find((item) => item.key === key)?.value || '';
     const visibleDraftAttributes = draft.attributes
@@ -1740,12 +1947,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         .filter(({ attribute }) => !isRoleDraft || (attribute.key !== '性别' && attribute.key !== '年龄'));
     const draftCategoryOptions = useMemo(() => [
         { id: '', name: '未分类', icon: Tag },
-        ...categories.map((category) => ({
+        ...categories
+            .filter((category) => category.name.trim() !== '商品' || category.id === draft.categoryId)
+            .map((category) => ({
             id: category.id,
             name: category.name,
             icon: categoryIconForName(category.name),
         })),
-    ], [categories]);
+    ], [categories, draft.categoryId]);
     const selectedDraftCategory = draftCategoryOptions.find((item) => item.id === draft.categoryId) || draftCategoryOptions[0];
     const SelectedDraftCategoryIcon = selectedDraftCategory.icon;
     const activeLibraryTab = isModalVariant ? libraryTab : 'assets';
@@ -1789,6 +1998,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
                             刷新
                         </button>
+                        {!isBrandCategoryView && (
                         <div className="inline-flex rounded-xl bg-[rgb(var(--color-surface-secondary))] p-1">
                             <button
                                 type="button"
@@ -1815,6 +2025,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 <List className="h-4 w-4" />
                             </button>
                         </div>
+                        )}
                         {!showAssetControls && (
                             <button
                                 type="button"
@@ -2059,6 +2270,112 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     )
                 ) : loading && subjects.length === 0 && categories.length === 0 ? (
                     <div className="text-sm text-[rgb(var(--color-text-secondary))]">资产库加载中...</div>
+                ) : isBrandCategoryView ? (
+                    filteredBrandSubjects.length === 0 ? (
+                        <div className={clsx('flex flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
+                            <Building2 className="mb-4 h-12 w-12 stroke-[1.8]" />
+                            <div className="text-sm font-medium">暂无品牌</div>
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
+                            {filteredBrandSubjects.map((brand) => {
+                                const products = productsByBrandId.get(brand.id) || [];
+                                const expanded = expandedBrandIds.has(brand.id);
+                                return (
+                                    <div key={brand.id} className="bg-white">
+                                        <div className="flex items-center gap-3 px-3 py-2.5">
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleBrandExpanded(brand.id)}
+                                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                aria-label={expanded ? '收起品牌商品' : '展开品牌商品'}
+                                                title={expanded ? '收起' : '展开'}
+                                            >
+                                                <ChevronDown className={clsx('h-4 w-4 transition-transform', !expanded && '-rotate-90')} />
+                                            </button>
+                                            <div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                                {brand.primaryPreviewUrl ? (
+                                                    <img src={resolveAssetUrl(brand.primaryPreviewUrl)} alt={brand.name} className="h-full w-full object-cover" />
+                                                ) : (
+                                                    <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                                        <Building2 className="h-5 w-5" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleBrandExpanded(brand.id)}
+                                                className="min-w-0 flex-1 text-left"
+                                            >
+                                                <div className="truncate text-sm font-semibold text-[rgb(var(--color-text-primary))]">{brand.name}</div>
+                                                <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
+                                                    {products.length} 个商品
+                                                    {brand.description ? ` · ${brand.description}` : ''}
+                                                </div>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => openEditModal(brand)}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                aria-label="编辑品牌"
+                                                title="编辑品牌"
+                                            >
+                                                <Pencil className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => openCreateProductModal(brand)}
+                                                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85"
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                                商品
+                                            </button>
+                                        </div>
+                                        {expanded && (
+                                            <div className="border-t border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] px-3 py-2">
+                                                {products.length === 0 ? (
+                                                    <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-white px-3 py-3 text-xs text-[rgb(var(--color-text-secondary))]">
+                                                        还没有商品
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-1.5">
+                                                        {products.map((product) => (
+                                                            <button
+                                                                key={product.id}
+                                                                type="button"
+                                                                onClick={() => openEditModal(product)}
+                                                                className="flex w-full items-center gap-3 rounded-lg bg-white px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                                            >
+                                                                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                                                    {product.primaryPreviewUrl ? (
+                                                                        <img src={resolveAssetUrl(product.primaryPreviewUrl)} alt={product.name} className="h-full w-full object-cover" />
+                                                                    ) : (
+                                                                        <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                                                            <Package className="h-4 w-4" />
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="min-w-0 flex-1">
+                                                                    <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{product.name}</div>
+                                                                    <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
+                                                                        {(product.skus || []).length} 个SKU
+                                                                        {product.description ? ` · ${product.description}` : ''}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
+                                                                    {new Date(product.updatedAt).toLocaleDateString()}
+                                                                </div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )
                 ) : filteredSubjects.length === 0 ? (
                     <div className={clsx('flex flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
                         <CalendarClock className="mb-4 h-12 w-12 stroke-[1.8]" />
@@ -2070,6 +2387,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         {filteredSubjects.map((subject) => {
                             const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
                             const voiceSlots = subjectVoiceSlots(subject);
+                            const categoryName = categoryNameMap.get(subject.categoryId || '') || '未分类';
+                            const brandName = subject.brandId ? subjectNameMap.get(subject.brandId) || '' : '';
+                            const productCount = productCountByBrandId.get(subject.id) || 0;
                             return (
                             <div
                                 key={subject.id}
@@ -2097,7 +2417,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         <div>
                                             <div className="truncate text-xs font-semibold text-text-primary">{subject.name}</div>
                                             <div className="mt-0.5 text-[11px] text-text-tertiary">
-                                                {categoryNameMap.get(subject.categoryId || '') || '未分类'}
+                                                {categoryName}
+                                                {brandName ? ` · ${brandName}` : ''}
                                             </div>
                                         </div>
                                         {subject.description && (
@@ -2121,6 +2442,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             <div className="flex items-center justify-between text-[9px] text-text-tertiary">
                                             <span>属性 {subject.attributes.length}</span>
                                             <span>图片 {(subject.previewUrls || []).length}</span>
+                                            {categoryName === '品牌' && <span>商品 {productCount}</span>}
+                                            {categoryName === '商品' && <span>SKU {(subject.skus || []).length}</span>}
                                             <span className={clsx('rounded-md border px-1.5 py-0.5', voiceInfoClassName(voiceInfo.tone))}>
                                                 {voiceInfo.targetTtsModel ? `${voiceInfo.label} · ${shortVoiceId(voiceInfo.targetTtsModel)}` : voiceInfo.label}
                                             </span>
@@ -2136,6 +2459,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         {filteredSubjects.map((subject) => {
                             const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
                             const voiceSlots = subjectVoiceSlots(subject);
+                            const categoryName = categoryNameMap.get(subject.categoryId || '') || '未分类';
+                            const brandName = subject.brandId ? subjectNameMap.get(subject.brandId) || '' : '';
+                            const productCount = productCountByBrandId.get(subject.id) || 0;
                             return (
                             <button
                                 key={subject.id}
@@ -2155,7 +2481,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 <div className="min-w-0 flex-1">
                                     <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{subject.name}</div>
                                     <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
-                                        {categoryNameMap.get(subject.categoryId || '') || '未分类'}
+                                        {categoryName}
+                                        {brandName ? ` · ${brandName}` : ''}
+                                        {categoryName === '品牌' && productCount > 0 ? ` · ${productCount} 个商品` : ''}
+                                        {categoryName === '商品' && (subject.skus || []).length > 0 ? ` · ${(subject.skus || []).length} 个SKU` : ''}
                                         {subject.description ? ` · ${subject.description}` : ''}
                                     </div>
                                 </div>
@@ -2412,6 +2741,92 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             />
                                         </div>
                                     </label>
+
+                                    {isProductDraft && (
+                                        <div className="space-y-3 rounded-xl bg-[rgb(var(--color-surface-primary))] p-4">
+                                            <div className="block">
+                                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">所属品牌</div>
+                                                <div className="flex h-9 items-center rounded-lg bg-white px-3 text-sm font-medium text-[rgb(var(--color-text-primary))]">
+                                                    {selectedBrandName || '未绑定品牌'}
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">SKU</div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleAddSku}
+                                                        className="inline-flex h-8 items-center gap-1 rounded-lg bg-white px-2.5 text-xs font-medium text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                                    >
+                                                        <Plus className="h-3.5 w-3.5" />
+                                                        添加
+                                                    </button>
+                                                </div>
+                                                {draft.skus.length === 0 ? (
+                                                    <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] px-3 py-2.5 text-xs text-[rgb(var(--color-text-secondary))]">
+                                                        为商品添加颜色、尺码、规格等可选项。
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-2">
+                                                        {draft.skus.map((sku, skuIndex) => (
+                                                            <div key={sku.id || skuIndex} className="rounded-lg bg-white p-3">
+                                                                <div className="grid grid-cols-[minmax(0,1fr)_32px] gap-2">
+                                                                    <input
+                                                                        value={sku.name}
+                                                                        onChange={(event) => handleSkuChange(skuIndex, { name: event.target.value })}
+                                                                        placeholder="SKU 名称"
+                                                                        className="h-9 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                                    />
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveSku(skuIndex)}
+                                                                        className="inline-flex h-9 items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))] transition hover:bg-red-50 hover:text-red-600"
+                                                                        aria-label="删除 SKU"
+                                                                    >
+                                                                        <X className="h-4 w-4" />
+                                                                    </button>
+                                                                </div>
+                                                                <div className="mt-2 space-y-2">
+                                                                    {sku.attributes.map((attribute, attributeIndex) => (
+                                                                        <div key={`${sku.id}-${attributeIndex}`} className="grid grid-cols-[minmax(0,120px)_minmax(0,1fr)_32px] gap-2">
+                                                                            <input
+                                                                                value={attribute.key}
+                                                                                onChange={(event) => handleSkuAttributeChange(skuIndex, attributeIndex, { key: event.target.value })}
+                                                                                placeholder="属性"
+                                                                                className="h-8 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-2.5 text-xs text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                                            />
+                                                                            <input
+                                                                                value={attribute.value}
+                                                                                onChange={(event) => handleSkuAttributeChange(skuIndex, attributeIndex, { value: event.target.value })}
+                                                                                placeholder="值"
+                                                                                className="h-8 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-2.5 text-xs text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                                            />
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleRemoveSkuAttribute(skuIndex, attributeIndex)}
+                                                                                className="inline-flex h-8 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-red-50 hover:text-red-600"
+                                                                                aria-label="删除 SKU 属性"
+                                                                            >
+                                                                                <X className="h-3.5 w-3.5" />
+                                                                            </button>
+                                                                        </div>
+                                                                    ))}
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleAddSkuAttribute(skuIndex)}
+                                                                        className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                                    >
+                                                                        <Plus className="h-3.5 w-3.5" />
+                                                                        属性
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
 
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between">
@@ -2693,6 +3108,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         <div className="flex items-center gap-1.5 text-xs font-medium text-[rgb(var(--color-text-secondary))]">
                                             <span className="rounded-full bg-white px-2 py-0.5">{draftCategoryName || '未分类'}</span>
                                             <span>{draft.images.length}/5 张图片</span>
+                                            {isBrandDraft && <span>{productCountByBrandId.get(draft.id || '') || 0} 个商品</span>}
+                                            {isProductDraft && <span>{draft.skus.length} 个SKU</span>}
                                             {isRoleDraft && <span>{draft.voice?.previewUrl ? '有声音' : '未录音'}</span>}
                                             {isRoleDraft && <span>{draft.video?.previewUrl ? '有视频' : '无视频'}</span>}
                                         </div>
@@ -2700,10 +3117,24 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         <div className="min-h-[36px] text-xs leading-5 text-[rgb(var(--color-text-secondary))]">
                                             {draft.description || `选择图片后实时查看${draftEntityLabel}素材预览`}
                                         </div>
+                                        {isProductDraft && selectedBrandName && (
+                                            <div className="text-xs font-medium text-[rgb(var(--color-text-secondary))]">
+                                                品牌：{selectedBrandName}
+                                            </div>
+                                        )}
                                     </div>
                                     {draft.id && (
                                         <div className="mt-4 space-y-1 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-[rgb(var(--color-text-secondary))]">
                                             <div>ID：{draft.id}</div>
+                                            {isBrandDraft && (
+                                                <div>绑定商品：{productCountByBrandId.get(draft.id) || 0}</div>
+                                            )}
+                                            {isProductDraft && selectedBrandName && (
+                                                <div>所属品牌：{selectedBrandName}</div>
+                                            )}
+                                            {isProductDraft && (
+                                                <div>SKU数量：{draft.skus.length}</div>
+                                            )}
                                             {activeDraftVoiceInfo?.voiceId && (
                                                 <div>音色ID：<span className="font-mono">{activeDraftVoiceInfo.voiceId}</span></div>
                                             )}

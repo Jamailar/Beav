@@ -421,6 +421,8 @@ mod tests {
             video_path: None,
             voice_script: None,
             voice: Some(json!({ "voiceId": "voice_2eee156a6468427bb185a831" })),
+            brand_id: None,
+            skus: Vec::new(),
             created_at: "2026-05-14T00:00:00Z".to_string(),
             updated_at: "2026-05-14T00:00:00Z".to_string(),
             absolute_image_paths: Vec::new(),
