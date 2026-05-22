@@ -1651,3 +1651,23 @@ Remaining in this slice:
 
 - Migrate direct invoke call sites in `Knowledge.tsx`, `GenerationStudio.tsx`, and `Home.tsx` where the new typed facade already exists.
 - Add focused bridge contract tests or an IPC inventory check once direct invoke migration starts.
+
+### 2026-05-22 Media Generation Feed Model Slice Started
+
+Completed:
+
+- Added `src/features/media-generation/feedModel.ts` as the renderer-side module boundary for generation requests, generation feed records, generated asset summaries, deleted feed state, and media job projection.
+- Moved image, video, audio, cover, digital human request types out of `src/pages/GenerationStudio.tsx`.
+- Moved manual and Agent-mode request builders out of `src/pages/GenerationStudio.tsx`.
+- Moved feed persistence, sorting, deletion filtering, progress estimation, job-to-feed projection, and recent asset summary helpers out of the page.
+- Added `src/features/media-generation/README.md` to document what the module owns and what still belongs to the page.
+- Kept `GenerationStudio.tsx` responsible for form state, UI rendering, context menus, and agent chat session mounting.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `pnpm build`
+
+Remaining in this slice:
+
+- Add focused tests for persisted feed normalization and media job projection before moving host-side media runtime code.
