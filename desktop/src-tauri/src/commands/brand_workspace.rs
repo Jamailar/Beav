@@ -6,9 +6,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::persistence::ensure_store_hydrated_for_subjects;
-use crate::{
-    make_id, now_iso, with_store, workspace_root, write_json_value, AppState, SubjectRecord,
-};
+use crate::{make_id, now_iso, with_store, workspace_root, AppState, SubjectRecord};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,7 +25,6 @@ pub(crate) struct BrandWorkspaceProduct {
     pub brand_id: String,
     pub name: String,
     pub description: Option<String>,
-    pub product_family: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -38,19 +35,19 @@ pub(crate) struct BrandWorkspaceSku {
     pub id: String,
     pub product_id: String,
     pub name: String,
-    pub variant_values: Value,
+    pub variant_text: String,
     pub created_at: String,
     pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BrandWorkspaceSkuImage {
+pub(crate) struct BrandWorkspaceAssetRef {
     pub id: String,
-    pub sku_id: String,
-    pub relative_path: String,
+    pub owner_type: String,
+    pub owner_id: String,
+    pub path: String,
     pub role: String,
-    pub selected_by_default: bool,
     pub created_at: String,
 }
 
@@ -59,13 +56,14 @@ pub(crate) struct BrandWorkspaceSkuImage {
 pub(crate) struct BrandWorkspaceProductBundle {
     pub product: BrandWorkspaceProduct,
     pub skus: Vec<BrandWorkspaceSku>,
-    pub sku_images: Vec<BrandWorkspaceSkuImage>,
+    pub assets: Vec<BrandWorkspaceAssetRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BrandWorkspaceBrandBundle {
     pub brand: BrandWorkspaceBrand,
+    pub assets: Vec<BrandWorkspaceAssetRef>,
     pub products: Vec<BrandWorkspaceProductBundle>,
 }
 
@@ -84,7 +82,6 @@ struct ProductMutationInput {
     brand_id: String,
     name: String,
     description: Option<String>,
-    product_family: Option<String>,
     skus: Option<Vec<SkuMutationInput>>,
 }
 
@@ -94,21 +91,13 @@ struct SkuMutationInput {
     id: Option<String>,
     product_id: Option<String>,
     name: String,
-    variant_values: Option<Value>,
+    variant_text: Option<String>,
 }
 
 fn clean_string(value: Option<String>) -> Option<String> {
     value
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
-}
-
-fn json_text(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
-}
-
-fn parse_json_text(value: String) -> Value {
-    serde_json::from_str(&value).unwrap_or(Value::Null)
 }
 
 fn brand_workspace_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -147,24 +136,21 @@ fn open_connection(state: &State<'_, AppState>) -> Result<Connection, String> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS brand_assets (
+        CREATE TABLE IF NOT EXISTS asset_refs (
             id TEXT PRIMARY KEY,
-            brand_id TEXT NOT NULL,
-            relative_path TEXT NOT NULL,
+            owner_type TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            path TEXT NOT NULL,
             role TEXT NOT NULL,
-            used_for TEXT,
-            selected_by_default INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(brand_id) REFERENCES brand_records(id) ON DELETE CASCADE
+            created_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_brand_assets_brand
-            ON brand_assets(brand_id, role, id);
+        CREATE INDEX IF NOT EXISTS idx_asset_refs_owner
+            ON asset_refs(owner_type, owner_id, role, id);
         CREATE TABLE IF NOT EXISTS product_records (
             id TEXT PRIMARY KEY,
             brand_id TEXT NOT NULL,
             name TEXT NOT NULL,
             description TEXT,
-            product_family TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(brand_id) REFERENCES brand_records(id) ON DELETE CASCADE
@@ -175,28 +161,48 @@ fn open_connection(state: &State<'_, AppState>) -> Result<Connection, String> {
             id TEXT PRIMARY KEY,
             product_id TEXT NOT NULL,
             name TEXT NOT NULL,
-            variant_values_json TEXT NOT NULL DEFAULT '{}',
+            variant_text TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(product_id) REFERENCES product_records(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_skus_product_id
             ON product_skus(product_id, updated_at DESC, id);
-        CREATE TABLE IF NOT EXISTS sku_reference_images (
-            id TEXT PRIMARY KEY,
-            sku_id TEXT NOT NULL,
-            relative_path TEXT NOT NULL,
-            role TEXT NOT NULL,
-            selected_by_default INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(sku_id) REFERENCES product_skus(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_sku_images_sku_id
-            ON sku_reference_images(sku_id, role, id);
         "#,
     )
     .map_err(|error| error.to_string())?;
+    ensure_column(
+        &conn,
+        "product_skus",
+        "variant_text",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     Ok(conn)
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|error| error.to_string())?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    if columns.iter().any(|item| item == column) {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn row_to_brand(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceBrand, rusqlite::Error> {
@@ -215,9 +221,8 @@ fn row_to_product(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceProduct, rusq
         brand_id: row.get(1)?,
         name: row.get(2)?,
         description: row.get(3)?,
-        product_family: row.get(4)?,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
     })
 }
 
@@ -226,20 +231,19 @@ fn row_to_sku(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceSku, rusqlite::Er
         id: row.get(0)?,
         product_id: row.get(1)?,
         name: row.get(2)?,
-        variant_values: parse_json_text(row.get(3)?),
+        variant_text: row.get(3)?,
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
     })
 }
 
-fn row_to_sku_image(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceSkuImage, rusqlite::Error> {
-    let selected: i64 = row.get(4)?;
-    Ok(BrandWorkspaceSkuImage {
+fn row_to_asset_ref(row: &rusqlite::Row<'_>) -> Result<BrandWorkspaceAssetRef, rusqlite::Error> {
+    Ok(BrandWorkspaceAssetRef {
         id: row.get(0)?,
-        sku_id: row.get(1)?,
-        relative_path: row.get(2)?,
-        role: row.get(3)?,
-        selected_by_default: selected != 0,
+        owner_type: row.get(1)?,
+        owner_id: row.get(2)?,
+        path: row.get(3)?,
+        role: row.get(4)?,
         created_at: row.get(5)?,
     })
 }
@@ -264,7 +268,7 @@ fn select_products_for_brand(
 ) -> Result<Vec<BrandWorkspaceProduct>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, brand_id, name, description, product_family, created_at, updated_at
+            "SELECT id, brand_id, name, description, created_at, updated_at
              FROM product_records WHERE brand_id = ?1 ORDER BY updated_at DESC, name ASC",
         )
         .map_err(|error| error.to_string())?;
@@ -281,7 +285,7 @@ fn select_skus_for_product(
 ) -> Result<Vec<BrandWorkspaceSku>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, product_id, name, variant_values_json, created_at, updated_at
+            "SELECT id, product_id, name, variant_text, created_at, updated_at
              FROM product_skus WHERE product_id = ?1 ORDER BY updated_at DESC, name ASC",
         )
         .map_err(|error| error.to_string())?;
@@ -292,25 +296,27 @@ fn select_skus_for_product(
         .map_err(|error| error.to_string())
 }
 
-fn select_images_for_skus(
+fn select_asset_refs(
     conn: &Connection,
-    sku_ids: &[String],
-) -> Result<Vec<BrandWorkspaceSkuImage>, String> {
-    if sku_ids.is_empty() {
+    owner_type: &str,
+    owner_ids: &[String],
+) -> Result<Vec<BrandWorkspaceAssetRef>, String> {
+    if owner_ids.is_empty() {
         return Ok(Vec::new());
     }
     let placeholders = std::iter::repeat("?")
-        .take(sku_ids.len())
+        .take(owner_ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT id, sku_id, relative_path, role, selected_by_default, created_at
-         FROM sku_reference_images WHERE sku_id IN ({placeholders})
+        "SELECT id, owner_type, owner_id, path, role, created_at
+         FROM asset_refs WHERE owner_type = ?1 AND owner_id IN ({placeholders})
          ORDER BY created_at DESC, id"
     );
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
+    let params = std::iter::once(owner_type).chain(owner_ids.iter().map(String::as_str));
     let rows = stmt
-        .query_map(rusqlite::params_from_iter(sku_ids.iter()), row_to_sku_image)
+        .query_map(rusqlite::params_from_iter(params), row_to_asset_ref)
         .map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())
@@ -321,19 +327,20 @@ fn brand_bundle(
     brand: BrandWorkspaceBrand,
 ) -> Result<BrandWorkspaceBrandBundle, String> {
     let products = select_products_for_brand(conn, &brand.id)?;
+    let brand_assets = select_asset_refs(conn, "brand", &[brand.id.clone()])?;
     let mut bundles = Vec::new();
     for product in products {
         let skus = select_skus_for_product(conn, &product.id)?;
-        let sku_ids = skus.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
-        let sku_images = select_images_for_skus(conn, &sku_ids)?;
+        let assets = select_asset_refs(conn, "product", &[product.id.clone()])?;
         bundles.push(BrandWorkspaceProductBundle {
             product,
             skus,
-            sku_images,
+            assets,
         });
     }
     Ok(BrandWorkspaceBrandBundle {
         brand,
+        assets: brand_assets,
         products: bundles,
     })
 }
@@ -405,48 +412,52 @@ fn sync_subject_brands(conn: &Connection, state: &State<'_, AppState>) -> Result
         }
         conn.execute(
             "INSERT INTO product_records (
-                id, brand_id, name, description, product_family, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                id, brand_id, name, description, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                 brand_id = excluded.brand_id,
                 name = excluded.name,
                 description = excluded.description,
-                product_family = excluded.product_family,
                 updated_at = excluded.updated_at",
             params![
                 subject.id,
                 brand_id,
                 subject.name,
                 subject.description,
-                subject.name,
                 subject.created_at,
                 now,
             ],
         )
         .map_err(|error| error.to_string())?;
         for sku in &subject.skus {
-            let variant_values = json!(sku
+            let variant_text = sku
                 .attributes
                 .iter()
-                .map(|item| (item.key.clone(), Value::String(item.value.clone())))
-                .collect::<serde_json::Map<String, Value>>());
+                .filter_map(|item| {
+                    let key = item.key.trim();
+                    let value = item.value.trim();
+                    if key.is_empty() && value.is_empty() {
+                        None
+                    } else if key.is_empty() {
+                        Some(value.to_string())
+                    } else if value.is_empty() {
+                        Some(key.to_string())
+                    } else {
+                        Some(format!("{key}: {value}"))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
             conn.execute(
                 "INSERT INTO product_skus (
-                    id, product_id, name, variant_values_json, created_at, updated_at
+                    id, product_id, name, variant_text, created_at, updated_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(id) DO UPDATE SET
                     product_id = excluded.product_id,
                     name = excluded.name,
-                    variant_values_json = excluded.variant_values_json,
+                    variant_text = excluded.variant_text,
                     updated_at = excluded.updated_at",
-                params![
-                    sku.id,
-                    subject.id,
-                    sku.name,
-                    json_text(&variant_values),
-                    now,
-                    now
-                ],
+                params![sku.id, subject.id, sku.name, variant_text, now, now],
             )
             .map_err(|error| error.to_string())?;
         }
@@ -520,22 +531,20 @@ fn upsert_product(
     let created_at = existing_created_at.unwrap_or_else(|| now.clone());
     conn.execute(
         "INSERT INTO product_records (
-            id, brand_id, name, description, product_family, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            id, brand_id, name, description, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(id) DO UPDATE SET
             brand_id = excluded.brand_id,
             name = excluded.name,
             description = excluded.description,
-            product_family = excluded.product_family,
             updated_at = excluded.updated_at",
         params![
             id,
             brand_id,
             name,
             clean_string(input.description),
-            clean_string(input.product_family).or_else(|| Some(name.clone())),
             created_at,
-            now,
+            now
         ],
     )
     .map_err(|error| error.to_string())?;
@@ -588,24 +597,20 @@ fn upsert_sku_for_product(
         .optional()
         .map_err(|error| error.to_string())?;
     let created_at = existing_created_at.unwrap_or_else(|| now.clone());
-    let variant_values = input.variant_values.unwrap_or_else(|| json!({}));
+    let variant_text = input
+        .variant_text
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
     conn.execute(
         "INSERT INTO product_skus (
-            id, product_id, name, variant_values_json, created_at, updated_at
+            id, product_id, name, variant_text, created_at, updated_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(id) DO UPDATE SET
             product_id = excluded.product_id,
             name = excluded.name,
-            variant_values_json = excluded.variant_values_json,
+            variant_text = excluded.variant_text,
             updated_at = excluded.updated_at",
-        params![
-            id,
-            product_id,
-            name,
-            json_text(&variant_values),
-            created_at,
-            now
-        ],
+        params![id, product_id, name, variant_text, created_at, now],
     )
     .map_err(|error| error.to_string())?;
     get_sku(conn, &id)
@@ -623,7 +628,7 @@ fn get_brand(conn: &Connection, id: &str) -> Result<BrandWorkspaceBrand, String>
 
 fn get_product(conn: &Connection, id: &str) -> Result<BrandWorkspaceProduct, String> {
     conn.query_row(
-        "SELECT id, brand_id, name, description, product_family, created_at, updated_at
+        "SELECT id, brand_id, name, description, created_at, updated_at
          FROM product_records WHERE id = ?1",
         params![id],
         row_to_product,
@@ -633,7 +638,7 @@ fn get_product(conn: &Connection, id: &str) -> Result<BrandWorkspaceProduct, Str
 
 fn get_sku(conn: &Connection, id: &str) -> Result<BrandWorkspaceSku, String> {
     conn.query_row(
-        "SELECT id, product_id, name, variant_values_json, created_at, updated_at
+        "SELECT id, product_id, name, variant_text, created_at, updated_at
          FROM product_skus WHERE id = ?1",
         params![id],
         row_to_sku,
@@ -644,13 +649,65 @@ fn get_sku(conn: &Connection, id: &str) -> Result<BrandWorkspaceSku, String> {
 fn get_product_bundle(conn: &Connection, id: &str) -> Result<BrandWorkspaceProductBundle, String> {
     let product = get_product(conn, id)?;
     let skus = select_skus_for_product(conn, id)?;
-    let sku_ids = skus.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
-    let sku_images = select_images_for_skus(conn, &sku_ids)?;
+    let assets = select_asset_refs(conn, "product", &[product.id.clone()])?;
     Ok(BrandWorkspaceProductBundle {
         product,
         skus,
-        sku_images,
+        assets,
     })
+}
+
+fn markdown_line(value: Option<&str>) -> &str {
+    value
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("未填写")
+}
+
+fn asset_refs_markdown(assets: &[BrandWorkspaceAssetRef]) -> String {
+    if assets.is_empty() {
+        return "- 未绑定\n".to_string();
+    }
+    assets
+        .iter()
+        .map(|asset| format!("- {}: {}\n", asset.role, asset.path))
+        .collect::<String>()
+}
+
+fn brand_markdown(bundle: &BrandWorkspaceBrandBundle, generated_at: &str) -> String {
+    let mut markdown = String::new();
+    markdown.push_str(&format!("# 品牌：{}\n\n", bundle.brand.name));
+    markdown.push_str(
+        "<!-- generated: true; readOnly: true; canonicalSource: brand-workspace.sqlite -->\n\n",
+    );
+    markdown.push_str(&format!("生成时间：{generated_at}\n\n"));
+    markdown.push_str("## 品牌描述\n\n");
+    markdown.push_str(markdown_line(bundle.brand.description.as_deref()));
+    markdown.push_str("\n\n## 品牌图片\n\n");
+    markdown.push_str(&asset_refs_markdown(&bundle.assets));
+    markdown.push('\n');
+    for product_bundle in &bundle.products {
+        markdown.push_str(&format!("## 商品：{}\n\n", product_bundle.product.name));
+        markdown.push_str("### 商品描述\n\n");
+        markdown.push_str(markdown_line(product_bundle.product.description.as_deref()));
+        markdown.push_str("\n\n### 商品图片\n\n");
+        markdown.push_str(&asset_refs_markdown(&product_bundle.assets));
+        markdown.push_str("\n### SKU\n\n");
+        if product_bundle.skus.is_empty() {
+            markdown.push_str("- 未创建 SKU\n\n");
+        } else {
+            for sku in &product_bundle.skus {
+                let variant_text = sku.variant_text.trim();
+                if variant_text.is_empty() {
+                    markdown.push_str(&format!("- {}\n", sku.name));
+                } else {
+                    markdown.push_str(&format!("- {}：{}\n", sku.name, variant_text));
+                }
+            }
+            markdown.push('\n');
+        }
+    }
+    markdown
 }
 
 fn rebuild_ai_index_with_connection(
@@ -660,43 +717,38 @@ fn rebuild_ai_index_with_connection(
     let index_root = brand_workspace_ai_index_root(state)?;
     let brands = select_brands(conn)?;
     let generated_at = now_iso();
-    let index = brands
-        .iter()
-        .map(|brand| {
-            let products = select_products_for_brand(conn, &brand.id).unwrap_or_default();
-            json!({
-                "id": brand.id,
-                "name": brand.name,
-                "description": brand.description,
-                "productCount": products.len(),
-                "contextPath": format!("brand_{}.context.json", brand.id),
-            })
-        })
-        .collect::<Vec<_>>();
-    write_json_value(
-        &index_root.join("brands.index.json"),
-        &json!({
-            "generated": true,
-            "readOnly": true,
-            "canonicalSource": "brand-workspace.sqlite",
-            "generatedAt": generated_at,
-            "brands": index,
-        }),
-    )?;
+    let _ = fs::remove_file(index_root.join("brands.index.json"));
+    for entry in fs::read_dir(&index_root).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with("brand_") && file_name.ends_with(".context.json") {
+            let _ = fs::remove_file(path);
+        }
+    }
+    let mut index = String::new();
+    index.push_str("# 品牌资产索引\n\n");
+    index.push_str(
+        "<!-- generated: true; readOnly: true; canonicalSource: brand-workspace.sqlite -->\n\n",
+    );
+    index.push_str(&format!("生成时间：{generated_at}\n\n"));
     for brand in brands {
         let bundle = brand_bundle(conn, brand)?;
-        write_json_value(
-            &index_root.join(format!("brand_{}.context.json", bundle.brand.id)),
-            &json!({
-                "generated": true,
-                "readOnly": true,
-                "canonicalSource": "brand-workspace.sqlite",
-                "generatedAt": generated_at,
-                "brand": bundle.brand,
-                "products": bundle.products,
-            }),
-        )?;
+        let context_file_name = format!("brand_{}.md", bundle.brand.id);
+        index.push_str(&format!(
+            "- [{}]({})：{} 个商品\n",
+            bundle.brand.name,
+            context_file_name,
+            bundle.products.len()
+        ));
+        fs::write(
+            index_root.join(context_file_name),
+            brand_markdown(&bundle, &generated_at),
+        )
+        .map_err(|error| error.to_string())?;
     }
+    fs::write(index_root.join("brands.index.md"), index).map_err(|error| error.to_string())?;
     Ok(())
 }
 
