@@ -214,6 +214,12 @@ interface ProductDetailVersionDraft {
     title: string;
 }
 
+interface ProductDetailVersionOption extends ProductDetailVersionDraft {
+    key: string;
+    page?: BrandWorkspaceProductDetailPage;
+    builtIn: boolean;
+}
+
 interface GeneratedImageAsset {
     id: string;
     title?: string;
@@ -990,16 +996,62 @@ function productDetailVersionForPlatform(
         : version;
 }
 
+function buildProductDetailVersionOptions(
+    platform: EcommercePlatformRecord | null,
+    pages: BrandWorkspaceProductDetailPage[],
+): ProductDetailVersionOption[] {
+    if (!platform || isMainlandChinaPlatform(platform)) {
+        const page = pages.find((item) => detailVersionKey(item.market, item.locale) === '__default__') || pages[0];
+        return [{
+            key: '__default__',
+            market: '',
+            locale: '',
+            title: page?.title || '',
+            page,
+            builtIn: true,
+        }];
+    }
+
+    const options = (platform.detailPageLocales || []).map((item) => {
+        const key = detailVersionKey(item.market, item.locale);
+        const page = pages.find((candidate) => detailVersionKey(candidate.market, candidate.locale) === key);
+        return {
+            key,
+            market: item.market,
+            locale: item.locale,
+            title: page?.title || '',
+            page,
+            builtIn: true,
+        };
+    });
+    const knownKeys = new Set(options.map((item) => item.key));
+    const legacyOptions = pages
+        .filter((page) => {
+            const key = detailVersionKey(page.market, page.locale);
+            return key !== '__default__' && !knownKeys.has(key);
+        })
+        .map((page) => ({
+            key: detailVersionKey(page.market, page.locale),
+            market: page.market,
+            locale: page.locale,
+            title: page.title || '',
+            page,
+            builtIn: false,
+        }));
+
+    return [...options, ...legacyOptions];
+}
+
 function detailVersionKey(market = '', locale = ''): string {
     const cleanMarket = market.trim();
     const cleanLocale = locale.trim();
     return cleanMarket || cleanLocale ? `${cleanMarket}__${cleanLocale}` : '__default__';
 }
 
-function detailVersionLabel(page?: Pick<BrandWorkspaceProductDetailPage, 'market' | 'locale'>): string {
+function detailVersionLabel(page?: Pick<ProductDetailVersionDraft, 'market' | 'locale'>): string {
     if (!page) return '默认版本';
     const parts = [page.market, page.locale].map((value) => value.trim()).filter(Boolean);
-    return parts.length ? parts.join(' / ') : '默认版本';
+    return parts.length ? parts.join('-') : '默认版本';
 }
 
 function generatedAssetToImageDraft(asset: Partial<GeneratedImageAsset> & Record<string, unknown>): BrandWorkspaceImageDraft | null {
@@ -1562,21 +1614,20 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const activeDetailPlatform = useMemo(() => (
         enabledEcommercePlatforms.find((platform) => platform.id === selectedDetailPlatformId) || enabledEcommercePlatforms[0] || null
     ), [enabledEcommercePlatforms, selectedDetailPlatformId]);
-    const hideDetailMarketLocaleFields = isMainlandChinaPlatform(activeDetailPlatform);
     const activeDetailPages = useMemo(() => (
         activeDetailProductBundle && activeDetailPlatform
             ? (activeDetailProductBundle.detailPages || []).filter((page) => page.platform === activeDetailPlatform.id)
             : []
     ), [activeDetailPlatform, activeDetailProductBundle]);
-    const isDraftDetailVersion = selectedDetailVersionKey.startsWith('draft-');
-    const activeDetailPage = useMemo(() => (
-        isDraftDetailVersion
-            ? null
-            : activeDetailPages.find((page) => detailVersionKey(page.market, page.locale) === selectedDetailVersionKey)
-                || activeDetailPages.find((page) => detailVersionKey(page.market, page.locale) === '__default__')
-                || activeDetailPages[0]
-                || null
-    ), [activeDetailPages, isDraftDetailVersion, selectedDetailVersionKey]);
+    const detailVersionOptions = useMemo(() => (
+        buildProductDetailVersionOptions(activeDetailPlatform, activeDetailPages)
+    ), [activeDetailPages, activeDetailPlatform]);
+    const activeDetailVersionOption = useMemo(() => (
+        detailVersionOptions.find((option) => option.key === selectedDetailVersionKey)
+            || detailVersionOptions[0]
+            || null
+    ), [detailVersionOptions, selectedDetailVersionKey]);
+    const activeDetailPage = activeDetailVersionOption?.page || null;
     const productDetailThumbnailsByProductId = useMemo(() => {
         const result = new Map<string, BrandWorkspaceAssetRef[]>();
         for (const brandBundle of brandWorkspaceBrands) {
@@ -1593,21 +1644,22 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [brandWorkspaceBrands]);
     useEffect(() => {
         if (!productDetailContext) return;
-        if (isDraftDetailVersion) return;
-        if (activeDetailPage) {
-            setSelectedDetailVersionKey(detailVersionKey(activeDetailPage.market, activeDetailPage.locale));
+        if (activeDetailVersionOption) {
+            if (selectedDetailVersionKey !== activeDetailVersionOption.key) {
+                setSelectedDetailVersionKey(activeDetailVersionOption.key);
+            }
             setDetailVersionDraft({
-                market: activeDetailPage.market,
-                locale: activeDetailPage.locale,
-                title: activeDetailPage.title || '',
+                market: activeDetailVersionOption.market,
+                locale: activeDetailVersionOption.locale,
+                title: activeDetailVersionOption.title || '',
             });
-            setDetailImageDrafts(assetRefsToImageDrafts(activeDetailProductBundle?.detailPageAssets?.[activeDetailPage.id]));
+            setDetailImageDrafts(assetRefsToImageDrafts(activeDetailVersionOption.page ? activeDetailProductBundle?.detailPageAssets?.[activeDetailVersionOption.page.id] : undefined));
             return;
         }
         setSelectedDetailVersionKey('__default__');
         setDetailVersionDraft({ market: '', locale: '', title: '' });
         setDetailImageDrafts([]);
-    }, [activeDetailPage, activeDetailProductBundle, isDraftDetailVersion, productDetailContext]);
+    }, [activeDetailProductBundle, activeDetailVersionOption, productDetailContext, selectedDetailVersionKey]);
     const activeDraftSubject = useMemo(
         () => draft.id ? subjects.find((subject) => subject.id === draft.id) || null : null,
         [draft.id, subjects],
@@ -1850,21 +1902,15 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setDetailImageDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
     }, []);
 
-    const handleSelectDetailVersion = useCallback((page: BrandWorkspaceProductDetailPage) => {
-        setSelectedDetailVersionKey(detailVersionKey(page.market, page.locale));
+    const handleSelectDetailVersion = useCallback((option: ProductDetailVersionOption) => {
+        setSelectedDetailVersionKey(option.key);
         setDetailVersionDraft({
-            market: page.market,
-            locale: page.locale,
-            title: page.title || '',
+            market: option.market,
+            locale: option.locale,
+            title: option.title || '',
         });
-        setDetailImageDrafts(assetRefsToImageDrafts(activeDetailProductBundle?.detailPageAssets?.[page.id]));
+        setDetailImageDrafts(assetRefsToImageDrafts(option.page ? activeDetailProductBundle?.detailPageAssets?.[option.page.id] : undefined));
     }, [activeDetailProductBundle]);
-
-    const handleCreateDetailVersion = useCallback(() => {
-        setSelectedDetailVersionKey(`draft-${Date.now()}`);
-        setDetailVersionDraft({ market: '', locale: '', title: '' });
-        setDetailImageDrafts([]);
-    }, []);
 
     const handleSaveDetailPage = useCallback(async () => {
         if (!activeDetailProductBundle || !activeDetailPlatform) {
@@ -2905,7 +2951,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             ? [productCover, ...activeDetailProductBundle.assets.filter((asset) => asset.id !== productCover.id)]
             : activeDetailProductBundle.assets
         ).filter((asset) => asset.path).slice(0, 4);
-        const detailPages = activeDetailPages;
         const hasPlatforms = enabledEcommercePlatforms.length > 0;
         const displayDetailVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
         return (
@@ -3029,21 +3074,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
                                     <div className="min-w-0 space-y-5">
                                         <div className="flex flex-wrap items-center gap-2">
-                                            {detailPages.length === 0 && (
-                                                <button
-                                                    type="button"
-                                                    className="inline-flex h-8 items-center rounded-lg bg-black px-3 text-xs font-semibold text-white"
-                                                >
-                                                    默认版本
-                                                </button>
-                                            )}
-                                            {detailPages.map((page) => {
-                                                const active = activeDetailPage?.id === page.id;
+                                            {detailVersionOptions.map((option) => {
+                                                const active = selectedDetailVersionKey === option.key
+                                                    || (!detailVersionOptions.some((item) => item.key === selectedDetailVersionKey) && activeDetailVersionOption?.key === option.key);
                                                 return (
                                                     <button
-                                                        key={page.id}
+                                                        key={option.key}
                                                         type="button"
-                                                        onClick={() => handleSelectDetailVersion(page)}
+                                                        onClick={() => handleSelectDetailVersion(option)}
                                                         className={clsx(
                                                             'inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold transition',
                                                             active
@@ -3051,26 +3089,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                                 : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
                                                         )}
                                                     >
-                                                        {detailVersionLabel(page)}
+                                                        {detailVersionLabel(option)}
                                                     </button>
                                                 );
                                             })}
-                                            <button
-                                                type="button"
-                                                onClick={handleCreateDetailVersion}
-                                                className="inline-flex h-8 items-center gap-1 rounded-lg border border-dashed border-[rgb(var(--color-border))] px-2.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
-                                            >
-                                                <Plus className="h-3.5 w-3.5" />
-                                                版本
-                                            </button>
                                         </div>
 
-                                        <div className={clsx(
-                                            'grid grid-cols-1 gap-3',
-                                            hideDetailMarketLocaleFields
-                                                ? 'md:grid-cols-[minmax(0,1fr)]'
-                                                : 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]',
-                                        )}>
+                                        <div className="grid grid-cols-1 gap-3">
                                             <label className="block">
                                                 <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">标题</div>
                                                 <input
@@ -3080,28 +3105,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
                                                 />
                                             </label>
-                                            {!hideDetailMarketLocaleFields && (
-                                                <>
-                                                    <label className="block">
-                                                        <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">国家 / 市场</div>
-                                                        <input
-                                                            value={detailVersionDraft.market}
-                                                            onChange={(event) => setDetailVersionDraft((current) => ({ ...current, market: event.target.value }))}
-                                                            placeholder="例如 US、JP、泰国"
-                                                            className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                                        />
-                                                    </label>
-                                                    <label className="block">
-                                                        <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">语言</div>
-                                                        <input
-                                                            value={detailVersionDraft.locale}
-                                                            onChange={(event) => setDetailVersionDraft((current) => ({ ...current, locale: event.target.value }))}
-                                                            placeholder="例如 en-US、ja-JP、th-TH"
-                                                            className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
-                                                        />
-                                                    </label>
-                                                </>
-                                            )}
                                         </div>
 
                                         <section className="space-y-3">
