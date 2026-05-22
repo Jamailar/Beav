@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use tauri::State;
@@ -487,7 +487,8 @@ fn sync_asset_images(
     )
     .map_err(|error| error.to_string())?;
     let now = now_iso();
-    for image in images {
+    let mut used_ids = HashSet::new();
+    for (index, image) in images.into_iter().enumerate() {
         let path = if let Some(data_url) = image
             .data_url
             .as_deref()
@@ -502,12 +503,13 @@ fn sync_asset_images(
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| "图片缺少路径".to_string())?
         };
+        let id = unique_asset_ref_id(conn, image.id, index, &mut used_ids)?;
         conn.execute(
             "INSERT INTO asset_refs (
                 id, owner_type, owner_id, path, role, created_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
-                image.id.unwrap_or_else(|| make_id("asset")),
+                id,
                 owner_type,
                 owner_id,
                 path,
@@ -518,6 +520,46 @@ fn sync_asset_images(
         .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn asset_ref_id_exists(conn: &Connection, id: &str) -> Result<bool, String> {
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT id FROM asset_refs WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    Ok(existing.is_some())
+}
+
+fn unique_asset_ref_id(
+    conn: &Connection,
+    requested_id: Option<String>,
+    index: usize,
+    used_ids: &mut HashSet<String>,
+) -> Result<String, String> {
+    if let Some(id) = requested_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        if !used_ids.contains(&id) && !asset_ref_id_exists(conn, &id)? {
+            used_ids.insert(id.clone());
+            return Ok(id);
+        }
+    }
+
+    let base = make_id("asset");
+    let mut suffix = index;
+    loop {
+        let id = format!("{base}-{suffix}");
+        if !used_ids.contains(&id) && !asset_ref_id_exists(conn, &id)? {
+            used_ids.insert(id.clone());
+            return Ok(id);
+        }
+        suffix += 1;
+    }
 }
 
 fn brand_bundle(

@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, State};
 
@@ -11,6 +12,59 @@ use crate::{
 };
 
 const PREVIEW_TEXT_MAX_BYTES: u64 = 512 * 1024;
+
+fn sanitize_zip_entry_name(value: &str, fallback: &str) -> String {
+    let trimmed = value.trim();
+    let file_name = Path::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(trimmed);
+    let sanitized = file_name
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>()
+        .trim_matches('.')
+        .trim()
+        .to_string();
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn unique_zip_entry_name(
+    base_name: &str,
+    used_names: &mut std::collections::HashSet<String>,
+) -> String {
+    if used_names.insert(base_name.to_string()) {
+        return base_name.to_string();
+    }
+    let path = Path::new(base_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    for index in 2.. {
+        let candidate = if extension.is_empty() {
+            format!("{stem}-{index}")
+        } else {
+            format!("{stem}-{index}.{extension}")
+        };
+        if used_names.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
 
 fn find_existing_file_candidate(raw_path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
     if raw_path.as_os_str().is_empty() {
@@ -593,7 +647,11 @@ pub fn handle_file_ops_channel(
 ) -> Option<Result<Value, String>> {
     if !matches!(
         channel,
-        "file:show-in-folder" | "file:copy-image" | "file:save-as" | "file:preview-resolve"
+        "file:show-in-folder"
+            | "file:copy-image"
+            | "file:save-as"
+            | "file:save-zip"
+            | "file:preview-resolve"
     ) {
         return None;
     }
@@ -645,6 +703,75 @@ pub fn handle_file_ops_channel(
                 };
                 fs::copy(&path, &target_path).map_err(|error| error.to_string())?;
                 Ok(json!({ "success": true, "path": target_path }))
+            }
+            "file:save-zip" => {
+                let default_name = payload_string(payload, "defaultName")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "assets.zip".to_string());
+                let files = payload
+                    .get("files")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| "file:save-zip requires files".to_string())?;
+                if files.is_empty() {
+                    return Ok(json!({ "success": false, "error": "没有可下载的文件" }));
+                }
+                let selected = pick_save_file_native("选择压缩包保存位置", &default_name, None)?;
+                let Some(target_path) = selected else {
+                    return Ok(json!({ "success": false, "canceled": true }));
+                };
+                let target_path = if target_path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.eq_ignore_ascii_case("zip"))
+                    .unwrap_or(false)
+                {
+                    target_path
+                } else {
+                    target_path.with_extension("zip")
+                };
+                let file = fs::File::create(&target_path).map_err(|error| error.to_string())?;
+                let mut zip = zip::ZipWriter::new(file);
+                let options = zip::write::FileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated);
+                let mut used_names = std::collections::HashSet::new();
+                let mut written = 0usize;
+                for (index, item) in files.iter().enumerate() {
+                    let source = item
+                        .get("source")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let path = match resolve_file_action_path(state, source) {
+                        Ok(path) => path,
+                        Err(error) => {
+                            return Ok(
+                                json!({ "success": false, "error": error, "source": source }),
+                            );
+                        }
+                    };
+                    if !path.is_file() {
+                        return Ok(
+                            json!({ "success": false, "error": "只能下载文件", "source": source }),
+                        );
+                    }
+                    let fallback_name = format!("image-{}.png", index + 1);
+                    let requested_name = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .or_else(|| path.file_name().and_then(|value| value.to_str()))
+                        .unwrap_or(&fallback_name);
+                    let entry_name = unique_zip_entry_name(
+                        &sanitize_zip_entry_name(requested_name, &fallback_name),
+                        &mut used_names,
+                    );
+                    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+                    zip.start_file(entry_name, options)
+                        .map_err(|error| error.to_string())?;
+                    zip.write_all(&bytes).map_err(|error| error.to_string())?;
+                    written += 1;
+                }
+                zip.finish().map_err(|error| error.to_string())?;
+                Ok(json!({ "success": true, "path": target_path, "count": written }))
             }
             "file:preview-resolve" => {
                 let source = payload_string(payload, "source").unwrap_or_default();
