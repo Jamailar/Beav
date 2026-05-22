@@ -1663,6 +1663,10 @@ declare global {
         }) => Promise<unknown>;
       };
       cover: {
+        list: (payload?: Record<string, unknown>) => Promise<unknown>;
+        generate: (payload: Record<string, unknown>) => Promise<unknown>;
+        openRoot: () => Promise<unknown>;
+        open: (payload: { assetId: string }) => Promise<unknown>;
         saveTemplateImage: (payload: { imageSource: string }) => Promise<unknown>;
         templates: {
           list: () => Promise<unknown>;

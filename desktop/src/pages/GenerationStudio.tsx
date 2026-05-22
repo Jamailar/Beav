@@ -4135,7 +4135,7 @@ export function GenerationStudio({
         void (async () => {
             try {
                 const modelRouteOverride = resolveSelectedModelOverride(settings, 'image', 'image', request.model);
-                const result = await window.ipcRenderer.invoke('cover:generate', {
+                const result = await window.ipcRenderer.cover.generate({
                     templateImage: request.templateImage?.dataUrl,
                     baseImage: request.baseImage?.dataUrl,
                     titles: [{ id: makeId('cover-title'), type: 'main', text: request.prompt.trim() }],
