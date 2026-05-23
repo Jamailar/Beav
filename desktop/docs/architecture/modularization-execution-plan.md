@@ -24,6 +24,7 @@ Status: Current
 | Manuscripts host | `src-tauri/src/commands/manuscripts.rs` 约 6707 行；channel handling 已拆入 `src-tauri/src/commands/manuscripts/` | shared package/timeline helpers 仍在 parent；tree/package/timeline/Remotion/layout 等 channel 已有独立 dispatch 文件 |
 | Settings page | `src/pages/Settings.tsx` 约 8254 行；pricing/model route/MCP draft/runtime perf helpers 已迁入 `features/settings/settingsModel.ts` | 页面仍承担多 tab composition 和保存协调；AI source、账号计费、技能、插件、MCP、CLI runtime、日志诊断、runtime debug 仍需继续 section 化 |
 | Generation page | `src/pages/GenerationStudio.tsx` 约 3961 行；request/feed/submit/reference/audio option helpers 已迁入 `features/media-generation/` | 页面仍承担 mode UI composition，但 shared schema、submit payload、feed projection、Agent context、reference handling 和 digital-human readiness 已出页面 |
+| Knowledge page | `src/pages/Knowledge.tsx` 约 3339 行；catalog projection/filter helpers 已迁入 `features/knowledge/knowledgeModel.ts` | 页面仍承担 detail modal UI、event subscriptions、selection state 和 bridge actions |
 | Chat page | `src/pages/Chat.tsx` 约 4429 行 | 消息、附件、工具流、runtime event 合并、错误恢复、快捷动作混在页面层 |
 | Bridge | `src/bridge/ipcRenderer.ts` 约 1553 行，约 400 个 `invokeChannel` 调用 | channel contract、fallback、browser host、业务 facade 在同一个文件 |
 | Direct IPC usage | `src/` 中仍有约 118 处页面/组件直接 `window.ipcRenderer.invoke(...)` | 页面绕过 typed facade，contract 难以追踪 |
@@ -1907,3 +1908,26 @@ Remaining after Phase 6:
 
 - Manual settings smoke still needs to be run in the app: general/AI/tools/profile/remote/experimental tabs, AI connection test, account/pricing/model refresh if logged in, skills/plugins/MCP/CLI lists, and diagnostics dashboard.
 - `Settings.tsx` is thinner but still owns section rendering for several tabs; future settings work should extract visible section components without changing save payload semantics.
+
+### 2026-05-23 Phase 7 Knowledge UI And Ingest Split Completed
+
+Completed:
+
+- Moved Knowledge page types and pure catalog projections into `src/features/knowledge/knowledgeModel.ts`, including catalog summary conversion, backend kind mapping, card kind resolution, image ordering, visual-file detection, search/tag helpers, and content hash.
+- Kept `src/pages/Knowledge.tsx` focused on UI composition, event subscriptions, selection state, dialogs, and bridge calls.
+- Moved source-specific ingest normalization from `src-tauri/src/knowledge.rs` into `src-tauri/src/knowledge/source_normalizers.rs`, including note kind normalization, title/author derivation, Zhihu answer/article mapping, content text normalization, and source seed resolution.
+- Kept workspace persistence, projection refresh, local HTTP route compatibility, and event emission in `knowledge.rs`.
+- Updated Knowledge renderer and Rust module README files with the new ownership boundaries.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `pnpm build`
+- `cargo fmt --check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo test knowledge`
+
+Remaining after Phase 7:
+
+- Manual Knowledge smoke still needs to be run in the app: list knowledge items, open note/video/document detail, delete note/batch, add document files/folder/vault, rebuild catalog/index, and capture through plugin/local route if available.
+- `Knowledge.tsx` is thinner but still owns detail modal UI and action handlers; deeper UI split should happen around visible list/detail/import sections with the same bridge contracts.
