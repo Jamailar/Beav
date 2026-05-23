@@ -13,6 +13,7 @@
 - `host_impl.rs`：Phase 3 兼容承接层，暂存历史 host glue 与 interactive runtime helpers，后续按领域继续拆分。
 - `commands/`：IPC/频道命令处理层（按业务域拆分）。
 - `commands/manuscripts.rs` + `commands/manuscripts/`：稿件 IPC router plus tree/package/post/richpost/editor-project/timeline/Remotion/layout channel handlers.
+- `commands/official.rs` + `commands/official/`：官方账号/计费/model/API key IPC router plus auth/account/api-key/billing/model channel handlers.
 - `document_ingest/`：文档源接入层，负责 copied-file / tracked-folder / vault 注册与 workspace 托管复制。
 - `events/`：统一事件发射与前端兼容事件桥接。
 - `media_generation.rs` + `media_generation/`：AI media provider adapter layer；parent keeps shared settings/transport/embedding helpers, `image.rs` owns image request/provider logic, and `video.rs` owns video request/provider logic.

@@ -6,6 +6,7 @@
 
 - `SettingsSections.tsx`
 - `shared.tsx`
+- `../../features/settings/settingsModel.ts`：设置页纯 model/helper，包含价格表、AI route、MCP draft 和 runtime perf preset。
 
 ## Characteristics
 
@@ -18,6 +19,7 @@
 
 - 设置页说明文字只描述用户可配置项和后果，不写开发实现说明。
 - 与宿主状态强绑定的设置项，必须提供默认值和降级显示。
+- 纯解析/格式化/默认值逻辑优先放到 `features/settings/settingsModel.ts`，页面只做加载、保存和 section composition。
 
 ## Verification
 
