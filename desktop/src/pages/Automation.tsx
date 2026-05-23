@@ -1,35 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, ChevronDown, Clock3, Loader2, MoreHorizontal, PauseCircle, Pencil, Play, PlayCircle, Plus, Trash2 } from 'lucide-react';
+import {
+  DEFAULT_REDCLAW_AUTOMATION_DRAFT,
+  REDCLAW_AUTOMATION_WEEKDAY_OPTIONS,
+  redClawAutomationDraftFromItem,
+  redClawAutomationIntentFromDraft,
+  redClawAutomationIsTask,
+  redClawAutomationScheduledPayload,
+  redClawAutomationWeekdayLabel,
+  sortRedClawAutomationItems,
+  type RedClawAutomationDraft,
+  type RedClawAutomationScheduleMode,
+  type RedClawTaskListItem,
+} from '../features/redclaw/automationTasks';
 import { appAlert, appConfirm } from '../utils/appDialogs';
-
-type TaskListResponse = Awaited<ReturnType<typeof window.ipcRenderer.redclawRunner.taskList>>;
-type TaskListItem = NonNullable<TaskListResponse['items']>[number];
 
 interface AutomationProps {
   isActive?: boolean;
   onOpenRedClawSession?: (sessionId: string) => void;
 }
 
-interface AutomationDraft {
-  name: string;
-  scheduleMode: ScheduleMode;
-  weekday: number;
-  time: string;
-  prompt: string;
-}
-
-type ScheduleMode = 'hourly' | 'daily' | 'workday' | 'weekly';
 type SchedulePanel = 'mode' | 'weekday' | 'time' | null;
-
-const WEEKDAY_OPTIONS = [
-  { value: 1, label: '星期一' },
-  { value: 2, label: '星期二' },
-  { value: 3, label: '星期三' },
-  { value: 4, label: '星期四' },
-  { value: 5, label: '星期五' },
-  { value: 6, label: '星期六' },
-  { value: 0, label: '星期日' },
-];
 
 const TIME_OPTIONS = Array.from({ length: 24 * 4 }, (_, index) => {
   const totalMinutes = index * 15;
@@ -38,33 +29,7 @@ const TIME_OPTIONS = Array.from({ length: 24 * 4 }, (_, index) => {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 });
 
-const defaultDraft: AutomationDraft = {
-  name: '',
-  scheduleMode: 'daily',
-  weekday: 1,
-  time: '09:00',
-  prompt: '',
-};
-
-function draftFromItem(item: TaskListItem): AutomationDraft {
-  const weekdays = Array.isArray(item.weekdays) ? item.weekdays.join(',') : '';
-  const scheduleMode: ScheduleMode = item.triggerKind === 'interval'
-    ? 'hourly'
-    : item.triggerKind === 'weekly' && weekdays === '1,2,3,4,5'
-      ? 'workday'
-      : item.triggerKind === 'weekly'
-        ? 'weekly'
-        : 'daily';
-  return {
-    name: item.title || '',
-    scheduleMode,
-    weekday: Array.isArray(item.weekdays) && item.weekdays.length > 0 ? Number(item.weekdays[0]) : 1,
-    time: String(item.time || '09:00').slice(0, 5),
-    prompt: item.prompt || item.goal || '',
-  };
-}
-
-function scheduleModeLabel(mode: ScheduleMode): string {
+function scheduleModeLabel(mode: RedClawAutomationScheduleMode): string {
   switch (mode) {
     case 'hourly':
       return '每小时';
@@ -79,45 +44,16 @@ function scheduleModeLabel(mode: ScheduleMode): string {
 }
 
 function weekdayLabel(value: number): string {
-  return WEEKDAY_OPTIONS.find((item) => item.value === value)?.label || '星期一';
+  return redClawAutomationWeekdayLabel(value);
 }
 
-function scheduleButtonLabel(draft: AutomationDraft): string {
+function scheduleButtonLabel(draft: RedClawAutomationDraft): string {
   if (draft.scheduleMode === 'hourly') return '每小时';
   if (draft.scheduleMode === 'weekly') return `${weekdayLabel(draft.weekday)} ${draft.time}`;
   return `${scheduleModeLabel(draft.scheduleMode)} ${draft.time}`;
 }
 
-function isAutomationTask(item: TaskListItem): boolean {
-  return item.kind === 'scheduled' || item.kind === 'scheduled_draft' || item.sourceKind === 'scheduled';
-}
-
-function scheduledPayloadFromDraft(draft: AutomationDraft, name: string, prompt: string): Record<string, unknown> {
-  const base = {
-    name,
-    prompt,
-    actionType: 'redclaw_prompt',
-    ownerScope: 'manual:redclaw',
-    timezone: 'local',
-    missedRunPolicy: 'single',
-    enabled: true,
-  };
-  if (draft.scheduleMode === 'hourly') {
-    return { ...base, mode: 'interval', intervalMinutes: 60 };
-  }
-  if (draft.scheduleMode === 'daily') {
-    return { ...base, mode: 'daily', time: draft.time };
-  }
-  if (draft.scheduleMode === 'workday') {
-    return { ...base, mode: 'weekly', time: draft.time, weekdays: [1, 2, 3, 4, 5] };
-  }
-  if (draft.scheduleMode === 'weekly') {
-    return { ...base, mode: 'weekly', time: draft.time, weekdays: [draft.weekday] };
-  }
-  return { ...base, mode: 'daily', time: draft.time };
-}
-
-function formatSchedule(item: TaskListItem): string {
+function formatSchedule(item: RedClawTaskListItem): string {
   if (item.triggerKind === 'daily') {
     return `每天 ${String(item.time || '09:00').slice(0, 5)}`;
   }
@@ -157,7 +93,7 @@ function formatSidebarTime(value: unknown): string {
   return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-function latestExecutionRecord(item: TaskListItem | null): Record<string, unknown> | null {
+function latestExecutionRecord(item: RedClawTaskListItem | null): Record<string, unknown> | null {
   if (!item) return null;
   const latest = recordFromUnknown(item).latestExecution;
   return Object.keys(recordFromUnknown(latest)).length > 0 ? recordFromUnknown(latest) : null;
@@ -169,15 +105,6 @@ function executionStatusLabel(status: unknown): string {
   if (status === 'running') return '运行中';
   if (status === 'queued') return '排队中';
   return '已处理';
-}
-
-function sortAutomationItems(items: TaskListItem[]): TaskListItem[] {
-  return [...items].sort((left, right) => {
-    const leftDueAt = Date.parse(left.nextDueAt || '') || Number.MAX_SAFE_INTEGER;
-    const rightDueAt = Date.parse(right.nextDueAt || '') || Number.MAX_SAFE_INTEGER;
-    if (leftDueAt !== rightDueAt) return leftDueAt - rightDueAt;
-    return Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || '');
-  });
 }
 
 function assertActionSuccess(result: unknown, fallbackMessage: string): void {
@@ -218,29 +145,13 @@ function confirmedTaskId(value: unknown, fallbackTaskId: string): string {
     || fallbackTaskId;
 }
 
-function scheduleToCron(draft: AutomationDraft): string {
-  if (draft.scheduleMode === 'hourly') {
-    return '0 * * * *';
-  }
-  const [hourRaw = '9', minuteRaw = '0'] = draft.time.split(':');
-  const hour = Math.min(23, Math.max(0, Number(hourRaw) || 0));
-  const minute = Math.min(59, Math.max(0, Number(minuteRaw) || 0));
-  if (draft.scheduleMode === 'workday') {
-    return `${minute} ${hour} * * 1,2,3,4,5`;
-  }
-  if (draft.scheduleMode === 'weekly') {
-    return `${minute} ${hour} * * ${draft.weekday}`;
-  }
-  return `${minute} ${hour} * * *`;
-}
-
 export function Automation({ isActive = true, onOpenRedClawSession }: AutomationProps) {
-  const [items, setItems] = useState<TaskListItem[]>([]);
+  const [items, setItems] = useState<RedClawTaskListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [draft, setDraft] = useState<AutomationDraft>(defaultDraft);
-  const [editingItem, setEditingItem] = useState<TaskListItem | null>(null);
+  const [draft, setDraft] = useState<RedClawAutomationDraft>(DEFAULT_REDCLAW_AUTOMATION_DRAFT);
+  const [editingItem, setEditingItem] = useState<RedClawTaskListItem | null>(null);
   const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
   const [schedulePanel, setSchedulePanel] = useState<SchedulePanel>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -253,7 +164,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
   const selectedTimeRef = useRef<HTMLButtonElement | null>(null);
 
   const currentItems = useMemo(
-    () => sortAutomationItems(items.filter(isAutomationTask)),
+    () => sortRedClawAutomationItems(items.filter(redClawAutomationIsTask)),
     [items],
   );
 
@@ -293,15 +204,15 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
   }, [isActive, load]);
 
   const openDialog = useCallback(() => {
-    setDraft(defaultDraft);
+    setDraft(DEFAULT_REDCLAW_AUTOMATION_DRAFT);
     setEditingItem(null);
     setSchedulePickerOpen(false);
     setSchedulePanel(null);
     setDialogOpen(true);
   }, []);
 
-  const openEditDialog = useCallback((item: TaskListItem) => {
-    setDraft(draftFromItem(item));
+  const openEditDialog = useCallback((item: RedClawTaskListItem) => {
+    setDraft(redClawAutomationDraftFromItem(item));
     setEditingItem(item);
     setSchedulePickerOpen(false);
     setSchedulePanel(null);
@@ -385,7 +296,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
     }
     setSubmitting(true);
     try {
-      const directScheduledPayload = scheduledPayloadFromDraft(draft, name, prompt);
+      const directScheduledPayload = redClawAutomationScheduledPayload(draft, name, prompt);
       if (!editingItem) {
         const created = await window.ipcRenderer.redclawRunner.addScheduled(directScheduledPayload);
         if (!created?.success) {
@@ -397,19 +308,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
         return;
       }
 
-      const intent = {
-        kind: 'scheduled',
-        name,
-        cron: scheduleToCron(draft),
-        prompt,
-        goal: prompt,
-        actionType: 'redclaw_prompt',
-        ownerScope: 'manual:redclaw',
-        timezone: 'local',
-        missedRunPolicy: 'single',
-        creatorMode: 'ui-manual',
-        createdBy: 'automation-page',
-      };
+      const intent = redClawAutomationIntentFromDraft(draft, name, prompt);
 
       if (editingItem) {
         await window.ipcRenderer.redclawRunner.taskUpdate({
@@ -429,7 +328,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
     }
   }, [draft, editingItem, load]);
 
-  const runNow = useCallback(async (item: TaskListItem) => {
+  const runNow = useCallback(async (item: RedClawTaskListItem) => {
     const sourceTaskId = String(item.sourceTaskId || '').trim();
     const definitionId = String(item.definitionId || '').trim();
     let taskId = sourceTaskId || definitionId;
@@ -461,7 +360,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
     }
   }, [load, onOpenRedClawSession]);
 
-  const toggleTaskEnabled = useCallback(async (item: TaskListItem) => {
+  const toggleTaskEnabled = useCallback(async (item: RedClawTaskListItem) => {
     const sourceTaskId = String(item.sourceTaskId || '');
     if (!sourceTaskId) {
       void appAlert('未找到定时任务源记录。');
@@ -485,7 +384,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
     }
   }, [load]);
 
-  const deleteTask = useCallback(async (item: TaskListItem) => {
+  const deleteTask = useCallback(async (item: RedClawTaskListItem) => {
     const confirmed = await appConfirm(`确定删除自动化“${item.title || '未命名自动化'}”吗？`, {
       title: '删除自动化',
       confirmLabel: '删除',
@@ -670,7 +569,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
                         </button>
                         {schedulePanel === 'mode' && (
                           <div className="automation-schedule-menu">
-                            {(['hourly', 'daily', 'workday', 'weekly'] as ScheduleMode[]).map((mode) => (
+                            {(['hourly', 'daily', 'workday', 'weekly'] as RedClawAutomationScheduleMode[]).map((mode) => (
                               <button key={mode} type="button" onClick={() => { setDraft((current) => ({ ...current, scheduleMode: mode })); setSchedulePanel(null); }} className="automation-schedule-option">
                                 <span>{scheduleModeLabel(mode)}</span>
                                 {draft.scheduleMode === mode && <Check className="h-[18px] w-[18px]" strokeWidth={1.7} />}
@@ -686,7 +585,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
                             </button>
                             {schedulePanel === 'weekday' && (
                               <div className="automation-schedule-menu">
-                                {WEEKDAY_OPTIONS.map((option) => (
+                                {REDCLAW_AUTOMATION_WEEKDAY_OPTIONS.map((option) => (
                                   <button key={option.value} type="button" onClick={() => { setDraft((current) => ({ ...current, weekday: option.value })); setSchedulePanel(null); }} className="automation-schedule-option">
                                     <span>{option.label}</span>
                                     {draft.weekday === option.value && <Check className="h-[18px] w-[18px]" strokeWidth={1.7} />}

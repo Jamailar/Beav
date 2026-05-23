@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
@@ -19,6 +19,48 @@ pub fn redclaw_session_id_for_space(space_id: &str) -> String {
 
 pub fn redclaw_context_id_for_space(space_id: &str) -> String {
     format!("redclaw-singleton:{space_id}")
+}
+
+fn apply_redclaw_runtime_metadata(
+    session: &mut crate::ChatSessionRecord,
+    active_space_id: &str,
+    context_id: &str,
+    source_kind: Option<&str>,
+    source_task_id: Option<&str>,
+) {
+    apply_context_binding_metadata(session, "redclaw", context_id, None);
+    let space_id = active_space_id.trim();
+    let mut metadata = session
+        .metadata
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    metadata.insert("surface".to_string(), json!("redclaw"));
+    metadata.insert("runtimeSurface".to_string(), json!("redclaw"));
+    metadata.insert("runtimeMode".to_string(), json!("redclaw"));
+
+    let mut redclaw_context = Map::new();
+    redclaw_context.insert("surface".to_string(), json!("redclaw"));
+    redclaw_context.insert("spaceId".to_string(), json!(space_id));
+    redclaw_context.insert("contextId".to_string(), json!(context_id));
+    redclaw_context.insert(
+        "profileContext".to_string(),
+        json!({
+            "kind": "redclaw-profile",
+            "spaceId": space_id
+        }),
+    );
+    if let Some(kind) = source_kind.map(str::trim).filter(|value| !value.is_empty()) {
+        redclaw_context.insert("sourceKind".to_string(), json!(kind));
+    }
+    if let Some(task_id) = source_task_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        redclaw_context.insert("sourceTaskId".to_string(), json!(task_id));
+    }
+    metadata.insert("redclawContext".to_string(), Value::Object(redclaw_context));
+    session.metadata = Some(Value::Object(metadata));
 }
 
 pub fn redclaw_session_id_for_task(
@@ -58,7 +100,13 @@ pub fn ensure_redclaw_task_session_record(
             Some(session_id.clone()),
             Some(session_title.clone()),
         );
-        apply_context_binding_metadata(session, "redclaw", &context_id, None);
+        apply_redclaw_runtime_metadata(
+            session,
+            &active_space_id,
+            &context_id,
+            source_kind,
+            source_task_id,
+        );
         session.updated_at = now_iso();
         Ok(session.id.clone())
     })
@@ -206,6 +254,8 @@ fn execute_redclaw_run_in_session(
     session_id: String,
     session_title: String,
     context_id: String,
+    source_kind: Option<&str>,
+    source_task_id: Option<&str>,
 ) -> Result<Value, String> {
     let _ = with_store_mut(state, |store| {
         let (session, _) = ensure_chat_session(
@@ -213,7 +263,16 @@ fn execute_redclaw_run_in_session(
             Some(session_id.clone()),
             Some(session_title.clone()),
         );
-        apply_context_binding_metadata(session, "redclaw", &context_id, None);
+        let active_space_id = context_id
+            .strip_prefix("redclaw-singleton:")
+            .unwrap_or("default");
+        apply_redclaw_runtime_metadata(
+            session,
+            active_space_id,
+            &context_id,
+            source_kind,
+            source_task_id,
+        );
         session.updated_at = now_iso();
         Ok(session.id.clone())
     })?;
@@ -288,6 +347,8 @@ pub fn execute_redclaw_run(
         session_id,
         "RedClaw".to_string(),
         context_id,
+        None,
+        None,
     )
 }
 
@@ -317,5 +378,66 @@ pub fn execute_redclaw_task_run(
         session_id,
         session_title,
         context_id,
+        source_kind,
+        source_task_id,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redclaw_runtime_metadata_adds_surface_space_and_task_context() {
+        let mut session = crate::ChatSessionRecord {
+            id: "session-1".to_string(),
+            title: "RedClaw".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({
+                "allowedTools": ["Operate"]
+            })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
+        };
+
+        apply_redclaw_runtime_metadata(
+            &mut session,
+            "default",
+            "redclaw-singleton:default",
+            Some("scheduled"),
+            Some("task-1"),
+        );
+
+        let metadata = session.metadata.expect("metadata");
+        assert_eq!(
+            metadata.get("surface").and_then(Value::as_str),
+            Some("redclaw")
+        );
+        assert_eq!(
+            metadata.get("runtimeMode").and_then(Value::as_str),
+            Some("redclaw")
+        );
+        assert_eq!(
+            metadata
+                .pointer("/redclawContext/spaceId")
+                .and_then(Value::as_str),
+            Some("default")
+        );
+        assert_eq!(
+            metadata
+                .pointer("/redclawContext/sourceTaskId")
+                .and_then(Value::as_str),
+            Some("task-1")
+        );
+        assert_eq!(
+            metadata
+                .get("allowedTools")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
 }

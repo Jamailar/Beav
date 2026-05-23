@@ -1931,3 +1931,27 @@ Remaining after Phase 7:
 
 - Manual Knowledge smoke still needs to be run in the app: list knowledge items, open note/video/document detail, delete note/batch, add document files/folder/vault, rebuild catalog/index, and capture through plugin/local route if available.
 - `Knowledge.tsx` is thinner but still owns detail modal UI and action handlers; deeper UI split should happen around visible list/detail/import sections with the same bridge contracts.
+
+### 2026-05-23 Phase 8 RedClaw Runtime Cohesion Slice Completed
+
+Completed:
+
+- Moved RedClaw runner/project/profile/orchestration bridge exports out of `src/bridge/ipcRenderer.ts` into `src/bridge/domains/redclawBridge.ts`.
+- Added `src/features/redclaw/automationTasks.ts` for shared automation task draft shaping, schedule conversion, list filtering, and sorting.
+- Updated `Automation.tsx` to use the RedClaw feature task helpers and typed RedClaw bridge surface without changing UI behavior.
+- Added explicit RedClaw runtime metadata for created RedClaw sessions: `surface`, `runtimeSurface`, `runtimeMode`, and `redclawContext` with space/profile context.
+- Preserved task source metadata for scheduled RedClaw runs by carrying `sourceKind` and `sourceTaskId` into session metadata.
+- Added `src/features/redclaw/README.md` documenting the new feature boundary.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `cargo fmt --check`
+- `cargo test redclaw_runtime_metadata_adds_surface_space_and_task_context`
+- `cargo check`
+
+Remaining after Phase 8:
+
+- Manual RedClaw/Automation smoke still needs to be run in the app: new RedClaw session, open existing session, create/enable/disable/run scheduled task, inspect task history/notifications, and open manuscript/editor from RedClaw.
+- `RedClaw.tsx` still owns substantial page/session/sidebar composition; future RedClaw work should move visible history/sidebar/session orchestration into `features/redclaw` in smaller UI-safe slices.
+- Generic `commands/chat.rs` still contains RedClaw first-turn style-definition activation; a later runtime cleanup should move that policy behind an explicit RedClaw runtime extension point.

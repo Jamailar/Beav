@@ -32,6 +32,7 @@ import {
 import {
     buildRedClawContextId,
     buildRedClawInitialContext,
+    buildRedClawRuntimeMetadata,
     buildRedClawSessionTitle,
     createContextSessionListItem,
     normalizeClawHubSlug,
@@ -897,6 +898,7 @@ export function RedClaw({
                         contextType: REDCLAW_CONTEXT_TYPE,
                         title: sessionTitle,
                         initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                        metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
                     }, {
                         timeoutMs: 3200,
                         fallback: null,
@@ -1009,6 +1011,7 @@ export function RedClaw({
                         contextType: REDCLAW_CONTEXT_TYPE,
                         title: buildRedClawSessionTitle(nextSpaceName),
                         initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                        metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
                     }, {
                         timeoutMs: 3200,
                         fallback: null,
@@ -1321,6 +1324,7 @@ export function RedClaw({
                     contextType: REDCLAW_CONTEXT_TYPE,
                     title: sessionTitle,
                     initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                    metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
                 }, {
                     timeoutMs: 3200,
                     fallback: null,
@@ -1652,6 +1656,7 @@ export function RedClaw({
                     contextType: REDCLAW_CONTEXT_TYPE,
                     title: buildRedClawSessionTitle(nextSpaceName),
                     initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                    metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
                 }, {
                     timeoutMs: 3200,
                     fallback: null,
