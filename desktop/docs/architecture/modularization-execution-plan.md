@@ -21,7 +21,7 @@ Status: Current
 | Area | Evidence | Risk |
 | --- | --- | --- |
 | Host assembly | `src-tauri/src/main.rs` 约 192 行；历史 host glue 已迁入 `host_impl.rs` 兼容层 | `main.rs` 已恢复装配角色；`host_impl.rs` 后续仍需按领域继续拆分 |
-| Manuscripts host | `src-tauri/src/commands/manuscripts.rs` 约 9798 行 | 稿件树、package、timeline、Remotion、FFmpeg、editor runtime state 共用一个 command 文件 |
+| Manuscripts host | `src-tauri/src/commands/manuscripts.rs` 约 6707 行；channel handling 已拆入 `src-tauri/src/commands/manuscripts/` | shared package/timeline helpers 仍在 parent；tree/package/timeline/Remotion/layout 等 channel 已有独立 dispatch 文件 |
 | Settings page | `src/pages/Settings.tsx` 约 8470 行 | AI source、账号计费、技能、插件、MCP、CLI runtime、日志诊断、runtime debug 混成控制台 |
 | Generation page | `src/pages/GenerationStudio.tsx` 约 3961 行；request/feed/submit/reference/audio option helpers 已迁入 `features/media-generation/` | 页面仍承担 mode UI composition，但 shared schema、submit payload、feed projection、Agent context、reference handling 和 digital-human readiness 已出页面 |
 | Chat page | `src/pages/Chat.tsx` 约 4429 行 | 消息、附件、工具流、runtime event 合并、错误恢复、快捷动作混在页面层 |
@@ -1863,3 +1863,25 @@ Remaining after Phase 4:
 
 - Manual media smoke still needs a configured provider: image job, video job with reference, audio/TTS job, cover job, digital-human readiness path, retry/cancel/list jobs.
 - `GenerationStudio.tsx` is materially thinner, but mode UI composition can still be split further if Phase 5+ scope allows frontend page-shell polishing.
+
+### 2026-05-23 Phase 5 Manuscripts And Video Editor Split Completed
+
+Completed:
+
+- Split `src-tauri/src/commands/manuscripts.rs` channel handling into `commands/manuscripts/` domain files: tree, package, post, richpost, editor project, timeline, Remotion, and layout.
+- Kept shared package schema helpers and timeline mutation helpers in the parent module so channel modules stay dispatch-only.
+- Moved manuscript editor pure model/types/helpers into `src/features/manuscripts/editorModel.ts`, including draft/media card projection, folder traversal, generated media job projection, package state types, and export resolution sizing.
+- Updated manuscript renderer and Rust command README files with the new ownership boundaries.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `pnpm build`
+- `cargo fmt --check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo test manuscripts`
+
+Remaining after Phase 5:
+
+- Manual editor smoke still needs to be run in the app: open manuscript editor, create/rename/delete folder and draft, edit/save draft, bind media asset, mutate clip/track if available, and render/export video.
+- `commands/manuscripts.rs` is thinner but still owns many shared helpers; deeper package/timeline helper relocation should only happen with focused regression coverage for package schema compatibility.
