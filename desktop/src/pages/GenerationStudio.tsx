@@ -26,7 +26,7 @@ import clsx from 'clsx';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import { findAiPresetById, inferPresetIdByEndpoint, type AiSourceConfig } from '../config/aiSources';
 import { APP_BRAND } from '../config/brand';
-import type { GenerationIntent, PendingChatMessage } from '../App';
+import type { GenerationIntent, PendingChatMessage } from '../features/app-shell/types';
 import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { mediaJobsStore, shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';

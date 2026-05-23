@@ -3,7 +3,7 @@ import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRig
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { PendingChatMessage } from '../App';
+import type { PendingChatMessage } from '../features/app-shell/types';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';

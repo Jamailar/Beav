@@ -1,25 +1,25 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
-import { ChevronDown, FileText, Link2, Loader2, MessageSquareWarning, ShieldCheck, Minus, Square, X } from 'lucide-react';
-import QRCode from 'qrcode';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
+import { FileText, Loader2, MessageSquareWarning } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { AppOnboarding, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
-import { StartupMigrationModal } from './components/StartupMigrationModal';
 import { FeedbackReportDialog, OPEN_FEEDBACK_REPORT_EVENT, type FeedbackReportContext } from './components/FeedbackReportDialog';
 import { useLlmReadinessLifecycle } from './hooks/useLlmReadinessLifecycle';
 import { useLlmReadinessState } from './hooks/useLlmReadinessState';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import { useOfficialAuthState } from './hooks/useOfficialAuthState';
 import { NotificationsHost } from './notifications/NotificationsHost';
-import { REDBOX_NAVIGATE_EVENT } from './notifications/types';
 import { useI18n } from './i18n';
-import { useClipboardCapturePrompt } from './features/capture/useClipboardCapturePrompt';
-import { APP_BRAND } from './config/brand';
-import { AI_SOURCE_PRESETS, DEFAULT_AI_PRESET_ID } from './config/aiSources';
-import googleIcon from './assets/auth/google.svg';
-import wechatIcon from './assets/auth/wechat.svg';
+import { OfficialLoginGate } from './features/app-shell/OfficialLoginGate';
+import { StartupMigrationGate } from './features/app-shell/StartupMigrationGate';
+import { useGlobalIntentRouter } from './features/app-shell/useGlobalIntentRouter';
+import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
+import type { GenerationIntent, ImmersiveMode, PendingChatMessage, RedClawNavigationAction, SettingsNavigationTarget } from './features/app-shell/types';
+import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
+
+export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
 
 const HomePage = lazy(async () => ({ default: (await import('./pages/Home')).Home }));
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
@@ -36,192 +36,10 @@ const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subject
 const AutomationPage = lazy(async () => ({ default: (await import('./pages/Automation')).Automation }));
 const ApprovalPage = lazy(async () => ({ default: (await import('./pages/Approval')).Approval }));
 
-export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation' | 'approval';
-export type ImmersiveMode = false | 'theme' | 'dark';
-export type TeamSection = 'team-workbench' | 'members';
-type SettingsNavigationTarget = {
-  tab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
-  aiModelSubTab?: 'custom' | 'login';
-  nonce: number;
-};
-type RedClawNavigationAction = {
-  action: 'new' | 'open-team' | 'open-session';
-  sessionId?: string;
-  nonce: number;
-};
-
-function recordFromUnknown(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function shouldAutoOpenTeamSession(session: Record<string, unknown>): boolean {
-  const status = String(session.status || '').trim().toLowerCase();
-  if (status === 'archived' || status === 'completed') return false;
-  const source = String(session.source || '').trim().toLowerCase();
-  const metadata = recordFromUnknown(session.metadata);
-  const surface = String(metadata.surface || '').trim().toLowerCase();
-  if (surface === 'redclaw' || source === 'team-workbench') return false;
-  const metadataAutoOpen = metadata.autoOpen === true
-    || String(metadata.autoOpen || '').trim().toLowerCase() === 'true';
-  if (source === 'team-guide' || metadataAutoOpen) return true;
-  return source === 'real-subagent-orchestration'
-    || source === 'ai_coordinator'
-    || source === 'internal'
-    || Boolean(metadata.sourceTaskId || metadata.intent || metadata.recommendedRole);
-}
-
-const PINNED_VIEWS: ViewType[] = [];
-const MAX_CACHED_VIEWS = 0;
-const NON_CACHEABLE_VIEWS = new Set<ViewType>([
-  'home',
-  'skills',
-  'knowledge',
-  'settings',
-  'archives',
-  'wander',
-  'redclaw',
-  'media-library',
-  'cover-studio',
-  'generation-studio',
-  'subjects',
-  'automation',
-  'approval',
-]);
-const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 const OFFICIAL_AUTH_NOTICE_ENABLED = false;
 const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
   'redbox-auth:panel-display',
 ] as const;
-
-// 待发送的聊天消息（用于跨页面传递）
-export interface PendingChatMessage {
-  content: string;          // 实际发送给 AI 的完整内容
-  displayContent?: string;  // UI 上显示的简短内容
-  sessionRouting?: 'current' | 'new';
-  deliveryMode?: 'send' | 'draft';
-  taskHints?: AuthoringTaskHints;
-  knowledgeReferences?: Array<{
-    id: string;
-    title: string;
-    sourceKind?: string;
-    summary?: string;
-    cover?: string;
-    sourceUrl?: string;
-    folderPath?: string;
-    rootPath?: string;
-    tags?: string[];
-    updatedAt?: string;
-    fileCount?: number;
-    hasTranscript?: boolean;
-  }>;
-  attachment?: {
-    type: 'youtube-video';
-    title: string;
-    thumbnailUrl?: string;
-    videoId?: string;
-  } | {
-    type: 'wander-references';
-    title?: string;
-    items: Array<{
-      title: string;
-      itemType: 'note' | 'video';
-      tag?: string;
-      folderPath?: string;
-      summary?: string;
-      cover?: string;
-    }>;
-  } | {
-    attachmentId?: string;
-    type: 'uploaded-file';
-    name: string;
-    ext?: string;
-    size?: number;
-    thumbnailDataUrl?: string;
-    inlineDataUrl?: string;
-    workspaceRelativePath?: string;
-    toolPath?: string;
-    absolutePath?: string;
-    originalAbsolutePath?: string;
-    localUrl?: string;
-    kind?: 'text' | 'image' | 'audio' | 'video' | 'document' | 'binary' | string;
-    mimeType?: string;
-    storageMode?: 'staged' | string;
-    directUploadEligible?: boolean;
-    processingStrategy?: string;
-    deliveryMode?: 'direct-input' | 'tool-read';
-    intakeStatus?: 'ready' | 'unsupported' | 'failed' | string;
-    capabilities?: Record<string, boolean | undefined>;
-    deliveryPlan?: {
-      mode?: string;
-      toolPath?: string;
-      toolName?: string;
-      requiresTool?: boolean;
-      reason?: string;
-    };
-    summary?: string;
-    requiresMultimodal?: boolean;
-  };
-  attachments?: Array<{
-    type: 'uploaded-file';
-    name: string;
-    attachmentId?: string;
-    workspaceRelativePath?: string;
-    toolPath?: string;
-    absolutePath?: string;
-    originalAbsolutePath?: string;
-    localUrl?: string;
-    inlineDataUrl?: string;
-    thumbnailDataUrl?: string;
-    kind?: string;
-    mimeType?: string;
-    size?: number;
-    ext?: string;
-    storageMode?: string;
-    directUploadEligible?: boolean;
-    processingStrategy?: string;
-    deliveryMode?: string;
-    intakeStatus?: string;
-    capabilities?: Record<string, boolean | undefined>;
-    deliveryPlan?: Record<string, unknown>;
-    summary?: string;
-    requiresMultimodal?: boolean;
-    attachmentLifecycle?: string;
-  }>;
-}
-
-export interface GenerationIntent {
-  mode: 'image' | 'video' | 'audio' | 'cover' | 'digital-human';
-  source: 'standalone' | 'media-library' | 'manuscripts' | 'cover-studio';
-  sourceTitle?: string;
-  bindTarget?: {
-    manuscriptPath?: string;
-    projectId?: string;
-  };
-  preset?: {
-    aspectRatio?: string;
-    resolution?: '720p' | '1080p';
-    durationSeconds?: number;
-  };
-}
-
-type StartupMigrationState = {
-  status?: string;
-  needsDbImport?: boolean;
-  needsProjectUpgrade?: boolean;
-  shouldShowModal?: boolean;
-  legacyDbPath?: string | null;
-  legacyWorkspacePath?: string | null;
-  workspacePath?: string | null;
-  currentStep?: string | null;
-  message?: string | null;
-  error?: string | null;
-  progress?: number;
-  legacyMarkdownCount?: number | null;
-  importedCounts?: Record<string, number> | null;
-  projectUpgradeCounts?: Record<string, number> | null;
-};
 
 function ViewLoadingFallback() {
   const { t } = useI18n();
@@ -231,32 +49,6 @@ function ViewLoadingFallback() {
       {t('app.loadingPage')}
     </div>
   );
-}
-
-function computeMountedViews(history: ViewType[]): Set<ViewType> {
-  const next = new Set<ViewType>();
-  const recent = history.slice(-MAX_CACHED_VIEWS);
-  for (const view of recent) {
-    if (!NON_CACHEABLE_VIEWS.has(view)) {
-      next.add(view);
-    }
-  }
-  return next;
-}
-
-function shouldRenderView(
-  mountedViews: Set<ViewType>,
-  currentView: ViewType,
-  persistentViews: Set<ViewType>,
-  view: ViewType,
-): boolean {
-  if (currentView === view || persistentViews.has(view)) {
-    return true;
-  }
-  if (NON_CACHEABLE_VIEWS.has(view)) {
-    return false;
-  }
-  return mountedViews.has(view);
 }
 
 function clearStaleOfficialAuthSnapshots(): boolean {
@@ -275,21 +67,25 @@ function clearStaleOfficialAuthSnapshots(): boolean {
 
 function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => void }) {
   const { t } = useI18n();
-
-  const [currentView, setCurrentView] = useState<ViewType>('home');
-  const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
+  const {
+    currentView,
+    setCurrentView,
+    immersiveMode,
+    setImmersiveMode,
+    activeManuscriptEditorFile,
+    setActiveManuscriptEditorFile,
+    mountedViews,
+    persistentViews,
+    navigateToView,
+    setViewPersistent,
+    returnFromSettings,
+  } = useViewNavigation();
   const [redclawOnboardingVersion, setRedclawOnboardingVersion] = useState(0);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
   const [redClawTitleBarActions, setRedClawTitleBarActions] = useState<ReactNode>(null);
   const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
-  const [activeManuscriptEditorFile, setActiveManuscriptEditorFile] = useState<string | null>(null);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
-  const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['home']));
-  const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
-  const [startupMigration, setStartupMigration] = useState<StartupMigrationState | null>(null);
-  const [startupMigrationBusy, setStartupMigrationBusy] = useState(false);
-  const [startupMigrationDismissed, setStartupMigrationDismissed] = useState(false);
   const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
   const [feedbackReportOpen, setFeedbackReportOpen] = useState(false);
   const [feedbackReportContext, setFeedbackReportContext] = useState<FeedbackReportContext | null>(null);
@@ -299,16 +95,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
   const [approvalTargetDocketId, setApprovalTargetDocketId] = useState('');
 
-  const viewHistoryRef = useRef<ViewType[]>(['home']);
   const lastAuthStatusRef = useRef('');
-  const clipboardCapture = useClipboardCapturePrompt();
-
-  useEffect(() => {
-    viewHistoryRef.current = [...viewHistoryRef.current.filter((item) => item !== currentView), currentView];
-    const nextMounted = computeMountedViews(viewHistoryRef.current);
-    nextMounted.add(currentView);
-    setMountedViews(nextMounted);
-  }, [currentView]);
 
   const openSubjectsModal = useCallback(() => {
     setSubjectsModalOpen(true);
@@ -316,12 +103,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
 
   const closeSubjectsModal = useCallback(() => {
     setSubjectsModalOpen(false);
-  }, []);
-
-  const navigateToView = useCallback((view: ViewType) => {
-    setActiveManuscriptEditorFile(null);
-    setImmersiveMode(false);
-    setCurrentView(view);
   }, []);
 
   const openFeedbackReport = useCallback((context?: FeedbackReportContext | null) => {
@@ -397,51 +178,14 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     };
   }, [t]);
 
-  useEffect(() => {
-    const handleNavigate = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        view?: ViewType;
-        settingsTab?: SettingsNavigationTarget['tab'];
-        aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
-        redclawAction?: RedClawNavigationAction['action'];
-        teamSessionId?: string;
-        docketId?: string;
-      }>).detail;
-      const nextView = detail?.view;
-      if (!nextView) return;
-      if (nextView === 'settings') {
-        setSettingsNavigationTarget({
-          tab: detail.settingsTab,
-          aiModelSubTab: detail.aiModelSubTab,
-          nonce: Date.now(),
-        });
-      }
-      if (nextView === 'redclaw' && detail.redclawAction === 'new') {
-        setActiveManuscriptEditorFile(null);
-        setRedClawNavigationAction({
-          action: 'new',
-          nonce: Date.now(),
-        });
-      }
-      if (nextView === 'redclaw' && detail.redclawAction === 'open-team' && detail.teamSessionId) {
-        setActiveManuscriptEditorFile(null);
-        setRedClawNavigationAction({
-          action: 'open-team',
-          sessionId: detail.teamSessionId,
-          nonce: Date.now(),
-        });
-      }
-      if (nextView === 'approval') {
-        setApprovalTargetDocketId(String(detail.docketId || ''));
-      }
-      navigateToView(nextView);
-    };
-
-    window.addEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
-    return () => {
-      window.removeEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
-    };
-  }, [navigateToView]);
+  useGlobalIntentRouter({
+    navigateToView,
+    setCurrentView,
+    setActiveManuscriptEditorFile,
+    setSettingsNavigationTarget,
+    setRedClawNavigationAction,
+    setApprovalTargetDocketId,
+  });
 
   useEffect(() => {
     if (!subjectsModalOpen) return;
@@ -453,30 +197,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [subjectsModalOpen]);
-
-  useEffect(() => {
-    const openedSessionIds = new Set<string>();
-    const handleTeamRuntimeEvent = (event: { eventType?: string; payload?: unknown }) => {
-      if (event.eventType !== 'runtime:collab-session-changed') return;
-      const payload = recordFromUnknown(event.payload);
-      const session = recordFromUnknown(payload.session);
-      const sessionId = String(session.id || payload.collabSessionId || '').trim();
-      if (!sessionId || openedSessionIds.has(sessionId)) return;
-      if (!shouldAutoOpenTeamSession(session)) return;
-      openedSessionIds.add(sessionId);
-      setRedClawNavigationAction({
-        action: 'open-team',
-        sessionId,
-        nonce: Date.now(),
-      });
-      setCurrentView('redclaw');
-    };
-
-    window.ipcRenderer.teamRuntime.onEvent(handleTeamRuntimeEvent);
-    return () => {
-      window.ipcRenderer.teamRuntime.offEvent(handleTeamRuntimeEvent);
-    };
-  }, []);
 
   const navigateToRedClaw = (message: PendingChatMessage) => {
     uiTraceInteraction('app', 'nav_to_redclaw', { to: 'redclaw' });
@@ -563,22 +283,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setPendingGenerationIntent(null);
   };
 
-  const setViewPersistent = useCallback((view: ViewType, persistent: boolean) => {
-    setPersistentViews((prev) => {
-      const alreadyPersistent = prev.has(view);
-      if (alreadyPersistent === persistent) {
-        return prev;
-      }
-      const next = new Set(prev);
-      if (persistent) {
-        next.add(view);
-      } else {
-        next.delete(view);
-      }
-      return next;
-    });
-  }, []);
-
   const handleWanderExecutionStateChange = useCallback((active: boolean) => {
     setViewPersistent('wander', active);
   }, [setViewPersistent]);
@@ -599,74 +303,8 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setCurrentView('home');
   }, []);
 
-  const returnFromSettings = useCallback(() => {
-    const previousView = [...viewHistoryRef.current].reverse().find((view) => view !== 'settings') || 'home';
-    setCurrentView(previousView);
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-
-    const applyStatus = (value: unknown) => {
-      if (disposed || !value || typeof value !== 'object') return;
-      const next = value as StartupMigrationState;
-      setStartupMigration(next);
-      if (next.status === 'running') {
-        setStartupMigrationBusy(true);
-        setStartupMigrationDismissed(false);
-      } else {
-        setStartupMigrationBusy(false);
-      }
-    };
-
-    void window.ipcRenderer.startupMigration.getStatus<StartupMigrationState>().then(applyStatus);
-    const handleStatus = (_event: unknown, payload: unknown) => applyStatus(payload);
-    window.ipcRenderer.on('app:startup-migration-status', handleStatus as (...args: unknown[]) => void);
-
-    return () => {
-      disposed = true;
-      window.ipcRenderer.off('app:startup-migration-status', handleStatus as (...args: unknown[]) => void);
-    };
-  }, []);
-
-  const shouldShowStartupMigration = Boolean(
-    startupMigration
-      && startupMigration.shouldShowModal
-      && !startupMigrationDismissed
-      && (
-        startupMigration.status === 'running'
-        || startupMigration.status === 'completed'
-        || startupMigration.status === 'failed'
-        || startupMigration.status === 'pending'
-      ),
-  );
   const isManuscriptEditorActive = currentView === 'redclaw' && Boolean(activeManuscriptEditorFile);
   const effectiveImmersiveMode: ImmersiveMode = isManuscriptEditorActive ? false : immersiveMode;
-
-  const handleStartStartupMigration = useCallback(async () => {
-    setStartupMigrationBusy(true);
-    setStartupMigrationDismissed(false);
-    try {
-      const next = await window.ipcRenderer.startupMigration.start<StartupMigrationState>();
-      if (next && typeof next === 'object') {
-        setStartupMigration(next);
-      }
-    } finally {
-      setStartupMigrationBusy(false);
-    }
-  }, []);
-
-  const handleCloseStartupMigration = useCallback(() => {
-    if (startupMigration?.status === 'running') return;
-    setStartupMigration((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        shouldShowModal: false,
-      };
-    });
-    setStartupMigrationDismissed(true);
-  }, [startupMigration?.status]);
 
   return (
     <>
@@ -873,53 +511,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
           </div>
         )}
       </Layout>
-      {clipboardCapture.open && clipboardCapture.candidate && (
-        <div className="fixed inset-0 z-[10000] bg-black/35 flex items-center justify-center px-4">
-          <div className="w-full max-w-[560px] rounded-xl border border-border bg-surface-primary shadow-2xl p-5">
-            <div className="flex items-start gap-3">
-              <div className="h-10 w-10 rounded-lg bg-red-50 text-red-600 inline-flex items-center justify-center shrink-0">
-                <Link2 className="w-5 h-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-base font-semibold text-text-primary">{t('app.youtubeDetected')}</h3>
-                <p className="text-sm text-text-secondary mt-1">{t('app.youtubeCaptureDescription')}</p>
-                <div className="mt-3 rounded-md border border-border bg-surface-secondary px-3 py-2 text-xs text-text-tertiary break-all">
-                  {clipboardCapture.candidate.rawUrl}
-                </div>
-                <div className="mt-2 text-xs text-text-secondary">
-                  videoId: <span className="font-mono">{clipboardCapture.candidate.videoId}</span>
-                </div>
-              </div>
-            </div>
-
-            {clipboardCapture.message && (
-              <div className={`mt-4 text-sm ${
-                clipboardCapture.status === 'error' ? 'text-red-600' : clipboardCapture.status === 'success' ? 'text-green-600' : 'text-text-secondary'
-              }`}>
-                {clipboardCapture.message}
-              </div>
-            )}
-
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                onClick={clipboardCapture.close}
-                disabled={clipboardCapture.status === 'saving'}
-                className="h-9 px-4 rounded-md border border-border text-sm text-text-secondary hover:text-text-primary hover:bg-surface-secondary disabled:opacity-50"
-              >
-                {t('app.cancel')}
-              </button>
-              <button
-                onClick={() => void clipboardCapture.confirm()}
-                disabled={clipboardCapture.status === 'saving'}
-                className="h-9 px-4 rounded-md bg-[rgb(var(--color-accent-primary))] text-white text-sm hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-50 inline-flex items-center gap-2"
-              >
-                {clipboardCapture.status === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
-                {t('app.confirmCapture')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ClipboardCapturePrompt />
       {subjectsModalOpen && (
         <div
           className="fixed inset-0 z-[90] flex items-center justify-center bg-black/35 p-4"
@@ -949,626 +541,8 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
         onClose={() => setFeedbackReportOpen(false)}
         onSubmitted={() => window.dispatchEvent(new CustomEvent('redbox:feedback-report-submitted'))}
       />
-      <StartupMigrationModal
-        open={shouldShowStartupMigration}
-        state={startupMigration}
-        busy={startupMigrationBusy}
-        onStart={() => void handleStartStartupMigration()}
-        onClose={handleCloseStartupMigration}
-      />
+      <StartupMigrationGate />
       <NotificationsHost currentView={currentView} />
-      <AppDialogsHost />
-    </>
-  );
-}
-
-type OfficialAuthGateMode = 'checking' | 'login' | 'expired';
-type LoginNoticeType = 'idle' | 'success' | 'error';
-type OfficialAuthRealm = 'cn' | 'global';
-type LlmSetupTab = 'official' | 'custom';
-type AppShellPlatform = 'mac' | 'windows' | null;
-
-function getAppShellPlatform(): AppShellPlatform {
-  if (typeof navigator === 'undefined') return null;
-  const platform = navigator.platform || '';
-  const userAgent = navigator.userAgent || '';
-  if (/\bMac\b/i.test(platform) || /\bMac OS X\b/i.test(userAgent)) return 'mac';
-  if (/\bWin/i.test(platform) || /\bWindows\b/i.test(userAgent)) return 'windows';
-  return null;
-}
-
-function TransparentWindowTitleBar() {
-  const platform = getAppShellPlatform();
-  if (platform !== 'windows') return null;
-
-  const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
-    event.preventDefault();
-    void window.ipcRenderer.windowControls.startDragging().catch((error) => {
-      console.warn(`[${APP_BRAND.displayName}] failed to start window drag:`, error);
-    });
-  };
-
-  const toggleWindowMaximize = () => {
-    void window.ipcRenderer.windowControls.toggleMaximize().catch((error) => {
-      console.warn(`[${APP_BRAND.displayName}] failed to toggle window maximize:`, error);
-    });
-  };
-
-  const handleTitleBarDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
-    toggleWindowMaximize();
-  };
-
-  return (
-    <header
-      data-tauri-drag-region
-      onMouseDown={startWindowDrag}
-      onDoubleClick={handleTitleBarDoubleClick}
-      className="app-titlebar app-auth-titlebar app-titlebar--windows shrink-0"
-    >
-      <div data-tauri-drag-region className="app-titlebar-title" />
-      <div className="app-titlebar-window-controls" data-no-window-drag>
-        <button
-          type="button"
-          onClick={() => {
-            void window.ipcRenderer.windowControls.minimize();
-          }}
-          className="app-titlebar-window-button"
-          title="最小化"
-          aria-label="最小化"
-          data-no-window-drag
-        >
-          <Minus className="h-[14px] w-[14px]" strokeWidth={1.8} />
-        </button>
-        <button
-          type="button"
-          onClick={toggleWindowMaximize}
-          className="app-titlebar-window-button"
-          title="最大化"
-          aria-label="最大化"
-          data-no-window-drag
-        >
-          <Square className="h-[11px] w-[11px]" strokeWidth={1.8} />
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            void window.ipcRenderer.windowControls.close();
-          }}
-          className="app-titlebar-window-button app-titlebar-window-button--close"
-          title="关闭"
-          aria-label="关闭"
-          data-no-window-drag
-        >
-          <X className="h-[14px] w-[14px]" strokeWidth={1.8} />
-        </button>
-      </div>
-    </header>
-  );
-}
-
-function isLikelyImageUrl(value: string): boolean {
-  const normalized = String(value || '').trim().toLowerCase();
-  return normalized.startsWith('data:image/')
-    || normalized.startsWith('blob:')
-    || /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?(#.*)?$/i.test(normalized);
-}
-
-async function buildWechatQrDataUrl(value: string): Promise<string> {
-  const content = String(value || '').trim();
-  if (!content) {
-    throw new Error('二维码内容为空');
-  }
-  if (isLikelyImageUrl(content)) {
-    return content;
-  }
-  return QRCode.toDataURL(content, {
-    errorCorrectionLevel: 'M',
-    margin: 1,
-    width: 420,
-    color: {
-      dark: '#111827',
-      light: '#ffffff',
-    },
-  });
-}
-
-function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
-  const [activeRealm, setActiveRealm] = useState<OfficialAuthRealm>('cn');
-  const [activeSetupTab, setActiveSetupTab] = useState<LlmSetupTab>('official');
-  const [smsBusy, setSmsBusy] = useState(false);
-  const [smsForm, setSmsForm] = useState({ phone: '', code: '', inviteCode: '' });
-  const [customBusy, setCustomBusy] = useState(false);
-  const [customForm, setCustomForm] = useState({
-    presetId: DEFAULT_AI_PRESET_ID,
-    baseURL: AI_SOURCE_PRESETS.find((preset) => preset.id === DEFAULT_AI_PRESET_ID)?.baseURL || '',
-    apiKey: '',
-  });
-  const [wechatBusy, setWechatBusy] = useState(false);
-  const [wechatQrUrl, setWechatQrUrl] = useState('');
-  const [wechatStatus, setWechatStatus] = useState('');
-  const [notice, setNotice] = useState('');
-  const [noticeType, setNoticeType] = useState<LoginNoticeType>('idle');
-  const wechatSessionIdRef = useRef('');
-  const wechatPollTimerRef = useRef<number | null>(null);
-  const wechatPollTokenRef = useRef(0);
-
-  const setLoginNotice = useCallback((type: LoginNoticeType, message: string) => {
-    setNoticeType(type);
-    setNotice(message);
-  }, []);
-
-  const refreshAuthAfterLogin = useCallback(() => {
-    void window.ipcRenderer.officialAuth.bootstrap({ reason: 'login-gate-authenticated' })
-      .finally(() => {
-        void window.ipcRenderer.llmReadiness.refresh();
-      });
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadConfig = async () => {
-      try {
-        const result = await window.ipcRenderer.officialAuth.getConfig() as {
-          success?: boolean;
-          activeRealm?: OfficialAuthRealm;
-        };
-        if (!cancelled && result?.success) {
-          setActiveRealm(result.activeRealm === 'global' ? 'global' : 'cn');
-        }
-      } catch {
-        if (!cancelled) {
-          setActiveRealm('cn');
-        }
-      }
-    };
-    void loadConfig();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const stopWechatPolling = useCallback(() => {
-    wechatPollTokenRef.current += 1;
-    if (wechatPollTimerRef.current !== null) {
-      window.clearTimeout(wechatPollTimerRef.current);
-      wechatPollTimerRef.current = null;
-    }
-  }, []);
-
-  const pollWechatStatus = useCallback((sessionId: string, token: number) => {
-    const run = async () => {
-      if (wechatPollTokenRef.current !== token) return;
-      try {
-        const result = await window.ipcRenderer.officialAuth.getWechatStatus({ sessionId }) as {
-          success?: boolean;
-          data?: {
-            status?: string;
-            session?: unknown;
-          };
-          error?: string;
-        };
-        if (!result?.success) {
-          throw new Error(result?.error || '微信登录状态检查失败');
-        }
-
-        const nextStatus = String(result.data?.status || '').toUpperCase();
-        setWechatStatus(nextStatus);
-        if (nextStatus === 'CONFIRMED') {
-          stopWechatPolling();
-          setLoginNotice('success', '登录成功，正在进入工作台…');
-          refreshAuthAfterLogin();
-          return;
-        }
-        if (nextStatus === 'EXPIRED' || nextStatus === 'FAILED') {
-          stopWechatPolling();
-          setLoginNotice('error', nextStatus === 'EXPIRED' ? '二维码已过期，请重新获取。' : '微信登录失败，请重试。');
-          return;
-        }
-      } catch (error) {
-        setWechatStatus('FAILED');
-        setLoginNotice('error', error instanceof Error ? error.message : '微信登录状态检查失败');
-      }
-
-      if (wechatPollTokenRef.current === token) {
-        wechatPollTimerRef.current = window.setTimeout(run, 900);
-      }
-    };
-
-    wechatPollTimerRef.current = window.setTimeout(run, 300);
-  }, [refreshAuthAfterLogin, setLoginNotice, stopWechatPolling]);
-
-  useEffect(() => {
-    return () => stopWechatPolling();
-  }, [stopWechatPolling]);
-
-  const startWechatLogin = useCallback(async () => {
-    setWechatBusy(true);
-    stopWechatPolling();
-    try {
-      const result = await window.ipcRenderer.officialAuth.getWechatUrl({ state: 'redconvert-desktop' }) as {
-        success?: boolean;
-        data?: {
-          sessionId?: string;
-          qrContentUrl?: string;
-          url?: string;
-        };
-        error?: string;
-      };
-      if (!result?.success || !result.data) {
-        throw new Error(result?.error || '微信登录初始化失败');
-      }
-      const sessionId = String(result.data.sessionId || '').trim();
-      const qrContent = String(result.data.qrContentUrl || result.data.url || '').trim();
-      if (!sessionId || !qrContent) {
-        throw new Error('微信登录二维码数据不完整');
-      }
-      const qrUrl = await buildWechatQrDataUrl(qrContent);
-      wechatSessionIdRef.current = sessionId;
-      setWechatQrUrl(qrUrl);
-      setWechatStatus('PENDING');
-      setLoginNotice('idle', '');
-      const token = wechatPollTokenRef.current + 1;
-      wechatPollTokenRef.current = token;
-      pollWechatStatus(sessionId, token);
-    } catch (error) {
-      setWechatStatus('');
-      setWechatQrUrl('');
-      setLoginNotice('error', error instanceof Error ? error.message : '微信登录初始化失败');
-    } finally {
-      setWechatBusy(false);
-    }
-  }, [pollWechatStatus, setLoginNotice, stopWechatPolling]);
-
-  const sendSmsCode = useCallback(async () => {
-    const phone = String(smsForm.phone || '').trim();
-    if (!phone) {
-      setLoginNotice('error', '请先输入手机号');
-      return;
-    }
-    setSmsBusy(true);
-    try {
-      const result = await window.ipcRenderer.officialAuth.sendSmsCode({ phone }) as {
-        success?: boolean;
-        error?: string;
-      };
-      if (!result?.success) {
-        throw new Error(result?.error || '验证码发送失败');
-      }
-      setLoginNotice('success', '验证码已发送');
-    } catch (error) {
-      setLoginNotice('error', error instanceof Error ? error.message : '验证码发送失败');
-    } finally {
-      setSmsBusy(false);
-    }
-  }, [setLoginNotice, smsForm.phone]);
-
-  const handleSmsAuth = useCallback(async (mode: 'login' | 'register') => {
-    const phone = String(smsForm.phone || '').trim();
-    const code = String(smsForm.code || '').trim();
-    if (!phone || !code) {
-      setLoginNotice('error', '请输入手机号和验证码');
-      return;
-    }
-    setSmsBusy(true);
-    try {
-      const result = await (
-        mode === 'login'
-          ? window.ipcRenderer.officialAuth.loginSms({ phone, code, inviteCode: smsForm.inviteCode.trim() || undefined })
-          : window.ipcRenderer.officialAuth.registerSms({ phone, code, inviteCode: smsForm.inviteCode.trim() || undefined })
-      ) as {
-        success?: boolean;
-        session?: unknown;
-        error?: string;
-      };
-      if (!result?.success || !result.session) {
-        throw new Error(result?.error || (mode === 'login' ? '登录失败' : '注册失败'));
-      }
-      setLoginNotice('success', mode === 'login' ? '登录成功，正在进入工作台…' : '注册成功，正在进入工作台…');
-      refreshAuthAfterLogin();
-    } catch (error) {
-      setLoginNotice('error', error instanceof Error ? error.message : (mode === 'login' ? '登录失败' : '注册失败'));
-    } finally {
-      setSmsBusy(false);
-    }
-  }, [refreshAuthAfterLogin, setLoginNotice, smsForm.code, smsForm.inviteCode, smsForm.phone]);
-
-  const startGoogleLogin = useCallback(() => {
-    setLoginNotice('error', 'Google 登录通道尚未接入。');
-  }, [setLoginNotice]);
-
-  const handleCustomPresetChange = useCallback((presetId: string) => {
-    const preset = AI_SOURCE_PRESETS.find((item) => item.id === presetId) || AI_SOURCE_PRESETS.find((item) => item.id === DEFAULT_AI_PRESET_ID);
-    setCustomForm((prev) => ({
-      ...prev,
-      presetId: preset?.id || DEFAULT_AI_PRESET_ID,
-      baseURL: preset?.baseURL || prev.baseURL,
-    }));
-    setLoginNotice('idle', '');
-  }, [setLoginNotice]);
-
-  const handleCustomApiSetup = useCallback(async () => {
-    const preset = AI_SOURCE_PRESETS.find((item) => item.id === customForm.presetId);
-    const baseURL = String(customForm.baseURL || '').trim();
-    const apiKey = String(customForm.apiKey || '').trim();
-    if (!baseURL) {
-      setLoginNotice('error', '请先填写 API Base URL');
-      return;
-    }
-    setCustomBusy(true);
-    setLoginNotice('idle', '正在保存模型配置…');
-    try {
-      const result = await window.ipcRenderer.llmReadiness.configureCustomSource({
-        baseURL,
-        apiKey,
-        presetId: customForm.presetId,
-        protocol: preset?.protocol,
-        name: preset?.label || 'Custom API',
-      });
-      if (!result?.success) {
-        throw new Error(result?.error || '自定义 API 配置失败');
-      }
-      const model = String((result.source as { model?: unknown } | undefined)?.model || '').trim();
-      setLoginNotice('success', model ? `已选择 ${model}，正在进入工作台…` : '配置成功，正在进入工作台…');
-      void window.ipcRenderer.llmReadiness.refresh();
-    } catch (error) {
-      setLoginNotice('error', error instanceof Error ? error.message : '自定义 API 配置失败');
-    } finally {
-      setCustomBusy(false);
-    }
-  }, [customForm.apiKey, customForm.baseURL, customForm.presetId, setLoginNotice]);
-
-  const returnToSmsLogin = useCallback(() => {
-    stopWechatPolling();
-    setWechatQrUrl('');
-    setWechatStatus('');
-    setLoginNotice('idle', '');
-  }, [setLoginNotice, stopWechatPolling]);
-
-  const isMainlandRealm = activeRealm === 'cn';
-  const authBusy = wechatBusy || smsBusy || customBusy;
-  const showMainlandWechatQr = isMainlandRealm && Boolean(wechatQrUrl);
-  const title = mode === 'checking'
-    ? 'Checking session'
-    : 'Welcome back';
-  const subtitle = mode === 'checking'
-    ? `Restoring ${APP_BRAND.displayName}.`
-    : mode === 'expired'
-      ? 'Your session expired. Log in or use your own API to continue.'
-      : `Choose how ${APP_BRAND.displayName} should run AI.`;
-
-  return (
-    <>
-      <div className="min-h-screen overflow-hidden bg-[rgb(var(--color-background))] text-slate-950">
-        <TransparentWindowTitleBar />
-        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_85%,rgb(var(--color-accent-primary)/0.18),transparent_34%),radial-gradient(circle_at_32%_45%,rgb(var(--color-accent-muted)/0.5),transparent_28%),linear-gradient(135deg,rgb(var(--color-background))_0%,rgb(var(--color-surface-primary))_52%,rgb(var(--color-surface-secondary))_100%)]" />
-        <div className="relative grid min-h-screen grid-cols-1 lg:grid-cols-[1fr_520px]">
-          <section className="hidden lg:flex min-h-screen flex-col justify-center px-[11vw]">
-            <div className="relative h-[440px] w-[360px]">
-              <img
-                src={APP_BRAND.logoSrc}
-                alt=""
-                className="absolute left-0 top-0 h-[300px] w-[300px] object-contain opacity-20 blur-[1px]"
-              />
-              <div className="absolute left-10 bottom-8 flex items-center gap-3">
-                <img src={APP_BRAND.logoSrc} alt="" className="h-9 w-9 object-contain" />
-                <div className="text-4xl font-semibold tracking-[0]">{APP_BRAND.displayName}</div>
-              </div>
-              <p className="absolute left-10 bottom-0 text-[13px] whitespace-nowrap text-[rgb(var(--color-text-secondary))]">
-                {APP_BRAND.tagline || 'The AI content workspace that helps your ideas thrive.'}
-              </p>
-            </div>
-            <div className="absolute bottom-10 left-12 flex items-center gap-2 text-xs text-slate-500">
-              <ShieldCheck className="h-4 w-4 text-[rgb(var(--color-accent-primary))]" />
-              Your data is encrypted and secure.
-            </div>
-          </section>
-
-          <main className="flex min-h-screen items-center justify-center px-6 py-8 lg:justify-start lg:px-0">
-            <div className="w-full max-w-[432px]">
-              <div className="mb-10 text-center lg:text-left">
-                <h1 className="text-4xl font-semibold tracking-[0] text-slate-950">{title}</h1>
-                <p className="mt-3 text-base text-slate-500">{subtitle}</p>
-              </div>
-
-          {mode === 'checking' ? (
-                <div className="flex h-52 items-center justify-center rounded-2xl border border-slate-200/80 bg-white/70 text-slate-500 shadow-sm">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  正在恢复账号
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  {activeSetupTab === 'custom' ? (
-                    <form
-                      className="space-y-4"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void handleCustomApiSetup();
-                      }}
-                    >
-                      <div className="text-sm font-medium text-slate-700">自定义 API</div>
-                      <div className="relative">
-                        <select
-                          value={customForm.presetId}
-                          onChange={(event) => handleCustomPresetChange(event.target.value)}
-                          disabled={authBusy}
-                          className="h-12 w-full appearance-none rounded-xl border border-slate-200/80 bg-white/80 px-4 pr-11 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
-                        >
-                          {AI_SOURCE_PRESETS.filter((preset) => preset.id !== 'redbox-official').map((preset) => (
-                            <option key={preset.id} value={preset.id}>{preset.label}</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                      </div>
-                      <input
-                        type="url"
-                        value={customForm.baseURL}
-                        onChange={(event) => setCustomForm((prev) => ({ ...prev, baseURL: event.target.value }))}
-                        placeholder="API Base URL"
-                        autoComplete="url"
-                        disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
-                      />
-                      <input
-                        type="password"
-                        value={customForm.apiKey}
-                        onChange={(event) => setCustomForm((prev) => ({ ...prev, apiKey: event.target.value }))}
-                        placeholder="API Key"
-                        autoComplete="off"
-                        disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
-                      />
-                      <button
-                        type="submit"
-                        disabled={authBusy}
-                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgb(var(--color-accent-primary)/0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
-                      >
-                        {customBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '继续'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveSetupTab('official');
-                          setLoginNotice('idle', '');
-                        }}
-                        disabled={authBusy}
-                        className="flex h-[56px] w-full items-center justify-center rounded-xl border border-slate-200/80 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
-                      >
-                        返回登陆
-                      </button>
-                    </form>
-                  ) : showMainlandWechatQr ? (
-                    <div className="space-y-5">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-sm font-medium text-slate-700">微信扫码登录</div>
-                        <button
-                          type="button"
-                          onClick={returnToSmsLogin}
-                          className="text-sm font-medium text-slate-500 transition hover:text-slate-700"
-                        >
-                          手机号登录
-                        </button>
-                      </div>
-                      <div className="flex justify-center py-2">
-                        <img src={wechatQrUrl} alt="微信登录二维码" className="h-64 w-64 rounded-xl bg-white object-contain p-3 shadow-[0_16px_44px_rgba(15,23,42,0.08)]" />
-                      </div>
-                    </div>
-                  ) : isMainlandRealm && (
-                    <form
-                      className="space-y-4"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void handleSmsAuth('login');
-                      }}
-                    >
-                      <div className="text-sm font-medium text-slate-700">手机号登录</div>
-                      <input
-                        type="tel"
-                        value={smsForm.phone}
-                        onChange={(event) => setSmsForm((prev) => ({ ...prev, phone: event.target.value }))}
-                        placeholder="手机号"
-                        autoComplete="tel"
-                        disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
-                      />
-                      <div className="grid grid-cols-[1fr_auto] gap-3">
-                        <input
-                          type="text"
-                          value={smsForm.code}
-                          onChange={(event) => setSmsForm((prev) => ({ ...prev, code: event.target.value }))}
-                          placeholder="短信验证码"
-                          autoComplete="one-time-code"
-                          disabled={authBusy}
-                          className="h-12 min-w-0 rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => void sendSmsCode()}
-                          disabled={authBusy}
-                          className="h-12 rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm font-medium text-slate-600 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
-                        >
-                          发送验证码
-                        </button>
-                      </div>
-                      <button
-                        type="submit"
-                        disabled={authBusy}
-                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgb(var(--color-accent-primary)/0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
-                      >
-                        {smsBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录 / 注册'}
-                      </button>
-                    </form>
-                  )}
-
-                  {activeSetupTab !== 'custom' && !showMainlandWechatQr && (
-                    <div className="space-y-4">
-                    {!isMainlandRealm && (
-                      <button
-                        type="button"
-                        onClick={startGoogleLogin}
-                        disabled={authBusy}
-                        className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
-                      >
-                        <img src={googleIcon} alt="" className="h-5 w-5" />
-                        Continue with Google
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => void startWechatLogin()}
-                      disabled={authBusy}
-                      className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200/80 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
-                    >
-                      {wechatBusy ? <Loader2 className="h-5 w-5 animate-spin text-[rgb(var(--color-accent-primary))]" /> : <img src={wechatIcon} alt="" className="h-5 w-5" />}
-                      Continue with WeChat
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        stopWechatPolling();
-                        setActiveSetupTab((current) => current === 'custom' ? 'official' : 'custom');
-                        setLoginNotice('idle', '');
-                      }}
-                      disabled={authBusy}
-                      className="flex h-[56px] w-full items-center justify-center rounded-xl border border-slate-200/80 bg-white/70 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
-                    >
-                      自定义 API
-                    </button>
-                    </div>
-                  )}
-
-                  {activeSetupTab !== 'custom' && wechatQrUrl && !showMainlandWechatQr && (
-                    <div className="flex items-center gap-4">
-                      <img src={wechatQrUrl} alt="微信登录二维码" className="h-24 w-24 rounded-lg bg-white object-contain" />
-                      <div className="min-w-0 text-sm text-slate-500">
-                        <div className="font-medium text-slate-700">微信扫码登录</div>
-                      </div>
-                    </div>
-                  )}
-
-                  {notice && (
-                    <div className={`text-center text-sm ${
-                      noticeType === 'error'
-                        ? 'text-red-500'
-                        : noticeType === 'success'
-                          ? 'text-[rgb(var(--color-accent-primary))]'
-                          : 'text-slate-500'
-                    }`}>
-                      {notice}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </main>
-        </div>
-      </div>
       <AppDialogsHost />
     </>
   );

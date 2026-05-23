@@ -31,7 +31,7 @@ import {
   type ChatMessageLinkTarget,
 } from '../components/MessageItem';
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
-import type { PendingChatMessage } from '../App';
+import type { PendingChatMessage } from '../features/app-shell/types';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { type AudioRecordingClip } from '../features/audio-input/audioInput';
 import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';

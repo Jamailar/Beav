@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, ChevronDown, Plus, Users } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Advisors, type AdvisorCreateMode, type AdvisorProfile } from './Advisors';
-import type { TeamSection } from '../App';
+import type { TeamSection } from '../features/app-shell/types';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { appAlert } from '../utils/appDialogs';
 import { TeamWorkbench } from './team-workbench/TeamWorkbench';
