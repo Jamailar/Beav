@@ -4,7 +4,13 @@
 
 ## 顶层模块
 
-- `main.rs`：应用入口、状态定义、Tauri 生命周期、模块装配。
+- `main.rs`：应用入口、Tauri builder / command registration / top-level run lifecycle。
+- `app_state.rs`：Tauri managed state、runtime handles 与 global debug handle。
+- `store/types.rs`：`AppStore` 与本地持久化 record structs。
+- `workspace/paths.rs`：workspace/store/media/knowledge/subject/advisor path helpers。
+- `channel_router.rs`：`window.ipcRenderer.invoke` channel fanout。
+- `startup/`：store startup preparation、runtime restore、background housekeeping。
+- `host_impl.rs`：Phase 3 兼容承接层，暂存历史 host glue 与 interactive runtime helpers，后续按领域继续拆分。
 - `commands/`：IPC/频道命令处理层（按业务域拆分）。
 - `document_ingest/`：文档源接入层，负责 copied-file / tracked-folder / vault 注册与 workspace 托管复制。
 - `events/`：统一事件发射与前端兼容事件桥接。
