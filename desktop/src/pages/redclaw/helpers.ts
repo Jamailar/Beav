@@ -51,6 +51,28 @@ export function buildRedClawInitialContext(spaceName: string, activeSpaceId: str
     return `${REDCLAW_CONTEXT}\n当前空间: ${spaceName} (${activeSpaceId})`;
 }
 
+export function buildRedClawRuntimeMetadata(activeSpaceId: string, spaceName?: string): Record<string, unknown> {
+    const spaceId = String(activeSpaceId || 'default').trim() || 'default';
+    const contextId = buildRedClawContextId(spaceId);
+    return {
+        surface: 'redclaw',
+        runtimeSurface: 'redclaw',
+        runtimeMode: 'redclaw',
+        contextType: 'redclaw',
+        contextId,
+        redclawContext: {
+            surface: 'redclaw',
+            spaceId,
+            contextId,
+            profileContext: {
+                kind: 'redclaw-profile',
+                spaceId,
+                spaceName: String(spaceName || spaceId).trim() || spaceId,
+            },
+        },
+    };
+}
+
 function contextSessionTimestampMs(value?: string | null): number {
     const text = String(value || '').trim();
     if (!text) return 0;

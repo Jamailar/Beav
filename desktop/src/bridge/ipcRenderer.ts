@@ -5,6 +5,7 @@ import { createGenerationBridge } from './domains/generationBridge';
 import { createKnowledgeBridge } from './domains/knowledgeBridge';
 import { createManuscriptsBridge } from './domains/manuscriptsBridge';
 import { createMediaBridge } from './domains/mediaBridge';
+import { createRedClawBridge } from './domains/redclawBridge';
 import { createSkillsBridge } from './domains/skillsBridge';
 import { createSystemBridge } from './domains/systemBridge';
 import { createWanderBridge } from './domains/wanderBridge';
@@ -463,71 +464,7 @@ function createIpcRenderer() {
       bindEditorSession: (payload: Record<string, unknown>) => invokeChannel('chat:bind-editor-session', payload)
     },
     ...createGenerationBridge(core),
-    redclawRunner: {
-      getStatus: () => invokeCommandGuarded('redclaw_runner_status', undefined, {
-        timeoutMs: 2800,
-        fallbackChannel: 'redclaw:runner-status',
-      }),
-      start: (payload?: Record<string, unknown>) => invokeChannel('redclaw:runner-start', payload || {}),
-      stop: () => invokeChannel('redclaw:runner-stop'),
-      runNow: (payload?: Record<string, unknown>) => invokeChannel('redclaw:runner-run-now', payload || {}),
-      setProject: (payload: Record<string, unknown>) => invokeChannel('redclaw:runner-set-project', payload),
-      setConfig: (payload?: Record<string, unknown>) => invokeChannel('redclaw:runner-set-config', payload || {}),
-      listScheduled: () => invokeChannel('redclaw:runner-list-scheduled'),
-      addScheduled: (payload: Record<string, unknown>) => invokeChannel('redclaw:runner-add-scheduled', payload),
-      removeScheduled: (payload: { taskId: string }) => invokeChannel('redclaw:runner-remove-scheduled', payload),
-      setScheduledEnabled: (payload: { taskId: string; enabled: boolean }) => invokeChannel('redclaw:runner-set-scheduled-enabled', payload),
-      runScheduledNow: (payload: { taskId: string }) => invokeChannel('redclaw:runner-run-scheduled-now', payload),
-      listLongCycle: () => invokeChannel('redclaw:runner-list-long-cycle'),
-      addLongCycle: (payload: Record<string, unknown>) => invokeChannel('redclaw:runner-add-long-cycle', payload),
-      removeLongCycle: (payload: { taskId: string }) => invokeChannel('redclaw:runner-remove-long-cycle', payload),
-      setLongCycleEnabled: (payload: { taskId: string; enabled: boolean }) => invokeChannel('redclaw:runner-set-long-cycle-enabled', payload),
-      runLongCycleNow: (payload: { taskId: string }) => invokeChannel('redclaw:runner-run-long-cycle-now', payload),
-      taskPreview: (payload: Record<string, unknown>) => invokeChannel('redclaw:task-preview', payload),
-      taskCreate: (payload: Record<string, unknown>) => invokeChannel('redclaw:task-create', payload),
-      taskConfirm: (payload: { draftId: string; confirm: boolean }) => invokeChannel('redclaw:task-confirm', payload),
-      taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => invokeChannel('redclaw:task-update', payload),
-      taskCancel: (payload: { jobDefinitionId: string; reason?: string; deleteSource?: boolean }) => invokeChannel('redclaw:task-cancel', payload),
-      taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => invokeChannel('redclaw:task-list', payload || {}),
-      taskStats: () => invokeChannel('redclaw:task-stats'),
-    },
-    redclawOrchestration: {
-      createRun: (payload: { goal: string; sessionId?: string; projectId?: string; platform?: string; format?: string }) =>
-        invokeChannel('redclaw:orchestration-create-run', payload),
-      getRegistry: () => invokeChannel('redclaw:orchestration-registry'),
-    },
-    redclawProjects: {
-      list: () => invokeChannel('redclaw:list-projects'),
-      updateLearningCandidate: (payload: { projectId: string; candidateId: string; status: 'accepted' | 'rejected' | 'pending' }) =>
-        invokeChannel('redclaw:learning-candidate-update', payload),
-      updateSection: (payload: { projectId: string; sectionId: string; content: string }) =>
-        invokeChannel('redclaw:project-section-update', payload),
-      exportMediaPlan: (payload: { projectId: string }) =>
-        invokeChannel('redclaw:media-plan-export', payload),
-      renderRoughCut: (payload: { projectId: string }) =>
-        invokeChannel('redclaw:media-plan-render', payload),
-      exportPublishPackage: (payload: { projectId: string }) =>
-        invokeChannel('redclaw:publish-package-export', payload),
-      exportReviewReport: (payload: { projectId: string }) =>
-        invokeChannel('redclaw:review-report-export', payload),
-      exportXhsPackage: (payload: { projectId: string }) =>
-        invokeChannel('redclaw:xhs-package-export', payload),
-    },
-    redclawProfile: {
-      getBundle: () => invokeChannel('redclaw:profile:get-bundle'),
-      updateDoc: (payload: { docType: 'agent' | 'soul' | 'user' | 'creator_profile'; markdown: string; reason?: string }) =>
-        invokeChannel('redclaw:profile:update-doc', payload),
-      getOnboardingStatus: () => invokeChannel('redclaw:profile:onboarding-status'),
-      onboardingTurn: (payload: { input: string }) => invokeChannel('redclaw:profile:onboarding-turn', payload),
-      saveInitializationProgress: (payload: { stepIndex: number; answers: Record<string, unknown> }) =>
-        invokeChannel('redclaw:profile:save-initialization-progress', payload),
-      completeInitialization: (payload: { answers: Record<string, unknown> }) =>
-        invokeChannel('redclaw:profile:complete-initialization', payload),
-      startStyleDefinition: (payload?: { forceRestart?: boolean; source?: string; sessionId?: string }) =>
-        invokeChannel('redclaw:profile:start-style-definition', payload || {}),
-      completeStyleDefinition: (payload: Record<string, unknown>) =>
-        invokeChannel('redclaw:profile:complete-style-definition', payload),
-    },
+    ...createRedClawBridge(core),
     assistantDaemon: {
       getStatus: () => invokeChannel('assistant:daemon-status'),
       start: (payload?: Record<string, unknown>) => invokeChannel('assistant:daemon-start', payload || {}),
