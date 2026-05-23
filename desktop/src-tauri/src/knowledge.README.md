@@ -5,6 +5,7 @@
 - 提供知识库 workspace-first 写入与变更操作。
 - 提供纯图片素材的 workspace-first 导入操作，统一落到 `workspace/media/**`。
 - 定义统一 ingest contract，供旧 IPC、本地 HTTP、未来其他 adapter 复用。
+- `knowledge/source_normalizers.rs` 负责把来源特定 payload 归一化到统一 ingest contract。
 - 在落盘后刷新 knowledge 投影，并发出兼容事件。
 
 ## 当前覆盖
@@ -29,6 +30,7 @@
 - `workspace/media/**` 是通过本模块导入的图片素材真相源。
 - `AppStore` 中的 knowledge 数据只作为投影与缓存，不应再直接成为写入真相层。
 - 新入口应优先复用本模块，而不是在 command 层再次直接 `push/retain` knowledge store。
+- 来源适配器只做 payload -> `KnowledgeEntryIngestRequest`，不直接写 workspace。
 - 本地 HTTP 入口挂在 assistant daemon 上，默认根路径是 `/api/knowledge`。
 
 ## 本地 HTTP 路由
