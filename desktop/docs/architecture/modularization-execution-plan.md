@@ -1646,10 +1646,6 @@ Verification:
 
 - `pnpm exec tsc --noEmit`
 - `pnpm build`
-- `cargo check`
-- `git diff --check`
-- `pnpm build`
-- `pnpm build`
 
 Remaining in this slice:
 
@@ -1670,6 +1666,9 @@ Completed:
 Verification:
 
 - `pnpm exec tsc --noEmit`
+- `pnpm build`
+- `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo check`
 - `pnpm build`
 
 Remaining in this slice:
@@ -1792,3 +1791,28 @@ Verification:
 Remaining in this slice:
 
 - Replace `features/official/generatedOfficialAiPanel.tsx` dynamic invoker only after the generated official panel has a typed channel map or generated bridge contract.
+
+### 2026-05-23 Phase 2 Thin App Shell Completed
+
+Completed:
+
+- Added `src/features/app-shell/types.ts` and moved shared shell-facing types out of `App.tsx`, while keeping `App.tsx` type re-exports for compatibility.
+- Added `OfficialLoginGate.tsx` so provider-specific login, WeChat QR, SMS, custom API, and transparent login titlebar logic no longer live in `App.tsx`.
+- Added `StartupMigrationGate.tsx` so startup migration status subscription, start/close handlers, and modal state no longer live in `App.tsx`.
+- Added `useViewNavigation.ts` for current view, mounted view projection, persistent view flags, manuscript editor shell state, and Settings return navigation.
+- Added `useGlobalIntentRouter.ts` for `redbox:navigate` handling and RedClaw auto-open session routing.
+- Added `ClipboardCapturePrompt.tsx` so `App.tsx` only mounts the capture prompt and no longer owns clipboard parsing, YouTube ingest, or capture modal UI.
+- Updated page/component type imports to depend on `features/app-shell/types` instead of importing types from `App.tsx`.
+- Added README files for the new `app-shell` and `capture` feature boundaries.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `pnpm build`
+- `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo check`
+
+Remaining after Phase 2:
+
+- Manual smoke still needs to be run in the app for logged-out/logged-in gates, Settings navigation, subject modal, Knowledge -> RedClaw, and clipboard capture accept.
+- Phase 3 Host Main And App State Split remains the next major unfinished modularization phase.

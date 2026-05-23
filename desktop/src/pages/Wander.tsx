@@ -3,7 +3,7 @@ import { RefreshCw, Sparkles, History, X, Trash2, Dices, FileText, Play, Message
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
-import type { PendingChatMessage } from '../App';
+import type { PendingChatMessage } from '../features/app-shell/types';
 import {
   AUTHORING_ALLOWED_OPERATE_ACTIONS,
   AUTHORING_ALLOWED_TOOLS,

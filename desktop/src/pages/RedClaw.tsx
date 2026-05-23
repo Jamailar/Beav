@@ -7,7 +7,7 @@ import { Chat } from './Chat';
 import { AdvisorModal, type Advisor, type AdvisorProfile } from './Advisors';
 import { TeamWorkbench } from './team-workbench/TeamWorkbench';
 import type { TeamWorkbenchSession } from './team-workbench/teamWorkbenchTypes';
-import type { PendingChatMessage } from '../App';
+import type { PendingChatMessage } from '../features/app-shell/types';
 import { type ChatMessageLinkKind, type ChatMessageLinkTarget } from '../components/MessageItem';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';

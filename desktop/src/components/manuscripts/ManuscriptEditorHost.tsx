@@ -21,7 +21,7 @@ import { formatTimestampDate, parseTimestampMs } from '../../utils/time';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { EditorLayoutToggleButton } from './EditorLayoutToggleButton';
 import { appAlert, appConfirm } from '../../utils/appDialogs';
-import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from '../../App';
+import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from '../../features/app-shell/types';
 import { useMediaJobSubscription } from '../../features/media-jobs/useMediaJobSubscription';
 import { shallowArrayEqual, useMediaJobsByIds, useMediaJobsStore } from '../../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../../features/media-jobs/types';

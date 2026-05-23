@@ -4,6 +4,8 @@
 
 ## Current Areas
 
+- `app-shell/`: shell gates, view navigation, and global intent routing
+- `capture/`: clipboard and external capture prompt logic
 - `official/`: 官方发布相关 UI
 
 ## Rule Of Thumb

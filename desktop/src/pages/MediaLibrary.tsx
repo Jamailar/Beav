@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2, Music2 } from 'lucide-react';
 import clsx from 'clsx';
-import type { GenerationIntent } from '../App';
+import type { GenerationIntent } from '../features/app-shell/types';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import { appAlert, appConfirm } from '../utils/appDialogs';

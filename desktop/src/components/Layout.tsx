@@ -4,7 +4,7 @@ import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pen
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ImmersiveMode, ViewType } from '../App';
+import type { ImmersiveMode, ViewType } from '../features/app-shell/types';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
 import { APP_BRAND } from '../config/brand';
 import { applyAppTheme, CUSTOM_THEME_CHANGED_EVENT, readThemePreference, resolveThemeMode, writeThemePreference, type ThemeMode, type ThemePreference } from '../config/theme';
