@@ -23,7 +23,7 @@ Status: Current
 | Host assembly | `src-tauri/src/main.rs` 约 192 行；历史 host glue 已迁入 `host_impl.rs` 兼容层 | `main.rs` 已恢复装配角色；`host_impl.rs` 后续仍需按领域继续拆分 |
 | Manuscripts host | `src-tauri/src/commands/manuscripts.rs` 约 9798 行 | 稿件树、package、timeline、Remotion、FFmpeg、editor runtime state 共用一个 command 文件 |
 | Settings page | `src/pages/Settings.tsx` 约 8470 行 | AI source、账号计费、技能、插件、MCP、CLI runtime、日志诊断、runtime debug 混成控制台 |
-| Generation page | `src/pages/GenerationStudio.tsx` 约 5895 行 | 图片、视频、音频、封面、数字人、Agent session、feed、角色 readiness 混在一个页面 |
+| Generation page | `src/pages/GenerationStudio.tsx` 约 3961 行；request/feed/submit/reference/audio option helpers 已迁入 `features/media-generation/` | 页面仍承担 mode UI composition，但 shared schema、submit payload、feed projection、Agent context、reference handling 和 digital-human readiness 已出页面 |
 | Chat page | `src/pages/Chat.tsx` 约 4429 行 | 消息、附件、工具流、runtime event 合并、错误恢复、快捷动作混在页面层 |
 | Bridge | `src/bridge/ipcRenderer.ts` 约 1553 行，约 400 个 `invokeChannel` 调用 | channel contract、fallback、browser host、业务 facade 在同一个文件 |
 | Direct IPC usage | `src/` 中仍有约 118 处页面/组件直接 `window.ipcRenderer.invoke(...)` | 页面绕过 typed facade，contract 难以追踪 |
@@ -1838,3 +1838,28 @@ Remaining after Phase 3:
 
 - `host_impl.rs` is intentionally a compatibility holding module, not a new destination for business logic.
 - Future host work should split `host_impl.rs` by domain before changing behavior in those areas.
+
+### 2026-05-23 Phase 4 Generation And Media Module Split Completed
+
+Completed:
+
+- Moved generation Agent session id, initial context text, and session metadata helpers into `src/features/media-generation/agentSession.ts`.
+- Moved attachment/reference classification, preview resolution, reference contact sheets, and attachment-to-reference conversion into `src/features/media-generation/references.ts`.
+- Moved feed display helpers, asset file naming, request summaries, placeholder aspect ratios, and feed grid class helpers into `src/features/media-generation/assetDisplay.ts`.
+- Moved AI source model options, selected model route override resolution, voice list normalization, and audio language/voice option projection into `src/features/media-generation/audioOptions.ts`.
+- Moved digital-human subject readiness extraction into `src/features/media-generation/digitalHumanReadiness.ts`, keeping the existing audio-first submit chain in `submitter.ts`.
+- Split host `src-tauri/src/media_generation.rs` by request type: `media_generation/image.rs` owns image provider request logic and `media_generation/video.rs` owns video provider request logic; `media_generation.rs` remains the shared settings/transport/result/embedding parent.
+- Updated media generation README files and Rust module map to document the new boundaries.
+
+Verification:
+
+- `pnpm exec tsc --noEmit`
+- `pnpm build`
+- `cargo fmt --check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo test media_generation`
+
+Remaining after Phase 4:
+
+- Manual media smoke still needs a configured provider: image job, video job with reference, audio/TTS job, cover job, digital-human readiness path, retry/cancel/list jobs.
+- `GenerationStudio.tsx` is materially thinner, but mode UI composition can still be split further if Phase 5+ scope allows frontend page-shell polishing.

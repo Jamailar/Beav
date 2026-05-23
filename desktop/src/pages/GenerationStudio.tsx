@@ -24,8 +24,6 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
-import { findAiPresetById, inferPresetIdByEndpoint, type AiSourceConfig } from '../config/aiSources';
-import { APP_BRAND } from '../config/brand';
 import type { GenerationIntent, PendingChatMessage } from '../features/app-shell/types';
 import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
@@ -80,6 +78,40 @@ import {
     type VideoGenerationMode,
     type VideoGenerationRequest,
     buildGenerationAgentRuntimeContext,
+    buildGenerationAgentContextId,
+    buildGenerationAgentInitialContext,
+    buildGenerationAgentSessionMetadata,
+    GENERATION_AGENT_CONTEXT_TYPE,
+    dataUrlMimeType,
+    referenceItemIsImage,
+    attachmentVisualKind,
+    attachmentPreviewSrc,
+    formatAttachmentSize,
+    attachmentKindLabel,
+    buildReferenceContactSheet,
+    attachmentToReferenceItem,
+    isVideoAsset,
+    isAudioAsset,
+    generatedAssetDefaultName,
+    formatRelativeTime,
+    buildRequestSummary,
+    shortVoiceId,
+    placeholderCountForRequest,
+    placeholderAspectRatioForRequest,
+    feedMediaGridClass,
+    feedMediaHeightClass,
+    fileUrlToPath,
+    digitalHumanReadiness,
+    buildImageModelOptions,
+    buildAudioModelOptions,
+    resolveSelectedModelOverride,
+    normalizeVoiceList,
+    DEFAULT_AUDIO_TTS_MODEL,
+    voiceMatchesAudioModel,
+    voiceLanguageMatches,
+    buildAudioLanguageOptions,
+    buildAudioVoiceOptions,
+    isRemoteUrl,
     generationAgentRoleForMode,
     generationSubmitSource,
     submitAudioGeneration,
@@ -92,54 +124,18 @@ import {
     validateDigitalHumanGenerationRequest,
     validateImageGenerationRequest,
     validateVideoGenerationRequest,
-    type GenerationAgentPreferredRole,
     type GenerationAgentVoice,
+    type PickerOption,
+    type SettingsShape,
+    type VoiceListItem,
     type ModelRouteOverride,
 } from '../features/media-generation';
 import { Chat, clearFixedSessionWarmSnapshot } from './Chat';
-import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources } from './settings/shared';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 
 type GenerationSurface = 'manual' | 'agent';
 
-type SettingsShape = {
-    api_endpoint?: string;
-    api_key?: string;
-    ai_sources_json?: string;
-    ai_model_routes_json?: string;
-    default_ai_source_id?: string;
-    image_provider?: string;
-    image_endpoint?: string;
-    image_api_key?: string;
-    image_model?: string;
-    image_provider_template?: string;
-    image_aspect_ratio?: string;
-    image_size?: string;
-    image_quality?: string;
-    video_endpoint?: string;
-    video_api_key?: string;
-    video_model?: string;
-    voice_endpoint?: string;
-    tts_endpoint?: string;
-    voice_api_key?: string;
-    tts_api_key?: string;
-    voice_tts_model?: string;
-    tts_model?: string;
-};
-
-type GenerationAgentSessionMetadata = {
-    contextType: typeof GENERATION_AGENT_CONTEXT_TYPE;
-    intent: 'image_creation';
-    preferredRole: GenerationAgentPreferredRole;
-    generationTarget: StudioMode;
-    executionMode: 'auto';
-    requiresHumanApproval: false;
-    projectId?: string;
-    source: 'generation-studio';
-    sourceTitle?: string;
-    recentAssetPolicy: 'current-project-feed';
-};
 
 type SubjectCategoryRecord = {
     id: string;
@@ -154,8 +150,6 @@ interface GenerationStudioProps {
     onReturnHome?: () => void;
     onOpenAssets?: () => void;
 }
-
-const GENERATION_AGENT_CONTEXT_TYPE = 'generation-agent';
 
 const IMAGE_ASPECT_RATIO_OPTIONS = [
     { value: 'auto', label: 'Auto' },
@@ -217,12 +211,6 @@ const VIDEO_DURATION_OPTIONS = [
 const VIDEO_AUDIO_OPTIONS = [
     { value: 'off', label: '音频关' },
     { value: 'on', label: '音频开' },
-] as const;
-
-const DEFAULT_AUDIO_LANGUAGE_OPTIONS = [
-    { value: '', label: '自动' },
-    { value: 'Chinese', label: '中文' },
-    { value: 'English', label: '英文' },
 ] as const;
 
 const AUDIO_SPEED_OPTIONS = [
@@ -315,325 +303,6 @@ function makeId(prefix: string): string {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function valueRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : {};
-}
-
-function firstString(...values: unknown[]): string {
-    for (const value of values) {
-        if (typeof value === 'string' && value.trim()) return value.trim();
-    }
-    return '';
-}
-
-function isRemoteUrl(value: string): boolean {
-    return /^https?:\/\//i.test(value.trim());
-}
-
-function fileUrlToPath(value: string): string {
-    if (!value.startsWith('file://')) return value;
-    try {
-        return decodeURIComponent(new URL(value).pathname);
-    } catch {
-        return value.replace(/^file:\/\//, '');
-    }
-}
-
-function extractSubjectVoiceId(subject: SubjectRecord | null): string {
-    if (!subject) return '';
-    const voice = valueRecord(subject.voice);
-    const attributes = Array.isArray(subject.attributes) ? subject.attributes : [];
-    const attributeVoice = attributes.find((item) => {
-        const key = String(item?.key || '').trim().toLowerCase();
-        return key === 'voice_id' || key === 'voiceid' || key === '声音id';
-    });
-    return firstString(voice.voiceId, voice.voice_id, voice.id, attributeVoice?.value);
-}
-
-function extractSubjectVideoPath(subject: SubjectRecord | null): string {
-    if (!subject) return '';
-    return firstString(subject.absoluteVideoPath, subject.videoPath, fileUrlToPath(firstString(subject.videoPreviewUrl)));
-}
-
-function digitalHumanReadiness(subject: SubjectRecord | null): { ok: boolean; voiceId: string; videoPath: string; issue: string } {
-    if (!subject) return { ok: false, voiceId: '', videoPath: '', issue: '请选择角色' };
-    const voiceId = extractSubjectVoiceId(subject);
-    const videoPath = extractSubjectVideoPath(subject);
-    const issues: string[] = [];
-    if (!videoPath) issues.push('角色缺少参考视频');
-    if (!voiceId) {
-        issues.push(videoPath ? '音色克隆未完成' : '角色缺少声音 ID');
-    }
-    return { ok: issues.length === 0, voiceId, videoPath, issue: issues.join('，') };
-}
-
-function dataUrlMimeType(dataUrl: string): string {
-    const match = String(dataUrl || '').match(/^data:([^;,]+)[;,]/i);
-    return String(match?.[1] || '').trim().toLowerCase();
-}
-
-function referenceItemIsImage(item: ReferenceItem | null | undefined): boolean {
-    return dataUrlMimeType(String(item?.dataUrl || '')).startsWith('image/');
-}
-
-function attachmentVisualKind(
-    attachment: UploadedFileAttachment | null | undefined,
-): 'image' | 'video' | 'audio' | 'text' | 'file' {
-    const kind = String(attachment?.kind || '').trim().toLowerCase();
-    const mimeType = String(attachment?.mimeType || '').trim().toLowerCase();
-    const name = String(attachment?.name || '').trim().toLowerCase();
-    if (kind === 'image' || mimeType.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg|avif)$/i.test(name)) return 'image';
-    if (kind === 'video' || mimeType.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(name)) return 'video';
-    if (kind === 'audio' || mimeType.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(name)) return 'audio';
-    if (kind === 'text' || mimeType.startsWith('text/') || /\.(txt|md|markdown|json|csv|tsv|doc|docx|pdf|rtf|xml|yaml|yml)$/i.test(name)) return 'text';
-    return 'file';
-}
-
-function attachmentPreviewSrc(attachment: UploadedFileAttachment | null | undefined): string {
-    const preferred = String(
-        attachment?.thumbnailDataUrl
-        || attachment?.inlineDataUrl
-        || attachment?.localUrl
-        || attachment?.absolutePath
-        || attachment?.originalAbsolutePath
-        || '',
-    ).trim();
-    if (!preferred) return '';
-    return preferred.startsWith('data:') ? preferred : resolveAssetUrl(preferred);
-}
-
-function formatAttachmentSize(size?: number): string {
-    if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) return '';
-    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
-    if (size >= 1024) return `${Math.round(size / 1024)} KB`;
-    return `${Math.round(size)} B`;
-}
-
-function attachmentKindLabel(kind: ReturnType<typeof attachmentVisualKind>): string {
-    switch (kind) {
-        case 'image':
-            return '图片';
-        case 'video':
-            return '视频';
-        case 'audio':
-            return '音频';
-        case 'text':
-            return '文档';
-        default:
-            return '文件';
-    }
-}
-
-async function loadImageElement(source: string): Promise<HTMLImageElement> {
-    return new Promise((resolve, reject) => {
-        const image = new window.Image();
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error('参考图读取失败'));
-        image.src = source;
-    });
-}
-
-async function buildReferenceContactSheet(
-    items: ReferenceItem[],
-): Promise<{ fileName: string; dataUrl: string; note: string }> {
-    const imageItems = items.filter(referenceItemIsImage).slice(0, 4);
-    if (imageItems.length === 0) {
-        throw new Error('没有可用于拼版的图片参考图');
-    }
-    if (imageItems.length === 1) {
-        return {
-            fileName: imageItems[0].name || 'reference-image.png',
-            dataUrl: imageItems[0].dataUrl,
-            note: `参考图共 1 张：${imageItems[0].name || 'reference-image'}`,
-        };
-    }
-
-    const loaded = await Promise.all(imageItems.map(async (item) => ({
-        item,
-        image: await loadImageElement(item.dataUrl),
-    })));
-    const columns = imageItems.length <= 2 ? imageItems.length : 2;
-    const rows = Math.ceil(imageItems.length / columns);
-    const cellWidth = 640;
-    const cellHeight = 640;
-    const labelHeight = 76;
-    const gap = 18;
-    const padding = 24;
-    const canvas = document.createElement('canvas');
-    canvas.width = padding * 2 + columns * cellWidth + (columns - 1) * gap;
-    canvas.height = padding * 2 + rows * (cellHeight + labelHeight) + (rows - 1) * gap;
-    const context = canvas.getContext('2d');
-    if (!context) {
-        throw new Error('参考图拼版失败');
-    }
-
-    context.fillStyle = '#0f1115';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.textBaseline = 'middle';
-    context.font = '500 28px sans-serif';
-
-    loaded.forEach(({ item, image }, index) => {
-        const column = index % columns;
-        const row = Math.floor(index / columns);
-        const x = padding + column * (cellWidth + gap);
-        const y = padding + row * (cellHeight + labelHeight + gap);
-        const imageRatio = image.width / Math.max(image.height, 1);
-        const targetRatio = cellWidth / cellHeight;
-        let drawWidth = cellWidth;
-        let drawHeight = cellHeight;
-        let drawX = x;
-        let drawY = y;
-        if (imageRatio > targetRatio) {
-            drawHeight = cellHeight;
-            drawWidth = drawHeight * imageRatio;
-            drawX = x - (drawWidth - cellWidth) / 2;
-        } else {
-            drawWidth = cellWidth;
-            drawHeight = drawWidth / Math.max(imageRatio, 0.001);
-            drawY = y - (drawHeight - cellHeight) / 2;
-        }
-
-        context.save();
-        context.beginPath();
-        context.roundRect(x, y, cellWidth, cellHeight, 22);
-        context.clip();
-        context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
-        context.restore();
-
-        context.fillStyle = 'rgba(255,255,255,0.12)';
-        context.fillRect(x, y + cellHeight + 10, cellWidth, labelHeight - 10);
-        context.fillStyle = '#f5f7fb';
-        context.fillText(`${index + 1}. ${item.name || `参考图 ${index + 1}`}`, x + 20, y + cellHeight + labelHeight / 2 + 4);
-    });
-
-    return {
-        fileName: `suite-references-${Date.now()}.png`,
-        dataUrl: canvas.toDataURL('image/png'),
-        note: `参考图共 ${imageItems.length} 张，附件为拼版图，按从左到右、从上到下查看：${imageItems.map((item, index) => `${index + 1}.${item.name || `参考图${index + 1}`}`).join('，')}`,
-    };
-}
-
-async function attachmentToReferenceItem(
-    attachment: UploadedFileAttachment,
-): Promise<ReferenceItem | null> {
-    if (attachmentVisualKind(attachment) !== 'image') return null;
-    const source = attachmentPreviewSrc(attachment);
-    if (!source) return null;
-    const response = await fetch(source);
-    if (!response.ok) {
-        throw new Error(`读取附件失败 (${response.status})`);
-    }
-    const blob = await response.blob();
-    return {
-        name: attachment.name || `reference-${Date.now()}.png`,
-        dataUrl: await readBlobAsDataUrl(blob),
-    };
-}
-
-function normalizeGenerationAgentScope(value: string): string {
-    const normalized = String(value || '')
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-    return normalized || 'default';
-}
-
-function buildGenerationAgentContextId(projectId: string, source?: GenerationIntent['source'], sourceTitle?: string): string {
-    const scope = normalizeGenerationAgentScope(projectId || sourceTitle || source || 'default');
-    return `generation-studio:agent:${scope}`;
-}
-
-function buildGenerationAgentInitialContext(projectId: string, sourceTitle?: string): string {
-    return [
-        `你当前位于 ${APP_BRAND.displayName} 创作页的「Agent 模式」。`,
-        '这是图片、视频、音频生成共用的创作上下文。用户只负责给目标、反馈和约束；你负责整理意图、补全提示词、引用上下文并直接调用生成工具。',
-        '不要要求用户二次确认；只有缺少不可推断的硬性必填项时才停止并说明缺口。',
-        sourceTitle ? `当前来源: ${sourceTitle}` : '',
-        projectId ? `当前项目ID: ${projectId}` : '',
-    ].filter(Boolean).join('\n');
-}
-
-function buildGenerationAgentSessionMetadata(
-    mode: StudioMode,
-    projectId: string,
-    sourceTitle?: string,
-): GenerationAgentSessionMetadata {
-    return {
-        contextType: GENERATION_AGENT_CONTEXT_TYPE,
-        intent: 'image_creation',
-        preferredRole: generationAgentRoleForMode(mode),
-        generationTarget: mode,
-        executionMode: 'auto',
-        requiresHumanApproval: false,
-        projectId: projectId || undefined,
-        source: 'generation-studio',
-        sourceTitle: sourceTitle || undefined,
-        recentAssetPolicy: 'current-project-feed',
-    };
-}
-
-function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
-    const mimeType = String(asset.mimeType || '').toLowerCase();
-    if (mimeType.startsWith('video/')) return true;
-    return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
-}
-
-function isAudioAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
-    const mimeType = String(asset.mimeType || '').toLowerCase();
-    if (mimeType.startsWith('audio/')) return true;
-    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(String(asset.relativePath || '').trim());
-}
-
-function inferAssetExtension(asset: GeneratedAsset, source: string): string {
-    const mimeType = String(asset.mimeType || '').trim().toLowerCase();
-    if (mimeType.startsWith('image/')) {
-        const subtype = mimeType.slice('image/'.length).split(/[+;]/)[0];
-        if (subtype === 'jpeg') return 'jpg';
-        if (subtype) return subtype;
-    }
-    if (mimeType.startsWith('video/')) {
-        const subtype = mimeType.slice('video/'.length).split(/[+;]/)[0];
-        if (subtype === 'quicktime') return 'mov';
-        if (subtype) return subtype;
-    }
-    if (mimeType.startsWith('audio/')) {
-        const subtype = mimeType.slice('audio/'.length).split(/[+;]/)[0];
-        if (subtype === 'mpeg') return 'mp3';
-        if (subtype) return subtype;
-    }
-
-    const match = String(source || '').match(/\.([a-zA-Z0-9]+)(?:[?#].*)?$/);
-    const inferred = String(match?.[1] || '').trim().toLowerCase();
-    if (inferred) return inferred;
-    if (isVideoAsset(asset)) return 'mp4';
-    if (isAudioAsset(asset)) return 'mp3';
-    return 'png';
-}
-
-function generatedAssetDefaultName(asset: GeneratedAsset, source: string): string {
-    const extension = inferAssetExtension(asset, source);
-    const rawName = String(source || '').split(/[\\/]/).pop()?.replace(/[?#].*$/, '').trim();
-    if (rawName) {
-        try {
-            return decodeURIComponent(rawName);
-        } catch {
-            return rawName;
-        }
-    }
-    return `${asset.title || 'generated-asset'}.${extension}`;
-}
-
-function formatRelativeTime(timestampMs: number): string {
-    const diff = Date.now() - timestampMs;
-    if (diff < 60_000) return '刚刚';
-    if (diff < 3_600_000) return `${Math.max(1, Math.round(diff / 60_000))} 分钟前`;
-    if (diff < 86_400_000) return `${Math.max(1, Math.round(diff / 3_600_000))} 小时前`;
-    return `${Math.max(1, Math.round(diff / 86_400_000))} 天前`;
-}
-
 function isVideoReference(item: ReferenceItem | null | undefined): boolean {
     return String(item?.dataUrl || '').startsWith('data:video/');
 }
@@ -678,362 +347,6 @@ function applyIntentPreset(
     if (typeof intent.preset?.durationSeconds === 'number' && Number.isFinite(intent.preset.durationSeconds)) {
         setters.setVideoDurationSeconds(intent.preset.durationSeconds);
     }
-}
-
-function buildRequestSummary(request: GenerationRequest): string[] {
-    if (request.type === 'cover') {
-        return [
-            request.model || '默认模型',
-            '3:4',
-            request.quality || '默认',
-        ];
-    }
-    if (request.type === 'image') {
-        return [
-            request.model || '默认模型',
-            request.aspectRatio || 'Auto',
-            request.resolution || '自动',
-            request.quality || 'medium',
-        ];
-    }
-    if (request.type === 'audio') {
-        return [
-            request.model || '默认模型',
-            request.voiceId ? shortVoiceId(request.voiceId) : '未选音色',
-        ];
-    }
-    if (request.type === 'digital-human') {
-        return [
-            'videoretalk',
-            request.resolution,
-            request.durationSeconds ? `${request.durationSeconds} 秒` : '自动时长',
-        ];
-    }
-    return [
-        request.model || '默认模型',
-        request.aspectRatio,
-        request.resolution,
-    ];
-}
-
-function shortVoiceId(value: string): string {
-    if (!value) return '';
-    if (value.length <= 18) return value;
-    return `${value.slice(0, 10)}...${value.slice(-4)}`;
-}
-
-function placeholderCountForRequest(request: GenerationRequest): number {
-    return request.type === 'image' || request.type === 'cover' ? Math.max(1, request.count) : 1;
-}
-
-function placeholderAspectRatioForRequest(request: GenerationRequest): string {
-    if (request.type === 'audio') return '16 / 5';
-    if (request.type === 'digital-human') return '16 / 9';
-    if (request.type === 'cover') return '3 / 4';
-    return request.type === 'image'
-        ? normalizeAspectRatio(request.aspectRatio, '4 / 3')
-        : normalizeAspectRatio(request.aspectRatio, '16 / 9');
-}
-
-function isPortraitRequest(request: GenerationRequest): boolean {
-    if (request.type === 'audio' || request.type === 'digital-human') return false;
-    if (request.type === 'cover') return true;
-    const ratio = request.type === 'image'
-        ? parseAspectRatio(request.aspectRatio, '4:3')
-        : parseAspectRatio(request.aspectRatio, '16:9');
-    return ratio.height > ratio.width;
-}
-
-function feedMediaGridClass(request: GenerationRequest, itemCount: number): string {
-    if (request.type === 'audio') return 'max-w-[620px]';
-    const portrait = isPortraitRequest(request);
-    if (itemCount === 1) {
-        return portrait ? 'max-w-[380px]' : 'max-w-[500px]';
-    }
-    return portrait ? 'max-w-[560px] sm:grid-cols-2' : 'max-w-[700px] sm:grid-cols-2';
-}
-
-function feedMediaHeightClass(request: GenerationRequest): string {
-    if (request.type === 'audio') return 'min-h-[104px]';
-    return isPortraitRequest(request) ? 'max-h-[440px]' : 'max-h-[520px]';
-}
-
-type PickerOption = {
-    value: string;
-    label: string;
-    description?: string;
-    disabled?: boolean;
-    disabledReason?: string;
-    tone?: 'danger';
-};
-
-type VoiceListItem = GenerationAgentVoice & {
-    id: string;
-    name: string;
-    language: string;
-    languageBoost: string;
-    languageZh: string;
-    languageEn: string;
-    status: string;
-    source: string;
-    ownerAssetId: string;
-    genderHint: string;
-    systemVoice: boolean;
-    targetTtsModel: string;
-    cloneModel: string;
-    provider: string;
-    supportedModels: string[];
-};
-
-const DEFAULT_AUDIO_TTS_MODEL = 'cosyvoice-v3.5-plus';
-
-function normalizedModelKey(value: string): string {
-    return value.trim().toLowerCase();
-}
-
-function isMinimaxTtsModel(model: string): boolean {
-    const key = normalizedModelKey(model);
-    return key.includes('minimax') || key.startsWith('speech-') || key.startsWith('speech_');
-}
-
-function modelKeysMatch(left: string, right: string): boolean {
-    return normalizedModelKey(left) === normalizedModelKey(right);
-}
-
-function stringArrayValue(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    return value
-        .map((item) => String(item || '').trim())
-        .filter(Boolean);
-}
-
-function voiceMatchesAudioModel(voice: VoiceListItem, model: string): boolean {
-    const selected = model.trim();
-    if (!selected) return false;
-    if (voice.systemVoice) return isMinimaxTtsModel(model);
-    const target = voice.targetTtsModel.trim();
-    if (target) return modelKeysMatch(target, selected);
-    if (voice.supportedModels.length > 0) {
-        return voice.supportedModels.some((candidate) => modelKeysMatch(candidate, selected));
-    }
-    return false;
-}
-
-function getAiSourceTypeLabel(source: AiSourceConfig): string {
-    const presetId = String(source.presetId || inferPresetIdByEndpoint(source.baseURL || '') || '').trim();
-    const preset = findAiPresetById(presetId);
-    if (preset?.label) return preset.label;
-    if (presetId) return presetId;
-    return source.protocol ? source.protocol.toUpperCase() : 'Custom';
-}
-
-function getAiSourceModelDescriptors(source: AiSourceConfig) {
-    return normalizeAiModelDescriptors([
-        ...(source.modelsMeta || []),
-        ...(source.models || []).map((id) => ({ id })),
-        source.model ? { id: source.model } : null,
-    ]);
-}
-
-function buildImageModelOptions(settings: SettingsShape): PickerOption[] {
-    const sources = parseAiSources(settings.ai_sources_json);
-    const optionsByModel = new Map<string, { label: string; sourceLabels: string[] }>();
-
-    for (const source of sources) {
-        const imageModels = filterAiModelsByCapability(getAiSourceModelDescriptors(source), 'image');
-        if (imageModels.length === 0) continue;
-
-        const sourceType = getAiSourceTypeLabel(source);
-        const sourceName = String(source.name || '').trim();
-        const sourceLabel = sourceName && sourceName !== sourceType
-            ? `${sourceType} · ${sourceName}`
-            : sourceType;
-
-        for (const model of imageModels) {
-            const existing = optionsByModel.get(model.id);
-            if (!existing) {
-                optionsByModel.set(model.id, { label: model.id, sourceLabels: [sourceLabel] });
-                continue;
-            }
-            if (!existing.sourceLabels.includes(sourceLabel)) {
-                existing.sourceLabels.push(sourceLabel);
-            }
-        }
-    }
-    const currentImageModel = String(settings.image_model || '').trim();
-    if (currentImageModel && !optionsByModel.has(currentImageModel)) {
-        optionsByModel.set(currentImageModel, { label: currentImageModel, sourceLabels: ['当前设置'] });
-    }
-
-    return Array.from(optionsByModel.entries()).map(([value, option]) => ({
-        value,
-        label: option.label,
-        description: option.sourceLabels.join(' / '),
-    }));
-}
-
-function buildAudioModelOptions(settings: SettingsShape): PickerOption[] {
-    const sources = parseAiSources(settings.ai_sources_json);
-    const optionsByModel = new Map<string, { label: string; sourceLabels: string[] }>();
-    const addModelOption = (modelId: string, sourceLabel: string) => {
-        const id = String(modelId || '').trim();
-        if (!id) return;
-        const existing = optionsByModel.get(id);
-        if (!existing) {
-            optionsByModel.set(id, { label: id, sourceLabels: [sourceLabel] });
-            return;
-        }
-        if (!existing.sourceLabels.includes(sourceLabel)) {
-            existing.sourceLabels.push(sourceLabel);
-        }
-    };
-
-    for (const source of sources) {
-        const descriptors = getAiSourceModelDescriptors(source);
-        const ttsModels = filterAiModelsByCapability(descriptors, 'tts');
-        const audioModels = ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(descriptors, 'audio');
-        if (audioModels.length === 0) continue;
-
-        const sourceType = getAiSourceTypeLabel(source);
-        const sourceName = String(source.name || '').trim();
-        const sourceLabel = sourceName && sourceName !== sourceType
-            ? `${sourceType} · ${sourceName}`
-            : sourceType;
-
-        for (const model of audioModels) {
-            addModelOption(model.id, sourceLabel);
-        }
-    }
-
-    return Array.from(optionsByModel.entries()).map(([value, option]) => ({
-        value,
-        label: option.label,
-        description: option.sourceLabels.join(' / '),
-    }));
-}
-
-function parseAiModelRoutes(settings: SettingsShape): Record<string, unknown> {
-    const raw = settings.ai_model_routes_json;
-    if (!raw) return {};
-    try {
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : {};
-    } catch {
-        return {};
-    }
-}
-
-function sourceContainsModel(source: AiSourceConfig, capability: 'image' | 'tts' | 'audio', modelId: string): boolean {
-    const target = modelId.trim();
-    if (!target) return false;
-    const descriptors = getAiSourceModelDescriptors(source);
-    const scoped = capability === 'tts'
-        ? (
-            filterAiModelsByCapability(descriptors, 'tts').length > 0
-                ? filterAiModelsByCapability(descriptors, 'tts')
-                : filterAiModelsByCapability(descriptors, 'audio')
-        )
-        : capability === 'audio'
-            ? filterAiModelsByCapability(descriptors, 'audio')
-            : filterAiModelsByCapability(descriptors, capability);
-    return scoped.some((model) => model.id === target);
-}
-
-function aiSourceToRouteOverride(source: AiSourceConfig | null | undefined): ModelRouteOverride {
-    if (!source) return {};
-    return {
-        sourceId: source.id || undefined,
-        baseURL: source.baseURL || undefined,
-        apiKey: source.apiKey || undefined,
-        presetId: source.presetId || undefined,
-        protocol: source.protocol || undefined,
-    };
-}
-
-function resolveSelectedModelOverride(
-    settings: SettingsShape,
-    scope: 'image' | 'voiceTts',
-    capability: 'image' | 'tts' | 'audio',
-    modelId: string,
-): ModelRouteOverride {
-    const selectedModel = modelId.trim();
-    if (!selectedModel) return {};
-    const sources = parseAiSources(settings.ai_sources_json);
-    const candidates = sources.filter((source) => sourceContainsModel(source, capability, selectedModel));
-    if (candidates.length === 0) return {};
-
-    const routes = parseAiModelRoutes(settings);
-    const route = routes[scope];
-    const routeRecord = route && typeof route === 'object' && !Array.isArray(route)
-        ? route as Record<string, unknown>
-        : {};
-    const routeSourceId = String(routeRecord.sourceId || routeRecord.source_id || '').trim();
-    const routeModel = String(routeRecord.model || routeRecord.modelName || routeRecord.model_name || '').trim();
-    const defaultSourceId = String(settings.default_ai_source_id || '').trim();
-
-    const selectedSource = (
-        routeSourceId && (!routeModel || routeModel === selectedModel)
-            ? candidates.find((source) => source.id === routeSourceId)
-            : null
-    )
-        || (defaultSourceId ? candidates.find((source) => source.id === defaultSourceId) : null)
-        || candidates[0];
-
-    return aiSourceToRouteOverride(selectedSource);
-}
-
-function extractVoiceListItems(value: unknown): unknown[] {
-    if (Array.isArray(value)) return value;
-    if (!value || typeof value !== 'object') return [];
-    const record = value as Record<string, unknown>;
-    const hasVoiceId = Boolean(record.voice_id || record.voiceId || record.id || record.value);
-    if (hasVoiceId) return [record];
-    for (const key of ['voices', 'items', 'data', 'results']) {
-        const items = extractVoiceListItems(record[key]);
-        if (items.length > 0) return items;
-    }
-    return [];
-}
-
-function normalizeVoiceList(value: unknown): VoiceListItem[] {
-    const rawItems = extractVoiceListItems(value);
-
-    return rawItems
-        .map((item) => {
-            if (!item || typeof item !== 'object') return null;
-            const voice = item as Record<string, unknown>;
-            const id = String(voice.voice_id || voice.voiceId || voice.id || voice.value || '').trim();
-            if (!id) return null;
-            return {
-                id,
-                name: String(voice.name || voice.title || id).trim() || id,
-                language: String(voice.language || voice.lang || '').trim(),
-                languageBoost: String(voice.languageBoost || voice.language_boost || voice.language || '').trim(),
-                languageZh: String(voice.languageZh || voice.language_zh || '').trim(),
-                languageEn: String(voice.languageEn || voice.language_en || '').trim(),
-                status: String(voice.status || '').trim(),
-                source: String(voice.source || '').trim(),
-                ownerAssetId: String(voice.ownerAssetId || voice.assetId || voice.subjectId || '').trim(),
-                genderHint: String(voice.genderHint || voice.gender_hint || '').trim(),
-                systemVoice: Boolean(voice.systemVoice || voice.system_voice || voice.source === 'system'),
-                targetTtsModel: String(voice.targetTtsModel || voice.target_tts_model || voice.ttsModel || voice.tts_model || voice.model || '').trim(),
-                cloneModel: String(voice.cloneModel || voice.clone_model || '').trim(),
-                provider: String(voice.provider || '').trim(),
-                supportedModels: [
-                    ...stringArrayValue(voice.supportedModels),
-                    ...stringArrayValue(voice.supported_models),
-                    ...stringArrayValue(voice.ttsModels),
-                    ...stringArrayValue(voice.tts_models),
-                ],
-            } satisfies VoiceListItem;
-        })
-        .filter((item): item is VoiceListItem => {
-            if (!item) return false;
-            const status = item.status.trim().toLowerCase();
-            return !['failed', 'error', 'dead_lettered', 'deleted', 'cancelled', 'canceled'].includes(status);
-        })
 }
 
 function readAudioRichText(root: HTMLElement | null): string {
@@ -1211,50 +524,6 @@ const AudioRichTextInput = forwardRef<AudioRichTextInputHandle, {
         </div>
     );
 });
-
-function voiceLanguageValue(voice: VoiceListItem): string {
-    return (voice.languageBoost || voice.language).trim();
-}
-
-function voiceLanguageMatches(voice: VoiceListItem, languageBoost: string): boolean {
-    const selected = languageBoost.trim();
-    if (!selected) return true;
-    const value = voiceLanguageValue(voice);
-    if (!value) return !voice.systemVoice;
-    return value.split(',').map((item) => item.trim()).includes(selected);
-}
-
-function buildAudioLanguageOptions(voices: VoiceListItem[]): PickerOption[] {
-    const options = new Map<string, PickerOption>();
-    for (const option of DEFAULT_AUDIO_LANGUAGE_OPTIONS) {
-        options.set(option.value, { ...option });
-    }
-    for (const voice of voices) {
-        const value = voiceLanguageValue(voice);
-        if (!value || options.has(value)) continue;
-        options.set(value, {
-            value,
-            label: voice.languageZh || voice.languageEn || value,
-        });
-    }
-    return Array.from(options.values());
-}
-
-function buildAudioVoiceOptions(voices: VoiceListItem[], languageBoost: string): PickerOption[] {
-    return voices
-        .filter((voice) => voiceLanguageMatches(voice, languageBoost))
-        .map((voice) => ({
-            value: voice.id,
-            label: voice.name,
-            description: [
-                shortVoiceId(voice.id),
-                voice.source === 'subject' ? '角色音色' : voice.systemVoice ? '系统音色' : '',
-                voice.languageZh || voice.languageEn || voiceLanguageValue(voice),
-                voice.genderHint,
-                voice.status && voice.status !== 'ready' ? voice.status : '',
-            ].filter(Boolean).join(' · '),
-        }));
-}
 
 function useDismissiblePopover(open: boolean, onClose: () => void) {
     const rootRef = useRef<HTMLDivElement | null>(null);

@@ -7,7 +7,12 @@ This module owns renderer-side media generation model logic that is shared by th
 - `feedModel.ts` defines the generation feed domain types for image, video, audio, cover, digital human, agent sessions, generated assets, and deleted feed state.
 - It builds normalized generation requests from page form state for manual and agent flows.
 - `agentContext.ts` builds the structured runtime context passed into media-generation Agent mode.
+- `agentSession.ts` owns generation Agent context ids, initial context text, and session metadata.
+- `references.ts` owns uploaded attachment classification, preview source resolution, reference contact sheets, and attachment-to-reference conversion.
+- `assetDisplay.ts` owns feed display helpers such as request summaries, placeholder aspect ratios, grid classes, asset naming, and relative time labels.
+- `audioOptions.ts` owns AI source model option projection, model route override resolution, voice list normalization, and audio language/voice option projection.
 - `digitalHuman.ts` normalizes digital-human audio generation results.
+- `digitalHumanReadiness.ts` owns subject voice/video readiness extraction for the digital-human flow.
 - `validation.ts` validates generation requests and returns stable user-facing error messages.
 - `submitPayload.ts` translates generation requests into typed IPC payloads for image, video, audio, cover, and digital human submission.
 - `submitter.ts` owns the renderer-side submit orchestration for image, video, audio, cover, and digital human generation.

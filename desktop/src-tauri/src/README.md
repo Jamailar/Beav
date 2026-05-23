@@ -14,6 +14,7 @@
 - `commands/`：IPC/频道命令处理层（按业务域拆分）。
 - `document_ingest/`：文档源接入层，负责 copied-file / tracked-folder / vault 注册与 workspace 托管复制。
 - `events/`：统一事件发射与前端兼容事件桥接。
+- `media_generation.rs` + `media_generation/`：AI media provider adapter layer；parent keeps shared settings/transport/embedding helpers, `image.rs` owns image request/provider logic, and `video.rs` owns video request/provider logic.
 - `persistence/`：本地状态读取、持久化、工作区 hydrate。
 - `scheduler/`：后台调度计算、任务派生状态。
 - `runtime.rs`：运行时核心类型与通用运行时辅助。
