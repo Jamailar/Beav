@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: in_progress
-last_updated: 2026-05-22
+last_updated: 2026-05-23
 ---
 
 # RedBox Modularization Execution Plan
@@ -20,7 +20,7 @@ Status: Current
 
 | Area | Evidence | Risk |
 | --- | --- | --- |
-| Host assembly | `src-tauri/src/main.rs` 约 10746 行 | `AppStore`、`AppState`、workspace helper、runtime tool loop、startup restore、channel dispatch 混在入口层 |
+| Host assembly | `src-tauri/src/main.rs` 约 192 行；历史 host glue 已迁入 `host_impl.rs` 兼容层 | `main.rs` 已恢复装配角色；`host_impl.rs` 后续仍需按领域继续拆分 |
 | Manuscripts host | `src-tauri/src/commands/manuscripts.rs` 约 9798 行 | 稿件树、package、timeline、Remotion、FFmpeg、editor runtime state 共用一个 command 文件 |
 | Settings page | `src/pages/Settings.tsx` 约 8470 行 | AI source、账号计费、技能、插件、MCP、CLI runtime、日志诊断、runtime debug 混成控制台 |
 | Generation page | `src/pages/GenerationStudio.tsx` 约 5895 行 | 图片、视频、音频、封面、数字人、Agent session、feed、角色 readiness 混在一个页面 |
@@ -1816,3 +1816,25 @@ Remaining after Phase 2:
 
 - Manual smoke still needs to be run in the app for logged-out/logged-in gates, Settings navigation, subject modal, Knowledge -> RedClaw, and clipboard capture accept.
 - Phase 3 Host Main And App State Split remains the next major unfinished modularization phase.
+
+### 2026-05-23 Phase 3 Host Main And App State Split Completed
+
+Completed:
+
+- Moved `AppState`, assistant runtime handles, sidecar runtime handles, and global debug handles into `src-tauri/src/app_state.rs`.
+- Moved `AppStore` and pure persisted record structs into `src-tauri/src/store/types.rs`.
+- Moved workspace/store/media/cover/knowledge/RedClaw/advisor/subject path helpers into `src-tauri/src/workspace/paths.rs`.
+- Moved `handle_channel(...)` fanout into `src-tauri/src/channel_router.rs` while preserving the root `handle_channel` re-export for existing internal callers.
+- Moved store startup preparation, `.setup(...)` runtime restore, official auth bootstrap, and startup background housekeeping into `src-tauri/src/startup/mod.rs`.
+- Moved remaining historical host glue out of `main.rs` into `src-tauri/src/host_impl.rs` as a compatibility layer; `main.rs` is now 192 lines and only performs module declaration, root re-export, Tauri builder setup, command registration, and top-level run lifecycle.
+- Added module README files for `app_state`, `channel_router`, `host_impl`, `startup`, `store`, and `workspace`.
+
+Verification:
+
+- `cargo fmt --check`
+- `CARGO_TARGET_DIR=/tmp/redconvert-cargo-check-target cargo check`
+
+Remaining after Phase 3:
+
+- `host_impl.rs` is intentionally a compatibility holding module, not a new destination for business logic.
+- Future host work should split `host_impl.rs` by domain before changing behavior in those areas.
