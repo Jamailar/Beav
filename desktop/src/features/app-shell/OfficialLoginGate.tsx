@@ -205,6 +205,9 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
         const nextStatus = String(result.data?.status || '').toUpperCase();
         setWechatStatus(nextStatus);
         if (nextStatus === 'CONFIRMED') {
+          if (!result.data?.session) {
+            throw new Error('微信登录已确认，但服务端未返回登录凭证，请重新扫码。');
+          }
           stopWechatPolling();
           setLoginNotice('success', '登录成功，正在进入工作台…');
           refreshAuthAfterLogin();

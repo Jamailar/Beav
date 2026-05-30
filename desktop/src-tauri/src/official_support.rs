@@ -883,11 +883,26 @@ pub(crate) fn run_official_public_json_request(
     Ok(response.body)
 }
 
+fn official_auth_payload_candidate(raw: &Value) -> Value {
+    let unwrapped = official_unwrap_response_payload(raw);
+    for payload in [&unwrapped, raw] {
+        for key in [
+            "auth_payload",
+            "authPayload",
+            "auth_session",
+            "authSession",
+            "session",
+        ] {
+            if let Some(value) = payload.get(key).filter(|value| value.is_object()) {
+                return value.clone();
+            }
+        }
+    }
+    unwrapped
+}
+
 pub(crate) fn normalize_official_auth_session(raw: &Value) -> Result<Value, String> {
-    let payload = raw
-        .get("auth_payload")
-        .cloned()
-        .unwrap_or_else(|| official_unwrap_response_payload(raw));
+    let payload = official_auth_payload_candidate(raw);
     let access_token = payload_string(&payload, "access_token")
         .or_else(|| payload_string(&payload, "accessToken"))
         .ok_or_else(|| "登录结果缺少 access_token".to_string())?;
@@ -1531,6 +1546,44 @@ mod tests {
             ),
             format!("https://api.ziz.hk/{}/v1", app_brand_slug())
         );
+    }
+
+    #[test]
+    fn normalize_official_auth_session_accepts_wechat_auth_payload_aliases() {
+        let session = normalize_official_auth_session(&json!({
+            "status": "CONFIRMED",
+            "authPayload": {
+                "accessToken": "access-token",
+                "refreshToken": "refresh-token",
+                "apiKey": "official-key",
+                "user": { "id": "user-1" }
+            }
+        }))
+        .expect("wechat auth payload alias should normalize");
+
+        assert_eq!(
+            payload_string(&session, "accessToken").as_deref(),
+            Some("access-token")
+        );
+        assert_eq!(
+            payload_string(&session, "refreshToken").as_deref(),
+            Some("refresh-token")
+        );
+        assert_eq!(
+            payload_string(&session, "apiKey").as_deref(),
+            Some("official-key")
+        );
+    }
+
+    #[test]
+    fn normalize_official_auth_session_rejects_confirmed_payload_without_tokens() {
+        let error = normalize_official_auth_session(&json!({
+            "status": "CONFIRMED",
+            "message": "登录成功"
+        }))
+        .expect_err("confirmed payload without tokens must not be treated as logged in");
+
+        assert!(error.contains("access_token"));
     }
 
     #[test]
