@@ -77,7 +77,7 @@ pub(crate) use runtime::{
     RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
 };
 pub(crate) use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 pub(crate) use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64},
@@ -136,6 +136,7 @@ fn main() {
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
             editor_runtime_states: Mutex::new(std::collections::HashMap::new()),
             active_chat_requests: Mutex::new(HashMap::new()),
+            active_team_member_wakes: Mutex::new(HashSet::new()),
             assistant_runtime: Mutex::new(None),
             assistant_sidecar: Mutex::new(None),
             redclaw_runtime: Mutex::new(None),
