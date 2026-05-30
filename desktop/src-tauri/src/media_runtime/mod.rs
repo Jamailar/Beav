@@ -283,19 +283,62 @@ pub(crate) fn media_runtime_pressure_snapshot(
             |row| row.get::<_, i64>(0),
         )
         .map_err(|error| error.to_string())?;
+    let expired_leases = conn
+        .query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM media_jobs j
+            JOIN media_job_attempts a
+              ON a.job_id = j.job_id AND a.attempt_no = j.current_attempt_no
+            WHERE COALESCE(a.lease_expires_at, 0) > 0
+              AND COALESCE(a.lease_expires_at, 0) <= ?1
+              AND j.archived_at IS NULL
+            "#,
+            params![now],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let dead_lettered_jobs = conn
+        .query_row(
+            "SELECT COUNT(*) FROM media_jobs WHERE archived_at IS NULL AND status = 'dead_lettered'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let oldest_queued_at = conn
+        .query_row(
+            "SELECT MIN(created_at) FROM media_jobs WHERE archived_at IS NULL AND status = 'queued'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let oldest_queued_age_ms = oldest_queued_at
+        .as_deref()
+        .and_then(parse_timestamp_ms)
+        .map(|created_at| now.saturating_sub(created_at));
 
     Ok(json!({
         "byKindStatus": by_kind_status,
         "dueVideoPolls": due_video_polls,
         "leasedJobs": leased_jobs,
+        "expiredLeases": expired_leases,
+        "deadLetteredJobs": dead_lettered_jobs,
+        "oldestQueuedAt": oldest_queued_at,
+        "oldestQueuedAgeMs": oldest_queued_age_ms,
         "limits": {
             "imageSubmitPerProvider": IMAGE_SUBMIT_LIMIT_PER_PROVIDER,
             "videoSubmitPerProvider": VIDEO_SUBMIT_LIMIT_PER_PROVIDER,
             "videoDownloadPerProvider": VIDEO_DOWNLOAD_LIMIT_PER_PROVIDER,
             "videoPollGlobal": VIDEO_POLL_LIMIT_GLOBAL,
             "dispatchTickMs": DISPATCH_TICK_MS,
+            "mediaAwaitDefaultTimeoutMs": MEDIA_AWAIT_DEFAULT_TIMEOUT_MS,
+            "videoProviderPollTimeoutMs": VIDEO_PROVIDER_POLL_TIMEOUT_MS,
         }
     }))
+}
+
+pub(crate) fn default_media_job_wait_timeout_ms() -> u64 {
+    MEDIA_AWAIT_DEFAULT_TIMEOUT_MS
 }
 
 fn media_runtime_http_client() -> Result<&'static Client, String> {
@@ -1255,11 +1298,34 @@ fn set_job_terminal_failure(
 fn retry_policy_for_stage(stage: &str) -> Option<(&'static str, &'static str, usize, i64)> {
     match stage {
         "image-submit" => Some(("queued", "retry_image_submit", 3, 1_500)),
+        "video-submit" => Some(("queued", "retry_video_submit", 3, 2_500)),
+        "video-poll" => Some(("polling", "retry_video_poll", 120, 5_000)),
+        "video-download" => Some(("downloading", "retry_video_download", 3, 2_500)),
         "audio-submit" => Some(("queued", "retry_audio_submit", 3, 1_500)),
         "audio-sequence-submit" => Some(("queued", "retry_audio_sequence_submit", 3, 1_500)),
         "voice-clone-submit" => Some(("queued", "retry_voice_clone_submit", 3, 2_500)),
         _ => None,
     }
+}
+
+fn is_non_retryable_media_error(stage: &str, message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("missing_provider_task_id")
+        || normalized.contains("provider did not return")
+        || normalized.contains("未返回 taskid")
+        || normalized.contains("缺少 provider taskid")
+    {
+        return true;
+    }
+    if stage.starts_with("video-") {
+        return normalized.contains("http 400")
+            || normalized.contains("http 401")
+            || normalized.contains("http 403")
+            || normalized.contains("http 404")
+            || normalized.contains("request too large")
+            || normalized.contains("payload too large");
+    }
+    false
 }
 
 fn is_non_retryable_voice_clone_error(message: &str) -> bool {
@@ -1276,6 +1342,9 @@ fn schedule_stage_retry_or_dead_letter(
     result_json: Option<&Value>,
 ) -> Result<(), String> {
     if stage == "voice-clone-submit" && is_non_retryable_voice_clone_error(message) {
+        return fail_job(app, job_id, message, result_json);
+    }
+    if is_non_retryable_media_error(stage, message) {
         return fail_job(app, job_id, message, result_json);
     }
     let Some((next_status, retry_event_type, retry_limit, base_delay_ms)) =
@@ -2274,6 +2343,56 @@ fn clear_expired_leases(app: &AppHandle, state: &State<'_, AppState>) -> Result<
             emit_job_updated(app, state, &job_id);
             continue;
         }
+        if matches!(
+            loaded.job.status.as_str(),
+            "submitting" | "polling" | "downloading"
+        ) {
+            let recovery_count = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM media_job_events WHERE attempt_id = ?1 AND event_type = 'lease_recovered'",
+                    params![loaded.attempt.attempt_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if recovery_count < 3 {
+                let next_status = if loaded.job.status == "submitting" {
+                    "queued"
+                } else {
+                    loaded.job.status.as_str()
+                };
+                set_attempt_details(
+                    &conn,
+                    &loaded,
+                    next_status,
+                    loaded.attempt.provider_task_id.as_deref(),
+                    loaded.attempt.provider_status_url.as_deref(),
+                    if next_status == "polling" {
+                        Some(now + DEFAULT_POLL_INTERVAL_MS)
+                    } else {
+                        loaded.attempt.next_poll_at
+                    },
+                    loaded.attempt.response_json.as_ref(),
+                    Some("Recovered expired media generation lease"),
+                    true,
+                )?;
+                append_event_with_connection(
+                    &conn,
+                    &job_id,
+                    Some(&loaded.attempt.attempt_id),
+                    "lease_recovered",
+                    "Media generation stage lease expired; job released for retry",
+                    Some(&json!({
+                        "previousStatus": loaded.job.status,
+                        "nextStatus": next_status,
+                        "leaseOwner": loaded.attempt.lease_owner,
+                        "leaseExpiresAt": loaded.attempt.lease_expires_at,
+                        "recoveryCount": recovery_count + 1,
+                    })),
+                )?;
+                emit_job_updated(app, state, &job_id);
+                continue;
+            }
+        }
         let timeout_message = format!("{} stage lease expired", loaded.job.kind);
         set_job_terminal_failure(&conn, &loaded, "failed", &timeout_message, None)?;
         append_event_with_connection(
@@ -2304,7 +2423,7 @@ fn expire_timed_out_video_jobs(app: &AppHandle, state: &State<'_, AppState>) -> 
             JOIN media_job_attempts a
               ON a.job_id = j.job_id AND a.attempt_no = j.current_attempt_no
             WHERE j.kind = 'video'
-              AND j.status IN ('queued', 'polling')
+              AND j.status = 'polling'
               AND a.lease_owner IS NULL
             ORDER BY j.created_at ASC, j.job_id ASC
             "#,
@@ -2321,15 +2440,16 @@ fn expire_timed_out_video_jobs(app: &AppHandle, state: &State<'_, AppState>) -> 
         let Some(loaded) = load_job_with_current_attempt(&conn, &job_id)? else {
             continue;
         };
-        if !video_attempt_timed_out(&loaded, now) {
+        if !video_attempt_timed_out(&conn, &loaded, now)? {
             continue;
         }
         let message = video_timeout_failure_message();
-        let elapsed_ms = video_attempt_elapsed_ms(&loaded, now).unwrap_or(VIDEO_JOB_TIMEOUT_MS);
+        let elapsed_ms = video_provider_poll_elapsed_ms(&conn, &loaded, now)?
+            .unwrap_or(VIDEO_PROVIDER_POLL_TIMEOUT_MS);
         let result_json = json!({
             "error": message,
-            "reason": "timeout",
-            "timeoutMs": VIDEO_JOB_TIMEOUT_MS,
+            "reason": "provider_poll_timeout",
+            "timeoutMs": VIDEO_PROVIDER_POLL_TIMEOUT_MS,
             "elapsedMs": elapsed_ms,
             "providerTaskId": loaded.attempt.provider_task_id.clone(),
             "providerStatusUrl": loaded.attempt.provider_status_url.clone(),
@@ -2602,27 +2722,61 @@ fn final_job_error_message(projection: &Value) -> String {
         .to_string()
 }
 
-fn video_attempt_started_at_ms(loaded: &LoadedJob) -> Option<i64> {
-    parse_timestamp_ms(&loaded.attempt.created_at)
-        .or_else(|| parse_timestamp_ms(&loaded.job.created_at))
-}
-
-fn video_attempt_elapsed_ms(loaded: &LoadedJob, now_ms: i64) -> Option<i64> {
-    let started_at = video_attempt_started_at_ms(loaded)?;
-    Some(now_ms.saturating_sub(started_at))
-}
-
-fn video_attempt_timed_out(loaded: &LoadedJob, now_ms: i64) -> bool {
-    if loaded.job.kind != "video" {
-        return false;
+fn video_provider_poll_started_at_ms(
+    conn: &Connection,
+    loaded: &LoadedJob,
+) -> Result<Option<i64>, String> {
+    let event_started_at = conn
+        .query_row(
+            r#"
+            SELECT MIN(created_at)
+            FROM media_job_events
+            WHERE attempt_id = ?1
+              AND event_type IN ('submitted', 'poll_pending')
+            "#,
+            params![loaded.attempt.attempt_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .and_then(|value| parse_timestamp_ms(&value));
+    if event_started_at.is_some() {
+        return Ok(event_started_at);
     }
-    video_attempt_elapsed_ms(loaded, now_ms)
-        .map(|elapsed| elapsed >= VIDEO_JOB_TIMEOUT_MS)
-        .unwrap_or(false)
+    if loaded.attempt.provider_task_id.is_some() {
+        return Ok(parse_timestamp_ms(&loaded.attempt.created_at)
+            .or_else(|| parse_timestamp_ms(&loaded.job.created_at)));
+    }
+    Ok(None)
+}
+
+fn video_provider_poll_elapsed_ms(
+    conn: &Connection,
+    loaded: &LoadedJob,
+    now_ms: i64,
+) -> Result<Option<i64>, String> {
+    let Some(started_at) = video_provider_poll_started_at_ms(conn, loaded)? else {
+        return Ok(None);
+    };
+    Ok(Some(now_ms.saturating_sub(started_at)))
+}
+
+fn video_attempt_timed_out(
+    conn: &Connection,
+    loaded: &LoadedJob,
+    now_ms: i64,
+) -> Result<bool, String> {
+    if loaded.job.kind != "video" {
+        return Ok(false);
+    }
+    Ok(video_provider_poll_elapsed_ms(conn, loaded, now_ms)?
+        .map(|elapsed| elapsed >= VIDEO_PROVIDER_POLL_TIMEOUT_MS)
+        .unwrap_or(false))
 }
 
 fn video_timeout_failure_message() -> String {
-    "视频生成超时：30 分钟内未完成，已停止轮询。".to_string()
+    "视频生成超时：2 小时内未完成，已停止轮询。".to_string()
 }
 
 pub(crate) fn await_media_job_completion(
@@ -2683,7 +2837,7 @@ pub(crate) fn compat_generate_and_wait(
         .get("jobId")
         .and_then(Value::as_str)
         .ok_or_else(|| "media runtime did not return jobId".to_string())?;
-    let projection = await_media_job_completion(state, job_id, DEFAULT_JOB_WAIT_TIMEOUT_MS)?;
+    let projection = await_media_job_completion(state, job_id, MEDIA_AWAIT_DEFAULT_TIMEOUT_MS)?;
     let artifacts = projection
         .get("artifacts")
         .and_then(Value::as_array)
@@ -4161,7 +4315,7 @@ async fn run_video_segment_generation(
         return Err("视频片段任务创建失败：provider 未返回 taskId。".to_string());
     };
     let provider_status_url = extract_status_url(&response);
-    let deadline = now_i64() + VIDEO_JOB_TIMEOUT_MS;
+    let deadline = now_i64() + VIDEO_PROVIDER_POLL_TIMEOUT_MS;
     loop {
         if now_i64() > deadline {
             return Err("video sequence segment timed out while polling provider".to_string());
@@ -5644,41 +5798,101 @@ mod tests {
             retry_policy_for_stage("image-submit"),
             Some(("queued", "retry_image_submit", 3, 1_500))
         );
-        assert_eq!(retry_policy_for_stage("video-submit"), None);
+        assert_eq!(
+            retry_policy_for_stage("video-submit"),
+            Some(("queued", "retry_video_submit", 3, 2_500))
+        );
         assert_eq!(retry_policy_for_stage("video-sequence-submit"), None);
-        assert_eq!(retry_policy_for_stage("video-poll"), None);
-        assert_eq!(retry_policy_for_stage("video-download"), None);
+        assert_eq!(
+            retry_policy_for_stage("video-poll"),
+            Some(("polling", "retry_video_poll", 120, 5_000))
+        );
+        assert_eq!(
+            retry_policy_for_stage("video-download"),
+            Some(("downloading", "retry_video_download", 3, 2_500))
+        );
         assert_eq!(retry_policy_for_stage("unknown-stage"), None);
     }
 
     #[test]
-    fn video_attempt_timeout_uses_attempt_creation_time() {
+    fn video_attempt_timeout_uses_provider_poll_start_time() {
+        let conn = Connection::open_in_memory().expect("memory sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE media_job_events (
+                event_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                attempt_id TEXT,
+                event_type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                payload_json TEXT,
+                created_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("create events table");
         let mut loaded = test_loaded_job("interactive", "video-timeout");
         let attempt_started_at = 1_700_000_000_000_i64;
+        let poll_started_at = attempt_started_at + 20 * 60 * 1000;
         loaded.job.kind = "video".to_string();
         loaded.job.created_at = (attempt_started_at - 30_000).to_string();
         loaded.attempt.created_at = attempt_started_at.to_string();
+        loaded.attempt.provider_task_id = Some("task-1".to_string());
+        conn.execute(
+            r#"
+            INSERT INTO media_job_events (
+                event_id, job_id, attempt_id, event_type, message, payload_json, created_at
+            ) VALUES ('event-1', ?1, ?2, 'submitted', 'submitted', NULL, ?3)
+            "#,
+            params![
+                loaded.job.job_id,
+                loaded.attempt.attempt_id,
+                poll_started_at.to_string()
+            ],
+        )
+        .expect("insert submitted event");
 
         assert!(!video_attempt_timed_out(
+            &conn,
             &loaded,
-            attempt_started_at + VIDEO_JOB_TIMEOUT_MS - 1,
-        ));
+            poll_started_at + VIDEO_PROVIDER_POLL_TIMEOUT_MS - 1,
+        )
+        .expect("timeout check"));
         assert!(video_attempt_timed_out(
+            &conn,
             &loaded,
-            attempt_started_at + VIDEO_JOB_TIMEOUT_MS,
-        ));
+            poll_started_at + VIDEO_PROVIDER_POLL_TIMEOUT_MS,
+        )
+        .expect("timeout check"));
     }
 
     #[test]
-    fn video_attempt_timeout_ignores_non_video_jobs() {
+    fn video_attempt_timeout_ignores_queued_jobs_without_provider_task() {
+        let conn = Connection::open_in_memory().expect("memory sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE media_job_events (
+                event_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                attempt_id TEXT,
+                event_type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                payload_json TEXT,
+                created_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("create events table");
         let mut loaded = test_loaded_job("interactive", "image-job");
-        loaded.job.kind = "image".to_string();
+        loaded.job.kind = "video".to_string();
         loaded.attempt.created_at = "1700000000000".to_string();
 
         assert!(!video_attempt_timed_out(
+            &conn,
             &loaded,
-            1_700_000_000_000_i64 + VIDEO_JOB_TIMEOUT_MS,
-        ));
+            1_700_000_000_000_i64 + VIDEO_PROVIDER_POLL_TIMEOUT_MS * 4,
+        )
+        .expect("timeout check"));
     }
 
     #[test]

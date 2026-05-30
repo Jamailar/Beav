@@ -11,6 +11,6 @@ pub(super) const MAX_VIDEO_SEGMENT_SECONDS: i64 = 15;
 
 pub(super) const DISPATCH_TICK_MS: u64 = 350;
 pub(super) const DEFAULT_POLL_INTERVAL_MS: i64 = 2_500;
-pub(super) const VIDEO_JOB_TIMEOUT_MS: i64 = 30 * 60 * 1000;
-pub(super) const DEFAULT_JOB_WAIT_TIMEOUT_MS: u64 = VIDEO_JOB_TIMEOUT_MS as u64;
+pub(super) const VIDEO_PROVIDER_POLL_TIMEOUT_MS: i64 = 2 * 60 * 60 * 1000;
+pub(crate) const MEDIA_AWAIT_DEFAULT_TIMEOUT_MS: u64 = VIDEO_PROVIDER_POLL_TIMEOUT_MS as u64;
 pub(super) const ACTIVE_STAGE_LEASE_MS: i64 = 20 * 60 * 1000;

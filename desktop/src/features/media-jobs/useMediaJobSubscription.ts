@@ -41,35 +41,54 @@ export function useMediaJobSubscription(
             if (!log) return;
             mediaJobsStore.appendLog(log);
         };
+        const refreshSnapshot = async () => {
+            try {
+                if (options?.bootstrapFilter) {
+                    const result = await window.ipcRenderer.generation.listJobs(options.bootstrapFilter) as {
+                        items?: unknown[];
+                    };
+                    if (!cancelled && Array.isArray(result?.items)) {
+                        mediaJobsStore.upsertJobs(
+                            result.items
+                                .map(normalizeMediaJobProjection)
+                                .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+                        );
+                    }
+                }
+
+                for (const jobId of normalizedJobIds) {
+                    const projection = normalizeMediaJobProjection(
+                        await window.ipcRenderer.generation.getJob(jobId),
+                    );
+                    if (cancelled || !projection) continue;
+                    mediaJobsStore.upsertJob(projection);
+                }
+            } catch (error) {
+                console.warn('Failed to refresh media jobs snapshot:', error);
+            }
+        };
+        const handleVisibilityRefresh = () => {
+            if (document.visibilityState === 'visible') {
+                void refreshSnapshot();
+            }
+        };
 
         window.ipcRenderer.generation.onJobUpdated(handleJobUpdated);
         window.ipcRenderer.generation.onJobLog(handleJobLog);
-
-        void (async () => {
-            if (options?.bootstrapFilter) {
-                const result = await window.ipcRenderer.generation.listJobs(options.bootstrapFilter) as {
-                    items?: unknown[];
-                };
-                if (!cancelled && Array.isArray(result?.items)) {
-                    mediaJobsStore.upsertJobs(
-                        result.items
-                            .map(normalizeMediaJobProjection)
-                            .filter((item): item is NonNullable<typeof item> => Boolean(item)),
-                    );
-                }
+        window.addEventListener('focus', handleVisibilityRefresh);
+        document.addEventListener('visibilitychange', handleVisibilityRefresh);
+        const reconcileTimer = window.setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                void refreshSnapshot();
             }
-
-            for (const jobId of normalizedJobIds) {
-                const projection = normalizeMediaJobProjection(
-                    await window.ipcRenderer.generation.getJob(jobId),
-                );
-                if (cancelled || !projection) continue;
-                mediaJobsStore.upsertJob(projection);
-            }
-        })();
+        }, 15_000);
+        void refreshSnapshot();
 
         return () => {
             cancelled = true;
+            window.clearInterval(reconcileTimer);
+            window.removeEventListener('focus', handleVisibilityRefresh);
+            document.removeEventListener('visibilitychange', handleVisibilityRefresh);
             window.ipcRenderer.generation.offJobUpdated(handleJobUpdated);
             window.ipcRenderer.generation.offJobLog(handleJobLog);
         };
