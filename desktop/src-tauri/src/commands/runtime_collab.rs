@@ -343,6 +343,25 @@ fn prepare_team_member_wake(
     })
 }
 
+fn team_member_is_settled(status: &str) -> bool {
+    matches!(
+        status,
+        "idle" | "completed" | "failed" | "offline" | "suspended" | "archived" | "shutdown"
+    )
+}
+
+fn non_coordinator_members_settled(
+    store: &crate::AppStore,
+    session_id: &str,
+    coordinator_id: &str,
+) -> bool {
+    store
+        .collab_members
+        .iter()
+        .filter(|member| member.session_id == session_id && member.id != coordinator_id)
+        .all(|member| team_member_is_settled(member.status.as_str()))
+}
+
 fn finish_team_member_wake(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -426,9 +445,15 @@ fn finish_team_member_wake(
             } else {
                 None
             };
-            let coordinator_target = coordinator_message
-                .as_ref()
-                .and_then(|message| message.to_member_id.clone());
+            let coordinator_target = coordinator_id.as_deref().and_then(|coordinator_id| {
+                if non_coordinator_members_settled(store, &input.session.id, coordinator_id) {
+                    coordinator_message
+                        .as_ref()
+                        .and_then(|message| message.to_member_id.clone())
+                } else {
+                    None
+                }
+            });
             Ok((member, report, coordinator_message, coordinator_target))
         })?;
 
@@ -566,6 +591,23 @@ fn schedule_message_target_wake(
     }
 }
 
+fn mailbox_messages_from_value(value: &Value) -> Vec<CollabMailboxMessageRecord> {
+    if let Ok(message) = serde_json::from_value::<CollabMailboxMessageRecord>(value.clone()) {
+        return vec![message];
+    }
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    serde_json::from_value::<CollabMailboxMessageRecord>(item.clone()).ok()
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 fn has_pending_member_messages(
     state: &State<'_, AppState>,
     session_id: &str,
@@ -619,8 +661,7 @@ fn emit_team_action_result_events(
             }
         }
         "team.message.send" | "team.report.request" => {
-            if let Ok(message) = serde_json::from_value::<CollabMailboxMessageRecord>(value.clone())
-            {
+            for message in mailbox_messages_from_value(value) {
                 schedule_message_target_wake(app, state, &message, action);
                 emit_collab_event(
                     app,
@@ -1917,5 +1958,48 @@ mod tests {
                 .and_then(Value::as_str),
             Some("advisor-strategy")
         );
+    }
+
+    #[test]
+    fn coordinator_wake_waits_until_non_coordinator_members_are_settled() {
+        let mut store = crate::AppStore::default();
+        let session_id = "collab-session-settled".to_string();
+        store.collab_members.push(CollabMemberRecord {
+            id: "coordinator".to_string(),
+            session_id: session_id.clone(),
+            status: "idle".to_string(),
+            ..Default::default()
+        });
+        store.collab_members.push(CollabMemberRecord {
+            id: "worker-a".to_string(),
+            session_id: session_id.clone(),
+            status: "idle".to_string(),
+            ..Default::default()
+        });
+        store.collab_members.push(CollabMemberRecord {
+            id: "worker-b".to_string(),
+            session_id: session_id.clone(),
+            status: "active".to_string(),
+            ..Default::default()
+        });
+
+        assert!(!non_coordinator_members_settled(
+            &store,
+            &session_id,
+            "coordinator"
+        ));
+
+        store
+            .collab_members
+            .iter_mut()
+            .find(|member| member.id == "worker-b")
+            .unwrap()
+            .status = "failed".to_string();
+
+        assert!(non_coordinator_members_settled(
+            &store,
+            &session_id,
+            "coordinator"
+        ));
     }
 }

@@ -100,15 +100,15 @@ pub fn team_mcp_tool_contracts() -> Vec<TeamMcpToolContract> {
         TeamMcpToolContract {
             name: "team_send_message",
             description:
-                "Send a durable mailbox message to another team member or the coordinator.",
+                "Send a durable mailbox message to another team member, the coordinator, or all active members with toMemberId='*'.",
             host_action: "team.message.send",
             mutating: true,
             input_schema: object_schema(
-                &["sessionId", "body"],
+                &["sessionId", "toMemberId", "body"],
                 json!({
                     "sessionId": { "type": "string" },
                     "fromMemberId": { "type": "string" },
-                    "toMemberId": { "type": "string" },
+                    "toMemberId": { "type": "string", "description": "Recipient member id, or '*' to broadcast to all active members except the sender." },
                     "taskId": { "type": "string" },
                     "subject": { "type": "string" },
                     "body": { "type": "string" },

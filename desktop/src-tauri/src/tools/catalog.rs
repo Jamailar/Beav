@@ -1725,7 +1725,10 @@ fn team_message_send_input_schema() -> Value {
         &[
             ("sessionId", string_schema("Collaboration session id.")),
             ("fromMemberId", string_schema("Sender member id.")),
-            ("toMemberId", string_schema("Recipient member id.")),
+            (
+                "toMemberId",
+                string_schema("Recipient member id, or * to broadcast to all active members except the sender."),
+            ),
             ("taskId", string_schema("Related task id.")),
             ("subject", string_schema("Message subject.")),
             ("body", string_schema("Message body.")),
@@ -1735,7 +1738,7 @@ fn team_message_send_input_schema() -> Value {
                 json!({ "type": "object", "additionalProperties": true }),
             ),
         ],
-        &["sessionId", "body"],
+        &["sessionId", "toMemberId", "body"],
         None,
     )
 }
@@ -3984,7 +3987,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "team.message.send",
         namespace: "team.message",
-        description: "Send a durable mailbox message between internal team members or from the coordinator.",
+        description: "Send a durable mailbox message between internal team members, from the coordinator, or to all active members with toMemberId='*'.",
         input_schema: team_message_send_input_schema,
         output_schema: runtime_output_schema,
         mutating: true,

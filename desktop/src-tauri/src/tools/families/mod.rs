@@ -64,8 +64,12 @@ pub fn default_direct_namespaces(
         ],
         "team" => vec![
             team::SESSION_NAMESPACE,
-            "team.member",
+            team::MEMBER_NAMESPACE,
             team::TASK_NAMESPACE,
+            team::MESSAGE_NAMESPACE,
+            team::REPORT_NAMESPACE,
+            team::ARTIFACT_NAMESPACE,
+            team::BLOCKER_NAMESPACE,
             subjects::NAMESPACE,
             memory::NAMESPACE,
             "skills",

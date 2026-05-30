@@ -1,16 +1,52 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::runtime::{
     cleanup_collab_mailbox, list_collab_messages, post_collab_message, read_collab_mailbox,
     request_collab_report, CollabMailboxMessageRecord,
 };
-use crate::AppStore;
+use crate::{payload_string, AppStore};
 
 pub fn team_mailbox_send(
     store: &mut AppStore,
     payload: &Value,
 ) -> Result<CollabMailboxMessageRecord, String> {
     post_collab_message(store, payload)
+}
+
+pub fn team_mailbox_send_value(store: &mut AppStore, payload: &Value) -> Result<Value, String> {
+    if payload_string(payload, "toMemberId").as_deref() != Some("*") {
+        return Ok(json!(team_mailbox_send(store, payload)?));
+    }
+
+    let session_id =
+        payload_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
+    let from_member_id = payload_string(payload, "fromMemberId");
+    let recipient_ids = store
+        .collab_members
+        .iter()
+        .filter(|member| member.session_id == session_id)
+        .filter(|member| from_member_id.as_deref() != Some(member.id.as_str()))
+        .filter(|member| !matches!(member.status.as_str(), "offline" | "suspended"))
+        .map(|member| member.id.clone())
+        .collect::<Vec<_>>();
+
+    if recipient_ids.is_empty() {
+        return Err("没有可接收广播消息的团队成员".to_string());
+    }
+
+    let object = payload
+        .as_object()
+        .ok_or_else(|| "message payload must be an object".to_string())?;
+    let messages = recipient_ids
+        .into_iter()
+        .map(|member_id| {
+            let mut next_payload = object.clone();
+            next_payload.insert("toMemberId".to_string(), json!(member_id));
+            post_collab_message(store, &Value::Object(next_payload))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(json!(messages))
 }
 
 pub fn team_mailbox_request_report(
