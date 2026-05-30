@@ -16,6 +16,7 @@ This module owns renderer-side media generation model logic that is shared by th
 - `validation.ts` validates generation requests and returns stable user-facing error messages.
 - `submitPayload.ts` translates generation requests into typed IPC payloads for image, video, audio, cover, and digital human submission.
 - `submitter.ts` owns the renderer-side submit orchestration for image, video, audio, cover, and digital human generation.
+- Media jobs use `queueMode` to separate foreground free-creation jobs from AI/background generation jobs. `source` still means origin surface, and `priority` still means scheduler priority.
 - It normalizes persisted feed records from `localStorage`.
 - It projects `MediaJobProjection` records from `features/media-jobs` into generation feed entries.
 - It keeps feed sorting, deletion matching, progress estimation, and recent asset summaries outside the page component.

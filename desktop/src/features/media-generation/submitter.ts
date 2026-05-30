@@ -57,6 +57,7 @@ export type VoiceSubmitApi = {
 export type DigitalHumanSubmitOptions = {
     clientRequestId: string;
     source: DigitalHumanSpeechOptions['source'];
+    queueMode?: DigitalHumanSpeechOptions['queueMode'];
     ttsModel: string;
     languageBoost: string;
     speed: string;
@@ -137,6 +138,7 @@ export async function submitDigitalHumanGeneration(
     options.onStage?.('generating_audio');
     const speechResult = await voiceApi.speech(buildDigitalHumanSpeechPayload(request, {
         source: options.source,
+        queueMode: options.queueMode,
         input: audioPromptForSpeech(request.prompt.trim()),
         ttsModel: options.ttsModel,
         languageBoost: options.languageBoost,
@@ -154,6 +156,8 @@ export async function submitDigitalHumanGeneration(
     return ensureJobResult(
         await generationApi.submitVideo(buildDigitalHumanVideoSubmitPayload({
             clientRequestId: options.clientRequestId,
+            source: options.source,
+            queueMode: options.queueMode,
             request,
             videoUrl,
             audioUrl,

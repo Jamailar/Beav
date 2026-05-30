@@ -58,6 +58,7 @@ fn open_media_runtime_connection(state: &State<'_, AppState>) -> Result<Connecti
                 job_id TEXT PRIMARY KEY,
                 kind TEXT NOT NULL,
                 source TEXT NOT NULL,
+                queue_mode TEXT NOT NULL DEFAULT 'ai_generation',
                 priority TEXT NOT NULL,
                 status TEXT NOT NULL,
                 provider_key TEXT NOT NULL,
@@ -126,9 +127,22 @@ fn open_media_runtime_connection(state: &State<'_, AppState>) -> Result<Connecti
         )
         .map_err(|error| error.to_string())?;
     ensure_media_jobs_archive_columns(&connection)?;
+    ensure_media_jobs_queue_mode_column(&connection)?;
     connection
         .execute(
             "CREATE INDEX IF NOT EXISTS idx_media_jobs_archived_updated ON media_jobs(archived_at, updated_at, job_id)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_jobs_queue_mode_status_priority_created ON media_jobs(queue_mode, status, priority, created_at, job_id)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_jobs_queue_mode_archived_updated ON media_jobs(queue_mode, archived_at, updated_at, job_id)",
             [],
         )
         .map_err(|error| error.to_string())?;
@@ -162,6 +176,40 @@ fn ensure_media_jobs_archive_columns(conn: &Connection) -> Result<(), String> {
             conn.execute(definition, [])
                 .map_err(|error| error.to_string())?;
         }
+    }
+    Ok(())
+}
+
+fn ensure_media_jobs_queue_mode_column(conn: &Connection) -> Result<(), String> {
+    let exists = conn
+        .prepare("PRAGMA table_info(media_jobs)")
+        .and_then(|mut statement| {
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            for row in rows {
+                if row? == "queue_mode" {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
+        .map_err(|error| error.to_string())?;
+    if !exists {
+        conn.execute(
+            "ALTER TABLE media_jobs ADD COLUMN queue_mode TEXT NOT NULL DEFAULT 'ai_generation'",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+        conn.execute(
+            "UPDATE media_jobs
+             SET queue_mode = CASE
+                WHEN source = 'generation_studio'
+                  AND owner_session_id IS NULL
+                THEN 'free_creation'
+                ELSE 'ai_generation'
+             END",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -434,6 +482,7 @@ fn row_to_job(row: &rusqlite::Row<'_>) -> Result<MediaJobRecord, rusqlite::Error
         job_id: row.get("job_id")?,
         kind: row.get("kind")?,
         source: row.get("source")?,
+        queue_mode: row.get("queue_mode")?,
         priority: row.get("priority")?,
         status: row.get("status")?,
         provider_key: row.get("provider_key")?,
@@ -615,6 +664,7 @@ fn job_projection(
         "jobId": job.job_id,
         "kind": job.kind,
         "source": job.source,
+        "queueMode": job.queue_mode,
         "priority": job.priority,
         "status": job.status,
         "providerKey": job.provider_key,
@@ -753,6 +803,7 @@ fn media_job_summary(
         "id": job.job_id,
         "kind": job.kind,
         "source": job.source,
+        "queueMode": job.queue_mode,
         "priority": job.priority,
         "status": job.status,
         "providerKey": job.provider_key,
@@ -873,6 +924,7 @@ fn next_job_candidates(
                     job_id: row.get("job_id")?,
                     kind: row.get("kind")?,
                     source: row.get("source")?,
+                    queue_mode: row.get("queue_mode")?,
                     priority: row.get("priority")?,
                     status: row.get("status")?,
                     provider_key: row.get("provider_key")?,
@@ -921,25 +973,45 @@ fn weighted_priority_candidates(candidates: Vec<LoadedJob>, limit: usize) -> Vec
     if candidates.len() <= 1 || limit == 0 {
         return candidates.into_iter().take(limit).collect();
     }
-    let mut interactive = VecDeque::new();
-    let mut batch = VecDeque::new();
-    let mut background = VecDeque::new();
+    let mut free_interactive = VecDeque::new();
+    let mut ai_interactive = VecDeque::new();
+    let mut free_batch = VecDeque::new();
+    let mut ai_batch = VecDeque::new();
+    let mut free_background = VecDeque::new();
+    let mut ai_background = VecDeque::new();
     for job in candidates {
-        match job.job.priority.as_str() {
-            "interactive" => interactive.push_back(job),
-            "batch" => batch.push_back(job),
-            _ => background.push_back(job),
+        match (job.job.queue_mode.as_str(), job.job.priority.as_str()) {
+            ("free_creation", "interactive") => free_interactive.push_back(job),
+            (_, "interactive") => ai_interactive.push_back(job),
+            ("free_creation", "batch") => free_batch.push_back(job),
+            (_, "batch") => ai_batch.push_back(job),
+            ("free_creation", _) => free_background.push_back(job),
+            _ => ai_background.push_back(job),
         }
     }
-    let mut ordered =
-        Vec::with_capacity(limit.min(interactive.len() + batch.len() + background.len()));
+    let mut ordered = Vec::with_capacity(limit.min(
+        free_interactive.len()
+            + ai_interactive.len()
+            + free_batch.len()
+            + ai_batch.len()
+            + free_background.len()
+            + ai_background.len(),
+    ));
     let weights = [
-        ("interactive", 5usize),
-        ("batch", 2usize),
-        ("background", 1usize),
+        ("free_interactive", 5usize),
+        ("ai_interactive", 3usize),
+        ("free_batch", 2usize),
+        ("ai_batch", 1usize),
+        ("free_background", 1usize),
+        ("ai_background", 1usize),
     ];
     while ordered.len() < limit
-        && (!interactive.is_empty() || !batch.is_empty() || !background.is_empty())
+        && (!free_interactive.is_empty()
+            || !ai_interactive.is_empty()
+            || !free_batch.is_empty()
+            || !ai_batch.is_empty()
+            || !free_background.is_empty()
+            || !ai_background.is_empty())
     {
         for (bucket, weight) in weights {
             for _ in 0..weight {
@@ -947,9 +1019,12 @@ fn weighted_priority_candidates(candidates: Vec<LoadedJob>, limit: usize) -> Vec
                     break;
                 }
                 let next = match bucket {
-                    "interactive" => interactive.pop_front(),
-                    "batch" => batch.pop_front(),
-                    _ => background.pop_front(),
+                    "free_interactive" => free_interactive.pop_front(),
+                    "ai_interactive" => ai_interactive.pop_front(),
+                    "free_batch" => free_batch.pop_front(),
+                    "ai_batch" => ai_batch.pop_front(),
+                    "free_background" => free_background.pop_front(),
+                    _ => ai_background.pop_front(),
                 };
                 if let Some(job) = next {
                     ordered.push(job);
@@ -1289,6 +1364,7 @@ fn create_media_job_with_connection(
     conn: &Connection,
     kind: &str,
     source: &str,
+    queue_mode: &str,
     priority: &str,
     provider_key: &str,
     provider_model: Option<&str>,
@@ -1305,15 +1381,16 @@ fn create_media_job_with_connection(
     conn.execute(
         r#"
         INSERT INTO media_jobs (
-            job_id, kind, source, priority, status, provider_key, provider_model,
+            job_id, kind, source, queue_mode, priority, status, provider_key, provider_model,
             request_json, result_json, project_id, manuscript_path, video_project_path,
             owner_session_id, current_attempt_no, cancel_reason, created_at, updated_at, completed_at
-        ) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11, 1, NULL, ?12, ?12, NULL)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, 1, NULL, ?13, ?13, NULL)
         "#,
         params![
             job_id,
             kind,
             source,
+            queue_mode,
             priority,
             provider_key,
             provider_model,
@@ -1377,6 +1454,21 @@ fn infer_job_priority(source: &str, payload: &Value) -> String {
         "background" => "background".to_string(),
         _ => "interactive".to_string(),
     })
+}
+
+fn normalize_queue_mode(value: &str) -> Option<String> {
+    match value.trim() {
+        "free_creation" => Some("free_creation".to_string()),
+        "ai_generation" => Some("ai_generation".to_string()),
+        _ => None,
+    }
+}
+
+fn infer_job_queue_mode(_source: &str, payload: &Value) -> String {
+    payload_string(payload, "queueMode")
+        .or_else(|| payload_string(payload, "queue_mode"))
+        .and_then(|value| normalize_queue_mode(&value))
+        .unwrap_or_else(|| "ai_generation".to_string())
 }
 
 fn looks_like_video_model_id(model: &str) -> bool {
@@ -1609,6 +1701,7 @@ pub(crate) fn submit_media_job(
     let kind = kind.as_str();
     let payload = normalize_media_job_file_references(state, kind, payload)?;
     let source = infer_job_source(&payload);
+    let queue_mode = infer_job_queue_mode(&source, &payload);
     let priority = infer_job_priority(&source, &payload);
     let (provider_key, provider_model) = resolve_provider_metadata(app, state, kind, &payload)?;
     let conn = open_media_runtime_connection(state)?;
@@ -1616,6 +1709,7 @@ pub(crate) fn submit_media_job(
         &conn,
         kind,
         &source,
+        &queue_mode,
         &priority,
         &provider_key,
         provider_model.as_deref(),
@@ -1637,6 +1731,7 @@ pub(crate) fn submit_media_job(
         "status": "queued",
         "kind": kind,
         "source": source,
+        "queueMode": queue_mode,
         "priority": priority,
         "providerKey": provider_key,
         "providerModel": provider_model,
@@ -1772,6 +1867,9 @@ pub(crate) fn list_media_jobs(
     let kind_filter = normalize_optional_string(payload_string(payload, "kind"));
     let status_filter = normalize_optional_string(payload_string(payload, "status"));
     let source_filter = normalize_optional_string(payload_string(payload, "source"));
+    let queue_mode_filter = normalize_optional_string(payload_string(payload, "queueMode"))
+        .or_else(|| normalize_optional_string(payload_string(payload, "queue_mode")))
+        .and_then(|value| normalize_queue_mode(&value));
     let manuscript_path_filter =
         normalize_optional_string(payload_string(payload, "manuscriptPath"));
     let video_project_path_filter =
@@ -1787,12 +1885,13 @@ pub(crate) fn list_media_jobs(
              WHERE (?1 IS NULL OR kind = ?1)
                AND (?2 IS NULL OR status = ?2)
                AND (?3 IS NULL OR source = ?3)
-               AND (?4 IS NULL OR manuscript_path = ?4)
-               AND (?5 IS NULL OR video_project_path = ?5)
-               AND (?6 IS NULL OR owner_session_id = ?6)
-               AND (?7 OR archived_at IS NULL)
+               AND (?4 IS NULL OR queue_mode = ?4)
+               AND (?5 IS NULL OR manuscript_path = ?5)
+               AND (?6 IS NULL OR video_project_path = ?6)
+               AND (?7 IS NULL OR owner_session_id = ?7)
+               AND (?8 OR archived_at IS NULL)
              ORDER BY updated_at DESC, job_id DESC
-             LIMIT ?8",
+             LIMIT ?9",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -1801,6 +1900,7 @@ pub(crate) fn list_media_jobs(
                 kind_filter.as_deref(),
                 status_filter.as_deref(),
                 source_filter.as_deref(),
+                queue_mode_filter.as_deref(),
                 manuscript_path_filter.as_deref(),
                 video_project_path_filter.as_deref(),
                 owner_session_id_filter.as_deref(),
@@ -1833,6 +1933,9 @@ pub(crate) fn list_media_job_summaries(
     let kind_filter = normalize_optional_string(payload_string(payload, "kind"));
     let status_filter = normalize_optional_string(payload_string(payload, "status"));
     let source_filter = normalize_optional_string(payload_string(payload, "source"));
+    let queue_mode_filter = normalize_optional_string(payload_string(payload, "queueMode"))
+        .or_else(|| normalize_optional_string(payload_string(payload, "queue_mode")))
+        .and_then(|value| normalize_queue_mode(&value));
     let owner_session_id_filter =
         normalize_optional_string(payload_string(payload, "ownerSessionId"));
     let include_archived = payload_field(payload, "includeArchived")
@@ -1844,10 +1947,11 @@ pub(crate) fn list_media_job_summaries(
              WHERE (?1 IS NULL OR kind = ?1)
                AND (?2 IS NULL OR status = ?2)
                AND (?3 IS NULL OR source = ?3)
-               AND (?4 IS NULL OR owner_session_id = ?4)
-               AND (?5 OR archived_at IS NULL)
+               AND (?4 IS NULL OR queue_mode = ?4)
+               AND (?5 IS NULL OR owner_session_id = ?5)
+               AND (?6 OR archived_at IS NULL)
              ORDER BY updated_at DESC, job_id DESC
-             LIMIT ?6",
+             LIMIT ?7",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -1856,6 +1960,7 @@ pub(crate) fn list_media_job_summaries(
                 kind_filter.as_deref(),
                 status_filter.as_deref(),
                 source_filter.as_deref(),
+                queue_mode_filter.as_deref(),
                 owner_session_id_filter.as_deref(),
                 include_archived,
                 limit
@@ -5372,6 +5477,7 @@ mod tests {
                 job_id: job_id.to_string(),
                 kind: "video".to_string(),
                 source: "generation_studio".to_string(),
+                queue_mode: "free_creation".to_string(),
                 priority: priority.to_string(),
                 status: "queued".to_string(),
                 provider_key: "redbox-official".to_string(),
@@ -5422,6 +5528,25 @@ mod tests {
             "interactive"
         );
         assert_eq!(infer_job_priority("redclaw", &json!({})), "batch");
+    }
+
+    #[test]
+    fn infer_job_queue_mode_defaults_to_ai_unless_explicit() {
+        assert_eq!(
+            infer_job_queue_mode("generation_studio", &json!({})),
+            "ai_generation"
+        );
+        assert_eq!(
+            infer_job_queue_mode(
+                "generation_studio",
+                &json!({ "queueMode": "free_creation" })
+            ),
+            "free_creation"
+        );
+        assert_eq!(
+            infer_job_queue_mode("tool", &json!({ "queueMode": "unknown" })),
+            "ai_generation"
+        );
     }
 
     #[test]
