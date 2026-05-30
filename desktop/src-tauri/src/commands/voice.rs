@@ -103,7 +103,7 @@ pub fn handle_voice_channel(
                     {
                         let timeout_ms = payload_field(payload, "timeoutMs")
                             .and_then(Value::as_u64)
-                            .unwrap_or(30 * 60 * 1000);
+                            .unwrap_or_else(media_runtime::default_media_job_wait_timeout_ms);
                         let job_id = submitted
                             .get("jobId")
                             .and_then(Value::as_str)
@@ -144,7 +144,7 @@ pub fn handle_voice_channel(
                     {
                         let timeout_ms = payload_field(payload, "timeoutMs")
                             .and_then(Value::as_u64)
-                            .unwrap_or(30 * 60 * 1000);
+                            .unwrap_or_else(media_runtime::default_media_job_wait_timeout_ms);
                         let job_id = submitted
                             .get("jobId")
                             .and_then(Value::as_str)

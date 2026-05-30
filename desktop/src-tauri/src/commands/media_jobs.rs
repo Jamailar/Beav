@@ -73,19 +73,25 @@ pub fn handle_media_jobs_channel(
                 .and_then(|job_id| {
                     let timeout_ms = payload_field(payload, "timeoutMs")
                         .and_then(Value::as_u64)
-                        .unwrap_or(30 * 60 * 1000);
+                        .unwrap_or_else(media_runtime::default_media_job_wait_timeout_ms);
                     media_runtime::await_media_job_completion(state, &job_id, timeout_ms)
                 }),
         ),
-        "generation:get-runtime-status" => Some(Ok(json!({
-            "success": true,
-            "runtimeReady": media_runtime::ensure_media_runtime_ready(state).is_ok(),
-            "runtimeRunning": state
+        "generation:get-runtime-status" => Some((|| {
+            let runtime_ready = media_runtime::ensure_media_runtime_ready(state).is_ok();
+            let runtime_running = state
                 .media_generation_runtime
                 .lock()
                 .map(|guard| guard.is_some())
-                .unwrap_or(false),
-        }))),
+                .unwrap_or(false);
+            let pressure = media_runtime::media_runtime_pressure_snapshot(state).ok();
+            Ok(json!({
+                "success": true,
+                "runtimeReady": runtime_ready,
+                "runtimeRunning": runtime_running,
+                "pressure": pressure,
+            }))
+        })()),
         _ => None,
     }
 }
