@@ -243,10 +243,7 @@ pub(super) fn handle_auth_channel(
             }
             update_wechat_login_snapshot(&mut settings, &session_id, &status, &payload);
             let session = if status == "CONFIRMED" {
-                payload
-                    .get("auth_payload")
-                    .map(normalize_official_auth_session)
-                    .transpose()?
+                Some(normalize_official_auth_session(&payload)?)
             } else {
                 None
             };
