@@ -576,8 +576,42 @@ fn pinned_direct_app_cli_actions(
             | "shell"
     );
     let media_intent = matches!(task_intent, "image" | "video");
-    if wants_host_cli || (!media_intent && matches!(runtime_mode, "team" | "redclaw" | "knowledge"))
-    {
+    if !media_intent && runtime_mode == "team" {
+        &[
+            "web.fetch",
+            "video.analyze",
+            "media.edit",
+            "team.guide.create",
+            "team.session.create",
+            "team.session.get",
+            "team.session.list",
+            "team.members.list",
+            "team.member.spawn",
+            "team.member.match",
+            "team.member.rename",
+            "team.member.shutdown",
+            "team.task.create",
+            "team.task.update",
+            "team.task.list",
+            "team.message.send",
+            "team.report.request",
+            "team.report.submit",
+            "team.artifact.attach",
+            "team.blocker.raise",
+            "media.transcribe",
+            "image.generate",
+            "skills.invoke",
+            "skills.installFromRepo",
+            "skills.uninstall",
+            "cli_runtime.execution.get",
+            "mcp.list",
+            "mcp.discoverLocal",
+            "mcp.add",
+            "mcp.get",
+            "mcp.remove",
+            "mcp.listTools",
+        ]
+    } else if wants_host_cli || (!media_intent && matches!(runtime_mode, "redclaw" | "knowledge")) {
         &[
             "web.fetch",
             "video.analyze",
@@ -1063,6 +1097,28 @@ mod tests {
         assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
         assert!(plan.has_direct_app_cli_action("image.generate"));
+    }
+
+    #[test]
+    fn team_runtime_exposes_coordination_actions_directly() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "team",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        for action in [
+            "team.session.create",
+            "team.member.spawn",
+            "team.task.create",
+            "team.task.update",
+            "team.message.send",
+            "team.report.request",
+            "team.report.submit",
+            "team.artifact.attach",
+            "team.blocker.raise",
+        ] {
+            assert!(plan.has_direct_app_cli_action(action), "{action}");
+        }
     }
 
     #[test]

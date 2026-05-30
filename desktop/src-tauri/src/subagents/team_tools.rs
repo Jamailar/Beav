@@ -9,7 +9,7 @@ use crate::runtime::{
 };
 use crate::subagents::{
     team_mailbox_cleanup, team_mailbox_history, team_mailbox_read, team_mailbox_request_report,
-    team_mailbox_send, team_task_create, team_task_list, team_task_move, team_task_update,
+    team_mailbox_send_value, team_task_create, team_task_list, team_task_move, team_task_update,
 };
 use crate::{payload_string, AppStore};
 
@@ -137,7 +137,7 @@ pub fn execute_team_tool(
         "team.member.match" => Ok(match_collab_members_for_task(store, payload)?),
         "team.member.rename" => Ok(json!(rename_collab_member(store, payload)?)),
         "team.member.shutdown" => Ok(json!(shutdown_collab_member(store, payload)?)),
-        "team.message.send" => Ok(json!(team_mailbox_send(store, payload)?)),
+        "team.message.send" => team_mailbox_send_value(store, payload),
         "team.message.read" => Ok(json!(team_mailbox_read(store, payload)?)),
         "team.message.history" => {
             let session_id =
@@ -237,5 +237,51 @@ mod tests {
             task.get("memberId").and_then(Value::as_str),
             Some(member_id)
         );
+    }
+
+    #[test]
+    fn team_message_send_can_broadcast_to_active_members() {
+        let mut store = AppStore::default();
+        let session = execute_team_tool(
+            &mut store,
+            "team.session.create",
+            &json!({ "objective": "broadcast" }),
+        )
+        .unwrap();
+        let session_id = session.get("id").and_then(Value::as_str).unwrap();
+        let first = execute_team_tool(
+            &mut store,
+            "team.member.spawn",
+            &json!({ "sessionId": session_id, "displayName": "A" }),
+        )
+        .unwrap();
+        let first_id = first.get("id").and_then(Value::as_str).unwrap();
+        execute_team_tool(
+            &mut store,
+            "team.member.spawn",
+            &json!({ "sessionId": session_id, "displayName": "B" }),
+        )
+        .unwrap();
+
+        let messages = execute_team_tool(
+            &mut store,
+            "team.message.send",
+            &json!({
+                "sessionId": session_id,
+                "fromMemberId": first_id,
+                "toMemberId": "*",
+                "body": "broadcast"
+            }),
+        )
+        .unwrap();
+
+        let recipients = messages
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|message| message.get("toMemberId").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(!recipients.contains(&first_id));
+        assert_eq!(recipients.len(), store.collab_members.len() - 1);
     }
 }
