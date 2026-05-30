@@ -1,6 +1,6 @@
 import { Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2, Minus, Square } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -43,7 +43,7 @@ const NAV_ITEMS: SidebarNavItem[] = [
   { key: 'search', view: 'knowledge', labelKey: 'nav.search', icon: BookOpenText, primary: true },
   { key: 'assets', view: 'subjects', labelKey: 'nav.assets', icon: Folder, primary: true },
   { key: 'automation', view: 'automation', labelKey: 'nav.automation', icon: Clock3, primary: true },
-  { key: 'home', view: 'home', labelKey: 'nav.home', icon: Home },
+  { key: 'free-creation', view: 'generation-studio', labelKey: 'nav.home', icon: Pencil },
   { key: 'wander', view: 'wander', labelKey: 'nav.wander', icon: Dices },
   // { id: 'archives', label: '档案', icon: Archive },
   // { id: 'skills', label: '技能库', icon: Lightbulb },
