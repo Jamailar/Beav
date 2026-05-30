@@ -72,6 +72,7 @@ const CAPABILITY_RULES: Array<{ capability: ModelCapability; patterns: RegExp[] 
 const inferForcedNameCapabilities = (modelId: string): ModelCapability[] => {
     const normalized = String(modelId || '').trim().toLowerCase();
     if (!normalized) return [];
+    if (normalized.includes('tts')) return ['tts'];
     if (normalized.includes('clone')) return ['voice_clone'];
     if (normalized.includes('voice')) return ['tts'];
     return [];
