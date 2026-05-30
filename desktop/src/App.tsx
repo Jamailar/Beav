@@ -21,7 +21,6 @@ import { uiTraceInteraction } from './utils/uiDebug';
 
 export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
 
-const HomePage = lazy(async () => ({ default: (await import('./pages/Home')).Home }));
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
@@ -299,8 +298,8 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setViewPersistent('cover-studio', active);
   }, [setViewPersistent]);
 
-  const returnHomeFromEmbeddedTool = useCallback(() => {
-    setCurrentView('home');
+  const returnToFreeCreation = useCallback(() => {
+    setCurrentView('generation-studio');
   }, []);
 
   const isManuscriptEditorActive = currentView === 'redclaw' && Boolean(activeManuscriptEditorFile);
@@ -354,20 +353,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
                 isActive={true}
                 onClose={closeManuscriptEditor}
                 onImmersiveModeChange={setImmersiveMode}
-              />
-            </Suspense>
-          </div>
-        )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'home') && (
-          <div className={currentView === 'home' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'home' ? <ViewLoadingFallback /> : null}>
-              <HomePage
-                isActive={currentView === 'home'}
-                onNavigateToCoverStudio={() => navigateToGenerationStudio({ mode: 'cover', source: 'standalone' })}
-                onNavigateToGenerationStudio={(mode) => navigateToGenerationStudio({ mode, source: 'standalone' })}
-                onNavigateToDigitalHuman={() => navigateToGenerationStudio({ mode: 'digital-human', source: 'standalone' })}
-                onOpenManuscript={navigateToManuscript}
-                onNavigateToRedClaw={navigateToRedClaw}
               />
             </Suspense>
           </div>
@@ -471,7 +456,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
               <CoverStudioPage
                 isActive={currentView === 'cover-studio' || persistentViews.has('cover-studio')}
                 onExecutionStateChange={handleCoverStudioExecutionStateChange}
-                onReturnHome={returnHomeFromEmbeddedTool}
+                onReturnHome={returnToFreeCreation}
               />
             </Suspense>
           </div>
@@ -484,7 +469,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
                 pendingIntent={pendingGenerationIntent}
                 onIntentConsumed={clearPendingGenerationIntent}
                 onExecutionStateChange={handleGenerationStudioExecutionStateChange}
-                onReturnHome={returnHomeFromEmbeddedTool}
                 onOpenAssets={openSubjectsModal}
               />
             </Suspense>

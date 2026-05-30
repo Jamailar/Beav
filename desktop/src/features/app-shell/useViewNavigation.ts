@@ -3,7 +3,6 @@ import type { ImmersiveMode, ViewType } from './types';
 
 const MAX_CACHED_VIEWS = 0;
 const NON_CACHEABLE_VIEWS = new Set<ViewType>([
-  'home',
   'skills',
   'knowledge',
   'settings',
@@ -45,12 +44,12 @@ export function shouldRenderView(
 }
 
 export function useViewNavigation() {
-  const [currentView, setCurrentView] = useState<ViewType>('home');
+  const [currentView, setCurrentView] = useState<ViewType>('generation-studio');
   const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
   const [activeManuscriptEditorFile, setActiveManuscriptEditorFile] = useState<string | null>(null);
-  const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['home']));
+  const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['generation-studio']));
   const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
-  const viewHistoryRef = useRef<ViewType[]>(['home']);
+  const viewHistoryRef = useRef<ViewType[]>(['generation-studio']);
 
   useEffect(() => {
     viewHistoryRef.current = [...viewHistoryRef.current.filter((item) => item !== currentView), currentView];
@@ -82,7 +81,7 @@ export function useViewNavigation() {
   }, []);
 
   const returnFromSettings = useCallback(() => {
-    const previousView = [...viewHistoryRef.current].reverse().find((view) => view !== 'settings') || 'home';
+    const previousView = [...viewHistoryRef.current].reverse().find((view) => view !== 'settings') || 'generation-studio';
     setCurrentView(previousView);
   }, []);
 

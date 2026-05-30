@@ -34,7 +34,7 @@ const zhCN = {
   'nav.search': '知识库',
   'nav.assets': '资产库',
   'nav.automation': '自动化',
-  'nav.home': '主页',
+  'nav.home': '自由创作',
   'nav.wander': '漫步',
   'nav.settings': '设置',
 
@@ -131,7 +131,7 @@ const enUS: Record<keyof typeof zhCN, string> = {
   'nav.search': 'Knowledge',
   'nav.assets': 'Assets',
   'nav.automation': 'Automation',
-  'nav.home': 'Home',
+  'nav.home': 'Free creation',
   'nav.wander': 'Wander',
   'nav.settings': 'Settings',
 
