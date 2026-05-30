@@ -489,6 +489,7 @@ mod tests {
                 chat_runtime_states: Mutex::new(HashMap::new()),
                 editor_runtime_states: Mutex::new(HashMap::new()),
                 active_chat_requests: Mutex::new(HashMap::new()),
+                active_team_member_wakes: Mutex::new(std::collections::HashSet::new()),
                 assistant_runtime: Mutex::new(None),
                 assistant_sidecar: Mutex::new(None),
                 redclaw_runtime: Mutex::new(None),

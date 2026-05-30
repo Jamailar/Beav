@@ -5,7 +5,7 @@ use crate::{
     runtime::{ApprovalRuntimeState, RedclawRuntime, RuntimeWarmState},
     skills, startup_migration, AppStore, ChatRuntimeStateRecord, EditorRuntimeStateRecord,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{
@@ -32,6 +32,7 @@ pub(crate) struct AppState {
     pub(crate) editor_runtime_states:
         Mutex<std::collections::HashMap<String, EditorRuntimeStateRecord>>,
     pub(crate) active_chat_requests: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
+    pub(crate) active_team_member_wakes: Mutex<HashSet<String>>,
     pub(crate) assistant_runtime: Mutex<Option<AssistantRuntime>>,
     pub(crate) assistant_sidecar: Mutex<Option<AssistantSidecarRuntime>>,
     pub(crate) redclaw_runtime: Mutex<Option<RedclawRuntime>>,
