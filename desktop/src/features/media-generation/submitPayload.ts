@@ -16,6 +16,7 @@ export type ModelRouteOverride = {
 };
 
 export type GenerationSubmitSource = 'manuscripts' | 'generation_studio';
+export type GenerationQueueMode = 'free_creation' | 'ai_generation';
 
 export type ImageSubmitPayload = {
     clientRequestId: string;
@@ -34,6 +35,7 @@ export type ImageSubmitPayload = {
     quality: string;
     resolution: string;
     source: GenerationSubmitSource;
+    queueMode: GenerationQueueMode;
 } & ModelRouteOverride;
 
 export type VideoSubmitPayload = {
@@ -51,6 +53,7 @@ export type VideoSubmitPayload = {
     model: string;
     generateAudio?: boolean;
     source?: GenerationSubmitSource;
+    queueMode?: GenerationQueueMode;
     input?: Record<string, unknown>;
     parameters?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
@@ -59,6 +62,7 @@ export type VideoSubmitPayload = {
 export type AudioSubmitPayload = {
     clientRequestId: string;
     source: GenerationSubmitSource;
+    queueMode: GenerationQueueMode;
     input: string;
     title?: string;
     projectId?: string;
@@ -93,6 +97,7 @@ export type CoverGeneratePayload = {
 export type DigitalHumanSpeechPayload = {
     source: GenerationSubmitSource;
     surface: 'digital-human';
+    queueMode: GenerationQueueMode;
     subjectId: string;
     input: string;
     title: string;
@@ -110,6 +115,8 @@ export type DigitalHumanSpeechPayload = {
 
 export type DigitalHumanVideoSubmitInput = {
     clientRequestId: string;
+    source: GenerationSubmitSource;
+    queueMode?: GenerationQueueMode;
     request: DigitalHumanGenerationRequest;
     videoUrl: string;
     audioUrl: string;
@@ -118,6 +125,7 @@ export type DigitalHumanVideoSubmitInput = {
 export type ImageSubmitOptions = {
     clientRequestId: string;
     source: GenerationSubmitSource;
+    queueMode?: GenerationQueueMode;
     routeOverride?: ModelRouteOverride;
     provider?: string;
     providerTemplate?: string;
@@ -126,11 +134,13 @@ export type ImageSubmitOptions = {
 export type VideoSubmitOptions = {
     clientRequestId: string;
     source: GenerationSubmitSource;
+    queueMode?: GenerationQueueMode;
 };
 
 export type AudioSubmitOptions = {
     clientRequestId: string;
     source: GenerationSubmitSource;
+    queueMode?: GenerationQueueMode;
     routeOverride?: ModelRouteOverride;
 };
 
@@ -143,6 +153,7 @@ export type CoverSubmitOptions = {
 
 export type DigitalHumanSpeechOptions = {
     source: GenerationSubmitSource;
+    queueMode?: GenerationQueueMode;
     input: string;
     ttsModel: string;
     languageBoost: string;
@@ -193,6 +204,7 @@ export function buildImageSubmitPayload(
         quality: request.quality.trim() || 'medium',
         resolution: request.resolution.trim() || '2K',
         source: options.source,
+        queueMode: options.queueMode || 'free_creation',
     };
 }
 
@@ -215,6 +227,7 @@ export function buildVideoSubmitPayload(
         model: request.model,
         generateAudio: request.generateAudio,
         source: options.source,
+        queueMode: options.queueMode || 'free_creation',
     };
 }
 
@@ -225,6 +238,7 @@ export function buildAudioSubmitPayload(
     return {
         clientRequestId: options.clientRequestId,
         source: options.source,
+        queueMode: options.queueMode || 'free_creation',
         input: audioPromptForSpeech(request.prompt.trim()),
         title: optionalTrimmed(request.title),
         projectId: optionalTrimmed(request.projectId),
@@ -271,6 +285,7 @@ export function buildDigitalHumanSpeechPayload(
     return {
         source: options.source,
         surface: 'digital-human',
+        queueMode: options.queueMode || 'free_creation',
         subjectId: request.roleId,
         input: options.input,
         title: request.title.trim() || `${request.roleName} 数字人口播声音`,
@@ -293,6 +308,8 @@ export function buildDigitalHumanVideoSubmitPayload(
     const { request } = input;
     return {
         clientRequestId: input.clientRequestId,
+        source: input.source,
+        queueMode: input.queueMode || 'free_creation',
         model: 'videoretalk',
         generationMode: 'video-retalk',
         title: request.title.trim() || `${request.roleName} 数字人口播`,

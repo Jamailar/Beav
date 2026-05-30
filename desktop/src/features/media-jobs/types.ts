@@ -15,6 +15,7 @@ export type MediaJobStatus =
 
 export type KnownMediaJobKind = 'image' | 'video' | 'video_sequence' | 'audio' | 'audio_sequence' | 'voice_clone';
 export type MediaJobKind = KnownMediaJobKind | (string & {});
+export type MediaJobQueueMode = 'free_creation' | 'ai_generation';
 
 export type MediaJobArtifact = {
     artifactId: string;
@@ -55,6 +56,7 @@ export type MediaJobProjection = {
     jobId: string;
     kind: MediaJobKind;
     source: string;
+    queueMode: MediaJobQueueMode;
     priority: string;
     status: MediaJobStatus | string;
     providerKey: string;
@@ -87,6 +89,7 @@ export type MediaJobListFilter = {
     kind?: MediaJobKind;
     status?: string;
     source?: string;
+    queueMode?: MediaJobQueueMode;
     manuscriptPath?: string;
     videoProjectPath?: string;
     ownerSessionId?: string;
@@ -181,6 +184,23 @@ function normalizeMediaJobEvents(value: unknown): MediaJobEvent[] {
         .filter((item): item is MediaJobEvent => Boolean(item));
 }
 
+function normalizeMediaJobQueueMode(raw: Record<string, unknown>): MediaJobQueueMode {
+    const explicit = typeof raw.queueMode === 'string'
+        ? raw.queueMode
+        : typeof raw.queue_mode === 'string'
+            ? raw.queue_mode
+            : '';
+    if (explicit === 'free_creation' || explicit === 'ai_generation') {
+        return explicit;
+    }
+    const request = raw.request && typeof raw.request === 'object' ? raw.request as Record<string, unknown> : null;
+    const requestMode = request && typeof request.queueMode === 'string' ? request.queueMode : '';
+    if (requestMode === 'free_creation' || requestMode === 'ai_generation') {
+        return requestMode;
+    }
+    return raw.source === 'generation_studio' && !raw.ownerSessionId ? 'free_creation' : 'ai_generation';
+}
+
 export function normalizeMediaJobProjection(value: unknown): MediaJobProjection | null {
     if (!value || typeof value !== 'object') return null;
     const raw = value as Record<string, unknown>;
@@ -191,6 +211,7 @@ export function normalizeMediaJobProjection(value: unknown): MediaJobProjection 
         jobId: raw.jobId,
         kind: raw.kind as MediaJobKind,
         source: typeof raw.source === 'string' ? raw.source : 'generation_studio',
+        queueMode: normalizeMediaJobQueueMode(raw),
         priority: typeof raw.priority === 'string' ? raw.priority : 'interactive',
         status: raw.status,
         providerKey: typeof raw.providerKey === 'string' ? raw.providerKey : '',

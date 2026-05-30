@@ -1519,7 +1519,7 @@ export function GenerationStudio({
         [feedEntries],
     );
     const isDigitalHumanMode = studioMode === 'digital-human';
-    const generationJobBootstrapFilter = useMemo(() => ({ limit: 100 }), []);
+    const generationJobBootstrapFilter = useMemo(() => ({ limit: 100, queueMode: 'free_creation' as const }), []);
     const updateFeedEntries = useCallback(
         (updater: FeedEntry[] | ((prev: FeedEntry[]) => FeedEntry[])) => {
             setFeedEntries((prev) => {
@@ -1737,7 +1737,7 @@ export function GenerationStudio({
 
         void (async () => {
             try {
-                const result = await window.ipcRenderer.generation.listJobs({ limit: 100 }) as { items?: unknown[] };
+                const result = await window.ipcRenderer.generation.listJobs(generationJobBootstrapFilter) as { items?: unknown[] };
                 if (cancelled || !Array.isArray(result?.items)) return;
                 const jobs = result.items
                     .map(normalizeMediaJobProjection)
@@ -1751,7 +1751,7 @@ export function GenerationStudio({
         return () => {
             cancelled = true;
         };
-    }, [isActive, updateFeedEntries]);
+    }, [generationJobBootstrapFilter, isActive, updateFeedEntries]);
 
     useEffect(() => {
         if (!previewAsset) return;
@@ -2932,7 +2932,7 @@ export function GenerationStudio({
                 }
             }
             try {
-                const result = await window.ipcRenderer.generation.listJobs({ limit: 100 }) as { items?: unknown[] };
+                const result = await window.ipcRenderer.generation.listJobs(generationJobBootstrapFilter) as { items?: unknown[] };
                 const jobs = Array.isArray(result?.items)
                     ? result.items
                         .map(normalizeMediaJobProjection)
@@ -2977,7 +2977,7 @@ export function GenerationStudio({
             console.error('Failed to clear generation records:', error);
             void appAlert(error instanceof Error ? error.message : '清空生成记录失败');
         }
-    }, [agentSessionId, feedEntries, updateFeedEntries]);
+    }, [agentSessionId, feedEntries, generationAgentContextId, generationJobBootstrapFilter, updateFeedEntries]);
     const handlePickAgentAttachment = useCallback(async () => {
         if (!agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
         try {

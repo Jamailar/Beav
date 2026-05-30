@@ -1016,7 +1016,8 @@ export function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobPro
 }
 
 export function isGenerationStudioMediaJob(job: MediaJobProjection): boolean {
-    return job.kind === 'image' || job.kind === 'video' || job.kind === 'video_sequence' || job.kind === 'audio';
+    return job.queueMode === 'free_creation'
+        && (job.kind === 'image' || job.kind === 'video' || job.kind === 'video_sequence' || job.kind === 'audio');
 }
 
 export function mergeMediaJobsIntoFeedEntries(

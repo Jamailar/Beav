@@ -26,6 +26,7 @@ pub(super) struct MediaJobRecord {
     pub(super) job_id: String,
     pub(super) kind: String,
     pub(super) source: String,
+    pub(super) queue_mode: String,
     pub(super) priority: String,
     pub(super) status: String,
     pub(super) provider_key: String,
