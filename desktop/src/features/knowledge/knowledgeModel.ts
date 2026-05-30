@@ -199,6 +199,8 @@ export interface KnowledgeCardItem {
 
 export const resolveNoteCardKind = (note: Note): KnowledgeCardItem['kind'] => {
     const captureKind = note.captureKind || note.type || '';
+    if (captureKind === 'link-article') return 'link-article';
+    if (captureKind === 'wechat-article') return 'wechat-article';
     if (captureKind.startsWith('bilibili-')) return 'bilibili';
     if (captureKind.startsWith('kuaishou-')) return 'kuaishou';
     if (captureKind.startsWith('tiktok-')) return 'tiktok';
@@ -329,7 +331,12 @@ export const catalogSummaryToDocSource = (item: KnowledgeCatalogSummary): Docume
 export function resolveKnowledgeBackendKind(typeFilter: KnowledgeTypeFilter): string | undefined {
     if (typeFilter === 'youtube') return 'youtube-video';
     if (typeFilter === 'docs') return 'document-source';
-    if (typeFilter === 'zhihu-answer' || typeFilter === 'zhihu-article') return typeFilter;
+    if (
+        typeFilter === 'link-article'
+        || typeFilter === 'wechat-article'
+        || typeFilter === 'zhihu-answer'
+        || typeFilter === 'zhihu-article'
+    ) return typeFilter;
     if (typeFilter === 'all') return undefined;
     return 'redbook-note';
 }

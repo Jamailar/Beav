@@ -6105,19 +6105,39 @@ async function extractCurrentPageLinkPayload() {
       location.hostname.replace(/^www\./i, ''),
     ]);
     const richWechatSnapshot = buildWechatRichHtmlDocument(root);
+    const wechatImageEntries = richWechatSnapshot.imageMap.slice(0, 80);
     const localizedWechatImageMap = [];
-    if (richWechatSnapshot.imageMap.length > 0) {
-      for (const entry of richWechatSnapshot.imageMap.slice(0, 80)) {
-        const dataUrl = await fetchBinaryAsDataUrl(entry.url);
+    if (wechatImageEntries.length > 0) {
+      const maxInlineImages = 12;
+      const maxInlineChars = 4 * 1024 * 1024;
+      const inlineCandidates = await Promise.all(
+        wechatImageEntries.slice(0, maxInlineImages).map(async (entry) => ({
+          token: entry.token,
+          sourceUrl: entry.url,
+          dataUrl: await fetchBinaryAsDataUrl(entry.url),
+        }))
+      );
+      const inlineByToken = new Map();
+      let inlineChars = 0;
+      for (const candidate of inlineCandidates) {
+        const dataUrl = candidate.dataUrl || '';
+        if (dataUrl && inlineChars + dataUrl.length <= maxInlineChars) {
+          inlineByToken.set(candidate.token, dataUrl);
+          inlineChars += dataUrl.length;
+        } else {
+          inlineByToken.set(candidate.token, candidate.sourceUrl);
+        }
+      }
+      for (const entry of wechatImageEntries) {
         localizedWechatImageMap.push({
           token: entry.token,
-          url: dataUrl || entry.url,
+          url: inlineByToken.get(entry.token) || entry.url,
         });
       }
     }
 
-    const images = localizedWechatImageMap.length > 0
-      ? localizedWechatImageMap.map((item) => item.url).filter(Boolean).slice(0, 8)
+    const images = richWechatSnapshot.imageMap.length > 0
+      ? richWechatSnapshot.imageMap.map((item) => item.url).filter(Boolean).slice(0, 8)
       : collectImageUrls(root);
     const excerpt = metaDescription || content.slice(0, 180);
     const looksLikeArticle = content.length >= 280 || root.matches?.('article, main, [role="main"]');
