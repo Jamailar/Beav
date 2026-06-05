@@ -150,6 +150,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added `store::media` read helpers and routed plugin media count/recent data-source reads through them.
 - Routed plugin subject count/list data-source reads through `store::subjects`.
 - Routed RedClaw runner status value projections through `store::redclaw`.
+- Added `store::subjects` catalog snapshot helper and routed subject character-card generation reads through it.
 
 ### 1. Bridge Contract Layer
 
