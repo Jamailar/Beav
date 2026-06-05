@@ -278,6 +278,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted renderer log level normalization and append-renderer event forwarding into `commands/system/renderer_log`.
 - Extracted settings projection, model-default merge, workspace hydration and visual-index backfill triggers into `commands/system/settings_ops`.
 - Extracted release-page opening, knowledge API guide resource lookup, generic open-path handling and workspace directory picking into `commands/system/app_actions`.
+- Extracted AI model manager snapshot and resolve command handling into `commands/system/ai_model_ops`.
 
 ### 1. Bridge Contract Layer
 
