@@ -339,6 +339,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted brand workspace AI index markdown assembly and index file regeneration into `commands/brand_workspace/ai_index`, leaving the root command module focused on SQLite setup, CRUD and channel routing.
 - Extracted brand workspace image data-url decoding, media file writes, asset-ref replacement and unique asset id allocation into `commands/brand_workspace/assets`.
 - Extracted brand workspace root path resolution, SQLite connection/schema initialization and lightweight migration helpers into `commands/brand_workspace/storage`.
+- Extracted brand workspace row mapping, read projections, brand/product bundle assembly and get/list helpers into `commands/brand_workspace/queries`.
 - Extracted RedClaw publish/review/XHS package builders, markdown renderers, output artifact parsing and deterministic XHS compliance checks into `commands/redclaw/export_content`.
 - Extracted RedClaw publish/review/XHS package filesystem export, export slugging and metadata writebacks into `commands/redclaw/export_files`, keeping `export_content` focused on pure payload/markdown assembly.
 - Extracted RedClaw media-plan export assembly, ffconcat generation, ffconcat input validation and rough-cut ffmpeg rendering into `commands/redclaw/media_export`.
