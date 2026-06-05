@@ -340,6 +340,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted session resource discovery, resource de-duplication, media-kind inference and session-resource prompt rendering into `runtime/session_runtime/resources`.
 - Extracted session file-reference input resolution, fallback directory lookup, value-tree reference matching and local file URL normalization into `runtime/session_runtime/reference_resolver`.
 - Extracted session context counts, summaries, compaction record updates, compact-boundary transcript writes and runtime message bundling into `runtime/session_runtime/context`, while leaving settings threshold access in the parent boundary.
+- Extracted transcript listing/detail helpers, resume-message assembly, session bundle save/load/remove and duplicate handling into `runtime/session_runtime/transcript_api`.
 
 ### 1. Bridge Contract Layer
 
