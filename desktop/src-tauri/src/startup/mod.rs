@@ -1,4 +1,5 @@
 use crate::scheduler::sync_redclaw_job_definitions;
+use crate::store::{settings as settings_store, spaces as spaces_store};
 use crate::*;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -42,20 +43,27 @@ pub(crate) fn prepare_startup_state() -> StartupPreparedState {
     }
     let model_config_existed_at_startup =
         ai_model_manager::legacy_config::model_config_path(&store_path).exists();
-    let model_defaults_initialized = official_support::model_defaults_initialized(&store.settings);
+    let settings_snapshot = settings_store::settings_snapshot(&store);
+    let model_defaults_initialized =
+        official_support::model_defaults_initialized(&settings_snapshot);
     if !model_config_existed_at_startup && !model_defaults_initialized {
-        match official_support::fetch_official_default_model_slots_for_settings(&store.settings) {
+        match official_support::fetch_official_default_model_slots_for_settings(&settings_snapshot)
+        {
             Ok(default_slots) => {
                 let catalog_models =
-                    official_support::fetch_official_models_for_settings(&store.settings);
-                if official_support::seed_official_default_models_into_settings(
-                    &mut store.settings,
-                    &default_slots,
-                    &catalog_models,
-                ) {
+                    official_support::fetch_official_models_for_settings(&settings_snapshot);
+                let mut seeded_defaults = false;
+                let settings_snapshot = settings_store::update_settings(&mut store, |settings| {
+                    seeded_defaults = official_support::seed_official_default_models_into_settings(
+                        settings,
+                        &default_slots,
+                        &catalog_models,
+                    );
+                });
+                if seeded_defaults {
                     if let Err(error) = ai_model_manager::store::sync_model_config_file(
                         &store_path,
-                        &store.settings,
+                        &settings_snapshot,
                     ) {
                         logging::emit_legacy_line(
                             logging::event::LogSource::Host,
@@ -82,8 +90,9 @@ pub(crate) fn prepare_startup_state() -> StartupPreparedState {
             }
         }
     } else if !model_config_existed_at_startup && model_defaults_initialized {
+        let settings_snapshot = settings_store::settings_snapshot(&store);
         if let Err(error) =
-            ai_model_manager::store::sync_model_config_file(&store_path, &store.settings)
+            ai_model_manager::store::sync_model_config_file(&store_path, &settings_snapshot)
         {
             logging::emit_legacy_line(
                 logging::event::LogSource::Host,
@@ -96,10 +105,15 @@ pub(crate) fn prepare_startup_state() -> StartupPreparedState {
             );
         }
     }
-    if let Err(error) = ai_model_manager::legacy_config::load_model_config_into_settings(
-        &store_path,
-        &mut store.settings,
-    ) {
+    let mut model_config_load_error = None;
+    settings_store::update_settings(&mut store, |settings| {
+        if let Err(error) =
+            ai_model_manager::legacy_config::load_model_config_into_settings(&store_path, settings)
+        {
+            model_config_load_error = Some(error);
+        }
+    });
+    if let Some(error) = model_config_load_error {
         logging::emit_legacy_line(
             logging::event::LogSource::Host,
             logging::event::LogLevel::Warn,
@@ -110,26 +124,30 @@ pub(crate) fn prepare_startup_state() -> StartupPreparedState {
             None,
         );
     }
-    let synced_cached_official_models =
-        official_support::sync_official_cached_models_into_settings(&mut store.settings);
-    let repaired_missing_model_defaults =
-        match ai_model_manager::defaults::repair_missing_official_defaults_in_settings(
-            &mut store.settings,
-        ) {
-            Ok(repaired) => repaired,
-            Err(error) => {
-                logging::emit_legacy_line(
-                    logging::event::LogSource::Host,
-                    logging::event::LogLevel::Warn,
-                    "model_config",
-                    "startup.model_config_defaults_repair_failed",
-                    format!("[{} model config] {error}", app_brand_display_name()),
-                    json!({ "error": error }),
-                    None,
-                );
-                false
-            }
-        };
+    let mut synced_cached_official_models = false;
+    settings_store::update_settings(&mut store, |settings| {
+        synced_cached_official_models =
+            official_support::sync_official_cached_models_into_settings(settings);
+    });
+    let mut repaired_missing_model_defaults = false;
+    let mut model_defaults_repair_error = None;
+    settings_store::update_settings(&mut store, |settings| {
+        match ai_model_manager::defaults::repair_missing_official_defaults_in_settings(settings) {
+            Ok(repaired) => repaired_missing_model_defaults = repaired,
+            Err(error) => model_defaults_repair_error = Some(error),
+        }
+    });
+    if let Some(error) = model_defaults_repair_error {
+        logging::emit_legacy_line(
+            logging::event::LogSource::Host,
+            logging::event::LogLevel::Warn,
+            "model_config",
+            "startup.model_config_defaults_repair_failed",
+            format!("[{} model config] {error}", app_brand_display_name()),
+            json!({ "error": error }),
+            None,
+        );
+    }
     let startup_migration_status = probe_startup_migration(&store, &store_path);
     sync_redclaw_job_definitions(&mut store);
     if let Err(error) = persist_store(&store_path, &store) {
@@ -146,9 +164,11 @@ pub(crate) fn prepare_startup_state() -> StartupPreparedState {
     if (synced_cached_official_models || repaired_missing_model_defaults)
         && ai_model_manager::legacy_config::model_config_path(&store_path).exists()
     {
-        ai_model_manager::legacy_projection::normalize_settings_projection(&mut store.settings);
+        let settings_snapshot = settings_store::update_settings(&mut store, |settings| {
+            ai_model_manager::legacy_projection::normalize_settings_projection(settings);
+        });
         if let Err(error) =
-            ai_model_manager::store::sync_model_config_file(&store_path, &store.settings)
+            ai_model_manager::store::sync_model_config_file(&store_path, &settings_snapshot)
         {
             logging::emit_legacy_line(
                 logging::event::LogSource::Host,
@@ -161,14 +181,16 @@ pub(crate) fn prepare_startup_state() -> StartupPreparedState {
             );
         }
     }
+    let settings_snapshot = settings_store::settings_snapshot(&store);
+    let active_space_id = spaces_store::active_space_id(&store);
     let initial_workspace_root =
-        workspace_root_from_snapshot(&store.settings, &store.active_space_id, &store_path)
+        workspace_root_from_snapshot(&settings_snapshot, &active_space_id, &store_path)
             .unwrap_or_else(|_| preferred_workspace_dir());
     let store_root = store_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    let _ = logging::initialize_logging(store_root, &store.settings);
+    let _ = logging::initialize_logging(store_root, &settings_snapshot);
 
     StartupPreparedState {
         store_path,
