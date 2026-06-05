@@ -238,6 +238,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed runtime task resume work-item writebacks through `store::work_items`.
 - Routed image/video generation, media runtime and RedClaw run work-item writebacks through `store::work_items`.
 - Routed legacy store import settings and space migration access through `store::settings` and `store::spaces`.
+- Routed background-task bridge runtime-task cancellation through `store::runtime_tasks`.
 
 ### 1. Bridge Contract Layer
 
