@@ -294,6 +294,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted official route credential sync, realm switching, auth-state clearing and settings merge preservation into `commands/official/settings_sync`.
 - Moved official order status fallback and cached-order merge helpers into `commands/official/billing`.
 - Extracted official pricing payload validation and startup pricing cache refresh into `commands/official/pricing`, preserving the existing startup-facing API.
+- Moved official remote call-record fetch into `commands/official/call_records` beside its response normalization.
 
 ### 1. Bridge Contract Layer
 
