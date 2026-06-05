@@ -5,6 +5,7 @@ import { createAuthBridge } from './domains/authBridge';
 import { createBridgeCore } from './core';
 import { createChatBridge } from './domains/chatBridge';
 import { createCliRuntimeBridge } from './domains/cliRuntimeBridge';
+import { createCoverBridge } from './domains/coverBridge';
 import { createGenerationBridge } from './domains/generationBridge';
 import { createKnowledgeBridge } from './domains/knowledgeBridge';
 import { createManuscriptsBridge } from './domains/manuscriptsBridge';
@@ -180,19 +181,7 @@ function createIpcRenderer() {
     getAdvisorYoutubeRunnerStatus: () => invokeChannel('advisors:youtube-runner-status'),
     runAdvisorYoutubeNow: (advisorId?: string) => invokeChannel('advisors:youtube-runner-run-now', { advisorId })
     ,
-    cover: {
-      list: (payload?: Record<string, unknown>) => invokeChannel('cover:list', payload || {}),
-      generate: (payload: Record<string, unknown>) => invokeChannel('cover:generate', payload),
-      openRoot: () => invokeChannel('cover:open-root'),
-      open: (payload: { assetId: string }) => invokeChannel('cover:open', payload),
-      saveTemplateImage: (payload: { imageSource: string }) => invokeChannel('cover:save-template-image', payload),
-      templates: {
-        list: () => invokeChannel('cover:templates:list'),
-        save: (payload: { template: Record<string, unknown> }) => invokeChannel('cover:templates:save', payload),
-        delete: (payload: { templateId: string }) => invokeChannel('cover:templates:delete', payload),
-        importLegacy: (payload: { templates: Record<string, unknown>[] }) => invokeChannel('cover:templates:import-legacy', payload),
-      }
-    }
+    ...createCoverBridge(core),
   };
 }
 
