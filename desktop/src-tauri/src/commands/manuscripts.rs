@@ -45,6 +45,7 @@ mod richpost_scaffold;
 mod script_state;
 mod subtitles;
 mod timeline;
+mod timeline_insertions;
 mod timeline_model;
 mod timeline_tracks;
 mod tree;
