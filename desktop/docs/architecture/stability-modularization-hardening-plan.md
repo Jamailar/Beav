@@ -135,6 +135,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed manuscript transcription and Remotion generation settings reads through `store::settings`.
 - Routed advisor prompt/persona generation settings reads through `store::settings`.
 - Moved official API key listing network work outside the store lock and routed its settings reads through `store::settings`.
+- Routed official account, pricing and model-list settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
