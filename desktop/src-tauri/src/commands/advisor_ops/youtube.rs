@@ -1,5 +1,7 @@
 use super::member_skills::publish_member_skill_if_enabled;
 use super::videos::refresh_advisor_videos;
+#[path = "youtube_channel_info.rs"]
+mod youtube_channel_info;
 #[path = "youtube_persistence.rs"]
 mod youtube_persistence;
 use crate::persistence::{with_store, with_store_mut};
@@ -10,6 +12,7 @@ use crate::{
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
+use youtube_channel_info::channel_info_from_ytdlp_payload;
 use youtube_persistence::{persist_successful_download, upsert_failed_advisor_video};
 
 const YTDLP_DISABLED_MESSAGE: &str = "内置 yt-dlp 服务已移除。";
@@ -80,32 +83,9 @@ fn fetch_youtube_info_value(payload: &Value) -> Result<Value, String> {
             }));
         }
     };
-    let channel_id = fetched
-        .get("channel_id")
-        .and_then(|item| item.as_str())
-        .map(|item| item.to_string())
-        .unwrap_or(fallback_channel_id);
-    let channel_name = fetched
-        .get("channel")
-        .or_else(|| fetched.get("uploader"))
-        .or_else(|| fetched.get("title"))
-        .and_then(|item| item.as_str())
-        .map(|item| item.to_string())
-        .unwrap_or(fallback_channel_name);
-    let channel_description = fetched
-        .get("description")
-        .and_then(|item| item.as_str())
-        .map(|item| item.to_string())
-        .unwrap_or_default();
-    let avatar_url = fetched
-        .get("thumbnails")
-        .and_then(|item| item.as_array())
-        .and_then(|items| items.last())
-        .and_then(|item| item.get("url"))
-        .and_then(|item| item.as_str())
-        .unwrap_or("")
-        .to_string();
-    let recent_videos = parse_ytdlp_videos("", Some(&channel_id), &fetched)
+    let channel_info =
+        channel_info_from_ytdlp_payload(&fetched, fallback_channel_id, fallback_channel_name);
+    let recent_videos = parse_ytdlp_videos("", Some(&channel_info.channel_id), &fetched)
         .into_iter()
         .take(5)
         .map(|video| json!({ "id": video.id, "title": video.title }))
@@ -113,16 +93,16 @@ fn fetch_youtube_info_value(payload: &Value) -> Result<Value, String> {
     if recent_videos.is_empty() {
         return Ok(json!({
             "success": false,
-            "error": format!("未从 YouTube 频道 {} 获取到可下载的视频条目", channel_name)
+            "error": format!("未从 YouTube 频道 {} 获取到可下载的视频条目", channel_info.channel_name)
         }));
     }
     Ok(json!({
         "success": true,
         "data": {
-            "channelId": channel_id,
-            "channelName": channel_name,
-            "channelDescription": channel_description,
-            "avatarUrl": avatar_url,
+            "channelId": channel_info.channel_id,
+            "channelName": channel_info.channel_name,
+            "channelDescription": channel_info.description,
+            "avatarUrl": channel_info.avatar_url,
             "recentVideos": recent_videos
         }
     }))
@@ -161,25 +141,15 @@ fn download_youtube_subtitles_value(
             }));
         }
     };
-    let channel_id = fetched
-        .get("channel_id")
-        .and_then(|item| item.as_str())
-        .map(|item| item.to_string())
-        .unwrap_or(fallback_channel_id);
-    let channel_name = fetched
-        .get("channel")
-        .or_else(|| fetched.get("uploader"))
-        .or_else(|| fetched.get("title"))
-        .and_then(|item| item.as_str())
-        .map(|item| item.to_string())
-        .unwrap_or(fallback_channel_name);
-    let real_videos = parse_ytdlp_videos(&advisor_id, Some(&channel_id), &fetched);
+    let channel_info =
+        channel_info_from_ytdlp_payload(&fetched, fallback_channel_id, fallback_channel_name);
+    let real_videos = parse_ytdlp_videos(&advisor_id, Some(&channel_info.channel_id), &fetched);
     if real_videos.is_empty() {
         return Ok(json!({
             "success": false,
             "successCount": 0,
             "failCount": count,
-            "error": format!("未从 YouTube 频道 {} 获取到可下载的视频条目", channel_name)
+            "error": format!("未从 YouTube 频道 {} 获取到可下载的视频条目", channel_info.channel_name)
         }));
     }
     let knowledge_dir = advisor_knowledge_dir(state, &advisor_id)?;
@@ -202,7 +172,13 @@ fn download_youtube_subtitles_value(
         ) {
             Ok(path) => path,
             Err(error) => {
-                upsert_failed_advisor_video(state, &advisor_id, &channel_id, &video, &error)?;
+                upsert_failed_advisor_video(
+                    state,
+                    &advisor_id,
+                    &channel_info.channel_id,
+                    &video,
+                    &error,
+                )?;
                 fail_count += 1;
                 continue;
             }
@@ -211,8 +187,8 @@ fn download_youtube_subtitles_value(
             state,
             &advisor_id,
             &channel_url,
-            &channel_id,
-            &channel_name,
+            &channel_info.channel_id,
+            &channel_info.channel_name,
             &knowledge_dir,
             &video,
             &subtitle_path,
