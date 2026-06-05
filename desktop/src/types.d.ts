@@ -1258,6 +1258,8 @@ declare global {
         getTrace: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionRuntimeRecord[]>;
         getCheckpoints: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionCheckpointRecord[]>;
         getToolResults: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionToolResultItem[]>;
+        onEvent: (listener: (...args: unknown[]) => void) => void;
+        offEvent: (listener: (...args: unknown[]) => void) => void;
       };
       taskPanel: {
         list: (payload?: { limit?: number }) => Promise<TaskPanelListResponse>;

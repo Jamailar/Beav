@@ -701,8 +701,8 @@ export function subscribeRuntimeEventStream(handlers: RuntimeEventStreamHandlers
     const parsed = parseRuntimeEnvelopeRecord(record, eventType);
     dispatchRuntimeEnvelope(handlers, parsed);
   };
-  window.ipcRenderer.on('runtime:event', listener as (...args: unknown[]) => void);
+  window.ipcRenderer.runtime.onEvent(listener as (...args: unknown[]) => void);
   return () => {
-    window.ipcRenderer.off('runtime:event', listener as (...args: unknown[]) => void);
+    window.ipcRenderer.runtime.offEvent(listener as (...args: unknown[]) => void);
   };
 }

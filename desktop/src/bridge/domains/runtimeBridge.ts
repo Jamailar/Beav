@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createRuntimeBridge(core: BridgeCore) {
   return {
@@ -15,6 +15,8 @@ export function createRuntimeBridge(core: BridgeCore) {
       getToolResults: (payload: { sessionId: string; limit?: number }) =>
         core.invokeChannel('runtime:get-tool-results', payload),
       listApprovals: () => core.invokeChannel('runtime:list-approvals'),
+      onEvent: (listener: Listener) => core.on('runtime:event', listener),
+      offEvent: (listener: Listener) => core.off('runtime:event', listener),
     },
     taskPanel: {
       list: (payload?: { limit?: number }) => core.invokeChannel('task-panel:list', payload || {}),
