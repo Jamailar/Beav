@@ -416,9 +416,9 @@ pub fn requeue_retrying_job_executions(store: &mut AppStore, now: i64) {
 pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
     let now_iso = now_iso();
     let mut cooldown_candidates = Vec::new();
-    for execution in store.redclaw_job_executions.iter_mut() {
+    redclaw_store::for_each_job_execution_mut(store, |execution| {
         if !matches!(execution.status.as_str(), "leased" | "running") {
-            continue;
+            return;
         }
         let timeout_ms = execution
             .heartbeat_timeout_ms
@@ -427,7 +427,7 @@ pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
             .or_else(|| parse_millis_string(Some(execution.updated_at.as_str())))
             .unwrap_or(now);
         if now - last_heartbeat_at <= timeout_ms {
-            continue;
+            return;
         }
         let reason = "Execution heartbeat expired".to_string();
         let definition_id = execution.definition_id.clone();
@@ -450,22 +450,21 @@ pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
             );
         }
         cooldown_candidates.push(definition_id);
-    }
+    });
 
     for definition_id in cooldown_candidates {
-        if let Some(prepared) = store
-            .redclaw_job_definitions
-            .iter()
-            .find(|item| item.id == definition_id)
-            .map(|definition| PreparedJobExecution {
-                execution_id: String::new(),
-                definition_id: definition.id.clone(),
-                source_kind: definition.source_kind.clone(),
-                source_task_id: definition.source_task_id.clone(),
-                kind: definition.kind.clone(),
-                title: definition.title.clone(),
-                prompt: String::new(),
-                source_label: String::new(),
+        if let Some(prepared) =
+            redclaw_store::job_definition_by_id(store, &definition_id).map(|definition| {
+                PreparedJobExecution {
+                    execution_id: String::new(),
+                    definition_id: definition.id.clone(),
+                    source_kind: definition.source_kind.clone(),
+                    source_task_id: definition.source_task_id.clone(),
+                    kind: definition.kind.clone(),
+                    title: definition.title.clone(),
+                    prompt: String::new(),
+                    source_label: String::new(),
+                }
             })
         {
             activate_definition_cooldown(store, &prepared, "Execution heartbeat expired", &now_iso);
