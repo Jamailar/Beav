@@ -128,6 +128,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Moved `embedding:get-sorted-sources` embedding computation outside the store lock; the lock now only snapshots settings and source texts.
 - Extended `check:store-locks` to reject embedding computation inside store lock closures.
 - Routed media upload/transcription command settings reads through `store::settings`.
+- Extracted media transcription estimated SRT/VTT subtitle rendering, cue splitting and provider-error rejection into `commands/media_transcribe/subtitles`, keeping transcription request routing and fallback order unchanged.
 - Routed runtime task creation, runtime query and task resume settings reads through `store::settings`; runtime query now snapshots settings and mode in one store read.
 - Routed remote notification command settings reads through `store::settings`.
 - Routed space delete/switch workspace-root cache settings reads through `store::settings`.
