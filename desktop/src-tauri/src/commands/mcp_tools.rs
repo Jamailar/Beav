@@ -2,6 +2,8 @@
 mod diagnostics;
 #[path = "mcp_tools/registry.rs"]
 mod registry;
+#[path = "mcp_tools/runtime_hooks.rs"]
+mod runtime_hooks;
 #[path = "mcp_tools/server_payload.rs"]
 mod server_payload;
 
@@ -17,6 +19,7 @@ pub use registry::{
     mcp_add_value, mcp_discover_local_value, mcp_get_value, mcp_import_local_value, mcp_list_value,
     mcp_oauth_status_value, mcp_remove_value, mcp_save_value, mcp_set_enabled_value,
 };
+use runtime_hooks::handle_runtime_hooks_channel;
 
 pub fn mcp_probe_value(
     state: &State<'_, AppState>,
@@ -176,6 +179,9 @@ pub fn handle_mcp_tools_channel(
         if let Some(result) = handle_tools_diagnostics_channel(state, channel, payload) {
             return result;
         }
+        if let Some(result) = handle_runtime_hooks_channel(state, channel, payload) {
+            return result;
+        }
         match channel {
             "mcp:list" => mcp_list_value(state),
             "mcp:add" => mcp_add_value(state, payload),
@@ -213,35 +219,6 @@ pub fn handle_mcp_tools_channel(
             "mcp:oauth-status" => {
                 let server_id = payload_string(payload, "serverId").unwrap_or_default();
                 mcp_oauth_status_value(state, &server_id)
-            }
-            "tools:hooks:list" => with_store(state, |store| {
-                Ok(json!(mcp_tools_store::list_runtime_hooks(&store)))
-            }),
-            "tools:hooks:register" => {
-                let hook = RuntimeHookRecord {
-                    id: make_id("hook"),
-                    event: payload_string(payload, "event").unwrap_or_else(|| "tool".to_string()),
-                    r#type: payload_string(payload, "type").unwrap_or_else(|| "log".to_string()),
-                    matcher: normalize_optional_string(payload_string(payload, "matcher")),
-                    enabled: Some(
-                        payload_field(payload, "enabled")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(true),
-                    ),
-                };
-                with_store_mut(state, |store| {
-                    mcp_tools_store::push_runtime_hook(store, hook.clone());
-                    Ok(json!({ "success": true, "hookId": hook.id }))
-                })
-            }
-            "tools:hooks:remove" => {
-                let hook_id = payload_string(payload, "hookId")
-                    .or_else(|| payload_string(payload, "id"))
-                    .unwrap_or_default();
-                with_store_mut(state, |store| {
-                    mcp_tools_store::remove_runtime_hook(store, &hook_id);
-                    Ok(json!({ "success": true }))
-                })
             }
             _ => unreachable!(),
         }
