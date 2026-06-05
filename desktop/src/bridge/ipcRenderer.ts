@@ -7,6 +7,7 @@ import { createGenerationBridge } from './domains/generationBridge';
 import { createKnowledgeBridge } from './domains/knowledgeBridge';
 import { createManuscriptsBridge } from './domains/manuscriptsBridge';
 import { createMediaBridge } from './domains/mediaBridge';
+import { createPluginsBridge } from './domains/pluginsBridge';
 import { createRedClawBridge } from './domains/redclawBridge';
 import { createRuntimeBridge } from './domains/runtimeBridge';
 import { createSkillsBridge } from './domains/skillsBridge';
@@ -116,6 +117,7 @@ function createIpcRenderer() {
     ...createTeamRuntimeBridge(core),
     ...createCliRuntimeBridge(core),
     ...createAudioVoiceBridge(core),
+    ...createPluginsBridge(core),
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh'),
@@ -213,21 +215,6 @@ function createIpcRenderer() {
       generateAutoEdit: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:generate-auto-edit', payload),
       applyAutoEdit: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:apply-auto-edit', payload),
       render: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:render', payload),
-    },
-    plugins: {
-      list: () => invokeChannel('plugins:list'),
-      marketplace: (payload?: { url?: string }) => invokeChannel('plugins:marketplace', payload || {}),
-      install: (payload: { path: string }) => invokeChannel('plugins:install', payload),
-      installMarketplace: (payload: { id?: string; repo: string; version?: string; packageUrl?: string }) =>
-        invokeChannel('plugins:install-marketplace', payload),
-      setEnabled: (payload: { pluginId: string; enabled: boolean }) =>
-        invokeChannel('plugins:set-enabled', payload),
-      uninstall: (payload: { pluginId: string }) => invokeChannel('plugins:uninstall', payload),
-      openDataDir: (payload?: { pluginId?: string }) => invokeChannel('plugins:open-data-dir', payload || {}),
-      syncCapabilities: () => invokeChannel('plugins:sync-capabilities'),
-      readData: (payload: { pluginId: string; source: string; limit?: number; kind?: string; query?: string }) =>
-        invokeChannel('plugins:read-data', payload),
-      home: () => invokeChannel('plugins:home'),
     },
     aiRoles: {
       list: () => invokeChannel('ai:roles:list')
