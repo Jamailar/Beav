@@ -1,6 +1,7 @@
 import { createAccountsBridge } from './domains/accountsBridge';
 import { createArchivesBridge } from './domains/archivesBridge';
 import { createBridgeCore } from './core';
+import { createCliRuntimeBridge } from './domains/cliRuntimeBridge';
 import { createGenerationBridge } from './domains/generationBridge';
 import { createKnowledgeBridge } from './domains/knowledgeBridge';
 import { createManuscriptsBridge } from './domains/manuscriptsBridge';
@@ -112,6 +113,7 @@ function createIpcRenderer() {
     ...createSystemBridge(core),
     ...createRuntimeBridge(core),
     ...createTeamRuntimeBridge(core),
+    ...createCliRuntimeBridge(core),
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh'),
@@ -159,43 +161,6 @@ function createIpcRenderer() {
       createSession: (payload?: Record<string, unknown>) => invokeChannel('session-bridge:create-session', payload || {}),
       sendMessage: (payload: { sessionId: string; message: string }) => invokeChannel('session-bridge:send-message', payload),
       resolvePermission: (payload: { requestId: string; outcome: 'proceed_once' | 'proceed_always' | 'cancel' }) => invokeChannel('session-bridge:resolve-permission', payload)
-    },
-    cliRuntime: {
-      detect: (payload?: { commands?: string[] }) => invokeChannel('cli-runtime:detect', payload || {}),
-      discover: (payload?: { query?: string; limit?: number }) => invokeChannel('cli-runtime:discover', payload || {}),
-      listTools: () => invokeChannel('cli-runtime:list-tools'),
-      inspect: (payload: { toolId?: string; command?: string; executable?: string }) => invokeChannel('cli-runtime:inspect', payload),
-      diagnose: (payload: { command: string; environmentId?: string; cwd?: string; executionMode?: string }) =>
-        invokeChannel('cli-runtime:diagnose', payload),
-      listEnvironments: () => invokeChannel('cli-runtime:list-environments'),
-      createEnvironment: (payload: {
-        scope: 'app-global' | 'workspace-local' | 'task-ephemeral';
-        workspaceRoot?: string;
-        taskId?: string;
-      }) => invokeChannel('cli-runtime:create-environment', payload),
-      install: (payload: {
-        environmentId?: string;
-        installMethod: string;
-        spec: string;
-        toolName?: string;
-        executionMode?: string;
-      }) => invokeChannel('cli-runtime:install', payload),
-      execute: (payload: {
-        environmentId: string;
-        toolId?: string;
-        argv: string[];
-        cwd: string;
-        executionMode?: string;
-        usePty?: boolean;
-        verificationRules?: unknown[];
-      }) => invokeChannel('cli-runtime:execute', payload),
-      cancelExecution: (payload: { executionId: string }) => invokeChannel('cli-runtime:cancel-execution', payload),
-      pollExecution: (payload: { executionId: string }) => invokeChannel('cli-runtime:poll-execution', payload),
-      verify: (payload: { executionId: string; rules: unknown[] }) => invokeChannel('cli-runtime:verify', payload),
-      approveEscalation: (payload: { escalationId: string; scope: 'once' | 'session' | 'always' }) =>
-        invokeChannel('cli-runtime:approve-escalation', payload),
-      denyEscalation: (payload: { escalationId: string; reason?: string }) =>
-        invokeChannel('cli-runtime:deny-escalation', payload),
     },
     toolHooks: {
       list: () => invokeChannel('tools:hooks:list'),
