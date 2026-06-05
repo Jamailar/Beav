@@ -1,4 +1,5 @@
 pub(crate) mod assistant;
+pub(crate) mod mcp_tools;
 pub(crate) mod media;
 pub(crate) mod redclaw;
 pub(crate) mod runtime_tasks;
