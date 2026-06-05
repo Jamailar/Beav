@@ -306,6 +306,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted Thrive plugin secure directory copy, archive extraction, temp cleanup and source-root resolution into `commands/plugin/install_files`.
 - Extracted Thrive plugin marketplace registry loading, GitHub manifest probing, release asset selection, package download and marketplace install flow into `commands/plugin/marketplace`.
 - Extracted Thrive plugin data-source capability checks, manuscript tree projection, read-data command handling and home widget/action assembly into `commands/plugin/data_sources`.
+- Extracted Thrive plugin enabled-manifest enumeration, skill discovery, MCP config parsing and runtime capability sync into `commands/plugin/runtime_sync`.
 
 ### 1. Bridge Contract Layer
 
