@@ -257,6 +257,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted App Shell global knowledge search state, shortcut handling, debounced query and navigation dispatch into `features/app-shell/useGlobalKnowledgeSearch`.
 - Extracted App Shell theme preference, system-theme subscription, custom-theme sync and Tauri window-theme application into `features/app-shell/useLayoutTheme`.
 - Extracted App Shell sidebar collapsed/width persistence, animation timers and resize handling into `features/app-shell/useLayoutSidebar`.
+- Extracted App Shell workspace space loading, switching, rename/delete dialogs and menu lifecycle into `features/app-shell/useLayoutSpaces`.
 
 ### 1. Bridge Contract Layer
 
