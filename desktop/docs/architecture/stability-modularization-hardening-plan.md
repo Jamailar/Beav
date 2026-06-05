@@ -161,6 +161,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added `store::media` asset append helper and routed media-edit plus manuscript package/timeline media asset writes through it.
 - Routed generation command media asset writes through `store::media`.
 - Added `store::media` asset prepend helper and routed media-runtime plus voice-service media asset writes through it.
+- Added media asset lookup and subject catalog replacement helpers, then routed manuscript asset binding and subject card generation store access through them.
 
 ### 1. Bridge Contract Layer
 
