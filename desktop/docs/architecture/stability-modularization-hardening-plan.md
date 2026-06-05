@@ -265,6 +265,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted App Shell subjects modal shell rendering into `features/app-shell/AppSubjectsModal`, leaving modal open/close state in `useSubjectsModal`.
 - Extracted App Shell RedClaw pending message, onboarding, manuscript and session navigation state into `features/app-shell/useRedClawShellNavigation`.
 - Extracted App Shell generation pending intent and free-creation navigation state into `features/app-shell/useGenerationShellNavigation`.
+- Extracted App Shell settings navigation target state into `features/app-shell/useSettingsShellNavigation`.
 
 ### 1. Bridge Contract Layer
 
