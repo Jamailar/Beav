@@ -221,6 +221,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed LLM readiness settings writeback through `store::settings` so the command no longer writes `store.settings` directly.
 - Routed tool executor MCP server snapshots through `store::mcp_tools`, reducing direct AppStore coupling in tool dispatch paths.
 - Routed runtime tool-plan MCP server snapshots through `store::mcp_tools`.
+- Routed official settings merge/normalization writeback through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
