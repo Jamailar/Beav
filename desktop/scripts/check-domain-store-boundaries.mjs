@@ -65,6 +65,18 @@ const restrictedPatterns = [
       path.join(srcRoot, 'persistence', 'mod.rs'),
     ]),
   },
+  {
+    domain: 'mcp tools',
+    pattern: /store\s*\.\s*(mcp_servers|runtime_hooks)\b/g,
+    allowedFiles: new Set([
+      path.join(srcRoot, 'store', 'mcp_tools.rs'),
+      path.join(srcRoot, 'commands', 'plugin.rs'),
+      path.join(srcRoot, 'interactive_runtime_shared.rs'),
+      path.join(srcRoot, 'tools', 'executor.rs'),
+      path.join(srcRoot, 'tools', 'app_cli_mcp.rs'),
+      path.join(srcRoot, 'persistence', 'mod.rs'),
+    ]),
+  },
 ];
 
 function listRustFiles(dir) {

@@ -1,5 +1,6 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::session_lineage_fields;
+use crate::store::mcp_tools as mcp_tools_store;
 use crate::tools::registry::diagnostics_tool_items;
 use crate::*;
 use serde_json::{json, Value};
@@ -8,7 +9,7 @@ use tauri::{AppHandle, State};
 
 pub fn mcp_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
     let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
-    let servers = with_store(state, |store| Ok(store.mcp_servers.clone()))?;
+    let servers = with_store(state, |store| Ok(mcp_tools_store::list_servers(&store)))?;
     let sessions = state.mcp_manager.sessions()?;
     let items = servers
         .iter()
@@ -135,11 +136,7 @@ pub fn mcp_save_value(state: &State<'_, AppState>, payload: &Value) -> Result<Va
         let server: McpServerRecord =
             serde_json::from_value(server_value).map_err(|error| error.to_string())?;
         let next = with_store_mut(state, |store| {
-            store
-                .mcp_servers
-                .retain(|item| item.id != server.id && item.name != server.name);
-            store.mcp_servers.push(server.clone());
-            Ok(store.mcp_servers.clone())
+            Ok(mcp_tools_store::upsert_server(store, server.clone()))
         })?;
         state.mcp_manager.sync_servers(&next)?;
         return Ok(json!({ "success": true, "mode": "upsert", "server": server, "servers": next }));
@@ -153,7 +150,7 @@ pub fn mcp_save_value(state: &State<'_, AppState>, payload: &Value) -> Result<Va
         .filter_map(|value| serde_json::from_value(value).ok())
         .collect();
     with_store_mut(state, |store| {
-        store.mcp_servers = next.clone();
+        mcp_tools_store::replace_servers(store, next.clone());
         Ok(())
     })?;
     state.mcp_manager.sync_servers(&next)?;
@@ -170,20 +167,12 @@ pub fn mcp_add_value(state: &State<'_, AppState>, payload: &Value) -> Result<Val
     validate_mcp_server_name(&name)?;
 
     let existing = with_store(state, |store| {
-        Ok(store
-            .mcp_servers
-            .iter()
-            .find(|server| server.id == name || server.name == name)
-            .cloned())
+        Ok(mcp_tools_store::find_server(&store, &name))
     })?;
     let server = mcp_server_from_add_payload(payload, &name, existing.as_ref())?;
     let mode = if existing.is_some() { "update" } else { "add" };
     let next = with_store_mut(state, |store| {
-        store
-            .mcp_servers
-            .retain(|item| item.id != server.id && item.name != server.name);
-        store.mcp_servers.push(server.clone());
-        Ok(store.mcp_servers.clone())
+        Ok(mcp_tools_store::upsert_server(store, server.clone()))
     })?;
     state.mcp_manager.sync_servers(&next)?;
     Ok(json!({
@@ -209,17 +198,7 @@ pub fn mcp_get_value(state: &State<'_, AppState>, payload: &Value) -> Result<Val
 pub fn mcp_remove_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let target = mcp_target_name(payload)?;
     let (removed, next) = with_store_mut(state, |store| {
-        let removed = store
-            .mcp_servers
-            .iter()
-            .find(|server| server.id == target || server.name == target)
-            .cloned();
-        if removed.is_some() {
-            store
-                .mcp_servers
-                .retain(|server| server.id != target && server.name != target);
-        }
-        Ok((removed, store.mcp_servers.clone()))
+        Ok(mcp_tools_store::remove_server(store, &target))
     })?;
     state.mcp_manager.sync_servers(&next)?;
     let disconnected = removed
@@ -243,13 +222,7 @@ pub fn mcp_set_enabled_value(
 ) -> Result<Value, String> {
     let target = mcp_target_name(payload)?;
     let (server, next) = with_store_mut(state, |store| {
-        let server = store
-            .mcp_servers
-            .iter_mut()
-            .find(|server| server.id == target || server.name == target)
-            .ok_or_else(|| format!("MCP server `{target}` not found"))?;
-        server.enabled = enabled;
-        Ok((server.clone(), store.mcp_servers.clone()))
+        mcp_tools_store::set_server_enabled(store, &target, enabled)
     })?;
     state.mcp_manager.sync_servers(&next)?;
     let disconnected = if enabled {
@@ -289,10 +262,10 @@ pub fn mcp_import_local_value(state: &State<'_, AppState>) -> Result<Value, Stri
         merged.extend(servers.clone());
     }
     with_store_mut(state, |store| {
-        if !merged.is_empty() {
-            store.mcp_servers = merged.clone();
-        }
-        Ok(store.mcp_servers.clone())
+        Ok(mcp_tools_store::replace_servers_if_non_empty(
+            store,
+            merged.clone(),
+        ))
     })
     .and_then(|servers| {
         state.mcp_manager.sync_servers(&servers)?;
@@ -311,12 +284,7 @@ pub fn mcp_oauth_status_value(
     server_id: &str,
 ) -> Result<Value, String> {
     with_store(state, |store| {
-        let status = store
-            .mcp_servers
-            .iter()
-            .find(|item| item.id == server_id)
-            .and_then(|item| item.oauth.clone())
-            .unwrap_or_else(|| json!({}));
+        let status = mcp_tools_store::oauth_status(&store, server_id);
         Ok(json!({
             "success": true,
             "connected": status.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -444,7 +412,7 @@ pub fn handle_mcp_tools_channel(
                     }),
                 ];
                 items.extend(diagnostics_tool_items());
-                for server in &store.mcp_servers {
+                for server in mcp_tools_store::list_servers(&store) {
                     items.push(json!({
                         "name": format!("mcp_server:{}", server.id),
                         "displayName": format!("MCP · {}", server.name),
@@ -463,11 +431,7 @@ pub fn handle_mcp_tools_channel(
                     payload_string(payload, "toolName").unwrap_or_else(|| "unknown".to_string());
                 if let Some(server_id) = tool_name.strip_prefix("mcp_server:") {
                     let server = with_store(state, |store| {
-                        Ok(store
-                            .mcp_servers
-                            .iter()
-                            .find(|item| item.id == server_id)
-                            .cloned())
+                        Ok(mcp_tools_store::find_server(&store, server_id))
                     })?;
                     if let Some(server) = server {
                         let mode = if channel.ends_with("run-ai") {
@@ -508,7 +472,9 @@ pub fn handle_mcp_tools_channel(
                     "executionSucceeded": true
                 }))
             }
-            "tools:hooks:list" => with_store(state, |store| Ok(json!(store.runtime_hooks.clone()))),
+            "tools:hooks:list" => with_store(state, |store| {
+                Ok(json!(mcp_tools_store::list_runtime_hooks(&store)))
+            }),
             "tools:hooks:register" => {
                 let hook = RuntimeHookRecord {
                     id: make_id("hook"),
@@ -522,7 +488,7 @@ pub fn handle_mcp_tools_channel(
                     ),
                 };
                 with_store_mut(state, |store| {
-                    store.runtime_hooks.push(hook.clone());
+                    mcp_tools_store::push_runtime_hook(store, hook.clone());
                     Ok(json!({ "success": true, "hookId": hook.id }))
                 })
             }
@@ -531,7 +497,7 @@ pub fn handle_mcp_tools_channel(
                     .or_else(|| payload_string(payload, "id"))
                     .unwrap_or_default();
                 with_store_mut(state, |store| {
-                    store.runtime_hooks.retain(|item| item.id != hook_id);
+                    mcp_tools_store::remove_runtime_hook(store, &hook_id);
                     Ok(json!({ "success": true }))
                 })
             }
@@ -659,22 +625,14 @@ fn resolve_mcp_server_from_payload(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "缺少 server 或 serverId".to_string())?;
     with_store(state, |store| {
-        store
-            .mcp_servers
-            .iter()
-            .find(|server| server.id == server_id || server.name == server_id)
-            .cloned()
+        mcp_tools_store::find_server(&store, &server_id)
             .ok_or_else(|| format!("MCP server `{server_id}` not found"))
     })
 }
 
 fn find_mcp_server(state: &State<'_, AppState>, target: &str) -> Result<McpServerRecord, String> {
     with_store(state, |store| {
-        store
-            .mcp_servers
-            .iter()
-            .find(|server| server.id == target || server.name == target)
-            .cloned()
+        mcp_tools_store::find_server(&store, target)
             .ok_or_else(|| format!("MCP server `{target}` not found"))
     })
 }
