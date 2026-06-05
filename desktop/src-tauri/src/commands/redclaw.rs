@@ -27,7 +27,7 @@ use crate::scheduler::{
     enqueue_manual_job_execution_for_definition, run_job_queue_once, run_redclaw_job_runner,
     run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
-use crate::store::redclaw as redclaw_store;
+use crate::store::{redclaw as redclaw_store, spaces as spaces_store};
 use crate::{
     complete_redclaw_mvp_onboarding, complete_redclaw_style_definition_from_interview,
     ffmpeg_executable, handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded,
@@ -174,7 +174,7 @@ pub fn handle_redclaw_channel(
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
-                crate::with_store(state, |store| Ok(store.active_space_id.clone()))?;
+                crate::with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?;
             Ok(json!({
                 "success": true,
                 "activeSpaceId": active_space_id,
@@ -802,6 +802,7 @@ fn update_redclaw_learning_candidate(
         return Err("status must be accepted, rejected, or pending".to_string());
     }
     with_store_mut(state, |store| {
+        let active_space_id = spaces_store::active_space_id(store);
         let project = store
             .redclaw_state
             .projects
@@ -841,7 +842,7 @@ fn update_redclaw_learning_candidate(
                         .unwrap_or("project")
                         .to_string(),
                 ),
-                space_id: Some(store.active_space_id.clone()),
+                space_id: Some(active_space_id),
                 project_id: Some(project_id.clone()),
                 session_id: None,
                 source: Some(json!({
