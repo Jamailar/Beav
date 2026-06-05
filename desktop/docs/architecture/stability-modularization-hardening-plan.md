@@ -313,6 +313,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted collaboration team-member wake scheduling, mailbox consumption, member session metadata, agent-turn execution and team action event fanout into `commands/runtime_collab/team_wake`.
 - Extracted review-docket runtime approval construction, proposed action routing, CLI escalation decisions and RedClaw draft confirmations into `commands/runtime_collab/review_approval`.
 - Extracted confirmed team-guide session assembly, member/task payload construction, role-to-member assignment and collab event fanout into `commands/runtime_collab/team_guide`.
+- Extracted team tool descriptor exposure, team tool execution, MCP contract execution and agent backend listing into `commands/runtime_collab/team_tools`.
 
 ### 1. Bridge Contract Layer
 
