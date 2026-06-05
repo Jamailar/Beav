@@ -1,8 +1,10 @@
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store};
-use crate::*;
+use crate::AppState;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
+#[path = "advisor_ops/avatar.rs"]
+mod avatar;
 #[path = "advisor_ops/crud.rs"]
 mod crud;
 #[path = "advisor_ops/knowledge_files.rs"]
@@ -20,6 +22,7 @@ mod videos;
 #[path = "advisor_ops/youtube.rs"]
 mod youtube;
 
+use avatar::handle_avatar_channel;
 use crud::handle_crud_channel;
 use knowledge_files::handle_knowledge_channel;
 use member_skills::handle_member_skill_channel;
@@ -151,15 +154,8 @@ pub fn handle_advisor_channel(
             }
             "advisors:generate-persona" => handle_persona_channel(state, channel, payload)
                 .unwrap_or_else(|| Err("成员角色生成动作未注册".to_string())),
-            "advisors:select-avatar" => {
-                let selected = pick_files_native("选择成员头像图片", false, false)?;
-                let Some(path) = selected.into_iter().next() else {
-                    return Ok(Value::Null);
-                };
-                let target_dir = advisor_avatar_dir(state)?;
-                let (_, copied) = copy_file_into_dir(&path, &target_dir)?;
-                Ok(json!(file_url_for_path(&copied)))
-            }
+            "advisors:select-avatar" => handle_avatar_channel(state, channel)
+                .unwrap_or_else(|| Err("成员头像动作未注册".to_string())),
             "advisors:youtube-runner-status"
             | "advisors:fetch-youtube-info"
             | "advisors:download-youtube-subtitles"
