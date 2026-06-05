@@ -19,6 +19,7 @@ use crate::persistence::{
     apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
     with_store_mut,
 };
+use crate::store::settings as settings_store;
 use crate::{
     app_brand_display_name, is_same_path, now_iso, payload_field, payload_string,
     payload_value_as_string, pick_files_native, refresh_runtime_warm_state, store_root,
@@ -663,7 +664,10 @@ pub fn handle_system_channel(
                         crate::ai_model_manager::legacy_projection::normalize_settings_projection(
                             &mut store.settings,
                         );
-                        Ok((store.active_space_id.clone(), store.settings.clone()))
+                        Ok((
+                            store.active_space_id.clone(),
+                            settings_store::settings_snapshot(&store),
+                        ))
                     })?;
                     crate::ai_model_manager::store::sync_model_config_file(
                         &state.store_path,
@@ -820,7 +824,8 @@ pub fn handle_system_channel(
                         }));
                     }
 
-                    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let settings =
+                        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                     let mut feedback_context = context.as_object().cloned().unwrap_or_default();
                     if !contact.is_empty() {
                         feedback_context.insert("contact".to_string(), json!(contact));
