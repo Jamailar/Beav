@@ -14,6 +14,7 @@ use crate::session_manager::{
     session_resume_value, update_metadata,
 };
 use crate::skills::{merge_requested_skills_into_metadata, SkillActivationSource};
+use crate::store::settings as settings_store;
 use crate::*;
 use base64::Engine;
 use serde_json::{json, Value};
@@ -3122,7 +3123,8 @@ pub fn handle_chat_sessions_wander_channel(
                 Ok(json!({ "success": true }))
             }
             "chat:transcribe-audio" => {
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let Some(audio_base64) = payload_string(&payload, "audioBase64") else {
                     return Ok(json!({ "success": false, "error": "缺少音频内容" }));
                 };
