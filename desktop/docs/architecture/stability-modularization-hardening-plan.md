@@ -123,6 +123,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added `pnpm --dir desktop check:store-locks` to prevent obvious slow file/process/network work inside `with_store` / `with_store_mut` closures.
 - Added `pnpm --dir desktop check:architecture` as the combined renderer IPC and store lock boundary guard.
 - Added `store::redclaw` owned snapshot helpers and routed RedClaw status/project/task/job read channels through them.
+- Extracted App Shell execution persistence handlers into `useExecutionPersistence`.
 
 ### 1. Bridge Contract Layer
 
