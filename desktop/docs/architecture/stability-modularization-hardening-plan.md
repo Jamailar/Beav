@@ -210,6 +210,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed RedClaw media-plan export metadata writebacks through `store::redclaw`.
 - Routed RedClaw section draft metadata writebacks through `store::redclaw`.
 - Routed RedClaw learning-candidate project updates and accepted memory appends through store helpers.
+- Routed RedClaw task cancellation source-task delete/pause updates through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
