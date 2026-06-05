@@ -162,6 +162,11 @@ pub(crate) fn long_cycle_task_by_id(
         .cloned()
 }
 
+#[cfg(test)]
+pub(crate) fn push_scheduled_task(store: &mut AppStore, task: RedclawScheduledTaskRecord) {
+    store.redclaw_state.scheduled_tasks.push(task);
+}
+
 pub(crate) fn update_source_task_next_run(
     store: &mut AppStore,
     source_kind: Option<&str>,
@@ -577,6 +582,16 @@ pub(crate) fn job_execution_status_by_id(store: &AppStore, execution_id: &str) -
         .iter()
         .find(|item| item.id == execution_id)
         .map(|item| item.status.clone())
+}
+
+#[cfg(test)]
+pub(crate) fn job_execution_is_archived(store: &AppStore, execution_id: &str) -> bool {
+    store
+        .redclaw_job_executions
+        .iter()
+        .find(|item| item.id == execution_id)
+        .and_then(|item| item.archived_at.as_deref())
+        .is_some()
 }
 
 pub(crate) fn consecutive_job_failure_count(store: &AppStore, definition_id: &str) -> usize {

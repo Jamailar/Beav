@@ -1012,10 +1012,9 @@ mod tests {
     use crate::scheduler::{derived_background_tasks, sync_redclaw_job_definitions};
 
     fn seed_scheduled_definition(store: &mut AppStore) {
-        store
-            .redclaw_state
-            .scheduled_tasks
-            .push(RedclawScheduledTaskRecord {
+        redclaw_store::push_scheduled_task(
+            store,
+            RedclawScheduledTaskRecord {
                 id: "scheduled-1".to_string(),
                 name: "Retry me".to_string(),
                 enabled: true,
@@ -1032,7 +1031,8 @@ mod tests {
                 last_result: None,
                 last_error: None,
                 next_run_at: Some("1".to_string()),
-            });
+            },
+        );
         sync_redclaw_job_definitions(store);
     }
 
@@ -1058,34 +1058,28 @@ mod tests {
         let original_execution_id =
             enqueue_manual_job_execution_for_definition(&mut store, "jobdef-scheduled-1", "manual")
                 .expect("seed execution");
-        let original_execution = store
-            .redclaw_job_executions
-            .iter_mut()
-            .find(|item| item.id == original_execution_id)
-            .expect("original execution exists");
-        original_execution.status = "failed".to_string();
-        original_execution.completed_at = Some("2".to_string());
+        redclaw_store::update_job_execution(&mut store, &original_execution_id, |execution| {
+            execution.status = "failed".to_string();
+            execution.completed_at = Some("2".to_string());
+        })
+        .expect("original execution exists");
 
         let (retry_execution_id, definition_id) =
             retry_job_execution(&mut store, &original_execution_id).expect("retry execution");
 
         assert_ne!(retry_execution_id, original_execution_id);
-        assert_eq!(store.redclaw_job_executions.len(), 2);
+        assert_eq!(redclaw_store::job_execution_count(&store), 2);
         assert_eq!(
-            store
-                .redclaw_job_executions
-                .iter()
-                .find(|item| item.id == retry_execution_id)
-                .map(|item| item.status.as_str()),
-            Some("queued")
+            redclaw_store::job_execution_status_by_id(&store, &retry_execution_id).as_deref(),
+            Some("queued"),
         );
         assert_eq!(
-            store
-                .redclaw_job_executions
-                .iter()
-                .find(|item| item.id == retry_execution_id)
-                .map(|item| item.definition_id.as_str()),
-            Some(definition_id.as_str())
+            redclaw_store::job_execution_definition_id_by_task_or_definition(
+                &store,
+                &retry_execution_id
+            )
+            .as_deref(),
+            Some(definition_id.as_str()),
         );
     }
 
@@ -1096,29 +1090,22 @@ mod tests {
         let execution_id =
             enqueue_manual_job_execution_for_definition(&mut store, "jobdef-scheduled-1", "manual")
                 .expect("seed execution");
-        let execution = store
-            .redclaw_job_executions
-            .iter_mut()
-            .find(|item| item.id == execution_id)
-            .expect("execution exists");
-        execution.status = "dead_lettered".to_string();
-        execution.completed_at = Some("2".to_string());
-        execution.dead_lettered_at = Some("2".to_string());
+        redclaw_store::update_job_execution(&mut store, &execution_id, |execution| {
+            execution.status = "dead_lettered".to_string();
+            execution.completed_at = Some("2".to_string());
+            execution.dead_lettered_at = Some("2".to_string());
+        })
+        .expect("execution exists");
 
         let archived_execution_id =
             archive_job_execution(&mut store, &execution_id).expect("archive execution");
         let tasks = derived_background_tasks(&store);
 
         assert_eq!(archived_execution_id, execution_id);
-        assert_eq!(
-            store
-                .redclaw_job_executions
-                .iter()
-                .find(|item| item.id == execution_id)
-                .and_then(|item| item.archived_at.as_deref())
-                .is_some(),
-            true
-        );
+        assert!(redclaw_store::job_execution_is_archived(
+            &store,
+            &execution_id
+        ));
         assert!(tasks.iter().all(
             |item| item.get("executionId").and_then(|value| value.as_str())
                 != Some(execution_id.as_str())
