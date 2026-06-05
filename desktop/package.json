@@ -20,6 +20,7 @@
     "brand:sync": "node ./scripts/sync-brand.mjs",
     "brand:sync:thrive": "node ./scripts/sync-brand.mjs --variant thrive",
     "check:ipc-boundaries": "node ./scripts/check-renderer-ipc-boundaries.mjs",
+    "check:store-locks": "node ./scripts/check-store-locks.mjs",
     "ipc:inventory": "node ./scripts/extract-ipc-inventory.mjs",
     "remotion:render": "node ./remotion/render.mjs",
     "release:mac": "node ./scripts/build-mac-release.mjs",
