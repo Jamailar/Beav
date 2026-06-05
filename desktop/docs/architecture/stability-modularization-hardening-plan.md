@@ -176,6 +176,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed account active-workspace reads through `store::spaces`.
 - Routed workspace-root and knowledge-index active-space reads through `store::spaces`.
 - Routed RedClaw command active-space reads through `store::spaces`.
+- Routed memory creation active-space fallback through `store::spaces`.
 
 ### 1. Bridge Contract Layer
 
