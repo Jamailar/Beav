@@ -1,8 +1,7 @@
-use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
+use crate::persistence::{ensure_store_hydrated_for_advisors, with_store};
 use crate::*;
 use serde_json::{json, Value};
-use std::fs;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 #[path = "advisor_ops/crud.rs"]
 mod crud;
@@ -22,8 +21,8 @@ mod videos;
 mod youtube;
 
 use crud::handle_crud_channel;
-use knowledge_files::{collect_advisor_knowledge_files, import_advisor_knowledge_files};
-use member_skills::{handle_member_skill_channel, publish_member_skill_if_enabled};
+use knowledge_files::handle_knowledge_channel;
+use member_skills::handle_member_skill_channel;
 use persona::handle_persona_channel;
 use prompt_ops::handle_prompt_channel;
 pub(crate) use templates::advisors_list_templates_value;
@@ -127,119 +126,11 @@ pub fn handle_advisor_channel(
                 handle_crud_channel(app, state, channel, payload)
                     .unwrap_or_else(|| Err("成员 CRUD 动作未注册".to_string()))
             }
-            "advisors:pick-knowledge-files" => {
-                let selected = pick_files_native("选择要导入该成员知识库的文件", false, true)?;
-                let files = selected
-                    .into_iter()
-                    .map(|path| {
-                        json!({
-                            "path": path,
-                            "name": path.file_name().and_then(|value| value.to_str()).unwrap_or_default()
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                Ok(json!({ "success": true, "files": files }))
-            }
-            "advisors:pick-knowledge-folder" => {
-                let selected = pick_files_native("选择要导入该成员知识库的文件夹", true, false)?;
-                let files = collect_advisor_knowledge_files(&selected)?
-                    .into_iter()
-                    .map(|path| {
-                        json!({
-                            "path": path,
-                            "name": path.file_name().and_then(|value| value.to_str()).unwrap_or_default()
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                Ok(json!({ "success": true, "files": files }))
-            }
-            "advisors:upload-knowledge" => {
-                let started_at = now_ms();
-                let advisor_id = payload_string(payload, "advisorId")
-                    .or_else(|| payload_value_as_string(payload))
-                    .unwrap_or_default();
-                let selected = payload_field(payload, "filePaths")
-                    .and_then(|value| value.as_array())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str())
-                            .map(std::path::PathBuf::from)
-                            .collect::<Vec<_>>()
-                    })
-                    .map(Ok)
-                    .unwrap_or_else(|| {
-                        pick_files_native("选择要导入该成员知识库的文件", false, true)
-                    })?;
-                let imported = import_advisor_knowledge_files(state, &advisor_id, &selected)?;
-                let imported_file_count = imported
-                    .get("files")
-                    .and_then(Value::as_array)
-                    .map(|items| items.len() as i64)
-                    .unwrap_or_default();
-                let total_knowledge_file_count = with_store(state, |store| {
-                    Ok(store
-                        .advisors
-                        .iter()
-                        .find(|item| item.id == advisor_id)
-                        .map(|item| item.knowledge_files.len() as i64)
-                        .unwrap_or_default())
-                })?;
-                let _ = record_advisor_knowledge_ingest_metric(
-                    state,
-                    AdvisorKnowledgeIngestMetric {
-                        advisor_id: advisor_id.clone(),
-                        imported_file_count,
-                        total_knowledge_file_count,
-                        elapsed_ms: now_ms().saturating_sub(started_at) as i64,
-                        created_at: now_i64(),
-                    },
-                );
-                log_timing_event(
-                    state,
-                    "advisor",
-                    &format!("advisors:upload-knowledge:{advisor_id}"),
-                    "advisors:upload-knowledge",
-                    started_at,
-                    Some(format!(
-                        "importedFiles={} totalKnowledgeFiles={}",
-                        imported_file_count, total_knowledge_file_count
-                    )),
-                );
-                let member_skill =
-                    publish_member_skill_if_enabled(state, &advisor_id, "advisor-knowledge-import");
-                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
-                knowledge_index::jobs::schedule_rebuild(app, "advisor-knowledge-import");
-                let mut imported = imported;
-                if let Some(object) = imported.as_object_mut() {
-                    object.insert(
-                        "memberSkill".to_string(),
-                        member_skill.unwrap_or_else(|| Value::Null),
-                    );
-                }
-                Ok(imported)
-            }
-            "advisors:delete-knowledge" => {
-                let advisor_id = payload_string(payload, "advisorId").unwrap_or_default();
-                let file_name = payload_string(payload, "fileName").unwrap_or_default();
-                let result = with_store_mut(state, |store| {
-                    let Some(advisor) =
-                        store.advisors.iter_mut().find(|item| item.id == advisor_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "成员不存在" }));
-                    };
-                    advisor.knowledge_files.retain(|item| item != &file_name);
-                    advisor.updated_at = now_iso();
-                    Ok(json!({ "success": true }))
-                })?;
-                let path = advisor_knowledge_dir(state, &advisor_id)?.join(&file_name);
-                let _ = fs::remove_file(path);
-                let _ =
-                    publish_member_skill_if_enabled(state, &advisor_id, "advisor-knowledge-delete");
-                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
-                knowledge_index::jobs::schedule_rebuild(app, "advisor-knowledge-delete");
-                Ok(result)
-            }
+            "advisors:pick-knowledge-files"
+            | "advisors:pick-knowledge-folder"
+            | "advisors:upload-knowledge"
+            | "advisors:delete-knowledge" => handle_knowledge_channel(app, state, channel, payload)
+                .unwrap_or_else(|| Err("成员知识库动作未注册".to_string())),
             "advisors:promote-member-skill-candidate"
             | "members:enqueue-distillation"
             | "members:distill-skill"
