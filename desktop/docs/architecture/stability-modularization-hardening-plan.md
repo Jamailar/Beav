@@ -357,6 +357,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted RedClaw task-control draft definition construction, review-docket lifecycle, draft promotion and confirmed scheduled/long-cycle task materialization into `commands/redclaw_task_control/drafts`.
 - Extracted collaboration task-panel status mapping, review counts, RedClaw job projection and sorted panel item assembly into `commands/runtime_collab/task_panel`.
 - Extracted collaboration team-member wake scheduling, mailbox consumption, member session metadata, agent-turn execution and team action event fanout into `commands/runtime_collab/team_wake`.
+- Split collaboration team-member session metadata and wake prompt assembly into `commands/runtime_collab/team_prompt`, keeping `team_wake` focused on wake preparation, execution, completion and scheduling.
 - Extracted review-docket runtime approval construction, proposed action routing, CLI escalation decisions and RedClaw draft confirmations into `commands/runtime_collab/review_approval`.
 - Extracted confirmed team-guide session assembly, member/task payload construction, role-to-member assignment and collab event fanout into `commands/runtime_collab/team_guide`.
 - Extracted team tool descriptor exposure, team tool execution, MCP contract execution and agent backend listing into `commands/runtime_collab/team_tools`.
