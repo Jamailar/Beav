@@ -12,9 +12,8 @@ import { useI18n, type I18nKey } from '../i18n';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import { dispatchAppIntent } from '../features/app-shell/appIntent';
+import { useAppUpdateNotice } from '../features/app-shell/useAppUpdateNotice';
 import { uiMeasure } from '../utils/uiDebug';
-import { SHOW_CURRENT_RELEASE_NOTES_EVENT, currentReleaseNotesMarkdown } from '../utils/currentReleaseNotes';
-import { subscribeAppUpdateAvailable } from '../bridge/appEvents';
 
 interface LayoutProps {
   children: ReactNode;
@@ -55,16 +54,6 @@ interface WorkspaceSpace {
   name: string;
 }
 
-interface AppUpdateNoticePayload {
-  currentVersion: string;
-  latestVersion: string;
-  htmlUrl: string;
-  name: string;
-  publishedAt: string;
-  body: string;
-  mode?: 'update' | 'current';
-}
-
 type GlobalKnowledgeSearchItem = {
   itemId?: string;
   kind?: 'redbook-note' | 'youtube-video' | 'document-source' | string;
@@ -81,7 +70,6 @@ type GlobalKnowledgeSearchResponse = {
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
 const SIDEBAR_WIDTH_STORAGE_KEY = 'redbox:layout-sidebar-width:v1';
-const UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY = 'redbox:update-notice-shown-version:v1';
 const SIDEBAR_DEFAULT_WIDTH = 320;
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 460;
@@ -104,28 +92,6 @@ function subscribeToSystemThemeChange(listener: () => void): () => void {
   }
   mediaQuery.addListener(listener);
   return () => mediaQuery.removeListener(listener);
-}
-
-function shouldShowAppUpdateNotice(payload: AppUpdateNoticePayload): boolean {
-  if (payload.mode === 'current') return true;
-  const latestVersion = String(payload.latestVersion || '').trim();
-  if (!latestVersion || typeof window === 'undefined') return Boolean(latestVersion);
-  try {
-    return window.localStorage.getItem(UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY) !== latestVersion;
-  } catch {
-    return true;
-  }
-}
-
-function markAppUpdateNoticeShown(payload: AppUpdateNoticePayload): void {
-  if (payload.mode === 'current') return;
-  const latestVersion = String(payload.latestVersion || '').trim();
-  if (!latestVersion || typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY, latestVersion);
-  } catch {
-    // Ignore storage failures; update checks should never break the shell.
-  }
 }
 
 function readInitialSidebarCollapsed(): boolean {
@@ -335,8 +301,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [spaceDialogTargetId, setSpaceDialogTargetId] = useState<string | null>(null);
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
   const [deletingSpaceId, setDeletingSpaceId] = useState<string | null>(null);
-  const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
-  const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
   const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
   const [isGlobalSearchClosing, setIsGlobalSearchClosing] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
@@ -363,6 +327,13 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
+  const {
+    updateNotice,
+    updatePublishedDateLabel,
+    isOpeningReleasePage,
+    openReleasePage,
+    closeUpdateNotice,
+  } = useAppUpdateNotice(t('layout.openDownloadFailed'));
   const isGlobalSearchVisible = isGlobalSearchOpen || isGlobalSearchClosing;
   const activeSpaceName = useMemo(
     () => spaces.find((space) => space.id === activeSpaceId)?.name || t('layout.defaultSpaceName'),
@@ -553,81 +524,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       window.clearTimeout(globalSearchAnimationTimerRef.current);
     }
   }, []);
-
-  useEffect(() => {
-    const handleUpdateNotice = (_event: unknown, payload: AppUpdateNoticePayload) => {
-      if (!payload || !payload.latestVersion) return;
-      if (!shouldShowAppUpdateNotice(payload)) return;
-      markAppUpdateNoticeShown(payload);
-      setUpdateNotice(payload);
-    };
-    const handleCurrentReleaseNotes = (event: Event) => {
-      const detail = event instanceof CustomEvent
-        ? event.detail as { version?: unknown } | null
-        : null;
-      const version = String(detail?.version || '').trim() || '2.0.0';
-      setUpdateNotice({
-        currentVersion: version,
-        latestVersion: version,
-        htmlUrl: '',
-        name: `RedBox v${version}`,
-        publishedAt: '2026-05-14',
-        body: currentReleaseNotesMarkdown(),
-        mode: 'current',
-      });
-    };
-    const updateCheckTimer = window.setTimeout(() => {
-      void window.ipcRenderer.checkAppUpdate(false).then((result) => {
-        if (result?.hasUpdate && result.notice) {
-          if (!shouldShowAppUpdateNotice(result.notice)) return;
-          markAppUpdateNoticeShown(result.notice);
-          setUpdateNotice(result.notice);
-        }
-      }).catch((error) => {
-        console.warn('[AppUpdate] check failed:', error);
-      });
-    }, 1800);
-    const unsubscribeAppUpdateAvailable = subscribeAppUpdateAvailable(handleUpdateNotice);
-    window.addEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
-    return () => {
-      window.clearTimeout(updateCheckTimer);
-      unsubscribeAppUpdateAvailable();
-      window.removeEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!updateNotice) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setUpdateNotice(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [updateNotice]);
-
-  const updatePublishedDateLabel = useMemo(() => {
-    if (!updateNotice?.publishedAt) return '';
-    const ts = Date.parse(updateNotice.publishedAt);
-    if (!Number.isFinite(ts)) return '';
-    return new Date(ts).toLocaleDateString();
-  }, [updateNotice?.publishedAt]);
-  const openReleasePage = useCallback(async () => {
-    if (!updateNotice?.htmlUrl || isOpeningReleasePage) return;
-    setIsOpeningReleasePage(true);
-    try {
-      const result = await window.ipcRenderer.openAppReleasePage(updateNotice.htmlUrl);
-      if (!result?.success) {
-        void appAlert(result?.error || t('layout.openDownloadFailed'));
-      }
-    } catch (error) {
-      console.error('Failed to open release page:', error);
-      void appAlert(t('layout.openDownloadFailed'));
-    } finally {
-      setIsOpeningReleasePage(false);
-    }
-  }, [isOpeningReleasePage, updateNotice?.htmlUrl]);
 
   const handleSwitchSpace = useCallback(async (nextSpaceId: string) => {
     if (!nextSpaceId) return;
@@ -1306,7 +1202,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       {updateNotice && (
         <div
           className="fixed inset-0 z-[140] bg-black/45 flex items-center justify-center px-6 py-6"
-          onMouseDown={() => setUpdateNotice(null)}
+          onMouseDown={closeUpdateNotice}
         >
           <div
             className="w-full max-w-5xl max-h-[86vh] bg-surface-primary border border-border rounded-3xl shadow-2xl flex flex-col"
@@ -1316,7 +1212,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
               <h2 className="text-2xl font-semibold text-text-primary">{t('layout.softwareUpdate')}</h2>
               <button
                 type="button"
-                onClick={() => setUpdateNotice(null)}
+                onClick={closeUpdateNotice}
                 className="h-9 w-9 rounded-lg border border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center"
                 title={t('layout.close')}
               >
