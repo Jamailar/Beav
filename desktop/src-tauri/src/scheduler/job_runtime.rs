@@ -12,7 +12,7 @@ use crate::scheduler::heartbeat::start_execution_heartbeat;
 use crate::scheduler::lease::lease_execution;
 use crate::scheduler::retry::{retry_delay_ms, should_dead_letter, DEFAULT_HEARTBEAT_TIMEOUT_MS};
 use crate::store::redclaw as redclaw_store;
-use crate::{make_id, now_i64, now_iso, redclaw_state_value, AppState, AppStore};
+use crate::{make_id, now_i64, now_iso, AppState, AppStore};
 
 use super::{
     clear_definition_cooldown, next_long_cycle_timestamp, next_scheduled_timestamp,
@@ -774,10 +774,7 @@ fn redclaw_task_kind(prepared: &PreparedJobExecution) -> &str {
 
 pub fn emit_scheduler_snapshot(app: &AppHandle, state: &State<'_, AppState>) {
     if let Ok(store) = state.store.lock() {
-        let _ = app.emit(
-            "redclaw:runner-status",
-            redclaw_state_value(&store.redclaw_state),
-        );
+        let _ = app.emit("redclaw:runner-status", redclaw_store::state_value(&store));
     }
 }
 
