@@ -8,6 +8,7 @@ use tauri::State;
 
 use crate::json_util::{json_string, read_json_value, write_json_pretty};
 use crate::persistence::with_store;
+use crate::store::spaces as spaces_store;
 use crate::{now_iso, storage_safe_file_stem, workspace_root, AppState};
 
 const ACCOUNT_SCHEMA_VERSION: i64 = 1;
@@ -1181,18 +1182,12 @@ fn account_root(
 }
 
 fn active_space_id(state: &State<'_, AppState>) -> Result<String, String> {
-    crate::with_store(state, |store| Ok(store.active_space_id.clone()))
+    crate::with_store(state, |store| Ok(spaces_store::active_space_id(&store)))
 }
 
 fn active_workspace_value(state: &State<'_, AppState>) -> Result<Value, String> {
     crate::with_store(state, |store| {
-        let id = store.active_space_id.clone();
-        let name = store
-            .spaces
-            .iter()
-            .find(|space| space.id == id)
-            .map(|space| space.name.clone())
-            .unwrap_or_else(|| id.clone());
+        let (id, name) = spaces_store::active_workspace_snapshot(&store);
         Ok(json!({ "id": id, "name": name }))
     })
 }
