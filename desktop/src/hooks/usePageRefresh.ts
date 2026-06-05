@@ -166,13 +166,13 @@ export function usePageRefresh({
             document.addEventListener('visibilitychange', handleVisibilityChange);
         }
         if (triggerOnSpaceChange) {
-            window.ipcRenderer.on('space:changed', handleSpaceChanged);
+            window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
         }
         if (triggerOnSettingsChange) {
-            window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+            window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
         }
         if (dataScopesRef.current.length > 0) {
-            window.ipcRenderer.on('data:changed', handleDataChanged);
+            window.ipcRenderer.onDataChanged(handleDataChanged);
         }
 
         return () => {
@@ -183,13 +183,13 @@ export function usePageRefresh({
                 document.removeEventListener('visibilitychange', handleVisibilityChange);
             }
             if (triggerOnSpaceChange) {
-                window.ipcRenderer.off('space:changed', handleSpaceChanged);
+                window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
             }
             if (triggerOnSettingsChange) {
-                window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+                window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
             }
             if (dataScopesRef.current.length > 0) {
-                window.ipcRenderer.off('data:changed', handleDataChanged);
+                window.ipcRenderer.offDataChanged(handleDataChanged);
             }
         };
     }, [
