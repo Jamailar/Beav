@@ -11,6 +11,7 @@ import { useOfficialAuthState } from './hooks/useOfficialAuthState';
 import { NotificationsHost } from './notifications/NotificationsHost';
 import { useI18n } from './i18n';
 import { OfficialLoginGate } from './features/app-shell/OfficialLoginGate';
+import { AppSubjectsModal } from './features/app-shell/AppSubjectsModal';
 import { StartupMigrationGate } from './features/app-shell/StartupMigrationGate';
 import { useExecutionPersistence } from './features/app-shell/useExecutionPersistence';
 import { useFeedbackReportDialog } from './features/app-shell/useFeedbackReportDialog';
@@ -390,27 +391,15 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
       </Layout>
       <ClipboardCapturePrompt />
       {subjectsModalOpen && (
-        <div
-          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/35 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="资产库"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              closeSubjectsModal();
-            }
-          }}
-        >
-          <div className="h-[min(860px,calc(100vh-48px))] w-[min(1180px,calc(100vw-40px))] overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <Suspense fallback={<ViewLoadingFallback />}>
-              <SubjectsPage
-                isActive={subjectsModalOpen}
-                variant="modal"
-                onClose={closeSubjectsModal}
-              />
-            </Suspense>
-          </div>
-        </div>
+        <AppSubjectsModal close={closeSubjectsModal}>
+          <Suspense fallback={<ViewLoadingFallback />}>
+            <SubjectsPage
+              isActive={subjectsModalOpen}
+              variant="modal"
+              onClose={closeSubjectsModal}
+            />
+          </Suspense>
+        </AppSubjectsModal>
       )}
       <FeedbackReportDialog
         open={feedbackReportOpen}
