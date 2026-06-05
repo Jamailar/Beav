@@ -42,6 +42,7 @@ use call_records::{
 };
 #[cfg(test)]
 use call_records::{normalize_official_call_records_value, OFFICIAL_CALL_RECORDS_PAGE_SIZE};
+use models::{fetch_official_models_with_recovery, seed_official_models_from_cache};
 #[cfg(test)]
 use points::normalize_official_points_payload;
 use points::{
@@ -535,41 +536,6 @@ fn run_authenticated_official_request_skip_preflight_refresh(
         false,
         expected_generation,
     )
-}
-
-fn fetch_official_models_with_recovery(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: &mut Value,
-    expected_generation: Option<u64>,
-) -> Vec<Value> {
-    match run_authenticated_official_request(
-        app,
-        state,
-        settings,
-        "GET",
-        "/models",
-        None,
-        expected_generation,
-    ) {
-        Ok(remote) => {
-            let items = official_response_items(&remote);
-            if items.is_empty() {
-                official_settings_models(settings)
-            } else {
-                items
-            }
-        }
-        Err(_) => official_settings_models(settings),
-    }
-}
-
-fn seed_official_models_from_cache(settings: &mut Value) {
-    let models = official_settings_models(settings);
-    write_settings_json_array(settings, "redbox_official_models_json", &models);
-    if !models.is_empty() {
-        official_sync_source_into_settings(settings, &models, false);
-    }
 }
 
 fn update_official_session_user(settings: &mut Value, user: &Value) {
