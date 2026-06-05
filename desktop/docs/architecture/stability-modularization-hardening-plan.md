@@ -251,6 +251,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed remaining CLI runtime, debug logging, diagnostics consent and legacy-import test settings access through `store::settings`.
 - Routed remaining library and manuscript timeline media asset lookup/update paths through `store::media`.
 - Routed remaining media follow-up, RedClaw orchestration, session bridge and App CLI MCP task/tool access through store helpers.
+- Tightened the domain-store boundary guard for settings, spaces, media assets, work items, runtime tasks, assistant state and MCP/tool state.
 
 ### 1. Bridge Contract Layer
 
