@@ -81,21 +81,12 @@ pub fn ensure_redclaw_runtime_running(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<bool, String> {
-    let (should_run, should_recover_tick) = with_store(state, |store| {
-        let has_tasks = !store.redclaw_state.scheduled_tasks.is_empty()
-            || !store.redclaw_state.long_cycle_tasks.is_empty();
-        let should_run = store.redclaw_state.enabled
-            && (store.redclaw_state.is_ticking || (!store.redclaw_state.is_ticking && has_tasks));
-        let should_recover_tick =
-            store.redclaw_state.enabled && !store.redclaw_state.is_ticking && has_tasks;
-        Ok((should_run, should_recover_tick))
-    })?;
+    let (should_run, should_recover_tick) =
+        with_store(state, |store| Ok(redclaw_store::runtime_start_decision(&store)))?;
 
     if should_recover_tick {
         let _ = with_store_mut(state, |store| {
-            if store.redclaw_state.enabled && !store.redclaw_state.is_ticking {
-                store.redclaw_state.is_ticking = true;
-            }
+            redclaw_store::recover_ticking_if_needed(store);
             Ok(())
         });
     }

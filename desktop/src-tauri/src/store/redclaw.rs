@@ -11,6 +11,22 @@ pub(crate) fn state_value(store: &AppStore) -> Value {
     redclaw_state_value(&store.redclaw_state)
 }
 
+pub(crate) fn runtime_start_decision(store: &AppStore) -> (bool, bool) {
+    let has_tasks = !store.redclaw_state.scheduled_tasks.is_empty()
+        || !store.redclaw_state.long_cycle_tasks.is_empty();
+    let should_run = store.redclaw_state.enabled
+        && (store.redclaw_state.is_ticking || (!store.redclaw_state.is_ticking && has_tasks));
+    let should_recover_tick =
+        store.redclaw_state.enabled && !store.redclaw_state.is_ticking && has_tasks;
+    (should_run, should_recover_tick)
+}
+
+pub(crate) fn recover_ticking_if_needed(store: &mut AppStore) {
+    if store.redclaw_state.enabled && !store.redclaw_state.is_ticking {
+        store.redclaw_state.is_ticking = true;
+    }
+}
+
 pub(crate) fn list_projects_sorted(store: &AppStore) -> Vec<RedclawProjectRecord> {
     let mut projects = store.redclaw_state.projects.clone();
     projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
