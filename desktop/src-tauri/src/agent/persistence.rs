@@ -12,7 +12,7 @@ use crate::runtime::{
     append_session_checkpoint, chat_messages_for_session, load_session_bundle_messages,
     save_session_bundle_messages, update_session_context_record,
 };
-use crate::store::redclaw as redclaw_store;
+use crate::store::{redclaw as redclaw_store, settings as settings_store};
 use crate::{
     append_session_transcript, make_id, next_memory_maintenance_at_ms, now_i64, now_iso,
     resolve_runtime_mode_from_context_type, session_title_from_message, value_to_i64_string,
@@ -399,16 +399,19 @@ pub fn update_post_exchange_maintenance(
     let next_scheduled_at = next_memory_maintenance_at_ms(response, now_i64());
     let workspace_status = memory_maintenance_status_from_workspace(state)?;
     let current = with_store(state, |store| {
+        let settings = settings_store::settings_snapshot(&store);
         Ok(workspace_status
-            .or_else(|| memory_maintenance_status_from_settings(&store.settings))
+            .or_else(|| memory_maintenance_status_from_settings(&settings))
             .unwrap_or_else(default_memory_maintenance_status))
     })?;
     let status = build_post_exchange_maintenance_status(&current, next_scheduled_at);
     write_memory_maintenance_status_for_workspace(state, &status)?;
     with_store_mut(state, |store| {
-        if let Some(object) = store.settings.as_object_mut() {
-            object.remove("redbox_memory_maintenance_status_json");
-        }
+        settings_store::update_settings(store, |settings| {
+            if let Some(object) = settings.as_object_mut() {
+                object.remove("redbox_memory_maintenance_status_json");
+            }
+        });
         redclaw_store::set_next_maintenance_at(
             store,
             value_to_i64_string(status.get("nextScheduledAt")),
