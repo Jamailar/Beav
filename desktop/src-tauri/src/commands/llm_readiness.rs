@@ -223,7 +223,7 @@ fn configure_custom_source(
         &mut settings,
     )?;
     with_store_mut(state, |store| {
-        store.settings = settings.clone();
+        settings_store::replace_settings(store, settings);
         Ok(())
     })?;
     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
