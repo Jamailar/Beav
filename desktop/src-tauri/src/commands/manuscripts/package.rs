@@ -1,6 +1,10 @@
 use super::*;
 use crate::store::{media as media_store, settings as settings_store};
 
+use super::subtitles::{
+    build_fallback_srt_segments, parse_srt_segments, serialize_srt_segments, SrtSegment,
+};
+
 pub(super) fn handle_package_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
