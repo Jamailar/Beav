@@ -425,7 +425,7 @@ fn derived_background_tasks_internal(store: &AppStore, include_turns: bool) -> V
         }));
     }
 
-    for execution in &store.redclaw_job_executions {
+    for execution in &executions {
         if execution.archived_at.is_some() {
             continue;
         }
@@ -436,8 +436,7 @@ fn derived_background_tasks_internal(store: &AppStore, include_turns: bool) -> V
         {
             continue;
         }
-        if store
-            .redclaw_job_definitions
+        if definitions
             .iter()
             .any(|item| item.id == execution.definition_id)
         {
