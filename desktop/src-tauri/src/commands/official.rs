@@ -37,10 +37,11 @@ use api_keys::has_official_plaintext_api_key_record;
 #[cfg(test)]
 use call_records::value_as_f64;
 use call_records::{
-    normalize_official_call_record_items, normalize_official_call_records_value,
+    fetch_remote_official_call_records, normalize_official_call_record_items,
     official_response_is_unauthorized, payload_f64, payload_i64, response_error_message,
-    OFFICIAL_CALL_RECORDS_PAGE_SIZE,
 };
+#[cfg(test)]
+use call_records::{normalize_official_call_records_value, OFFICIAL_CALL_RECORDS_PAGE_SIZE};
 #[cfg(test)]
 use points::normalize_official_points_payload;
 use points::{
@@ -569,28 +570,6 @@ fn seed_official_models_from_cache(settings: &mut Value) {
     if !models.is_empty() {
         official_sync_source_into_settings(settings, &models, false);
     }
-}
-
-fn fetch_remote_official_call_records(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: &mut Value,
-    expected_generation: Option<u64>,
-) -> Result<Vec<Value>, String> {
-    let response = run_authenticated_official_request(
-        app,
-        state,
-        settings,
-        "GET",
-        &format!("/users/me/ai-usage-logs?limit={OFFICIAL_CALL_RECORDS_PAGE_SIZE}&page=1"),
-        None,
-        expected_generation,
-    )?;
-    let items = normalize_official_call_records_value(&response);
-    if items.is_empty() {
-        return Err("官方调用记录接口返回了无法识别的数据结构".to_string());
-    }
-    Ok(items)
 }
 
 fn update_official_session_user(settings: &mut Value, user: &Value) {
