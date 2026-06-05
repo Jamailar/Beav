@@ -3,110 +3,18 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use tauri::State;
 
+#[path = "preview_types.rs"]
+mod preview_types;
+
 use crate::{
     cover_root, is_manuscript_package_path, media_root, package_entry_path, package_manifest_path,
     resolve_manuscript_path, strip_markdown_frontmatter, workspace_root, AppState,
 };
+use preview_types::{
+    extension_for_path, file_name_for_path, mime_type_for_extension, preview_kind_for_extension,
+};
 
 const PREVIEW_TEXT_MAX_BYTES: u64 = 512 * 1024;
-
-fn extension_for_path(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-}
-
-fn file_name_for_path(path: &Path) -> Option<String> {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .map(ToString::to_string)
-}
-
-fn preview_kind_for_extension(extension: Option<&str>, is_local: bool) -> &'static str {
-    let Some(extension) = extension else {
-        return if is_local { "unknown" } else { "web" };
-    };
-    match extension {
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg" | "avif" | "ico" | "tif"
-        | "tiff" => "image",
-        "mp4" | "webm" | "mov" | "m4v" | "mkv" | "avi" | "ogv" => "video",
-        "mp3" | "wav" | "m4a" | "flac" | "aac" | "ogg" | "oga" | "opus" => "audio",
-        "pdf" => "pdf",
-        "doc" | "docx" | "odt" | "ppt" | "pptx" | "odp" | "xls" | "xlsx" | "ods" => "document",
-        "html" | "htm" => "html",
-        "md" | "markdown" | "txt" | "srt" | "vtt" | "diff" | "patch" | "json" | "csv" | "tsv"
-        | "yaml" | "yml" | "toml" | "ini" | "conf" | "config" | "env" | "xml" | "log" | "sql"
-        | "sh" | "bash" | "zsh" | "fish" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "rs"
-        | "py" | "go" | "java" | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "hh" | "hxx"
-        | "css" | "scss" | "sass" | "less" | "vue" | "svelte" | "astro" | "rb" | "php"
-        | "swift" | "kt" | "kts" | "scala" | "r" | "lua" | "pl" | "pm" | "dart" | "dockerfile"
-        | "lock" => "text",
-        "zip" | "rar" | "7z" | "tar" | "gz" | "tgz" => "archive",
-        _ => {
-            if is_local {
-                "unknown"
-            } else {
-                "web"
-            }
-        }
-    }
-}
-
-fn mime_type_for_extension(extension: Option<&str>) -> Option<&'static str> {
-    let extension = extension?;
-    Some(match extension {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        "avif" => "image/avif",
-        "ico" => "image/x-icon",
-        "tif" | "tiff" => "image/tiff",
-        "mp4" | "m4v" => "video/mp4",
-        "webm" => "video/webm",
-        "mov" => "video/quicktime",
-        "ogv" => "video/ogg",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "m4a" => "audio/mp4",
-        "flac" => "audio/flac",
-        "aac" => "audio/aac",
-        "ogg" => "audio/ogg",
-        "oga" => "audio/ogg",
-        "opus" => "audio/opus",
-        "pdf" => "application/pdf",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "odt" => "application/vnd.oasis.opendocument.text",
-        "ppt" => "application/vnd.ms-powerpoint",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "odp" => "application/vnd.oasis.opendocument.presentation",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
-        "html" | "htm" => "text/html",
-        "md" | "markdown" => "text/markdown",
-        "txt" | "log" | "srt" | "diff" | "patch" | "toml" | "ini" | "conf" | "config" | "env"
-        | "sql" | "sh" | "bash" | "zsh" | "fish" | "lock" => "text/plain",
-        "vtt" => "text/vtt",
-        "json" => "application/json",
-        "csv" => "text/csv",
-        "tsv" => "text/tab-separated-values",
-        "yaml" | "yml" => "application/yaml",
-        "xml" => "application/xml",
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "rs" | "py" | "go" | "java" | "c" | "cpp"
-        | "cc" | "cxx" | "h" | "hpp" | "hh" | "hxx" | "css" | "scss" | "sass" | "less" | "vue"
-        | "svelte" | "astro" | "rb" | "php" | "swift" | "kt" | "kts" | "scala" | "r" | "lua"
-        | "pl" | "pm" | "dart" | "dockerfile" => "text/plain",
-        "zip" => "application/zip",
-        "gz" | "tgz" => "application/gzip",
-        "tar" => "application/x-tar",
-        _ => return None,
-    })
-}
 
 fn read_preview_text(path: &Path, kind: &str) -> Option<String> {
     if kind != "text" && kind != "html" && kind != "manuscript" {
@@ -346,10 +254,7 @@ pub(crate) fn resolve_preview_target(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        mime_type_for_extension, preview_kind_for_extension, read_preview_text,
-        resolve_package_preview_entry, safe_virtual_relative_path,
-    };
+    use super::{read_preview_text, resolve_package_preview_entry, safe_virtual_relative_path};
     use std::fs;
     use std::path::PathBuf;
 
@@ -372,19 +277,6 @@ mod tests {
         assert_eq!(safe_virtual_relative_path("../secret.md"), None);
         assert_eq!(safe_virtual_relative_path("C:/secret.md"), None);
         assert_eq!(safe_virtual_relative_path("//server/share/secret.md"), None);
-    }
-
-    #[test]
-    fn preview_kind_covers_common_document_and_media_extensions() {
-        assert_eq!(preview_kind_for_extension(Some("docx"), true), "document");
-        assert_eq!(preview_kind_for_extension(Some("pptx"), true), "document");
-        assert_eq!(preview_kind_for_extension(Some("xlsx"), true), "document");
-        assert_eq!(preview_kind_for_extension(Some("diff"), true), "text");
-        assert_eq!(preview_kind_for_extension(Some("tiff"), true), "image");
-        assert_eq!(
-            mime_type_for_extension(Some("docx")),
-            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        );
     }
 
     #[test]
