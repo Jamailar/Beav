@@ -229,6 +229,33 @@ pub(crate) fn update_project_section_draft(
     Ok(project.clone())
 }
 
+pub(crate) fn update_learning_candidate_status(
+    store: &mut AppStore,
+    project_id: &str,
+    candidate_id: &str,
+    status: &str,
+    updated_at: &str,
+) -> Result<(RedclawProjectRecord, Value), String> {
+    let project = store
+        .redclaw_state
+        .projects
+        .iter_mut()
+        .find(|item| item.id == project_id)
+        .ok_or_else(|| "RedClaw project not found".to_string())?;
+    let candidate = project
+        .learning_candidates
+        .iter_mut()
+        .find(|item| item.get("id").and_then(Value::as_str).map(str::trim) == Some(candidate_id))
+        .ok_or_else(|| "learning candidate not found".to_string())?;
+    if let Some(object) = candidate.as_object_mut() {
+        object.insert("status".to_string(), json!(status));
+        object.insert("updatedAt".to_string(), json!(updated_at));
+    }
+    let candidate_snapshot = candidate.clone();
+    project.updated_at = updated_at.to_string();
+    Ok((project.clone(), candidate_snapshot))
+}
+
 pub(crate) fn list_scheduled_tasks(store: &AppStore) -> Vec<RedclawScheduledTaskRecord> {
     store.redclaw_state.scheduled_tasks.clone()
 }
