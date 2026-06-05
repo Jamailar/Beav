@@ -2,6 +2,7 @@ import { createAccountsBridge } from './domains/accountsBridge';
 import { createAdvisorsBridge } from './domains/advisorsBridge';
 import { createAiConfigBridge } from './domains/aiConfigBridge';
 import { createArchivesBridge } from './domains/archivesBridge';
+import { createAssistantControlBridge } from './domains/assistantControlBridge';
 import { createAudioVoiceBridge } from './domains/audioVoiceBridge';
 import { createAuthBridge } from './domains/authBridge';
 import { createBridgeCore } from './core';
@@ -77,20 +78,7 @@ function createIpcRenderer() {
     ...createAiConfigBridge(core),
     ...createGenerationBridge(core),
     ...createRedClawBridge(core),
-    assistantDaemon: {
-      getStatus: () => invokeChannel('assistant:daemon-status'),
-      start: (payload?: Record<string, unknown>) => invokeChannel('assistant:daemon-start', payload || {}),
-      stop: () => invokeChannel('assistant:daemon-stop'),
-      setConfig: (payload?: Record<string, unknown>) => invokeChannel('assistant:daemon-set-config', payload || {}),
-      startWeixinLogin: (payload?: Record<string, unknown>) => invokeChannel('assistant:daemon-weixin-login-start', payload || {}),
-      waitForWeixinLogin: (payload?: Record<string, unknown>) => invokeChannel('assistant:daemon-weixin-login-wait', payload || {})
-    },
-    wechatOfficial: {
-      getStatus: () => invokeChannel('wechat-official:get-status'),
-      bind: (payload: Record<string, unknown>) => invokeChannel('wechat-official:bind', payload),
-      unbind: (payload?: Record<string, unknown>) => invokeChannel('wechat-official:unbind', payload || {}),
-      createDraft: (payload: Record<string, unknown>) => invokeChannel('wechat-official:create-draft', payload)
-    },
+    ...createAssistantControlBridge(core),
     listSkills: () => invokeChannel('skills:list'),
     ...createCoverBridge(core),
   };
