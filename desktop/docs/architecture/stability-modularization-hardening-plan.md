@@ -327,6 +327,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted advisor persona generation research, evidence rendering, web-search summarization, final prompt synthesis and persona metrics into `commands/advisor_ops/persona`.
 - Extracted advisor create, update and delete channel handling, member-skill refresh hooks and advisor-change event emission into `commands/advisor_ops/crud`.
 - Extracted advisor YouTube runner status, channel probing, subtitle batch import, video list/download/retry and YouTube settings handling into `commands/advisor_ops/youtube`.
+- Consolidated advisor knowledge file picking, upload metrics, member-skill publication hooks, file deletion and knowledge-index rebuild scheduling inside `commands/advisor_ops/knowledge_files`.
 
 ### 1. Bridge Contract Layer
 
