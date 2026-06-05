@@ -9,6 +9,7 @@ import { createRedClawBridge } from './domains/redclawBridge';
 import { createRuntimeBridge } from './domains/runtimeBridge';
 import { createSkillsBridge } from './domains/skillsBridge';
 import { createSystemBridge } from './domains/systemBridge';
+import { createTeamRuntimeBridge } from './domains/teamRuntimeBridge';
 import { createWanderBridge } from './domains/wanderBridge';
 import type { InvokeGuardOptions, Listener } from './types';
 import { preflightInlineAttachmentPayload } from '../utils/mediaReferencePreflight';
@@ -110,6 +111,7 @@ function createIpcRenderer() {
 
     ...createSystemBridge(core),
     ...createRuntimeBridge(core),
+    ...createTeamRuntimeBridge(core),
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh'),
@@ -157,116 +159,6 @@ function createIpcRenderer() {
       createSession: (payload?: Record<string, unknown>) => invokeChannel('session-bridge:create-session', payload || {}),
       sendMessage: (payload: { sessionId: string; message: string }) => invokeChannel('session-bridge:send-message', payload),
       resolvePermission: (payload: { requestId: string; outcome: 'proceed_once' | 'proceed_always' | 'cancel' }) => invokeChannel('session-bridge:resolve-permission', payload)
-    },
-    teamRuntime: {
-      listSessions: () => invokeChannel('team-runtime:list-sessions'),
-      createSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-session', payload),
-      getSession: (payload: { sessionId: string; mailboxLimit?: number; reportLimit?: number }) =>
-        invokeChannel('team-runtime:get-session', payload),
-      listMembers: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-members', payload),
-      addMember: (payload: Record<string, unknown>) => invokeChannel('team-runtime:add-member', payload),
-      setSessionCoordinator: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:set-session-coordinator', payload),
-      matchMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.member.match', payload }),
-      renameMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:rename-member', payload),
-      shutdownMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:shutdown-member', payload),
-      listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
-      createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
-      updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
-      claimTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:claim-task', payload),
-      startTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:start-task', payload),
-      waitReviewTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:wait-review-task', payload),
-      completeTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:complete-task', payload),
-      failTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:fail-task', payload),
-      cancelTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:cancel-task', payload),
-      pinTaskSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:pin-task-session', payload),
-      retryTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:retry-task', payload),
-      listReviewDockets: (payload: Record<string, unknown> = {}) => invokeChannel('review:dockets:list', payload),
-      getReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:get', payload),
-      reviewDocketStats: () => invokeChannel('review:dockets:stats', {}),
-      createReviewDocket: (payload: Record<string, unknown>) => invokeChannel('review:dockets:create', payload),
-      decideReviewDocket: (payload: Record<string, unknown>) => invokeChannel('review:dockets:decide', payload),
-      skipReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:skip', payload),
-      archiveReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:archive', payload),
-      listMessages: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-messages', payload),
-      readMailbox: (payload: Record<string, unknown>) => invokeChannel('team-runtime:read-mailbox', payload),
-      sendMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
-      postMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
-      listReports: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-reports', payload),
-      requestReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:request-report', payload),
-      submitReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:submit-report', payload),
-      attachArtifact: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.artifact.attach', payload }),
-      raiseBlocker: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.blocker.raise', payload }),
-      pauseSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:pause-session', payload),
-      resumeSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:resume-session', payload),
-      archiveSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:archive-session', payload),
-      tickReports: (payload: { sessionId: string }) => invokeChannel('team-runtime:tick-reports', payload),
-      listAgentBackends: () => invokeChannel('team-runtime:list-agent-backends'),
-      listTools: () => invokeChannel('team-runtime:list-tools'),
-      executeTool: (payload: { action: string; payload?: Record<string, unknown> }) =>
-        invokeChannel('team-runtime:execute-tool', payload),
-      onEvent: (listener: Listener) => on('runtime:event', listener),
-      offEvent: (listener: Listener) => off('runtime:event', listener)
-    },
-    collab: {
-      listSessions: () => invokeChannel('team-runtime:list-sessions'),
-      createSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-session', payload),
-      getSession: (payload: { sessionId: string; mailboxLimit?: number; reportLimit?: number }) =>
-        invokeChannel('team-runtime:get-session', payload),
-      listMembers: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-members', payload),
-      addMember: (payload: Record<string, unknown>) => invokeChannel('team-runtime:add-member', payload),
-      setSessionCoordinator: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:set-session-coordinator', payload),
-      matchMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.member.match', payload }),
-      renameMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:rename-member', payload),
-      shutdownMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:shutdown-member', payload),
-      listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
-      createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
-      updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
-      claimTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:claim-task', payload),
-      startTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:start-task', payload),
-      waitReviewTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:wait-review-task', payload),
-      completeTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:complete-task', payload),
-      failTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:fail-task', payload),
-      cancelTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:cancel-task', payload),
-      pinTaskSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:pin-task-session', payload),
-      retryTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:retry-task', payload),
-      listReviewDockets: (payload: Record<string, unknown> = {}) => invokeChannel('review:dockets:list', payload),
-      getReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:get', payload),
-      reviewDocketStats: () => invokeChannel('review:dockets:stats', {}),
-      createReviewDocket: (payload: Record<string, unknown>) => invokeChannel('review:dockets:create', payload),
-      decideReviewDocket: (payload: Record<string, unknown>) => invokeChannel('review:dockets:decide', payload),
-      skipReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:skip', payload),
-      archiveReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:archive', payload),
-      listMessages: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-messages', payload),
-      readMailbox: (payload: Record<string, unknown>) => invokeChannel('team-runtime:read-mailbox', payload),
-      sendMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
-      postMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
-      listReports: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-reports', payload),
-      requestReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:request-report', payload),
-      submitReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:submit-report', payload),
-      attachArtifact: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.artifact.attach', payload }),
-      raiseBlocker: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.blocker.raise', payload }),
-      pauseSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:pause-session', payload),
-      resumeSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:resume-session', payload),
-      archiveSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:archive-session', payload),
-      tickReports: (payload: { sessionId: string }) => invokeChannel('team-runtime:tick-reports', payload),
-      listAgentBackends: () => invokeChannel('team-runtime:list-agent-backends'),
-      listTools: () => invokeChannel('team-runtime:list-tools'),
-      executeTool: (payload: { action: string; payload?: Record<string, unknown> }) =>
-        invokeChannel('team-runtime:execute-tool', payload),
-      onEvent: (listener: Listener) => on('runtime:event', listener),
-      offEvent: (listener: Listener) => off('runtime:event', listener)
     },
     cliRuntime: {
       detect: (payload?: { commands?: string[] }) => invokeChannel('cli-runtime:detect', payload || {}),
