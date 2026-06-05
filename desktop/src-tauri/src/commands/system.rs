@@ -1,17 +1,17 @@
 mod ai_model_ops;
 mod app_actions;
 mod app_update;
+mod clipboard_ops;
 mod feedback;
 mod logging_ops;
 mod renderer_log;
 mod settings_ops;
 
 use app_update::check_app_update;
-use arboard::Clipboard;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-use crate::{payload_field, payload_string, AppState};
+use crate::{payload_field, AppState};
 
 pub fn handle_system_channel(
     app: &AppHandle,
@@ -80,18 +80,8 @@ pub fn handle_system_channel(
                 "logs:dismiss-report" => logging_ops::dismiss_report(payload),
                 "logs:set-upload-consent" => logging_ops::set_upload_consent(state, payload),
                 "logs:append-renderer" => renderer_log::append_renderer_log(payload),
-                "clipboard:read-text" => Ok(json!(Clipboard::new()
-                    .and_then(|mut clipboard| clipboard.get_text())
-                    .unwrap_or_default())),
-                "clipboard:write-html" => {
-                    let text = payload_string(payload, "text")
-                        .or_else(|| payload_string(payload, "html"))
-                        .unwrap_or_default();
-                    Clipboard::new()
-                        .and_then(|mut clipboard| clipboard.set_text(text.clone()))
-                        .map_err(|error| error.to_string())?;
-                    Ok(json!({ "success": true, "text": text }))
-                }
+                "clipboard:read-text" => clipboard_ops::read_text(),
+                "clipboard:write-html" => clipboard_ops::write_html(payload),
                 _ => unreachable!("channel prefiltered"),
             }
         })(),
