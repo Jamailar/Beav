@@ -301,6 +301,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted authenticated official request preflight-refresh and retry handling into `commands/official/request`.
 - Extracted official auth refresh, AI-request reauth and refresh failure handling into `commands/official/auth_refresh`.
 - Extracted official settings update application, model-default repair, auth runtime sync and update event emission into `commands/official/settings_update`.
+- Extracted Thrive plugin manifest primitive validation for names, versions, capabilities, UI slots, home sources and network hosts into `commands/plugin/manifest_primitives`.
 
 ### 1. Bridge Contract Layer
 
