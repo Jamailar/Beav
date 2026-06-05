@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use url::Url;
 
+use crate::store::{settings as settings_store, spaces as spaces_store};
 use crate::{
     compatible_workspace_base_dir, configured_workspace_dir, copy_dir_recursive, file_url_for_path,
     hydrate_store_from_workspace_files, is_same_path, legacy_workspace_dir, now_iso, AppStore,
@@ -338,7 +339,8 @@ fn legacy_archive_samples_rows(db_path: &Path) -> Result<Vec<Value>, String> {
 
 #[allow(dead_code)]
 pub(crate) fn legacy_workspace_dir_from_store(store: &AppStore, db_path: &Path) -> Option<PathBuf> {
-    let direct = configured_workspace_dir(&store.settings);
+    let settings = settings_store::settings_snapshot(store);
+    let direct = configured_workspace_dir(&settings);
     if direct.as_ref().is_some_and(|path| path.exists()) {
         return direct;
     }
@@ -587,7 +589,8 @@ pub(crate) fn ensure_preferred_workspace_dir(
     store: &mut AppStore,
     _store_path: &Path,
 ) -> Result<PathBuf, String> {
-    let chosen = compatible_workspace_base_dir(&store.settings);
+    let settings = settings_store::settings_snapshot(store);
+    let chosen = compatible_workspace_base_dir(&settings);
     if !is_same_path(
         &chosen,
         &legacy_workspace_dir().unwrap_or_else(|| PathBuf::from("__redbox_missing_legacy__")),
@@ -598,14 +601,15 @@ pub(crate) fn ensure_preferred_workspace_dir(
         fs::create_dir_all(&chosen).map_err(|error| error.to_string())?;
     }
 
-    let settings_obj = store
-        .settings
+    let mut next_settings = settings_store::settings_snapshot(store);
+    let settings_obj = next_settings
         .as_object_mut()
         .ok_or_else(|| "settings should be a JSON object".to_string())?;
     settings_obj.insert(
         "workspace_dir".to_string(),
         json!(chosen.display().to_string()),
     );
+    settings_store::replace_settings(store, next_settings);
     Ok(chosen)
 }
 
@@ -622,18 +626,24 @@ fn import_legacy_store_from_db(
     store_path: &Path,
     db_path: &Path,
 ) -> Result<(), String> {
-    if !store.settings.is_object() {
-        store.settings = json!({});
-    }
+    settings_store::update_settings(store, |settings| {
+        if !settings.is_object() {
+            *settings = json!({});
+        }
+    });
 
     let settings_rows = legacy_settings_rows(db_path)?;
     if let Some(first) = settings_rows.into_iter().next() {
-        if let (Some(current), Some(next)) = (store.settings.as_object_mut(), first.as_object()) {
-            for (key, value) in next {
-                current.insert(key.to_string(), value.clone());
-            }
+        if first.is_object() {
+            settings_store::update_settings(store, |settings| {
+                if let (Some(current), Some(next)) = (settings.as_object_mut(), first.as_object()) {
+                    for (key, value) in next {
+                        current.insert(key.to_string(), value.clone());
+                    }
+                }
+            });
         } else {
-            store.settings = first.clone();
+            settings_store::replace_settings(store, first.clone());
         }
         if let Some(active_space_id) = first
             .get("active_space_id")
@@ -641,12 +651,12 @@ fn import_legacy_store_from_db(
         {
             let trimmed = active_space_id.trim();
             if !trimmed.is_empty() {
-                store.active_space_id = trimmed.to_string();
+                spaces_store::set_active_space_id_unchecked(store, trimmed);
             }
         }
     }
 
-    if store.spaces.len() <= 1 {
+    if spaces_store::space_count(store) <= 1 {
         let rows = legacy_json_rows(
             db_path,
             "spaces",
@@ -709,7 +719,7 @@ fn import_legacy_store_from_db(
             });
         }
         if !imported_spaces.is_empty() {
-            store.spaces = imported_spaces;
+            spaces_store::replace_spaces(store, imported_spaces);
         }
     }
 
@@ -1501,16 +1511,7 @@ fn import_legacy_store_from_db(
         }
     }
 
-    if !store
-        .spaces
-        .iter()
-        .any(|space| space.id == store.active_space_id)
-    {
-        store.active_space_id = "default".to_string();
-    }
-    if store.active_space_id.trim().is_empty() {
-        store.active_space_id = "default".to_string();
-    }
+    spaces_store::normalize_active_space_id(store, "default");
 
     store.legacy_imported_at = Some(now_iso());
     store.legacy_import_source = Some(db_path.display().to_string());

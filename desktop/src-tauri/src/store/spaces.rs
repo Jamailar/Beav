@@ -8,6 +8,15 @@ pub(crate) fn active_space_id(store: &AppStore) -> String {
     store.active_space_id.clone()
 }
 
+pub(crate) fn set_active_space_id_unchecked(store: &mut AppStore, space_id: &str) -> String {
+    store.active_space_id = space_id.to_string();
+    active_space_id(store)
+}
+
+pub(crate) fn space_count(store: &AppStore) -> usize {
+    store.spaces.len()
+}
+
 pub(crate) fn space_exists(store: &AppStore, space_id: &str) -> bool {
     store.spaces.iter().any(|item| item.id == space_id)
 }
@@ -25,6 +34,18 @@ pub(crate) fn active_workspace_snapshot(store: &AppStore) -> (String, String) {
         .map(|space| space.name.clone())
         .unwrap_or_else(|| id.clone());
     (id, name)
+}
+
+pub(crate) fn replace_spaces(store: &mut AppStore, spaces: Vec<SpaceRecord>) {
+    store.spaces = spaces;
+}
+
+pub(crate) fn normalize_active_space_id(store: &mut AppStore, fallback_space_id: &str) -> String {
+    let current_space_id = active_space_id(store);
+    if current_space_id.trim().is_empty() || !space_exists(store, &current_space_id) {
+        store.active_space_id = fallback_space_id.to_string();
+    }
+    active_space_id(store)
 }
 
 pub(crate) fn rename_space(
