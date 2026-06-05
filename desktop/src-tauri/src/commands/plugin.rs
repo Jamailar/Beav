@@ -16,6 +16,7 @@ use crate::{
     skills::discover_skill_records_from_root,
     slug_from_relative_path,
     store::media as media_store,
+    store::subjects as subjects_store,
     store_root, workspace_root, write_json_value, AppState,
 };
 
@@ -1805,11 +1806,11 @@ fn plugin_data_source_value(
             Ok(json!({
                 "success": true,
                 "source": source,
-                "total": store.subjects.len(),
+                "total": subjects_store::list_subjects(&store).len(),
             }))
         }),
         "subjects.recent" | "subjects.list" => with_store(state, |store| {
-            let mut subjects = store.subjects.clone();
+            let mut subjects = subjects_store::list_subjects(&store);
             subjects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
             subjects.truncate(limit);
             Ok(json!({ "success": true, "source": source, "subjects": subjects }))
