@@ -1933,54 +1933,42 @@ fn render_redclaw_rough_cut(
     let output_size = std::fs::metadata(&output_path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
-    with_store_mut(state, |store| {
-        let project = store
-            .redclaw_state
-            .projects
-            .iter_mut()
-            .find(|item| item.id == project_id)
-            .ok_or_else(|| "RedClaw project not found".to_string())?;
-        let now = now_iso();
-        let render_record = json!({
-            "path": output_path.display().to_string(),
-            "packagePath": package_dir.display().to_string(),
-            "concatPath": concat_path.display().to_string(),
-            "inputCount": inputs.len(),
-            "sizeBytes": output_size,
-            "createdAt": now,
-            "renderer": "ffmpeg.concat.copy",
-        });
-        let mut metadata = project
-            .metadata
-            .clone()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let mut renders = metadata
-            .get("mediaPlanRenders")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        renders.push(render_record.clone());
-        metadata.insert("mediaPlanRenders".to_string(), Value::Array(renders));
-        project.artifacts.push(json!({
-            "artifactType": "redclaw-rough-cut",
-            "title": "RedClaw Rough Cut",
-            "path": output_path.display().to_string(),
-            "payload": render_record,
-            "createdAt": now,
-        }));
-        project.metadata = Some(Value::Object(metadata));
-        project.updated_at = now;
-        Ok(json!({
-            "success": true,
-            "project": project,
-            "path": output_path.display().to_string(),
-            "packagePath": package_dir.display().to_string(),
-            "inputCount": inputs.len(),
-            "sizeBytes": output_size,
-            "ffmpeg": ffmpeg,
-        }))
-    })
+    let now = now_iso();
+    let render_record = json!({
+        "path": output_path.display().to_string(),
+        "packagePath": package_dir.display().to_string(),
+        "concatPath": concat_path.display().to_string(),
+        "inputCount": inputs.len(),
+        "sizeBytes": output_size,
+        "createdAt": now,
+        "renderer": "ffmpeg.concat.copy",
+    });
+    let updated_project = with_store_mut(state, |store| {
+        redclaw_store::append_project_metadata_record_and_artifact(
+            store,
+            &project_id,
+            "mediaPlanRenders",
+            render_record.clone(),
+            json!({
+                "artifactType": "redclaw-rough-cut",
+                "title": "RedClaw Rough Cut",
+                "path": output_path.display().to_string(),
+                "payload": render_record,
+                "createdAt": now,
+            }),
+            &now,
+        )
+    })?;
+
+    Ok(json!({
+        "success": true,
+        "project": updated_project,
+        "path": output_path.display().to_string(),
+        "packagePath": package_dir.display().to_string(),
+        "inputCount": inputs.len(),
+        "sizeBytes": output_size,
+        "ffmpeg": ffmpeg,
+    }))
 }
 
 fn export_redclaw_publish_package(
