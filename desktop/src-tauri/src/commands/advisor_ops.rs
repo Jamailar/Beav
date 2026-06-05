@@ -1,9 +1,4 @@
-use crate::member_skill::{
-    compile_member_skill_package, discard_member_skill_candidate, evaluate_member_skill,
-    inspect_member_skill_versions, mark_member_skill_failed, member_feature_flag_enabled_for_store,
-    member_skill_result_value, promote_member_skill_candidate, publish_member_skill_for_advisor,
-    remove_member_skill_package, rollback_member_skill_version,
-};
+use crate::member_skill::remove_member_skill_package;
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
 use crate::store::settings as settings_store;
 use crate::*;
@@ -13,48 +8,21 @@ use tauri::{AppHandle, Emitter, State};
 
 #[path = "advisor_ops/knowledge_files.rs"]
 mod knowledge_files;
+#[path = "advisor_ops/member_skills.rs"]
+mod member_skills;
 #[path = "advisor_ops/templates.rs"]
 mod templates;
 #[path = "advisor_ops/videos.rs"]
 mod videos;
 
 use knowledge_files::{collect_advisor_knowledge_files, import_advisor_knowledge_files};
+use member_skills::{
+    handle_member_skill_channel, member_skill_distillation_enabled, publish_member_skill_if_enabled,
+};
 pub(crate) use templates::advisors_list_templates_value;
 use videos::refresh_advisor_videos;
 
 const YTDLP_DISABLED_MESSAGE: &str = "内置 yt-dlp 服务已移除。";
-
-fn member_skill_distillation_enabled(state: &State<'_, AppState>) -> Result<bool, String> {
-    with_store(state, |store| {
-        Ok(member_feature_flag_enabled_for_store(
-            &store,
-            "memberSkillDistillation",
-            true,
-        ))
-    })
-}
-
-fn publish_member_skill_if_enabled(
-    state: &State<'_, AppState>,
-    advisor_id: &str,
-    source_event: &str,
-) -> Option<Value> {
-    match member_skill_distillation_enabled(state) {
-        Ok(false) => Some(json!({
-            "status": "fallback",
-            "skipped": true,
-            "reason": "memberSkillDistillation disabled"
-        })),
-        Ok(true) => match publish_member_skill_for_advisor(state, advisor_id, source_event) {
-            Ok(result) => Some(member_skill_result_value(&result)),
-            Err(error) => {
-                let _ = mark_member_skill_failed(state, advisor_id, &error);
-                Some(json!({ "status": "failed", "error": error }))
-            }
-        },
-        Err(error) => Some(json!({ "status": "failed", "error": error })),
-    }
-}
 
 pub(crate) fn advisors_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
     let _ = ensure_store_hydrated_for_advisors(state);
@@ -408,99 +376,20 @@ pub fn handle_advisor_channel(
                 knowledge_index::jobs::schedule_rebuild(app, "advisor-knowledge-delete");
                 Ok(result)
             }
-            "members:enqueue-distillation" | "members:distill-skill" => {
-                let advisor_id = payload_string(payload, "advisorId")
-                    .or_else(|| payload_string(payload, "id"))
-                    .unwrap_or_default();
-                let result = if member_skill_distillation_enabled(state)? {
-                    publish_member_skill_for_advisor(state, &advisor_id, "members:enqueue-distillation")
-                        .map(|result| {
-                            json!({ "success": true, "memberSkill": member_skill_result_value(&result) })
-                        })
-                        .unwrap_or_else(|error| {
-                            let _ = mark_member_skill_failed(state, &advisor_id, &error);
-                            json!({ "success": false, "error": error })
-                        })
-                } else {
-                    json!({
-                        "success": false,
-                        "error": "memberSkillDistillation disabled"
-                    })
-                };
-                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
-                Ok(result)
-            }
             "advisors:promote-member-skill-candidate"
+            | "members:enqueue-distillation"
+            | "members:distill-skill"
             | "members:approve-distillation"
-            | "members:publish-skill-version" => {
-                let advisor_id = payload_string(payload, "advisorId")
-                    .or_else(|| payload_string(payload, "id"))
-                    .unwrap_or_default();
-                let candidate_version = payload_string(payload, "candidateVersion")
-                    .or_else(|| payload_string(payload, "version"));
-                let result =
-                    promote_member_skill_candidate(state, &advisor_id, candidate_version.as_deref())
-                        .map(|result| {
-                            json!({ "success": true, "memberSkill": member_skill_result_value(&result) })
-                        })
-                        .unwrap_or_else(|error| json!({ "success": false, "error": error }));
-                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
-                Ok(result)
-            }
-            "advisors:discard-member-skill-candidate" => {
-                let advisor_id = payload_string(payload, "advisorId")
-                    .or_else(|| payload_string(payload, "id"))
-                    .unwrap_or_default();
-                let result = discard_member_skill_candidate(state, &advisor_id)
-                    .map(|_| json!({ "success": true }))
-                    .unwrap_or_else(|error| json!({ "success": false, "error": error }));
-                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
-                Ok(result)
-            }
-            "advisors:inspect-member-skill"
+            | "members:publish-skill-version"
+            | "advisors:discard-member-skill-candidate"
+            | "advisors:inspect-member-skill"
             | "members:list-distillation-candidates"
-            | "members:preview-distillation" => {
-                let advisor_id = payload_string(payload, "advisorId")
-                    .or_else(|| payload_string(payload, "id"))
-                    .unwrap_or_default();
-                inspect_member_skill_versions(state, &advisor_id)
-                    .or_else(|error| Ok(json!({ "success": false, "error": error })))
-            }
-            "advisors:rollback-member-skill-version" | "members:rollback-skill-version" => {
-                let advisor_id = payload_string(payload, "advisorId")
-                    .or_else(|| payload_string(payload, "id"))
-                    .unwrap_or_default();
-                let version = payload_string(payload, "version").unwrap_or_default();
-                let result = rollback_member_skill_version(state, &advisor_id, &version)
-                    .map(|result| {
-                        json!({ "success": true, "memberSkill": member_skill_result_value(&result) })
-                    })
-                    .unwrap_or_else(|error| json!({ "success": false, "error": error }));
-                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
-                Ok(result)
-            }
-            "members:compile-skill-package" => {
-                let advisor_id = payload_string(payload, "advisorId")
-                    .or_else(|| payload_string(payload, "id"))
-                    .unwrap_or_default();
-                let version = payload_string(payload, "version");
-                let candidate = payload
-                    .get("candidate")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                    || payload_string(payload, "target")
-                        .map(|target| target == "candidate")
-                        .unwrap_or(false);
-                compile_member_skill_package(state, &advisor_id, version.as_deref(), candidate)
-                    .or_else(|error| Ok(json!({ "success": false, "error": error })))
-            }
-            "members:evaluate-skill" => {
-                let advisor_id = payload_string(payload, "advisorId")
-                    .or_else(|| payload_string(payload, "id"))
-                    .unwrap_or_default();
-                evaluate_member_skill(state, &advisor_id)
-                    .or_else(|error| Ok(json!({ "success": false, "error": error })))
-            }
+            | "members:preview-distillation"
+            | "advisors:rollback-member-skill-version"
+            | "members:rollback-skill-version"
+            | "members:compile-skill-package"
+            | "members:evaluate-skill" => handle_member_skill_channel(app, state, channel, payload)
+                .unwrap_or_else(|| Err("成员技能动作未注册".to_string())),
             "advisors:optimize-prompt" => {
                 let settings_snapshot =
                     with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
