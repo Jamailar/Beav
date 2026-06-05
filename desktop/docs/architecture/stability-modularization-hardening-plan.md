@@ -104,6 +104,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed shared page refresh and LLM readiness settings/data subscriptions through bridge event facades.
 - Routed notification settings and RedClaw task event subscriptions through system/RedClaw bridge facades.
 - Routed the shared runtime event stream subscription through the runtime bridge facade.
+- Routed startup migration status subscriptions through the startup migration bridge facade.
 
 ### 1. Bridge Contract Layer
 
