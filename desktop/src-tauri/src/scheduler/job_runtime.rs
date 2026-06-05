@@ -1073,22 +1073,13 @@ pub fn cancel_job_execution(
         task.enabled = false;
         task.last_error = Some(reason.to_string());
         task.updated_at = now_iso.clone();
-        let definition_id = store
-            .redclaw_job_definitions
-            .iter()
-            .find(|item| {
-                item.source_kind.as_deref() == Some("scheduled")
-                    && item.source_task_id.as_deref() == Some(task_id)
-            })
-            .map(|item| item.id.clone());
-        if let Some(execution_id) = definition_id.and_then(|definition_id| {
-            store
-                .redclaw_job_executions
-                .iter()
-                .filter(|item| item.definition_id == definition_id)
-                .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
-                .map(|item| item.id.clone())
-        }) {
+        if let Some(execution_id) =
+            redclaw_store::job_definition_id_by_source(store, "scheduled", task_id).and_then(
+                |definition_id| {
+                    redclaw_store::latest_job_execution_id_for_definition(store, &definition_id)
+                },
+            )
+        {
             let _ = mark_execution_cancelled(store, &execution_id, reason);
         }
         return Some((cancelled_id, "scheduled-task".to_string()));
@@ -1104,31 +1095,19 @@ pub fn cancel_job_execution(
         task.status = "cancelled".to_string();
         task.last_error = Some(reason.to_string());
         task.updated_at = now_iso.clone();
-        let definition_id = store
-            .redclaw_job_definitions
-            .iter()
-            .find(|item| {
-                item.source_kind.as_deref() == Some("long_cycle")
-                    && item.source_task_id.as_deref() == Some(task_id)
-            })
-            .map(|item| item.id.clone());
-        if let Some(execution_id) = definition_id.and_then(|definition_id| {
-            store
-                .redclaw_job_executions
-                .iter()
-                .filter(|item| item.definition_id == definition_id)
-                .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
-                .map(|item| item.id.clone())
-        }) {
+        if let Some(execution_id) =
+            redclaw_store::job_definition_id_by_source(store, "long_cycle", task_id).and_then(
+                |definition_id| {
+                    redclaw_store::latest_job_execution_id_for_definition(store, &definition_id)
+                },
+            )
+        {
             let _ = mark_execution_cancelled(store, &execution_id, reason);
         }
         return Some((cancelled_id, "long-cycle".to_string()));
     }
-    if let Some(execution_id) = store
-        .redclaw_job_executions
-        .iter()
-        .find(|item| item.id == task_id || item.definition_id == task_id)
-        .map(|item| item.id.clone())
+    if let Some(execution_id) =
+        redclaw_store::job_execution_id_by_task_or_definition(store, task_id)
     {
         let _ = mark_execution_cancelled(store, &execution_id, reason);
         return Some((execution_id, "job-execution".to_string()));
@@ -1137,18 +1116,8 @@ pub fn cancel_job_execution(
 }
 
 fn find_execution_definition_id(store: &AppStore, task_id: &str) -> Option<String> {
-    if let Some(execution) = store
-        .redclaw_job_executions
-        .iter()
-        .find(|item| item.id == task_id || item.definition_id == task_id)
-    {
-        return Some(execution.definition_id.clone());
-    }
-    store
-        .redclaw_job_definitions
-        .iter()
-        .find(|item| item.id == task_id || item.source_task_id.as_deref() == Some(task_id))
-        .map(|item| item.id.clone())
+    redclaw_store::job_execution_definition_id_by_task_or_definition(store, task_id)
+        .or_else(|| redclaw_store::job_definition_id_by_id_or_source_task(store, task_id))
 }
 
 pub fn retry_job_execution(

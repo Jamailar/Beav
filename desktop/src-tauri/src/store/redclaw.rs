@@ -167,6 +167,32 @@ pub(crate) fn job_definition_by_id(
         .cloned()
 }
 
+pub(crate) fn job_definition_id_by_source(
+    store: &AppStore,
+    source_kind: &str,
+    source_task_id: &str,
+) -> Option<String> {
+    store
+        .redclaw_job_definitions
+        .iter()
+        .find(|item| {
+            item.source_kind.as_deref() == Some(source_kind)
+                && item.source_task_id.as_deref() == Some(source_task_id)
+        })
+        .map(|item| item.id.clone())
+}
+
+pub(crate) fn job_definition_id_by_id_or_source_task(
+    store: &AppStore,
+    task_id: &str,
+) -> Option<String> {
+    store
+        .redclaw_job_definitions
+        .iter()
+        .find(|item| item.id == task_id || item.source_task_id.as_deref() == Some(task_id))
+        .map(|item| item.id.clone())
+}
+
 pub(crate) fn find_confirmable_job_definition(
     store: &AppStore,
     owner_scope: &str,
@@ -267,6 +293,40 @@ pub(crate) fn duplicate_job_execution_anchor_id(
                 && item.scheduled_for_at.as_deref() == Some(scheduled_for_at)
         })
         .map(|item| item.id.clone())
+}
+
+pub(crate) fn latest_job_execution_id_for_definition(
+    store: &AppStore,
+    definition_id: &str,
+) -> Option<String> {
+    store
+        .redclaw_job_executions
+        .iter()
+        .filter(|item| item.definition_id == definition_id)
+        .max_by(|left, right| left.updated_at.cmp(&right.updated_at))
+        .map(|item| item.id.clone())
+}
+
+pub(crate) fn job_execution_id_by_task_or_definition(
+    store: &AppStore,
+    task_id: &str,
+) -> Option<String> {
+    store
+        .redclaw_job_executions
+        .iter()
+        .find(|item| item.id == task_id || item.definition_id == task_id)
+        .map(|item| item.id.clone())
+}
+
+pub(crate) fn job_execution_definition_id_by_task_or_definition(
+    store: &AppStore,
+    task_id: &str,
+) -> Option<String> {
+    store
+        .redclaw_job_executions
+        .iter()
+        .find(|item| item.id == task_id || item.definition_id == task_id)
+        .map(|item| item.definition_id.clone())
 }
 
 pub(crate) fn consecutive_job_failure_count(store: &AppStore, definition_id: &str) -> usize {
