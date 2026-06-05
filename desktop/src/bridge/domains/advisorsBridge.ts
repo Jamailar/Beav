@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createAdvisorsBridge(core: BridgeCore) {
   return {
@@ -38,8 +38,12 @@ export function createAdvisorsBridge(core: BridgeCore) {
       optimizePromptDeep: (payload: Record<string, unknown>) => core.invokeChannel('advisors:optimize-prompt-deep', payload),
       generatePersona: (payload: Record<string, unknown>) => core.invokeChannel('advisors:generate-persona', payload),
       selectAvatar: () => core.invokeChannel('advisors:select-avatar'),
+      onDownloadProgress: (listener: Listener) => core.on('advisors:download-progress', listener),
+      offDownloadProgress: (listener: Listener) => core.off('advisors:download-progress', listener),
     },
     fetchYoutubeInfo: (channelUrl: string) => core.invokeChannel('advisors:fetch-youtube-info', { channelUrl }),
+    onFetchYoutubeInfoProgress: (listener: Listener) => core.on('youtube:fetch-info-progress', listener),
+    offFetchYoutubeInfoProgress: (listener: Listener) => core.off('youtube:fetch-info-progress', listener),
     downloadYoutubeSubtitles: (params: Record<string, unknown>) => core.invokeChannel('advisors:download-youtube-subtitles', params),
     refreshVideos: (advisorId: string, limit?: number) => core.invokeChannel('advisors:refresh-videos', { advisorId, limit }),
     getVideos: (advisorId: string) => core.invokeChannel('advisors:get-videos', { advisorId }),
