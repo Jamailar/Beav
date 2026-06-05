@@ -131,6 +131,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed runtime task creation, runtime query and task resume settings reads through `store::settings`; runtime query now snapshots settings and mode in one store read.
 - Routed remote notification command settings reads through `store::settings`.
 - Routed space delete/switch workspace-root cache settings reads through `store::settings`.
+- Routed image/video generation command settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
