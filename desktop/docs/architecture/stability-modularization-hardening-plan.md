@@ -272,6 +272,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted file preview path projection, virtual path validation, mime/kind classification and manuscript package preview tests into `commands/file_ops/preview`.
 - Extracted file zip archive entry sanitization, unique naming and zip writing into `commands/file_ops/archive`.
 - Extracted file show-in-folder, copy-image and save-as behavior into `commands/file_ops/actions`.
+- Extracted generation temporary official media upload validation, multipart retry and response parsing into `commands/media_jobs/temp_upload`.
 
 ### 1. Bridge Contract Layer
 
