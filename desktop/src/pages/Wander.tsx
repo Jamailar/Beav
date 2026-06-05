@@ -1141,7 +1141,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         return;
       }
 
-      window.ipcRenderer.send('wander:brainstorm', {
+      window.ipcRenderer.wander.brainstorm({
         items: nextItems,
         options: {
           multiChoice: multiChoiceEnabled,
