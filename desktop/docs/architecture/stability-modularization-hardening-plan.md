@@ -204,6 +204,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed scheduled task create/remove/enable command access through `store::redclaw`.
 - Routed long-cycle task create/remove/enable command access through `store::redclaw`.
 - Moved RedClaw publish package file writes outside the store lock.
+- Moved RedClaw review report file writes outside the store lock.
 
 ### 1. Bridge Contract Layer
 
