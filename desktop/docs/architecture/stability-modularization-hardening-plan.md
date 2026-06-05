@@ -204,6 +204,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted manuscript richpost scaffold/theme facade helpers and default master scaffold content into `commands/manuscripts/richpost_scaffold.rs`, preserving existing crate-level theme state exports for package hydration.
 - Extracted manuscript content persistence, package script body writes, richpost HTML sync and richpost page-plan persistence entrypoints into `commands/manuscripts/content_persistence.rs`, reducing the root manuscript command module to routing/re-export glue plus tests.
 - Extracted manuscript timeline track and UI channel handling into `commands/manuscripts/timeline_tracks.rs`, leaving `timeline.rs` focused on clip insertion, attachment and clip mutation channels.
+- Extracted manuscript timeline clip insertion, playhead insertion and package file attachment channels into `commands/manuscripts/timeline_insertions.rs`, leaving `timeline.rs` focused on clip update/delete/split mutations.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
