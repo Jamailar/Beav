@@ -191,6 +191,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted manuscript editor project model helpers for track/item/layer access, subtitle style defaults, motion item normalization, Remotion motion sync and timeline normalization into `commands/manuscripts/editor_project_model.rs`, keeping AI command generation and application orchestration unchanged.
 - Extracted manuscript richpost theme/model helpers for theme specs, typography clamps, frame CSS variables and CSS-var sanitization into `commands/manuscripts/richpost_model.rs`, keeping scaffold/store wrappers and page rendering orchestration unchanged.
 - Extracted manuscript richpost pagination helpers for text measurement, paragraph splitting, page draft assembly and segment pagination into `commands/manuscripts/richpost_pagination.rs`, keeping page plan generation and HTML rendering orchestration in the root command module.
+- Extracted manuscript richpost render-model helpers for CSS variable layering, style-attribute serialization and token lookup into `commands/manuscripts/richpost_render_model.rs`, keeping HTML template rendering unchanged.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
