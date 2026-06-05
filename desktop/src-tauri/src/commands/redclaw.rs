@@ -45,6 +45,21 @@ fn payload_bool(payload: &Value, key: &str) -> bool {
     payload.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+fn runner_config_patch_from_payload(payload: &Value) -> redclaw_store::RunnerConfigPatch {
+    redclaw_store::RunnerConfigPatch {
+        interval_minutes: payload_field(payload, "intervalMinutes").and_then(|v| v.as_i64()),
+        max_automation_per_tick: payload_field(payload, "maxAutomationPerTick")
+            .and_then(|v| v.as_i64()),
+        heartbeat_enabled: payload_field(payload, "heartbeatEnabled").and_then(|v| v.as_bool()),
+        heartbeat_interval_minutes: payload_field(payload, "heartbeatIntervalMinutes")
+            .and_then(|v| v.as_i64()),
+        heartbeat_suppress_empty_report: payload_field(payload, "heartbeatSuppressEmptyReport")
+            .and_then(|v| v.as_bool()),
+        heartbeat_report_to_main_session: payload_field(payload, "heartbeatReportToMainSession")
+            .and_then(|v| v.as_bool()),
+    }
+}
+
 fn require_confirmed_redclaw_team_plan(payload: &Value) -> Result<(), String> {
     if payload_bool(payload, "userConfirmedTeamPlan")
         || payload
@@ -261,33 +276,14 @@ pub fn handle_redclaw_channel(
             complete_redclaw_style_definition_from_interview(state, payload)
         }
         "redclaw:runner-start" => (|| {
+            let patch = runner_config_patch_from_payload(payload);
             let status = with_store_mut(state, |store| {
-                store.redclaw_state.enabled = true;
-                store.redclaw_state.is_ticking = true;
-                store.redclaw_state.last_tick_at = Some(now_iso());
-                store.redclaw_state.next_tick_at = Some(now_iso());
-                if store.redclaw_state.next_maintenance_at.is_none() {
-                    store.redclaw_state.next_maintenance_at =
-                        Some((now_i64() + 10 * 60 * 1000).to_string());
-                }
-                if let Some(interval) =
-                    payload_field(payload, "intervalMinutes").and_then(|v| v.as_i64())
-                {
-                    store.redclaw_state.interval_minutes = interval;
-                }
-                if let Some(max_auto) =
-                    payload_field(payload, "maxAutomationPerTick").and_then(|v| v.as_i64())
-                {
-                    store.redclaw_state.max_automation_per_tick = max_auto;
-                }
-                if let Some(heartbeat) =
-                    payload_field(payload, "heartbeatEnabled").and_then(|v| v.as_bool())
-                {
-                    if let Some(object) = store.redclaw_state.heartbeat.as_object_mut() {
-                        object.insert("enabled".to_string(), json!(heartbeat));
-                    }
-                }
-                Ok(redclaw_store::state_value(&store))
+                Ok(redclaw_store::start_runner(
+                    store,
+                    now_iso(),
+                    (now_i64() + 10 * 60 * 1000).to_string(),
+                    patch,
+                ))
             })?;
             let _ = ensure_redclaw_runtime_running(app, state)?;
             let _ = app.emit("redclaw:runner-status", status.clone());
@@ -300,9 +296,7 @@ pub fn handle_redclaw_channel(
                 }
             }
             let status = with_store_mut(state, |store| {
-                store.redclaw_state.enabled = false;
-                store.redclaw_state.is_ticking = false;
-                Ok(redclaw_store::state_value(&store))
+                Ok(redclaw_store::stop_runner(store))
             })?;
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(status)
@@ -314,48 +308,16 @@ pub fn handle_redclaw_channel(
             );
             let run_result = execute_redclaw_run(app, state, prompt, "runner-run-now")?;
             let status = with_store_mut(state, |store| {
-                store.redclaw_state.last_tick_at = Some(now_iso());
-                Ok(redclaw_store::state_value(&store))
+                Ok(redclaw_store::mark_runner_tick(store, now_iso()))
             })?;
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(json!({ "success": true, "status": status, "run": run_result }))
         })(),
         "redclaw:runner-set-project" => Ok(json!({ "success": true, "deprecated": true })),
         "redclaw:runner-set-config" => (|| {
+            let patch = runner_config_patch_from_payload(payload);
             let status = with_store_mut(state, |store| {
-                if let Some(interval) =
-                    payload_field(payload, "intervalMinutes").and_then(|v| v.as_i64())
-                {
-                    store.redclaw_state.interval_minutes = interval;
-                }
-                if let Some(max_auto) =
-                    payload_field(payload, "maxAutomationPerTick").and_then(|v| v.as_i64())
-                {
-                    store.redclaw_state.max_automation_per_tick = max_auto;
-                }
-                if let Some(object) = store.redclaw_state.heartbeat.as_object_mut() {
-                    if let Some(value) =
-                        payload_field(payload, "heartbeatEnabled").and_then(|v| v.as_bool())
-                    {
-                        object.insert("enabled".to_string(), json!(value));
-                    }
-                    if let Some(value) =
-                        payload_field(payload, "heartbeatIntervalMinutes").and_then(|v| v.as_i64())
-                    {
-                        object.insert("intervalMinutes".to_string(), json!(value));
-                    }
-                    if let Some(value) = payload_field(payload, "heartbeatSuppressEmptyReport")
-                        .and_then(|v| v.as_bool())
-                    {
-                        object.insert("suppressEmptyReport".to_string(), json!(value));
-                    }
-                    if let Some(value) = payload_field(payload, "heartbeatReportToMainSession")
-                        .and_then(|v| v.as_bool())
-                    {
-                        object.insert("reportToMainSession".to_string(), json!(value));
-                    }
-                }
-                Ok(redclaw_store::state_value(&store))
+                Ok(redclaw_store::apply_runner_config(store, patch))
             })?;
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(status)
