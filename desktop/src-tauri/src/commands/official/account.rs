@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::settings as settings_store;
 
 pub(super) fn handle_account_channel(
     app: &AppHandle,
@@ -9,7 +10,8 @@ pub(super) fn handle_account_channel(
 ) -> Option<Result<Value, String>> {
     match channel {
         "redbox-auth:points" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let cached_points = cached_official_points(&settings);
             let stale = official_points_need_silent_refresh(&settings);
@@ -46,7 +48,8 @@ pub(super) fn handle_account_channel(
         })()),
         "redbox-auth:pricing" => Some((|| -> Result<Value, String> {
             with_store(state, |store| {
-                let pricing = official_settings_pricing(&store.settings);
+                let settings = settings_store::settings_snapshot(&store);
+                let pricing = official_settings_pricing(&settings);
                 Ok(json!({
                     "success": pricing.is_some(),
                     "pricing": pricing,
@@ -63,7 +66,8 @@ pub(super) fn handle_account_channel(
             }))
         })()),
         "official:account:summary" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let models = official_settings_models(&settings);
             let remote = run_authenticated_official_request(
