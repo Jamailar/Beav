@@ -83,12 +83,11 @@ pub fn handle_task_create(
                 .cloned()
                 .unwrap_or_else(|| "任务策略拒绝创建".to_string()));
         }
-        if let Some(existing) = store.redclaw_job_definitions.iter().find(|item| {
-            item.requires_confirmation
-                && item.owner_scope.as_deref() == Some(intent.owner_scope.as_str())
-                && item.definition_fingerprint.as_deref()
-                    == Some(preview.definition_fingerprint.as_str())
-        }) {
+        if let Some(existing) = redclaw_store::find_confirmable_job_definition(
+            store,
+            &intent.owner_scope,
+            &preview.definition_fingerprint,
+        ) {
             return Ok(json!({
                 "draftId": existing.id,
                 "definition": existing,
@@ -98,7 +97,7 @@ pub fn handle_task_create(
         }
 
         let draft = build_draft_definition(&intent, &preview);
-        store.redclaw_job_definitions.push(draft.clone());
+        redclaw_store::push_job_definition(store, draft.clone());
         let review_docket_id =
             maybe_create_review_docket_for_draft(store, &draft, &intent, &preview)?;
         Ok(json!({
