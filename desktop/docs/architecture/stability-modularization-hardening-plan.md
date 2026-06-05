@@ -138,6 +138,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed official account, pricing and model-list settings reads through `store::settings`.
 - Routed official billing products, orders and call-record settings reads through `store::settings`.
 - Moved official auth SMS and WeChat URL requests outside store locks and routed auth-flow settings reads through `store::settings`.
+- Routed system settings save and feedback-upload settings snapshots through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
