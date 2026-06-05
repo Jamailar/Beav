@@ -65,6 +65,10 @@ pub(crate) fn mark_runner_tick(store: &mut AppStore, now: String) -> Value {
     state_value(store)
 }
 
+pub(crate) fn set_next_maintenance_at(store: &mut AppStore, next_maintenance_at: Option<String>) {
+    store.redclaw_state.next_maintenance_at = next_maintenance_at;
+}
+
 pub(crate) fn runner_is_ticking(store: &AppStore) -> bool {
     store.redclaw_state.enabled && store.redclaw_state.is_ticking
 }

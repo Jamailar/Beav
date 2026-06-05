@@ -12,6 +12,7 @@ use crate::runtime::{
     append_session_checkpoint, chat_messages_for_session, load_session_bundle_messages,
     save_session_bundle_messages, update_session_context_record,
 };
+use crate::store::redclaw as redclaw_store;
 use crate::{
     append_session_transcript, make_id, next_memory_maintenance_at_ms, now_i64, now_iso,
     resolve_runtime_mode_from_context_type, session_title_from_message, value_to_i64_string,
@@ -408,8 +409,10 @@ pub fn update_post_exchange_maintenance(
         if let Some(object) = store.settings.as_object_mut() {
             object.remove("redbox_memory_maintenance_status_json");
         }
-        store.redclaw_state.next_maintenance_at =
-            value_to_i64_string(status.get("nextScheduledAt"));
+        redclaw_store::set_next_maintenance_at(
+            store,
+            value_to_i64_string(status.get("nextScheduledAt")),
+        );
         Ok(())
     })
 }
