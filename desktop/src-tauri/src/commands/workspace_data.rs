@@ -1,5 +1,6 @@
 use crate::knowledge;
 use crate::persistence::{ensure_store_hydrated_for_work, with_store, with_store_mut};
+use crate::store::work_items as work_items_store;
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
@@ -43,31 +44,16 @@ pub fn handle_workspace_data_channel(
             "work:list" => {
                 let _ = ensure_store_hydrated_for_work(state);
                 with_store(state, |store| {
-                    let mut items = store.work_items.clone();
-                    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                    Ok(json!(items))
+                    Ok(json!(work_items_store::list_sorted(&store)))
                 })
             }
             "work:ready" => with_store(state, |store| {
-                let mut items: Vec<WorkItemRecord> = store
-                    .work_items
-                    .iter()
-                    .filter(|item| {
-                        item.effective_status == "ready" || item.effective_status == "pending"
-                    })
-                    .cloned()
-                    .collect();
-                items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                Ok(json!(items))
+                Ok(json!(work_items_store::list_ready_sorted(&store)))
             }),
             "work:get" => {
                 let id = payload_string(payload, "id").unwrap_or_default();
                 with_store(state, |store| {
-                    Ok(store
-                        .work_items
-                        .iter()
-                        .find(|item| item.id == id)
-                        .cloned()
+                    Ok(work_items_store::get_item(&store, &id)
                         .map_or(Value::Null, |item| json!(item)))
                 })
             }
@@ -78,33 +64,19 @@ pub fn handle_workspace_data_channel(
                 let description = normalize_optional_string(payload_string(payload, "description"));
                 let summary = normalize_optional_string(payload_string(payload, "summary"));
                 with_store_mut(state, |store| {
-                    let Some(item) = store.work_items.iter_mut().find(|entry| entry.id == id)
-                    else {
+                    let updated_at = now_iso();
+                    let Some(item) = work_items_store::update_item(
+                        store,
+                        &id,
+                        title,
+                        description,
+                        summary,
+                        status,
+                        &updated_at,
+                    ) else {
                         return Ok(json!({ "success": false, "error": "工作项不存在" }));
                     };
-                    if let Some(title) = title {
-                        item.title = title;
-                    }
-                    if let Some(description) = description {
-                        item.description = Some(description);
-                    }
-                    if let Some(summary) = summary {
-                        item.summary = Some(summary);
-                    }
-                    if let Some(status) = status {
-                        item.status = status.clone();
-                        item.effective_status = match status.as_str() {
-                            "pending" => "ready".to_string(),
-                            other => other.to_string(),
-                        };
-                        item.completed_at = if status == "done" {
-                            Some(now_iso())
-                        } else {
-                            None
-                        };
-                    }
-                    item.updated_at = now_iso();
-                    Ok(json!({ "success": true, "item": item.clone() }))
+                    Ok(json!({ "success": true, "item": item }))
                 })
             }
             "archives:list" => with_store(state, |store| {
