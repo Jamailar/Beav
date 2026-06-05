@@ -5,6 +5,7 @@ use crate::persistence::{
     ensure_store_hydrated_for_cover, ensure_store_hydrated_for_knowledge,
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
+use crate::store::settings as settings_store;
 use crate::*;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -1413,7 +1414,8 @@ pub fn handle_library_channel(
             }
             "knowledge:youtube-regenerate-summaries" => {
                 let _ = ensure_store_hydrated_for_knowledge(state);
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let candidates = with_store(state, |store| {
                     Ok(store
                         .youtube_videos
@@ -2114,7 +2116,8 @@ pub fn handle_library_channel(
                     .cloned()
                     .unwrap_or_default();
                 let prompt = build_cover_generation_prompt(payload, &titles);
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let settings_snapshot = {
                     let auth_runtime = state
                         .auth_runtime
