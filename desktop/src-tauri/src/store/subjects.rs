@@ -5,6 +5,10 @@ pub(crate) fn list_subjects(store: &AppStore) -> Vec<SubjectRecord> {
     store.subjects.clone()
 }
 
+pub(crate) fn count_subjects(store: &AppStore) -> usize {
+    store.subjects.len()
+}
+
 pub(crate) fn get_subject(store: &AppStore, id: &str) -> Option<SubjectRecord> {
     store.subjects.iter().find(|item| item.id == id).cloned()
 }
@@ -56,4 +60,11 @@ pub(crate) fn search_subjects(
         })
         .cloned()
         .collect()
+}
+
+pub(crate) fn list_recent_subjects(store: &AppStore, limit: usize) -> Vec<SubjectRecord> {
+    let mut subjects = list_subjects(store);
+    subjects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    subjects.truncate(limit);
+    subjects
 }

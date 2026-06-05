@@ -1806,13 +1806,11 @@ fn plugin_data_source_value(
             Ok(json!({
                 "success": true,
                 "source": source,
-                "total": subjects_store::list_subjects(&store).len(),
+                "total": subjects_store::count_subjects(&store),
             }))
         }),
         "subjects.recent" | "subjects.list" => with_store(state, |store| {
-            let mut subjects = subjects_store::list_subjects(&store);
-            subjects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-            subjects.truncate(limit);
+            let subjects = subjects_store::list_recent_subjects(&store, limit);
             Ok(json!({ "success": true, "source": source, "subjects": subjects }))
         }),
         _ => Err(format!("unsupported plugin data source `{source}`")),
