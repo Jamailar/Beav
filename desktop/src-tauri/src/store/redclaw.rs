@@ -255,6 +255,92 @@ pub(crate) fn activate_job_definition_cooldown(
     }
 }
 
+pub(crate) fn mark_source_task_succeeded(
+    store: &mut AppStore,
+    source_kind: Option<&str>,
+    source_task_id: Option<&str>,
+    now_iso: &str,
+) {
+    match source_kind {
+        Some("scheduled") => {
+            if let Some(task) = store
+                .redclaw_state
+                .scheduled_tasks
+                .iter_mut()
+                .find(|item| Some(item.id.as_str()) == source_task_id)
+            {
+                task.last_run_at = Some(now_iso.to_string());
+                task.last_result = Some("success".to_string());
+                task.last_error = None;
+                task.updated_at = now_iso.to_string();
+                if task.mode == "once" {
+                    task.enabled = false;
+                    task.next_run_at = None;
+                }
+            }
+        }
+        Some("long_cycle") => {
+            if let Some(task) = store
+                .redclaw_state
+                .long_cycle_tasks
+                .iter_mut()
+                .find(|item| Some(item.id.as_str()) == source_task_id)
+            {
+                task.completed_rounds += 1;
+                task.last_run_at = Some(now_iso.to_string());
+                task.last_result = Some("success".to_string());
+                task.last_error = None;
+                task.updated_at = now_iso.to_string();
+                task.status = if task.completed_rounds >= task.total_rounds {
+                    task.enabled = false;
+                    task.next_run_at = None;
+                    "completed".to_string()
+                } else {
+                    "running".to_string()
+                };
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn mark_source_task_failed(
+    store: &mut AppStore,
+    source_kind: Option<&str>,
+    source_task_id: Option<&str>,
+    error: &str,
+    now_iso: &str,
+) {
+    match source_kind {
+        Some("scheduled") => {
+            if let Some(task) = store
+                .redclaw_state
+                .scheduled_tasks
+                .iter_mut()
+                .find(|item| Some(item.id.as_str()) == source_task_id)
+            {
+                task.last_error = Some(error.to_string());
+                task.last_result = Some("failed".to_string());
+                task.updated_at = now_iso.to_string();
+            }
+        }
+        Some("long_cycle") => {
+            if let Some(task) = store
+                .redclaw_state
+                .long_cycle_tasks
+                .iter_mut()
+                .find(|item| Some(item.id.as_str()) == source_task_id)
+            {
+                task.last_error = Some(error.to_string());
+                task.last_result = Some("failed".to_string());
+                task.status = "failed".to_string();
+                task.updated_at = now_iso.to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn job_definition_sync_snapshot(
     store: &AppStore,
 ) -> (
