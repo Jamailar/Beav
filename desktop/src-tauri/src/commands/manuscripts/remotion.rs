@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::settings as settings_store;
 
 pub(super) fn handle_remotion_channel(
     app: &AppHandle,
@@ -92,7 +93,8 @@ Remotion 读取结果 JSON：{}\n\
                     serde_json::to_string(&clips).map_err(|error| error.to_string())?
                 );
             let model_config = payload_field(&payload, "modelConfig").cloned();
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let auth_runtime = state
                 .auth_runtime
                 .lock()
