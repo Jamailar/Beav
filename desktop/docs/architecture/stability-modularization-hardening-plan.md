@@ -125,6 +125,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added `store::redclaw` owned snapshot helpers and routed RedClaw status/project/task/job read channels through them.
 - Extracted App Shell execution persistence handlers into `useExecutionPersistence`.
 - Added `store::settings` snapshot helper and routed LLM readiness settings reads through it.
+- Moved `embedding:get-sorted-sources` embedding computation outside the store lock; the lock now only snapshots settings and source texts.
 
 ### 1. Bridge Contract Layer
 
