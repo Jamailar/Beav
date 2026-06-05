@@ -359,6 +359,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted RedClaw publish/review/XHS Markdown rendering into `commands/redclaw/export_markdown`, keeping `export_content` focused on payload assembly and deterministic compliance checks.
 - Extracted RedClaw media-plan export assembly, ffconcat generation, ffconcat input validation and rough-cut ffmpeg rendering into `commands/redclaw/media_export`.
 - Extracted manuscript editor project marker add/update/delete channel handling into `commands/manuscripts/editor_project_markers`, leaving `editor_project.rs` focused on project lifecycle, clip mutation, AI generation and runtime-state dispatch.
+- Extracted brand workspace brand/product/SKU/detail-page mutation inputs and SQLite upsert logic into `commands/brand_workspace/mutations`, leaving `brand_workspace.rs` focused on sample seeding, workspace preparation and channel dispatch.
 - Extracted RedClaw profile bundle, profile document update, onboarding and style-definition channels into `commands/redclaw/profile_channels`.
 - Extracted RedClaw legacy runner scheduled/long-cycle task channels, manual job enqueueing and runner-status emission into `commands/redclaw/runner_tasks`, leaving `commands/redclaw.rs` as a thinner dispatcher for these channels.
 - Extracted RedClaw task-control list/stat read projections into `commands/redclaw_task_control/listing`, keeping draft/create/update/cancel write paths in the root task-control module.
