@@ -246,3 +246,15 @@ pub(crate) fn job_execution_id_exists(store: &AppStore, execution_id: &str) -> b
 pub(crate) fn push_job_execution(store: &mut AppStore, execution: RedclawJobExecutionRecord) {
     store.redclaw_job_executions.push(execution);
 }
+
+pub(crate) fn update_job_execution<R>(
+    store: &mut AppStore,
+    execution_id: &str,
+    update: impl FnOnce(&mut RedclawJobExecutionRecord) -> R,
+) -> Option<R> {
+    store
+        .redclaw_job_executions
+        .iter_mut()
+        .find(|item| item.id == execution_id)
+        .map(update)
+}

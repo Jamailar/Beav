@@ -622,17 +622,15 @@ fn claim_execution(
 
 fn mark_execution_running(store: &mut AppStore, execution_id: &str) -> Result<(), String> {
     let now_iso = now_iso();
-    let execution = store
-        .redclaw_job_executions
-        .iter_mut()
-        .find(|item| item.id == execution_id)
-        .ok_or_else(|| "执行实例不存在".to_string())?;
-    transition_execution_status(execution, "running", &now_iso)?;
-    execution.started_at.get_or_insert_with(|| now_iso.clone());
-    execution.last_heartbeat_at = Some(now_iso.clone());
-    execution.retry_bucket = Some("running".to_string());
-    append_execution_turn(execution, &now_iso, "system", "Execution started");
-    Ok(())
+    redclaw_store::update_job_execution(store, execution_id, |execution| {
+        transition_execution_status(execution, "running", &now_iso)?;
+        execution.started_at.get_or_insert_with(|| now_iso.clone());
+        execution.last_heartbeat_at = Some(now_iso.clone());
+        execution.retry_bucket = Some("running".to_string());
+        append_execution_turn(execution, &now_iso, "system", "Execution started");
+        Ok(())
+    })
+    .ok_or_else(|| "执行实例不存在".to_string())?
 }
 
 fn mark_execution_cancelled(
@@ -641,20 +639,18 @@ fn mark_execution_cancelled(
     reason: &str,
 ) -> Result<(), String> {
     let now_iso = now_iso();
-    let execution = store
-        .redclaw_job_executions
-        .iter_mut()
-        .find(|item| item.id == execution_id)
-        .ok_or_else(|| "执行实例不存在".to_string())?;
-    if is_terminal_execution_status(&execution.status) {
-        return Ok(());
-    }
-    transition_execution_status(execution, "cancelled", &now_iso)?;
-    execution.cancel_requested_at = Some(now_iso.clone());
-    execution.cancel_reason = Some(reason.to_string());
-    execution.last_error = Some(reason.to_string());
-    append_execution_turn(execution, &now_iso, "system", reason.to_string());
-    Ok(())
+    redclaw_store::update_job_execution(store, execution_id, |execution| {
+        if is_terminal_execution_status(&execution.status) {
+            return Ok(());
+        }
+        transition_execution_status(execution, "cancelled", &now_iso)?;
+        execution.cancel_requested_at = Some(now_iso.clone());
+        execution.cancel_reason = Some(reason.to_string());
+        execution.last_error = Some(reason.to_string());
+        append_execution_turn(execution, &now_iso, "system", reason.to_string());
+        Ok(())
+    })
+    .ok_or_else(|| "执行实例不存在".to_string())?
 }
 
 fn consecutive_failure_count(store: &AppStore, definition_id: &str) -> usize {
