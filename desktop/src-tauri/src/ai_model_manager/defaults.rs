@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::store::settings as settings_store;
 use crate::{now_iso, persist_store, with_store, with_store_mut, AppState};
 
 pub(crate) fn repair_missing_official_defaults_in_settings(
@@ -30,7 +31,7 @@ pub(crate) fn repair_missing_official_defaults_for_store(
     state: &State<'_, AppState>,
     source: &str,
 ) -> Result<bool, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let mut next_settings = settings;
     if !repair_missing_official_defaults_in_settings(&mut next_settings)? {
         return Ok(false);

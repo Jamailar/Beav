@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::runtime::resolve_session_file_reference_inputs;
+use crate::store::settings as settings_store;
 use crate::*;
 use crate::{commands, with_store, with_store_mut, AppState};
 use config::*;
@@ -1610,7 +1611,7 @@ fn ensure_image_model_settings(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<Value, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     if configured_image_model_from_settings(&settings).is_some() {
         return Ok(settings);
     }
@@ -1620,7 +1621,8 @@ fn ensure_image_model_settings(
         state,
         "media-runtime-model-defaults-repair",
     )?;
-    let repaired_settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let repaired_settings =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let Some(model) = configured_image_model_from_settings(&repaired_settings) else {
         return Err("生图默认模型未初始化，请重新登录官方账号或在设置中选择生图模型".to_string());
     };
@@ -1641,7 +1643,7 @@ fn resolve_provider_metadata(
     let settings = if kind == "image" {
         ensure_image_model_settings(app, state)?
     } else {
-        with_store(state, |store| Ok(store.settings.clone()))?
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?
     };
     let provider = match kind {
         "image" => payload_string(payload, "provider")
@@ -5013,7 +5015,9 @@ async fn run_video_sequence_submit_worker(
 ) {
     let result = async {
         let state = app.state::<AppState>();
-        let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+        let settings = with_store(&state, |store| {
+            Ok(settings_store::settings_snapshot(&store))
+        })?;
         remove_existing_video_sequence_artifacts(&state, &loaded.job.job_id)?;
         let segments = video_sequence_segments(&loaded.job.request_json)?;
         if segments.len() <= 1 {
@@ -5162,7 +5166,9 @@ async fn run_video_submit_worker(
         {
             return complete_job_cancelled(&app, &loaded.job.job_id, "User requested cancellation");
         }
-        let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+        let settings = with_store(&state, |store| {
+            Ok(settings_store::settings_snapshot(&store))
+        })?;
         if is_video_retalk_request(
             &loaded.job.request_json,
             loaded.job.provider_model.as_deref(),
@@ -5269,7 +5275,9 @@ async fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mut
         {
             return complete_job_cancelled(&app, &loaded.job.job_id, "User requested cancellation");
         }
-        let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+        let settings = with_store(&state, |store| {
+            Ok(settings_store::settings_snapshot(&store))
+        })?;
         if is_video_retalk_request(
             &loaded.job.request_json,
             loaded.job.provider_model.as_deref(),
