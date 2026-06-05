@@ -1,5 +1,4 @@
 use crate::commands::library::persist_media_workspace_catalog;
-use crate::events::emit_runtime_tool_partial;
 use crate::persistence::{with_store, with_store_mut};
 use crate::store::{
     media as media_store, settings as settings_store, work_items as work_items_store,
@@ -12,9 +11,14 @@ use std::sync::mpsc;
 use tauri::{AppHandle, State};
 
 mod image_plan;
+mod progress;
 
 use image_plan::{
     build_generated_image_title, extract_planned_image_generation_items, PlannedImageGenerationItem,
+};
+use progress::{
+    emit_image_generation_log, emit_video_generation_progress,
+    runtime_tool_log_context_from_payload, summarize_json_for_log, video_generation_asset_label,
 };
 
 #[cfg(test)]
@@ -22,27 +26,6 @@ fn is_redbox_official_video_endpoint(endpoint: &str) -> bool {
     crate::media_generation::is_redbox_official_endpoint(endpoint)
 }
 const IMAGE_BATCH_PARALLELISM: usize = 4;
-
-#[derive(Debug, Clone, Default)]
-struct RuntimeToolLogContext {
-    session_id: Option<String>,
-    tool_call_id: Option<String>,
-    tool_name: String,
-}
-
-fn summarize_json_for_log(value: &Value) -> String {
-    let raw = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return "<empty>".to_string();
-    }
-    let snippet = trimmed.chars().take(400).collect::<String>();
-    if snippet.chars().count() == trimmed.chars().count() {
-        snippet
-    } else {
-        format!("{snippet}...")
-    }
-}
 
 fn execute_planned_image_generation_item(
     payload: Value,
@@ -679,55 +662,6 @@ pub(crate) fn generate_image_assets(
         prompt,
         project_id,
     })
-}
-
-fn runtime_tool_log_context_from_payload(payload: &Value) -> RuntimeToolLogContext {
-    RuntimeToolLogContext {
-        session_id: normalize_optional_string(
-            payload_string(payload, "sessionId").or_else(|| payload_string(payload, "session_id")),
-        ),
-        tool_call_id: normalize_optional_string(
-            payload_string(payload, "toolCallId")
-                .or_else(|| payload_string(payload, "tool_call_id")),
-        ),
-        tool_name: payload_string(payload, "toolName").unwrap_or_else(|| "workflow".to_string()),
-    }
-}
-
-fn emit_video_generation_progress(app: &AppHandle, context: &RuntimeToolLogContext, message: &str) {
-    let trimmed = message.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    println!("[video-gen] {trimmed}");
-    let Some(tool_call_id) = context.tool_call_id.as_deref() else {
-        return;
-    };
-    emit_runtime_tool_partial(
-        app,
-        context.session_id.as_deref(),
-        tool_call_id,
-        context.tool_name.as_str(),
-        trimmed,
-    );
-}
-
-fn emit_image_generation_log(state: &State<'_, AppState>, line: impl Into<String>) {
-    let line = line.into();
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    eprintln!("{trimmed}");
-    append_debug_log_state(state, trimmed.to_string());
-}
-
-fn video_generation_asset_label(index: i64, count: i64) -> String {
-    if count > 1 {
-        format!("第 {}/{} 个视频", index + 1, count)
-    } else {
-        "视频任务".to_string()
-    }
 }
 
 fn allow_placeholder_fallback(payload: &Value) -> bool {
