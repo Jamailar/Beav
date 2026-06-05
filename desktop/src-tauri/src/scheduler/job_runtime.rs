@@ -11,6 +11,7 @@ use crate::scheduler::dead_letter::mark_dead_lettered;
 use crate::scheduler::heartbeat::start_execution_heartbeat;
 use crate::scheduler::lease::lease_execution;
 use crate::scheduler::retry::{retry_delay_ms, should_dead_letter, DEFAULT_HEARTBEAT_TIMEOUT_MS};
+use crate::store::redclaw as redclaw_store;
 use crate::{make_id, now_i64, now_iso, redclaw_state_value, AppState, AppStore};
 
 use super::{
@@ -357,15 +358,11 @@ fn duplicate_execution_anchor_exists(
 }
 
 fn ensure_unique_execution_id(store: &AppStore, execution: &mut RedclawJobExecutionRecord) {
-    if store
-        .redclaw_job_executions
-        .iter()
-        .any(|item| item.id == execution.id)
-    {
+    if redclaw_store::job_execution_id_exists(store, &execution.id) {
         execution.id = format!(
             "{}-{}",
             execution.id,
-            store.redclaw_job_executions.len() + 1
+            redclaw_store::job_execution_count(store) + 1
         );
     }
 }
@@ -373,7 +370,7 @@ fn ensure_unique_execution_id(store: &AppStore, execution: &mut RedclawJobExecut
 pub fn enqueue_due_job_executions(store: &mut AppStore, now: i64) -> Vec<String> {
     let now_iso = now_iso();
     let mut enqueued = Vec::new();
-    let definitions = store.redclaw_job_definitions.clone();
+    let definitions = redclaw_store::list_job_definitions(store);
     for definition in definitions {
         if !definition.enabled {
             continue;
@@ -386,14 +383,10 @@ pub fn enqueue_due_job_executions(store: &mut AppStore, now: i64) -> Vec<String>
         }
         let (scheduled_anchors, next_due_at) = due_execution_plan(store, &definition, now);
         if scheduled_anchors.is_empty() {
-            if let Some(current_definition) = store
-                .redclaw_job_definitions
-                .iter_mut()
-                .find(|item| item.id == definition.id)
-            {
+            redclaw_store::update_job_definition(store, &definition.id, |current_definition| {
                 current_definition.next_due_at = next_due_at.clone();
                 current_definition.updated_at = now_iso.clone();
-            }
+            });
             update_source_task_after_enqueue(store, &definition, next_due_at, &now_iso);
             continue;
         }
@@ -421,18 +414,14 @@ pub fn enqueue_due_job_executions(store: &mut AppStore, now: i64) -> Vec<String>
             let mut execution = execution;
             ensure_unique_execution_id(store, &mut execution);
             let execution_id = execution.id.clone();
-            store.redclaw_job_executions.push(execution);
+            redclaw_store::push_job_execution(store, execution);
             enqueued.push(execution_id);
         }
-        if let Some(current_definition) = store
-            .redclaw_job_definitions
-            .iter_mut()
-            .find(|item| item.id == definition.id)
-        {
+        redclaw_store::update_job_definition(store, &definition.id, |current_definition| {
             current_definition.last_enqueued_at = Some(now_iso.clone());
             current_definition.next_due_at = next_due_at.clone();
             current_definition.updated_at = now_iso.clone();
-        }
+        });
         update_source_task_after_enqueue(store, &definition, next_due_at, &now_iso);
     }
     enqueued
