@@ -1,5 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createSystemBridge(core: BridgeCore) {
   return {
@@ -119,6 +119,8 @@ export function createSystemBridge(core: BridgeCore) {
     },
     getAppVersion: () => core.invokeChannel('app:get-version'),
     checkAppUpdate: (force = false) => core.invokeChannel('app:check-update', { force }),
+    onAppUpdateAvailable: (listener: Listener) => core.on('app:update-available', listener),
+    offAppUpdateAvailable: (listener: Listener) => core.off('app:update-available', listener),
     openAppReleasePage: (url?: string) => core.invokeChannel('app:open-release-page', { url }),
     openPath: (path: string) => core.invokeChannel('app:open-path', { path }),
     clipboardReadText: () => core.invokeChannel('clipboard:read-text'),

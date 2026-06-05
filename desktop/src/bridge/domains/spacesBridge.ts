@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 type SpaceListResult = {
   activeSpaceId?: string;
@@ -30,6 +30,8 @@ export function createSpacesBridge(core: BridgeCore) {
       create: () => Promise.resolve({ success: false, error: '创建新空间功能已关闭' }),
       rename: (payload: { id: string; name: string }) => core.invokeChannel('spaces:rename', payload),
       delete: (spaceId: string) => core.invokeChannel('spaces:delete', spaceId),
+      onChanged: (listener: Listener) => core.on('space:changed', listener),
+      offChanged: (listener: Listener) => core.off('space:changed', listener),
     },
   };
 }
