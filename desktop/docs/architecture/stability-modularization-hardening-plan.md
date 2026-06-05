@@ -111,6 +111,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed Advisors download and YouTube fetch progress subscriptions through the advisors bridge facade.
 - Routed ManuscriptEditorHost data, render progress and write proposal subscriptions through bridge facades.
 - Routed Chat page advisors, knowledge, space, settings and auth refresh subscriptions through bridge facades.
+- Routed renderer diagnostics report-pending subscription through the logs bridge facade.
 
 ### 1. Bridge Contract Layer
 
