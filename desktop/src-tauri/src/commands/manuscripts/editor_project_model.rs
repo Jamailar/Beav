@@ -1,6 +1,9 @@
 use super::timeline_model::DEFAULT_TIMELINE_CLIP_MS;
 use super::*;
 
+#[path = "editor_project_model/subtitles.rs"]
+mod subtitles;
+
 pub(super) fn ensure_editor_track(
     project: &mut Value,
     track_id: &str,
@@ -45,36 +48,7 @@ pub(super) fn editor_default_subtitle_style(
     subtitle_file: &str,
     style_patch: Option<&Value>,
 ) -> Value {
-    let mut style = json!({
-        "position": "bottom",
-        "fontSize": 34,
-        "color": "#ffffff",
-        "backgroundColor": "rgba(6, 8, 12, 0.58)",
-        "emphasisColor": "#facc15",
-        "align": "center",
-        "fontWeight": 700,
-        "textTransform": "none",
-        "letterSpacing": 0,
-        "borderRadius": 22,
-        "paddingX": 20,
-        "paddingY": 12,
-        "animation": "fade-up",
-        "presetId": "classic-bottom",
-        "segmentationMode": "punctuationOrPause",
-        "linesPerCaption": 1,
-        "emphasisWords": [],
-        "sourceItemId": source_item_id,
-        "subtitleFile": subtitle_file
-    });
-    if let (Some(target), Some(source)) = (
-        style.as_object_mut(),
-        style_patch.and_then(Value::as_object),
-    ) {
-        for (key, value) in source {
-            target.insert(key.clone(), value.clone());
-        }
-    }
-    style
+    subtitles::editor_default_subtitle_style(source_item_id, subtitle_file, style_patch)
 }
 
 pub(super) fn upsert_editor_project_last_subtitle_transcription(
@@ -83,17 +57,12 @@ pub(super) fn upsert_editor_project_last_subtitle_transcription(
     subtitle_file: &str,
     segment_count: usize,
 ) -> Result<(), String> {
-    let ai = ensure_editor_project_ai_state(project)?;
-    ai.insert(
-        "lastSubtitleTranscription".to_string(),
-        json!({
-            "sourceItemId": source_item_id,
-            "subtitleFile": subtitle_file,
-            "segmentCount": segment_count,
-            "updatedAt": now_i64()
-        }),
-    );
-    Ok(())
+    subtitles::upsert_editor_project_last_subtitle_transcription(
+        project,
+        source_item_id,
+        subtitle_file,
+        segment_count,
+    )
 }
 
 pub(super) fn editor_project_items_mut(project: &mut Value) -> Result<&mut Vec<Value>, String> {
@@ -517,21 +486,6 @@ mod tests {
         assert_eq!(
             project.pointer("/tracks/1/order").and_then(Value::as_i64),
             Some(4)
-        );
-    }
-
-    #[test]
-    fn subtitle_style_patch_overrides_defaults() {
-        let style = editor_default_subtitle_style(
-            "clip-1",
-            "subtitles/clip-1.srt",
-            Some(&json!({ "fontSize": 40 })),
-        );
-
-        assert_eq!(style.get("fontSize").and_then(Value::as_i64), Some(40));
-        assert_eq!(
-            style.get("sourceItemId").and_then(Value::as_str),
-            Some("clip-1")
         );
     }
 }
