@@ -3,6 +3,7 @@ import { Users, Plus, Pencil, Trash2, Upload, FolderOpen, FileText, X, Check, Sp
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
 import { APP_BRAND } from '../config/brand';
+import { subscribeYoutubeFetchInfoProgress } from '../bridge/appEvents';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 
@@ -1921,8 +1922,7 @@ export function AdvisorModal({
 
     useEffect(() => {
         const handleProgress = (_: unknown, msg: string) => setFetchMsg(msg);
-        window.ipcRenderer.onFetchYoutubeInfoProgress(handleProgress);
-        return () => window.ipcRenderer.offFetchYoutubeInfoProgress(handleProgress);
+        return subscribeYoutubeFetchInfoProgress(handleProgress);
     }, []);
 
     const handleFetchYoutube = async () => {

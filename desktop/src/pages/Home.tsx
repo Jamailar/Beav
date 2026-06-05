@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, Mic2, PenLine, RefreshCw, Send, Sparkles, UserRound, X } from 'lucide-react';
 import { ApprovalPanel } from './Approval';
+import { subscribeDataChanged } from '../bridge/appEvents';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import type { ThrivePluginHomeAction, ThrivePluginHomeResponse, ThrivePluginHomeWidget } from '../types';
 
@@ -404,11 +405,11 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
         const handleDataChanged = () => void loadStats();
         const handlePluginsChanged = () => void loadPluginHome();
         window.ipcRenderer.teamRuntime.onEvent(handleRuntimeEvent);
-        window.ipcRenderer.onDataChanged(handleDataChanged);
+        const unsubscribeDataChanged = subscribeDataChanged(handleDataChanged);
         window.ipcRenderer.plugins.onChanged(handlePluginsChanged);
         return () => {
             window.ipcRenderer.teamRuntime.offEvent(handleRuntimeEvent);
-            window.ipcRenderer.offDataChanged(handleDataChanged);
+            unsubscribeDataChanged();
             window.ipcRenderer.plugins.offChanged(handlePluginsChanged);
         };
     }, [isActive, loadPluginHome, loadStats]);

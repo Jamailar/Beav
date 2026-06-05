@@ -14,6 +14,7 @@ import { selectNotificationUnreadCount, useNotificationStore } from '../notifica
 import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { uiMeasure } from '../utils/uiDebug';
 import { SHOW_CURRENT_RELEASE_NOTES_EVENT, currentReleaseNotesMarkdown } from '../utils/currentReleaseNotes';
+import { subscribeAppUpdateAvailable } from '../bridge/appEvents';
 
 interface LayoutProps {
   children: ReactNode;
@@ -586,11 +587,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         console.warn('[AppUpdate] check failed:', error);
       });
     }, 1800);
-    window.ipcRenderer.onAppUpdateAvailable(handleUpdateNotice);
+    const unsubscribeAppUpdateAvailable = subscribeAppUpdateAvailable(handleUpdateNotice);
     window.addEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
     return () => {
       window.clearTimeout(updateCheckTimer);
-      window.ipcRenderer.offAppUpdateAvailable(handleUpdateNotice);
+      unsubscribeAppUpdateAvailable();
       window.removeEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
     };
   }, []);

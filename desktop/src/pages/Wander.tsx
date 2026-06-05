@@ -12,6 +12,7 @@ import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { uiDebug } from '../utils/uiDebug';
 import { APP_BRAND } from '../config/brand';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 
 interface WanderItem {
   id: string;
@@ -943,10 +944,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     const handleSettingsUpdated = () => {
       void syncWanderSettings();
     };
-    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
-    return () => {
-      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
-    };
+    return subscribeSettingsUpdated(handleSettingsUpdated);
   }, [isActive, syncWanderSettings]);
 
   useEffect(() => {
