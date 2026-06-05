@@ -5,7 +5,7 @@ export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'team-workbench' | 'members';
 
 export type SettingsNavigationTarget = {
-  tab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+  tab?: 'general' | 'ai' | 'platforms' | 'tools' | 'profile' | 'remote' | 'experimental';
   aiModelSubTab?: 'custom' | 'login';
   nonce: number;
 };
@@ -53,6 +53,8 @@ export type LegacyNavigateEventDetail = {
   sessionId?: string;
   docketId?: string;
 };
+
+export type AppNavigateEventDetail = AppIntent | LegacyNavigateEventDetail;
 
 export interface PendingChatMessage {
   content: string;

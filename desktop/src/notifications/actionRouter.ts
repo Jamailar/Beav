@@ -1,3 +1,4 @@
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { REDBOX_NAVIGATE_EVENT, type NotificationAction } from './types';
 
 export async function runNotificationAction(action: NotificationAction): Promise<void> {
@@ -13,9 +14,7 @@ export async function runNotificationAction(action: NotificationAction): Promise
 
   if (action.action === 'retry-generation') {
     await window.ipcRenderer.generation.retryJob(action.payload.jobId);
-    window.dispatchEvent(
-      new CustomEvent(REDBOX_NAVIGATE_EVENT, { detail: { view: 'generation-studio' } }),
-    );
+    dispatchAppIntent({ type: 'view.open', view: 'generation-studio' });
     return;
   }
 
