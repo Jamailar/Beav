@@ -3,12 +3,7 @@ use tauri::State;
 
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{
-    append_runtime_task_trace, cancel_runtime_task,
-    get_runtime_task_value as runtime_task_lookup_value,
-    list_runtime_task_traces_value as runtime_task_traces_lookup_value, list_runtime_tasks,
-    store_runtime_task,
-};
+use crate::store::runtime_tasks as runtime_tasks_store;
 use crate::store::settings as settings_store;
 use crate::{log_timing_event, now_ms, payload_field, payload_string, AppState};
 
@@ -31,7 +26,7 @@ pub fn create_runtime_task_from_payload(
         metadata.as_ref(),
     );
     let created = with_store_mut(state, |store| {
-        Ok(store_runtime_task(
+        Ok(runtime_tasks_store::store_task(
             store,
             "manual",
             "pending",
@@ -49,7 +44,7 @@ pub fn list_runtime_tasks_value(state: &State<'_, AppState>) -> Result<Value, St
     with_store(state, |store| {
         let started_at = now_ms();
         let request_id = format!("tasks:list:{}", started_at);
-        let tasks = list_runtime_tasks(&store);
+        let tasks = runtime_tasks_store::list_tasks(&store);
         log_timing_event(
             state,
             "settings",
@@ -68,7 +63,7 @@ pub fn get_runtime_task_value(
 ) -> Result<Value, String> {
     let task_id = payload_string(payload, "taskId").unwrap_or_default();
     with_store(state, |store| {
-        Ok(runtime_task_lookup_value(&store, &task_id))
+        Ok(runtime_tasks_store::task_value(&store, &task_id))
     })
 }
 
@@ -78,10 +73,10 @@ pub fn cancel_runtime_task_value(
 ) -> Result<Value, String> {
     let task_id = payload_string(payload, "taskId").unwrap_or_default();
     with_store_mut(state, |store| {
-        if !cancel_runtime_task(store, &task_id) {
+        if !runtime_tasks_store::cancel_task(store, &task_id) {
             return Ok(json!({ "success": false, "error": "任务不存在" }));
         }
-        append_runtime_task_trace(store, &task_id, "cancelled", None);
+        runtime_tasks_store::append_cancelled_trace(store, &task_id);
         Ok(json!({ "success": true, "taskId": task_id }))
     })
 }
@@ -98,7 +93,7 @@ pub fn runtime_task_trace_value(
         .and_then(Value::as_u64)
         .map(|value| value as usize);
     with_store(state, |store| {
-        Ok(runtime_task_traces_lookup_value(
+        Ok(runtime_tasks_store::task_traces_value(
             &store,
             &task_id,
             include_children,
