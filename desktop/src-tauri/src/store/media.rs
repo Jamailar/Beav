@@ -16,6 +16,18 @@ pub(crate) fn get_asset(store: &AppStore, asset_id: &str) -> Option<MediaAssetRe
         .cloned()
 }
 
+pub(crate) fn update_asset<R>(
+    store: &mut AppStore,
+    asset_id: &str,
+    update: impl FnOnce(&mut MediaAssetRecord) -> R,
+) -> Option<R> {
+    store
+        .media_assets
+        .iter_mut()
+        .find(|item| item.id == asset_id)
+        .map(update)
+}
+
 pub(crate) fn replace_assets(store: &mut AppStore, assets: Vec<MediaAssetRecord>) {
     store.media_assets = assets;
 }

@@ -210,13 +210,7 @@ pub(super) fn handle_timeline_channel(
                 );
             }
             let full_path = resolve_manuscript_path(state, &file_path)?;
-            let asset = with_store(state, |store| {
-                Ok(store
-                    .media_assets
-                    .iter()
-                    .find(|item| item.id == asset_id)
-                    .cloned())
-            })?;
+            let asset = with_store(state, |store| Ok(media_store::get_asset(&store, &asset_id)))?;
             let Some(asset) = asset else {
                 return Ok(json!({ "success": false, "error": "Media asset not found" }));
             };
@@ -480,13 +474,7 @@ pub(super) fn handle_timeline_channel(
                 );
             }
             let full_path = resolve_manuscript_path(state, &file_path)?;
-            let asset = with_store(state, |store| {
-                Ok(store
-                    .media_assets
-                    .iter()
-                    .find(|item| item.id == asset_id)
-                    .cloned())
-            })?;
+            let asset = with_store(state, |store| Ok(media_store::get_asset(&store, &asset_id)))?;
             let Some(asset) = asset else {
                 return Ok(json!({ "success": false, "error": "Media asset not found" }));
             };
