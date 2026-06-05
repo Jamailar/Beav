@@ -363,6 +363,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted MCP server registry list/save/add/get/remove/enable/import/OAuth-status handling into `commands/mcp_tools/registry`, keeping `mcp_tools.rs` focused on diagnostics, invocation, typed lists, hooks and channel dispatch.
 - Extracted RedClaw runner lifecycle status/start/stop/run-now/config handling and runtime startup into `commands/redclaw/runner_lifecycle`, preserving the public startup-facing runtime ensure entrypoint.
 - Extracted chat user-message persistence and member-mention advisor id parsing into `commands/chat/messages`, leaving `chat.rs` focused on send/cancel/approval orchestration.
+- Extracted chat cancel and runtime tool-confirmation send-channel handling into `commands/chat/control`, leaving `chat.rs` focused on message send orchestration and fallback channel routing.
 - Extracted RedClaw profile bundle, profile document update, onboarding and style-definition channels into `commands/redclaw/profile_channels`.
 - Extracted RedClaw legacy runner scheduled/long-cycle task channels, manual job enqueueing and runner-status emission into `commands/redclaw/runner_tasks`, leaving `commands/redclaw.rs` as a thinner dispatcher for these channels.
 - Extracted RedClaw task-control list/stat read projections into `commands/redclaw_task_control/listing`, keeping draft/create/update/cancel write paths in the root task-control module.
