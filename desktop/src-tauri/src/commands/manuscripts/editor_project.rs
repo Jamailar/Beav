@@ -1,5 +1,6 @@
 use super::*;
 
+use super::editor_runtime_state::update_editor_runtime_state;
 use super::ffmpeg_edit::{
     execute_ffmpeg_edit_recipe, ffmpeg_asset_items, ffmpeg_recipe_duration_ms,
     ffmpeg_recipe_source_asset_ids,
@@ -523,78 +524,9 @@ pub(super) fn handle_editor_project_channel(
             if file_path.is_empty() {
                 return Ok(json!({ "success": false, "error": "filePath is required" }));
             }
-            let mut guard = state
-                .editor_runtime_states
-                .lock()
-                .map_err(|_| "editor runtime state lock 已损坏".to_string())?;
-            let previous = guard.get(&file_path).cloned();
-            let updated_at = now_ms();
-            guard.insert(
-                file_path.clone(),
-                EditorRuntimeStateRecord {
-                    file_path: file_path.clone(),
-                    session_id: payload_string(&payload, "sessionId"),
-                    playhead_seconds: payload_field(&payload, "playheadSeconds")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(0.0),
-                    selected_clip_id: payload_string(&payload, "selectedClipId"),
-                    selected_clip_ids: payload_field(&payload, "selectedClipIds").cloned().or_else(
-                        || {
-                            previous
-                                .as_ref()
-                                .and_then(|record| record.selected_clip_ids.clone())
-                        },
-                    ),
-                    active_track_id: payload_string(&payload, "activeTrackId"),
-                    selected_track_ids: payload_field(&payload, "selectedTrackIds")
-                        .cloned()
-                        .or_else(|| {
-                            previous
-                                .as_ref()
-                                .and_then(|record| record.selected_track_ids.clone())
-                        }),
-                    selected_scene_id: payload_string(&payload, "selectedSceneId"),
-                    preview_tab: payload_string(&payload, "previewTab"),
-                    canvas_ratio_preset: payload_string(&payload, "canvasRatioPreset"),
-                    active_panel: payload_string(&payload, "activePanel"),
-                    drawer_panel: payload_string(&payload, "drawerPanel"),
-                    scene_item_transforms: payload_field(&payload, "sceneItemTransforms").cloned(),
-                    scene_item_visibility: payload_field(&payload, "sceneItemVisibility").cloned(),
-                    scene_item_order: payload_field(&payload, "sceneItemOrder").cloned(),
-                    scene_item_locks: payload_field(&payload, "sceneItemLocks").cloned(),
-                    scene_item_groups: payload_field(&payload, "sceneItemGroups").cloned(),
-                    focused_group_id: payload_string(&payload, "focusedGroupId"),
-                    track_ui: payload_field(&payload, "trackUi").cloned(),
-                    viewport_scroll_left: payload_field(&payload, "viewportScrollLeft")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(0.0),
-                    viewport_max_scroll_left: payload_field(&payload, "viewportMaxScrollLeft")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(0.0),
-                    viewport_scroll_top: payload_field(&payload, "viewportScrollTop")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(0.0),
-                    viewport_max_scroll_top: payload_field(&payload, "viewportMaxScrollTop")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(0.0),
-                    timeline_zoom_percent: payload_field(&payload, "timelineZoomPercent")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(100.0),
-                    undo_stack: previous
-                        .as_ref()
-                        .map(|record| record.undo_stack.clone())
-                        .unwrap_or_default(),
-                    redo_stack: previous
-                        .as_ref()
-                        .map(|record| record.redo_stack.clone())
-                        .unwrap_or_default(),
-                    updated_at,
-                },
-            );
-            drop(guard);
             Ok(json!({
                 "success": true,
-                "state": editor_runtime_state_value(state, &file_path)?
+                "state": update_editor_runtime_state(state, &file_path, payload)?
             }))
         })()),
         _ => None,
