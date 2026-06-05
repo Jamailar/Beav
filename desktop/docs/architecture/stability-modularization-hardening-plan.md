@@ -122,6 +122,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Moved RedClaw media plan export file writes outside the `with_store_mut` lock; the lock now only snapshots and applies metadata updates.
 - Added `pnpm --dir desktop check:store-locks` to prevent obvious slow file/process/network work inside `with_store` / `with_store_mut` closures.
 - Added `pnpm --dir desktop check:architecture` as the combined renderer IPC and store lock boundary guard.
+- Added `store::redclaw` owned snapshot helpers and routed RedClaw status/project/task/job read channels through them.
 
 ### 1. Bridge Contract Layer
 
