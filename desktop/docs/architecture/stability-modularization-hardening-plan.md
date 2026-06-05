@@ -349,6 +349,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted Thrive plugin data-source capability checks, manuscript tree projection, read-data command handling and home widget/action assembly into `commands/plugin/data_sources`.
 - Extracted Thrive plugin enabled-manifest enumeration, skill discovery, MCP config parsing and runtime capability sync into `commands/plugin/runtime_sync`.
 - Extracted Thrive plugin index persistence, plugin root/data/cache path helpers, plugin id validation, display-name projection and list summary assembly into `commands/plugin/registry`.
+- Extracted Thrive plugin install/enable/uninstall/open-data-dir lifecycle handling into `commands/plugin/lifecycle`, leaving `plugin.rs` focused on manifest types and channel dispatch.
 - Extracted skills marketplace registry loading, safe GitHub URL validation, marketplace listing and market-install entry resolution into `commands/skills_ai/marketplace`, leaving `skills_ai.rs` focused on skill CRUD, invocation, install and AI utility channels.
 - Extracted media edit ffmpeg operation parsing, argument construction and artifact projection into `commands/media_edit/pipeline`, leaving `media_edit.rs` focused on request setup, output selection and media asset registration.
 - Extracted advisor YouTube successful/failed subtitle download persistence and YouTube video upsert logic into `commands/advisor_ops/youtube_persistence`, leaving `youtube.rs` focused on channel routing, yt-dlp orchestration and user-facing events.
