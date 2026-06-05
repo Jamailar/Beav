@@ -7,6 +7,7 @@ mod call_records;
 mod models;
 mod points;
 mod pricing;
+mod request;
 mod session;
 mod settings_sync;
 
@@ -50,6 +51,9 @@ use points::{
     cached_official_points, fetch_remote_official_points, official_points_need_silent_refresh,
 };
 pub(crate) use pricing::refresh_official_pricing_cache;
+use request::{
+    run_authenticated_official_request, run_authenticated_official_request_skip_preflight_refresh,
+};
 #[cfg(test)]
 use session::session_refresh_window_ms;
 use session::{
@@ -412,117 +416,6 @@ fn refresh_official_auth_session_with_lock(
             Err(error)
         }
     }
-}
-
-fn run_authenticated_official_request_inner(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: &mut Value,
-    method: &str,
-    path: &str,
-    body: Option<Value>,
-    preflight_refresh: bool,
-    expected_generation: Option<u64>,
-) -> Result<Value, String> {
-    if preflight_refresh && official_session_needs_refresh(settings) {
-        log_official_auth(state, "request-preflight-refresh", format!("path={path}"));
-        refresh_official_auth_session_with_lock(
-            app,
-            state,
-            settings,
-            false,
-            "preflight",
-            expected_generation,
-        )?;
-    }
-
-    let response = crate::run_official_json_request_response(settings, method, path, body.clone())?;
-    if !official_response_is_unauthorized(response.status, &response.body) {
-        return Ok(response.body);
-    }
-
-    log_official_auth(
-        state,
-        "request-unauthorized",
-        format!("path={path} status={} retrying refresh", response.status),
-    );
-    refresh_official_auth_session_with_lock(
-        app,
-        state,
-        settings,
-        true,
-        "retry",
-        expected_generation,
-    )?;
-    let retry = crate::run_official_json_request_response(settings, method, path, body)?;
-    if !official_response_is_unauthorized(retry.status, &retry.body) {
-        return Ok(retry.body);
-    }
-
-    let error = response_error_message(&retry.body);
-    let kind = auth::classify_auth_error(&error);
-    log_official_auth(
-        state,
-        "request-retry-failed",
-        format!("path={path} kind={kind:?} error={error}"),
-    );
-    if kind == auth::AuthErrorKind::ReauthRequired {
-        clear_official_auth_state(settings);
-        let _ = apply_official_settings_update(
-            app,
-            state,
-            settings,
-            "official-auth-unauthorized",
-            None,
-            expected_generation,
-        );
-        let _ = auth::mark_auth_reauth_required(app, state, error.clone());
-    } else {
-        let _ = auth::mark_auth_degraded(app, state, error.clone(), kind);
-    }
-    Err(error)
-}
-
-fn run_authenticated_official_request(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: &mut Value,
-    method: &str,
-    path: &str,
-    body: Option<Value>,
-    expected_generation: Option<u64>,
-) -> Result<Value, String> {
-    run_authenticated_official_request_inner(
-        app,
-        state,
-        settings,
-        method,
-        path,
-        body,
-        true,
-        expected_generation,
-    )
-}
-
-fn run_authenticated_official_request_skip_preflight_refresh(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: &mut Value,
-    method: &str,
-    path: &str,
-    body: Option<Value>,
-    expected_generation: Option<u64>,
-) -> Result<Value, String> {
-    run_authenticated_official_request_inner(
-        app,
-        state,
-        settings,
-        method,
-        path,
-        body,
-        false,
-        expected_generation,
-    )
 }
 
 pub fn handle_official_channel(
