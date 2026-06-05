@@ -304,6 +304,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted App Shell settings navigation target state into `features/app-shell/useSettingsShellNavigation`.
 - Extracted LLM readiness source parsing, local endpoint detection, default model fallback and settings merge helpers into `commands/llm_readiness/config`.
 - Extracted audio capture capability probing and audio error classification into `commands/audio/capability`, leaving recording lifecycle in `commands/audio`.
+- Extracted audio sample-format conversion and WAV byte encoding into `commands/audio/samples`, leaving device selection, stream lifecycle and recording state in `commands/audio`.
 - Extracted remote notification path construction, response wrapping and official context projection into `commands/notifications/remote`.
 - Extracted file preview path projection, virtual path validation, mime/kind classification and manuscript package preview tests into `commands/file_ops/preview`.
 - Extracted file zip archive entry sanitization, unique naming and zip writing into `commands/file_ops/archive`.
