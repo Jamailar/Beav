@@ -12,6 +12,7 @@ use crate::runtime::{
     request_runtime_approval, resolve_runtime_approval_by_source_key,
     ManuscriptScriptConfirmPayload, RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
+use crate::store::settings as settings_store;
 use crate::*;
 use base64::Engine;
 use pulldown_cmark::{
@@ -5017,7 +5018,8 @@ fn generate_motion_items_for_project(
         instructions,
         serde_json::to_string(&media_items).map_err(|error| error.to_string())?
     );
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
@@ -5151,7 +5153,8 @@ fn generate_editor_commands_for_project(
         serde_json::to_string(project).map_err(|error| error.to_string())?,
         instructions
     );
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
