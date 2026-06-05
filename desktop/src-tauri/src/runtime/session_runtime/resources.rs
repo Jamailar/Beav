@@ -1,3 +1,6 @@
+use super::reference_resolver::{
+    local_file_url_to_path, path_file_name, resolve_reference_from_dir,
+};
 use super::*;
 
 pub fn session_resources_value_for_session(
