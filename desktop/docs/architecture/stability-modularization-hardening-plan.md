@@ -312,6 +312,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted collaboration task-panel status mapping, review counts, RedClaw job projection and sorted panel item assembly into `commands/runtime_collab/task_panel`.
 - Extracted collaboration team-member wake scheduling, mailbox consumption, member session metadata, agent-turn execution and team action event fanout into `commands/runtime_collab/team_wake`.
 - Extracted review-docket runtime approval construction, proposed action routing, CLI escalation decisions and RedClaw draft confirmations into `commands/runtime_collab/review_approval`.
+- Extracted confirmed team-guide session assembly, member/task payload construction, role-to-member assignment and collab event fanout into `commands/runtime_collab/team_guide`.
 
 ### 1. Bridge Contract Layer
 
