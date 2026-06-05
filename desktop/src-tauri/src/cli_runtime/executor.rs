@@ -23,6 +23,7 @@ use crate::cli_runtime::{
     CliVerifyRule,
 };
 use crate::process_utils::background_command;
+use crate::store::settings as settings_store;
 use crate::{make_id, now_i64, with_store, AppState};
 
 fn normalize_cwd(request: &CliExecuteRequest, environment_root: &str) -> String {
@@ -37,8 +38,8 @@ fn normalize_cwd(request: &CliExecuteRequest, environment_root: &str) -> String 
 
 pub fn default_cli_execution_mode(state: &State<'_, AppState>) -> Result<CliExecutionMode, String> {
     with_store(state, |store| {
-        let mode = store
-            .settings
+        let settings = settings_store::settings_snapshot(&store);
+        let mode = settings
             .get("cli_runtime_execution_mode")
             .and_then(Value::as_str)
             .map(str::trim)

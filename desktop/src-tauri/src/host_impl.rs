@@ -2111,8 +2111,7 @@ pub(crate) fn append_debug_log(store: &mut AppStore, line: String) {
 }
 
 pub(crate) fn is_debug_log_enabled(store: &AppStore) -> bool {
-    store
-        .settings
+    settings_store::settings_snapshot(store)
         .as_object()
         .and_then(|settings| settings.get("debug_log_enabled"))
         .and_then(|value| value.as_bool())
