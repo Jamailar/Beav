@@ -116,6 +116,20 @@ pub(crate) fn list_long_cycle_tasks(store: &AppStore) -> Vec<RedclawLongCycleTas
     store.redclaw_state.long_cycle_tasks.clone()
 }
 
+pub(crate) fn job_definition_sync_snapshot(
+    store: &AppStore,
+) -> (
+    Vec<RedclawJobDefinitionRecord>,
+    Vec<RedclawScheduledTaskRecord>,
+    Vec<RedclawLongCycleTaskRecord>,
+) {
+    (
+        list_job_definitions(store),
+        list_scheduled_tasks(store),
+        list_long_cycle_tasks(store),
+    )
+}
+
 pub(crate) fn list_job_definitions(store: &AppStore) -> Vec<RedclawJobDefinitionRecord> {
     store.redclaw_job_definitions.clone()
 }
@@ -149,6 +163,13 @@ pub(crate) fn find_confirmable_job_definition(
 
 pub(crate) fn push_job_definition(store: &mut AppStore, definition: RedclawJobDefinitionRecord) {
     store.redclaw_job_definitions.push(definition);
+}
+
+pub(crate) fn replace_job_definitions(
+    store: &mut AppStore,
+    definitions: Vec<RedclawJobDefinitionRecord>,
+) {
+    store.redclaw_job_definitions = definitions;
 }
 
 pub(crate) fn remove_job_definition(store: &mut AppStore, job_definition_id: &str) {
