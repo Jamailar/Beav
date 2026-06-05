@@ -55,6 +55,8 @@ export function createRedClawBridge(core: BridgeCore) {
       taskStats: () => core.invokeChannel('redclaw:task-stats'),
       onStatus: (listener: Listener) => core.on('redclaw:runner-status', listener),
       offStatus: (listener: Listener) => core.off('redclaw:runner-status', listener),
+      onTaskEvent: (listener: Listener) => core.on('redclaw:task-event', listener),
+      offTaskEvent: (listener: Listener) => core.off('redclaw:task-event', listener),
     },
     redclawOrchestration: {
       createRun: (payload: { goal: string; sessionId?: string; projectId?: string; platform?: string; format?: string }) =>

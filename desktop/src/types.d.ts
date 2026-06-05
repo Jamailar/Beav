@@ -2316,6 +2316,8 @@ declare global {
         }>;
         onStatus: (listener: (...args: unknown[]) => void) => void;
         offStatus: (listener: (...args: unknown[]) => void) => void;
+        onTaskEvent: (listener: (...args: unknown[]) => void) => void;
+        offTaskEvent: (listener: (...args: unknown[]) => void) => void;
       };
       redclawOrchestration: {
         createRun: (payload: {

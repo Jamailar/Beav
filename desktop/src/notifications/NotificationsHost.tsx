@@ -71,10 +71,10 @@ export function NotificationsHost({ currentView, children = null }: Notification
     const handleSettingsUpdated = () => {
       void loadSettings();
     };
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
     return () => {
       cancelled = true;
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
     };
   }, []);
 
@@ -143,12 +143,12 @@ export function NotificationsHost({ currentView, children = null }: Notification
     };
 
     window.ipcRenderer.generation.onJobUpdated(handleGenerationUpdated);
-    window.ipcRenderer.on('redclaw:task-event', handleRedclawTaskEvent);
+    window.ipcRenderer.redclawRunner.onTaskEvent(handleRedclawTaskEvent);
 
     return () => {
       runtimeDispose();
       window.ipcRenderer.generation.offJobUpdated(handleGenerationUpdated);
-      window.ipcRenderer.off('redclaw:task-event', handleRedclawTaskEvent);
+      window.ipcRenderer.redclawRunner.offTaskEvent(handleRedclawTaskEvent);
     };
   }, [currentView, openCenter, push]);
 
