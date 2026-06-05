@@ -6,7 +6,7 @@ use tauri::State;
 use super::index::rebuild_memory_index_from_store;
 use super::store::{memory_root, memory_workspace_snapshot, persist_memory_workspace_state};
 use crate::persistence::{with_store, with_store_mut};
-use crate::store::settings as settings_store;
+use crate::store::{redclaw as redclaw_store, settings as settings_store};
 use crate::{
     app_brand_display_name, load_redbox_prompt, make_id, now_i64, now_iso,
     parse_json_value_from_text, payload_string, render_redbox_prompt,
@@ -223,7 +223,10 @@ fn apply_memory_maintenance_status_to_store(store: &mut AppStore, status: &Value
     if let Some(object) = store.settings.as_object_mut() {
         object.remove("redbox_memory_maintenance_status_json");
     }
-    store.redclaw_state.next_maintenance_at = value_to_i64_string(status.get("nextScheduledAt"));
+    redclaw_store::set_next_maintenance_at(
+        store,
+        value_to_i64_string(status.get("nextScheduledAt")),
+    );
 }
 
 pub(crate) fn run_memory_maintenance_with_reason(
