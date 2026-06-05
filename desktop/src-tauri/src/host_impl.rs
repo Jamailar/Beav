@@ -15,7 +15,7 @@ use crate::runtime::{
     InteractiveToolOutcomeDigest, McpServerRecord, RedclawStateRecord, ResolvedChatConfig,
     RuntimeWarmEntry, SessionToolResultRecord, SessionTranscriptRecord,
 };
-use crate::store::settings as settings_store;
+use crate::store::{settings as settings_store, subjects as subject_store};
 use crate::*;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -8993,9 +8993,8 @@ pub(crate) fn handle_subject_category_create(
         return Ok(json!({ "success": false, "error": "分类名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
-    let (mut categories, subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (mut categories, subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     if categories
         .iter()
         .any(|item| item.name.eq_ignore_ascii_case(&name))
@@ -9012,8 +9011,7 @@ pub(crate) fn handle_subject_category_create(
     categories.push(category.clone());
     persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        store.categories = categories;
-        store.subjects = subjects;
+        subject_store::replace_catalog(store, categories, subjects);
         Ok(json!({ "success": true, "category": category }))
     })
 }
@@ -9033,9 +9031,8 @@ pub(crate) fn handle_subject_category_update(
         return Ok(json!({ "success": false, "error": "分类名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
-    let (mut categories, subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (mut categories, subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     if categories
         .iter()
         .any(|item| item.id != id && item.name.eq_ignore_ascii_case(&next_name))
@@ -9050,8 +9047,7 @@ pub(crate) fn handle_subject_category_update(
     let category = categories[index].clone();
     persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        store.categories = categories;
-        store.subjects = subjects;
+        subject_store::replace_catalog(store, categories, subjects);
         Ok(json!({ "success": true, "category": category }))
     })
 }
@@ -9065,9 +9061,8 @@ pub(crate) fn handle_subject_category_delete(
         return Ok(json!({ "success": false, "error": "缺少分类 id" }));
     };
     let subjects_root = subjects_root(state)?;
-    let (mut categories, subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (mut categories, subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     if subjects
         .iter()
         .any(|subject| subject.category_id.as_deref() == Some(id.as_str()))
@@ -9081,8 +9076,7 @@ pub(crate) fn handle_subject_category_delete(
     }
     persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        store.categories = categories;
-        store.subjects = subjects;
+        subject_store::replace_catalog(store, categories, subjects);
         Ok(json!({ "success": true }))
     })
 }
@@ -9099,9 +9093,8 @@ pub(crate) fn handle_subject_create(
         return Ok(json!({ "success": false, "error": "资产名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
-    let (categories, mut subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (categories, mut subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     if let Some(id) = input.id.as_deref() {
         if subjects.iter().any(|item| item.id == id) {
             return Ok(json!({ "success": false, "error": "资产已存在" }));
@@ -9123,8 +9116,7 @@ pub(crate) fn handle_subject_create(
     subjects.push(record.clone());
     persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        store.categories = categories;
-        store.subjects = subjects;
+        subject_store::replace_catalog(store, categories, subjects);
         Ok(())
     })?;
     let _ = voice_service::spawn_subject_voice_clone_if_needed(app, &record);
@@ -9146,9 +9138,8 @@ pub(crate) fn handle_subject_update(
         return Ok(json!({ "success": false, "error": "资产名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
-    let (categories, mut subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (categories, mut subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     if let Some(category_id) = input
         .category_id
         .as_deref()
@@ -9169,8 +9160,7 @@ pub(crate) fn handle_subject_update(
     subjects[index] = record.clone();
     persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        store.categories = categories;
-        store.subjects = subjects;
+        subject_store::replace_catalog(store, categories, subjects);
         Ok(())
     })?;
     let _ = voice_service::spawn_subject_voice_clone_if_needed(app, &record);
@@ -9186,9 +9176,8 @@ pub(crate) fn handle_subject_delete(
         return Ok(json!({ "success": false, "error": "缺少资产 id" }));
     };
     let subjects_root = subjects_root(state)?;
-    let (categories, mut subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (categories, mut subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     let deleting_subject = subjects.iter().find(|item| item.id == id).cloned();
     if deleting_subject
         .as_ref()
@@ -9211,8 +9200,7 @@ pub(crate) fn handle_subject_delete(
         fs::remove_dir_all(&subject_dir).map_err(|error| error.to_string())?;
     }
     with_store_mut(state, |store| {
-        store.categories = categories;
-        store.subjects = subjects;
+        subject_store::replace_catalog(store, categories, subjects);
         Ok(json!({ "success": true }))
     })
 }
