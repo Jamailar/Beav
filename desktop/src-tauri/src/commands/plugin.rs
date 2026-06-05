@@ -15,6 +15,7 @@ use crate::{
     runtime::{McpServerRecord, SkillRecord},
     skills::discover_skill_records_from_root,
     slug_from_relative_path,
+    store::mcp_tools as mcp_tools_store,
     store::media as media_store,
     store::subjects as subjects_store,
     store_root, workspace_root, write_json_value, AppState,
@@ -1025,18 +1026,11 @@ pub(crate) fn sync_enabled_thrive_plugin_capabilities(
                 .unwrap_or_default()
                 .starts_with("thrive-plugin:")
         });
-        store.mcp_servers.retain(|server| {
-            server
-                .oauth
-                .as_ref()
-                .and_then(|value| value.get("redbox"))
-                .and_then(|value| value.get("pluginId"))
-                .and_then(Value::as_str)
-                .is_none()
-        });
         store.skills.extend(plugin_skills.clone());
-        store.mcp_servers.extend(plugin_mcp_servers.clone());
-        Ok(store.mcp_servers.clone())
+        Ok(mcp_tools_store::replace_thrive_plugin_servers(
+            store,
+            plugin_mcp_servers.clone(),
+        ))
     })?;
     state.mcp_manager.sync_servers(&next_mcp_servers)?;
 

@@ -41,6 +41,17 @@ pub(crate) fn replace_servers_if_non_empty(
     list_servers(store)
 }
 
+pub(crate) fn replace_thrive_plugin_servers(
+    store: &mut AppStore,
+    servers: Vec<McpServerRecord>,
+) -> Vec<McpServerRecord> {
+    store
+        .mcp_servers
+        .retain(|server| thrive_plugin_id(server).is_none());
+    store.mcp_servers.extend(servers);
+    list_servers(store)
+}
+
 pub(crate) fn remove_server(
     store: &mut AppStore,
     target: &str,
@@ -75,6 +86,15 @@ pub(crate) fn oauth_status(store: &AppStore, server_id: &str) -> Value {
         .find(|item| item.id == server_id)
         .and_then(|item| item.oauth.clone())
         .unwrap_or_else(|| json!({}))
+}
+
+fn thrive_plugin_id(server: &McpServerRecord) -> Option<&str> {
+    server
+        .oauth
+        .as_ref()
+        .and_then(|value| value.get("redbox"))
+        .and_then(|value| value.get("pluginId"))
+        .and_then(Value::as_str)
 }
 
 pub(crate) fn list_runtime_hooks(store: &AppStore) -> Vec<RuntimeHookRecord> {
