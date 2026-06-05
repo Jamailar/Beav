@@ -299,6 +299,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted official cached-data refresh, auth bootstrap and background refresh inflight control into `commands/official/cache`, preserving existing startup/auth-flow entrypoints.
 - Moved official WeChat login snapshot update helper into `commands/official/auth_flow`.
 - Extracted authenticated official request preflight-refresh and retry handling into `commands/official/request`.
+- Extracted official auth refresh, AI-request reauth and refresh failure handling into `commands/official/auth_refresh`.
 
 ### 1. Bridge Contract Layer
 
