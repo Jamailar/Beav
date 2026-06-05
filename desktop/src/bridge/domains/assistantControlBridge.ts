@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createAssistantControlBridge(core: BridgeCore) {
   return {
@@ -9,6 +9,10 @@ export function createAssistantControlBridge(core: BridgeCore) {
       setConfig: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-set-config', payload || {}),
       startWeixinLogin: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-weixin-login-start', payload || {}),
       waitForWeixinLogin: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-weixin-login-wait', payload || {}),
+      onStatus: (listener: Listener) => core.on('assistant:daemon-status', listener),
+      offStatus: (listener: Listener) => core.off('assistant:daemon-status', listener),
+      onLog: (listener: Listener) => core.on('assistant:daemon-log', listener),
+      offLog: (listener: Listener) => core.off('assistant:daemon-log', listener),
     },
     wechatOfficial: {
       getStatus: () => core.invokeChannel('wechat-official:get-status'),

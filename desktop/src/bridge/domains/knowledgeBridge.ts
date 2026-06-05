@@ -120,6 +120,16 @@ export function createKnowledgeBridge(core: BridgeCore) {
       offChanged: (listener: Listener) => core.off('knowledge:changed', listener),
       onCatalogUpdated: (listener: Listener) => core.on('knowledge:catalog-updated', listener),
       offCatalogUpdated: (listener: Listener) => core.off('knowledge:catalog-updated', listener),
+      onYoutubeVideoUpdated: (listener: Listener) => core.on('knowledge:youtube-video-updated', listener),
+      offYoutubeVideoUpdated: (listener: Listener) => core.off('knowledge:youtube-video-updated', listener),
+      onNewYoutubeVideo: (listener: Listener) => core.on('knowledge:new-youtube-video', listener),
+      offNewYoutubeVideo: (listener: Listener) => core.off('knowledge:new-youtube-video', listener),
+      onDocsUpdated: (listener: Listener) => core.on('knowledge:docs-updated', listener),
+      offDocsUpdated: (listener: Listener) => core.off('knowledge:docs-updated', listener),
+      onNoteUpdated: (listener: Listener) => core.on('knowledge:note-updated', listener),
+      offNoteUpdated: (listener: Listener) => core.off('knowledge:note-updated', listener),
+      onFileIndexUpdated: (listener: Listener) => core.on('knowledge:file-index-updated', listener),
+      offFileIndexUpdated: (listener: Listener) => core.off('knowledge:file-index-updated', listener),
     },
 
     embedding: {

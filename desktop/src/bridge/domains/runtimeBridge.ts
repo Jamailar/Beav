@@ -27,6 +27,8 @@ export function createRuntimeBridge(core: BridgeCore) {
       cancel: (taskId: string) => core.invokeChannel('background-tasks:cancel', { taskId }),
       retry: (taskId: string) => core.invokeChannel('background-tasks:retry', { taskId }),
       archive: (taskId: string) => core.invokeChannel('background-tasks:archive', { taskId }),
+      onUpdated: (listener: Listener) => core.on('background:task-updated', listener),
+      offUpdated: (listener: Listener) => core.off('background:task-updated', listener),
     },
     backgroundWorkers: {
       getPoolState: () => core.invokeChannel('background-workers:get-pool-state'),

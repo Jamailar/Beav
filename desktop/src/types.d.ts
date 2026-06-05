@@ -1429,6 +1429,8 @@ declare global {
         } | null>;
         retry: (taskId: string) => Promise<{ success: boolean; executionId: string; definitionId: string }>;
         archive: (taskId: string) => Promise<{ success: boolean; executionId: string }>;
+        onUpdated: (listener: (...args: unknown[]) => void) => void;
+        offUpdated: (listener: (...args: unknown[]) => void) => void;
       };
       backgroundWorkers: {
         getPoolState: () => Promise<{
@@ -1809,6 +1811,16 @@ declare global {
         offChanged: (listener: (...args: unknown[]) => void) => void;
         onCatalogUpdated: (listener: (...args: unknown[]) => void) => void;
         offCatalogUpdated: (listener: (...args: unknown[]) => void) => void;
+        onYoutubeVideoUpdated: (listener: (...args: unknown[]) => void) => void;
+        offYoutubeVideoUpdated: (listener: (...args: unknown[]) => void) => void;
+        onNewYoutubeVideo: (listener: (...args: unknown[]) => void) => void;
+        offNewYoutubeVideo: (listener: (...args: unknown[]) => void) => void;
+        onDocsUpdated: (listener: (...args: unknown[]) => void) => void;
+        offDocsUpdated: (listener: (...args: unknown[]) => void) => void;
+        onNoteUpdated: (listener: (...args: unknown[]) => void) => void;
+        offNoteUpdated: (listener: (...args: unknown[]) => void) => void;
+        onFileIndexUpdated: (listener: (...args: unknown[]) => void) => void;
+        offFileIndexUpdated: (listener: (...args: unknown[]) => void) => void;
       };
       embedding: {
         getManuscriptCache: (manuscriptId: string) => Promise<unknown>;
@@ -2714,6 +2726,10 @@ declare global {
           accountId?: string;
           userId?: string;
         }>;
+        onStatus: (listener: (...args: unknown[]) => void) => void;
+        offStatus: (listener: (...args: unknown[]) => void) => void;
+        onLog: (listener: (...args: unknown[]) => void) => void;
+        offLog: (listener: (...args: unknown[]) => void) => void;
       };
       wechatOfficial: {
         getStatus: () => Promise<{
