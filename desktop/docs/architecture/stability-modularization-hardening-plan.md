@@ -116,6 +116,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed the remaining GenerationStudio, Knowledge and Settings page event subscriptions through bridge facades; strict raw page IPC event scan is now clean.
 - Added `pnpm --dir desktop check:ipc-boundaries` to prevent new renderer raw IPC channel calls from bypassing bridge domain facades.
 - Extracted feedback report dialog state and global open/submitted events into an App Shell hook, keeping `App.tsx` closer to composition-only.
+- Extracted official auth notice lifecycle and stale auth snapshot cleanup into an App Shell hook.
 
 ### 1. Bridge Contract Layer
 
