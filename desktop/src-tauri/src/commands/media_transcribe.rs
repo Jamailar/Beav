@@ -1,5 +1,6 @@
 use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
 use crate::desktop_io::{resolve_transcription_settings, run_curl_transcription_with_parse_format};
+use crate::store::settings as settings_store;
 use crate::{ffmpeg_program, make_id, now_ms, payload_string, workspace_root, AppState};
 use serde_json::{json, Value};
 use std::fs;
@@ -332,8 +333,9 @@ pub(crate) fn execute_media_transcribe(
             .or_else(|| request.get("responseFormat"))
             .and_then(Value::as_str),
     );
-    let settings_snapshot =
-        crate::persistence::with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot = crate::persistence::with_store(state, |store| {
+        Ok(settings_store::settings_snapshot(&store))
+    })?;
     let Some((endpoint, api_key, model_name)) = resolve_transcription_settings(&settings_snapshot)
     else {
         return Err(
