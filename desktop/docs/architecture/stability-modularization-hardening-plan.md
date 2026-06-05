@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: in_progress
-last_updated: 2026-06-05
+last_updated: 2026-06-06
 ---
 
 # RedBox Stability And Modularization Hardening Plan
@@ -188,6 +188,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted manuscript timeline model helpers for default clip duration, asset/track kind projection, clip construction and split behavior into `commands/manuscripts/timeline_model.rs`, while preserving the existing exported `timeline_clip_duration_ms` API.
 - Extracted manuscript editor runtime state snapshots, runtime-state updates, undo snapshots and undo/redo restoration into `commands/manuscripts/editor_runtime_state.rs`, keeping lock scope centralized and file writes outside the runtime-state lock.
 - Extracted manuscript Remotion context helpers for scene patch merging, scene summaries, asset metadata projection and editor context assembly into `commands/manuscripts/remotion_context.rs`.
+- Extracted manuscript editor project model helpers for track/item/layer access, subtitle style defaults, motion item normalization, Remotion motion sync and timeline normalization into `commands/manuscripts/editor_project_model.rs`, keeping AI command generation and application orchestration unchanged.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
