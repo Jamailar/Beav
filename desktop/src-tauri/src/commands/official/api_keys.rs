@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::settings as settings_store;
 
 pub(super) fn handle_api_keys_channel(
     app: &AppHandle,
@@ -9,73 +10,59 @@ pub(super) fn handle_api_keys_channel(
 ) -> Option<Result<Value, String>> {
     match channel {
         "redbox-auth:api-keys:list" => Some((|| -> Result<Value, String> {
-            with_store(state, |store| {
-                let mut settings = store.settings.clone();
-                let remote =
-                    crate::run_official_json_request(&settings, "GET", "/users/me/api-keys", None)?;
-                let remote_items = official_response_items(&remote);
-                let local_items = official_settings_api_keys(&settings);
-                let merged = remote_items
-                    .into_iter()
-                    .map(|item| {
-                        let id = payload_string(&item, "id").unwrap_or_default();
-                        let prefix = payload_string(&item, "key_prefix")
-                            .or_else(|| payload_string(&item, "keyPrefix"))
-                            .unwrap_or_default();
-                        let last4 = payload_string(&item, "key_last4")
-                            .or_else(|| payload_string(&item, "keyLast4"))
-                            .unwrap_or_default();
-                        let local_plaintext = local_items.iter().find_map(|local| {
-                            let id_matches = !id.is_empty()
-                                && payload_string(local, "id").unwrap_or_default() == id;
-                            let prefix_matches = !prefix.is_empty()
-                                && payload_string(local, "key_prefix").unwrap_or_default()
-                                    == prefix;
-                            let last4_matches = !last4.is_empty()
-                                && payload_string(local, "key_last4").unwrap_or_default() == last4;
-                            if id_matches || (prefix_matches && last4_matches) {
-                                payload_string(local, "apiKey")
-                            } else {
-                                None
-                            }
-                        });
-                        let mut object = item.as_object().cloned().unwrap_or_default();
-                        if let Some(api_key) = local_plaintext {
-                            object.insert("apiKey".to_string(), json!(api_key));
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
+            let mut settings = settings_snapshot.clone();
+            let remote =
+                crate::run_official_json_request(&settings, "GET", "/users/me/api-keys", None)?;
+            let remote_items = official_response_items(&remote);
+            let local_items = official_settings_api_keys(&settings);
+            let merged = remote_items
+                .into_iter()
+                .map(|item| {
+                    let id = payload_string(&item, "id").unwrap_or_default();
+                    let prefix = payload_string(&item, "key_prefix")
+                        .or_else(|| payload_string(&item, "keyPrefix"))
+                        .unwrap_or_default();
+                    let last4 = payload_string(&item, "key_last4")
+                        .or_else(|| payload_string(&item, "keyLast4"))
+                        .unwrap_or_default();
+                    let local_plaintext = local_items.iter().find_map(|local| {
+                        let id_matches =
+                            !id.is_empty() && payload_string(local, "id").unwrap_or_default() == id;
+                        let prefix_matches = !prefix.is_empty()
+                            && payload_string(local, "key_prefix").unwrap_or_default() == prefix;
+                        let last4_matches = !last4.is_empty()
+                            && payload_string(local, "key_last4").unwrap_or_default() == last4;
+                        if id_matches || (prefix_matches && last4_matches) {
+                            payload_string(local, "apiKey")
+                        } else {
+                            None
                         }
-                        Value::Object(object)
-                    })
-                    .collect::<Vec<_>>();
-                write_settings_json_array(&mut settings, "redbox_auth_api_keys_json", &merged);
-                Ok(json!({
-                    "success": true,
-                    "keys": merged,
-                    "settings": settings,
-                }))
-            })
-            .and_then(|response| {
-                let next_settings = response
-                    .get("settings")
-                    .cloned()
-                    .unwrap_or_else(|| json!({}));
-                apply_official_settings_update(
-                    app,
-                    state,
-                    &next_settings,
-                    "official-api-key-list",
-                    None,
-                    request_generation,
-                )?;
-                Ok(json!({
-                    "success": true,
-                    "keys": response.get("keys").cloned().unwrap_or_else(|| json!([]))
-                }))
-            })
+                    });
+                    let mut object = item.as_object().cloned().unwrap_or_default();
+                    if let Some(api_key) = local_plaintext {
+                        object.insert("apiKey".to_string(), json!(api_key));
+                    }
+                    Value::Object(object)
+                })
+                .collect::<Vec<_>>();
+            write_settings_json_array(&mut settings, "redbox_auth_api_keys_json", &merged);
+            apply_official_settings_update(
+                app,
+                state,
+                &settings,
+                "official-api-key-list",
+                None,
+                request_generation,
+            )?;
+            Ok(json!({ "success": true, "keys": merged }))
         })()),
         "redbox-auth:api-keys:create" => Some((|| -> Result<Value, String> {
             let name =
                 payload_string(payload, "name").unwrap_or_else(|| "Default API Key".to_string());
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let response = crate::run_official_json_request(
                 &settings,
@@ -129,7 +116,8 @@ pub(super) fn handle_api_keys_channel(
             if api_key.trim().is_empty() {
                 return Ok(json!({ "success": false, "error": "缺少 API Key" }));
             }
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let response = {
                 let mut settings = settings_snapshot.clone();
                 let mut keys = official_settings_api_keys(&settings);
