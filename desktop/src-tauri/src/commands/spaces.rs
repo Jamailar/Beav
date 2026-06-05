@@ -6,7 +6,7 @@ use crate::persistence::{
     apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
     with_store_mut,
 };
-use crate::store::settings as settings_store;
+use crate::store::{settings as settings_store, spaces as spaces_store};
 use crate::{
     active_space_workspace_root_from_store, emit_space_changed, emit_space_renamed,
     ensure_redclaw_space_writing_style_skill, now_iso, payload_string, payload_value_as_string,
@@ -17,9 +17,10 @@ pub(crate) const SPACE_CREATION_DISABLED_ERROR: &str = "创建新空间功能已
 
 pub(crate) fn spaces_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
     with_store(state, |store| {
+        let (spaces, active_space_id) = spaces_store::list_spaces_snapshot(&store);
         Ok(json!({
-            "spaces": store.spaces.clone(),
-            "activeSpaceId": store.active_space_id,
+            "spaces": spaces,
+            "activeSpaceId": active_space_id,
         }))
     })
 }
@@ -56,19 +57,15 @@ pub fn handle_spaces_channel(
                     return Ok(json!({ "success": false, "error": "空间名称不能为空" }));
                 };
                 let result = with_store_mut(state, |store| {
-                    let active_space_id = store.active_space_id.clone();
-                    let renamed_active_space = active_space_id == id;
-                    let Some(space) = store.spaces.iter_mut().find(|item| item.id == id) else {
-                        return Ok(json!({ "success": false, "error": "空间不存在" }));
-                    };
-                    space.name = name;
-                    space.updated_at = now_iso();
-                    Ok(json!({
-                        "success": true,
-                        "space": space.clone(),
-                        "activeSpaceId": active_space_id,
-                        "renamedActiveSpace": renamed_active_space,
-                    }))
+                    match spaces_store::rename_space(store, &id, name, &now_iso()) {
+                        Ok((space, active_space_id, renamed_active_space)) => Ok(json!({
+                            "success": true,
+                            "space": space,
+                            "activeSpaceId": active_space_id,
+                            "renamedActiveSpace": renamed_active_space,
+                        })),
+                        Err(error) => Ok(json!({ "success": false, "error": error })),
+                    }
                 })?;
                 if result
                     .get("renamedActiveSpace")
@@ -99,12 +96,12 @@ pub fn handle_spaces_channel(
                 }
 
                 let (target_root, deleted_active_space) = with_store(state, |store| {
-                    if !store.spaces.iter().any(|item| item.id == id) {
+                    if !spaces_store::space_exists(&store, &id) {
                         return Err("空间不存在".to_string());
                     }
                     Ok((
                         active_space_workspace_root_from_store(&store, &id, &state.store_path)?,
-                        store.active_space_id == id,
+                        spaces_store::is_active_space(&store, &id),
                     ))
                 })?;
 
@@ -114,26 +111,23 @@ pub fn handle_spaces_channel(
                 }
 
                 let result = with_store_mut(state, |store| {
-                    let Some(index) = store.spaces.iter().position(|item| item.id == id) else {
-                        return Ok(json!({ "success": false, "error": "空间不存在" }));
-                    };
-                    store.spaces.remove(index);
-                    if deleted_active_space {
-                        store.active_space_id = "default".to_string();
+                    match spaces_store::delete_space(store, &id, "default") {
+                        Ok((active_space_id, deleted_active_space)) => Ok(json!({
+                            "success": true,
+                            "deletedSpaceId": id,
+                            "activeSpaceId": active_space_id,
+                            "deletedActiveSpace": deleted_active_space,
+                        })),
+                        Err(error) => Ok(json!({ "success": false, "error": error })),
                     }
-                    Ok(json!({
-                        "success": true,
-                        "deletedSpaceId": id,
-                        "activeSpaceId": store.active_space_id,
-                        "deletedActiveSpace": deleted_active_space,
-                    }))
                 })?;
 
                 if deleted_active_space {
                     if let Some(root) = with_store(state, |store| {
+                        let active_space_id = spaces_store::active_space_id(&store);
                         Ok(Some(active_space_workspace_root_from_store(
                             &store,
-                            &store.active_space_id,
+                            &active_space_id,
                             &state.store_path,
                         )?))
                     })? {
@@ -170,18 +164,21 @@ pub fn handle_spaces_channel(
                 let Some(space_id) = next_id else {
                     return Ok(json!({ "success": false, "error": "缺少空间 id" }));
                 };
-                let result = with_store_mut(state, |store| {
-                    if !store.spaces.iter().any(|item| item.id == space_id) {
-                        return Ok(json!({ "success": false, "error": "空间不存在" }));
-                    }
-                    store.active_space_id = space_id.clone();
-                    Ok(json!({ "success": true, "activeSpaceId": store.active_space_id }))
-                })?;
+                let result =
+                    with_store_mut(state, |store| {
+                        match spaces_store::switch_active_space(store, &space_id) {
+                            Ok(active_space_id) => {
+                                Ok(json!({ "success": true, "activeSpaceId": active_space_id }))
+                            }
+                            Err(error) => Ok(json!({ "success": false, "error": error })),
+                        }
+                    })?;
 
                 if let Some(root) = with_store(state, |store| {
+                    let active_space_id = spaces_store::active_space_id(&store);
                     Ok(Some(active_space_workspace_root_from_store(
                         &store,
-                        &store.active_space_id,
+                        &active_space_id,
                         &state.store_path,
                     )?))
                 })? {

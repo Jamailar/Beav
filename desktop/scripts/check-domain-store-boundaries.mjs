@@ -23,6 +23,22 @@ const restrictedPatterns = [
       path.join(srcRoot, 'persistence', 'mod.rs'),
     ]),
   },
+  {
+    domain: 'spaces',
+    pattern: /store\s*\.\s*(spaces|active_space_id)\b/g,
+    allowedFiles: new Set([
+      path.join(srcRoot, 'store', 'spaces.rs'),
+      path.join(srcRoot, 'persistence', 'mod.rs'),
+      path.join(srcRoot, 'legacy_import.rs'),
+      path.join(srcRoot, 'workspace', 'paths.rs'),
+      path.join(srcRoot, 'startup', 'mod.rs'),
+      path.join(srcRoot, 'startup_migration.rs'),
+      path.join(srcRoot, 'commands', 'library.rs'),
+      path.join(srcRoot, 'commands', 'system.rs'),
+      path.join(srcRoot, 'knowledge.rs'),
+      path.join(srcRoot, 'memory', 'mod.rs'),
+    ]),
+  },
 ];
 
 function listRustFiles(dir) {
