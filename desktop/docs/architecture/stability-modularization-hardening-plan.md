@@ -213,6 +213,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed RedClaw task cancellation source-task delete/pause updates through `store::redclaw`.
 - Routed RedClaw orchestration project upserts and current-project assignment through `store::redclaw`.
 - Routed RedClaw memory-maintenance schedule writebacks through `store::redclaw`.
+- Added a domain-store boundary guard to block direct RedClaw AppStore internals outside `store::redclaw` and persistence hydration.
 
 ### 1. Bridge Contract Layer
 
