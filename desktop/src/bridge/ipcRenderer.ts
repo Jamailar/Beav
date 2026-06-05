@@ -1,5 +1,6 @@
 import { createAccountsBridge } from './domains/accountsBridge';
 import { createArchivesBridge } from './domains/archivesBridge';
+import { createAudioVoiceBridge } from './domains/audioVoiceBridge';
 import { createBridgeCore } from './core';
 import { createCliRuntimeBridge } from './domains/cliRuntimeBridge';
 import { createGenerationBridge } from './domains/generationBridge';
@@ -114,6 +115,7 @@ function createIpcRenderer() {
     ...createRuntimeBridge(core),
     ...createTeamRuntimeBridge(core),
     ...createCliRuntimeBridge(core),
+    ...createAudioVoiceBridge(core),
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh'),
@@ -191,14 +193,6 @@ function createIpcRenderer() {
       upsertProductDetailPage: (payload: unknown) => invokeChannel('brand-workspace:product-detail-page:upsert', payload),
       rebuildAiIndex: () => invokeChannel('brand-workspace:rebuild-ai-index')
     },
-    voice: {
-      list: (payload?: Record<string, unknown>) => invokeChannel('voice:list', payload || {}),
-      get: (payload: { voiceId: string }) => invokeChannel('voice:get', payload),
-      clone: (payload: Record<string, unknown>) => invokeChannel('voice:clone', payload),
-      bindAsset: (payload: Record<string, unknown>) => invokeChannel('voice:bind-asset', payload),
-      speech: (payload: Record<string, unknown>) => invokeChannel('voice:speech', payload),
-      delete: (payload: { voiceId: string }) => invokeChannel('voice:delete', payload),
-    },
     videoEditorV2: {
       getOrCreateForManuscript: (payload: { manuscriptPath: string; title?: string }) =>
         invokeChannel('videoEditorV2:get-or-create-for-manuscript', payload),
@@ -219,13 +213,6 @@ function createIpcRenderer() {
       generateAutoEdit: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:generate-auto-edit', payload),
       applyAutoEdit: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:apply-auto-edit', payload),
       render: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:render', payload),
-    },
-    audio: {
-      getCaptureCapability: () => invokeChannel('audio:get-capture-capability'),
-      startRecording: () => invokeChannel('audio:start-recording'),
-      stopRecording: () => invokeChannel('audio:stop-recording'),
-      cancelRecording: () => invokeChannel('audio:cancel-recording'),
-      openMicrophoneSettings: () => invokeChannel('audio:open-microphone-settings'),
     },
     plugins: {
       list: () => invokeChannel('plugins:list'),
