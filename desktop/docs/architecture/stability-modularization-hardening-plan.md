@@ -118,6 +118,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted feedback report dialog state and global open/submitted events into an App Shell hook, keeping `App.tsx` closer to composition-only.
 - Extracted official auth notice lifecycle and stale auth snapshot cleanup into an App Shell hook.
 - Extracted Subjects asset-library modal state and Escape handling into an App Shell hook.
+- Added `store::subjects` owned snapshot helpers and routed subject list/get/search/category reads through them as the first store domain helper slice.
 
 ### 1. Bridge Contract Layer
 
