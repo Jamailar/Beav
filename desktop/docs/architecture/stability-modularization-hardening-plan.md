@@ -166,6 +166,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed host subject category and asset CRUD catalog snapshots/writebacks through `store::subjects`.
 - Routed plugin subject count/recent data-source projections through `store::subjects`.
 - Routed RedClaw runtime start/recovery state decisions through `store::redclaw`.
+- Routed RedClaw runner start/stop/tick/config state patches through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
