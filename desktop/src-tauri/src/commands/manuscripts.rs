@@ -35,6 +35,7 @@ mod remotion_context;
 mod richpost;
 mod richpost_model;
 mod richpost_pagination;
+mod richpost_render_model;
 mod subtitles;
 mod timeline;
 mod timeline_model;
@@ -71,6 +72,7 @@ use export_helpers::{
 use remotion_context::{merge_remotion_scene_patch, remotion_context_value};
 use richpost_model::*;
 use richpost_pagination::*;
+use richpost_render_model::*;
 pub(crate) use timeline_model::timeline_clip_duration_ms;
 use timeline_model::{
     build_timeline_clip_from_asset, build_timeline_subtitle_clip, build_timeline_text_clip,
@@ -1219,68 +1221,6 @@ fn normalize_richpost_page_plan(
         "pageCount": pages.len(),
         "pages": pages
     })
-}
-
-fn richpost_css_var_map_from_tokens(
-    tokens: &Value,
-    role: &str,
-    style_overrides: Option<&Value>,
-) -> BTreeMap<String, String> {
-    let mut map = BTreeMap::<String, String>::new();
-    if let Some(object) = tokens.get("cssVars").and_then(Value::as_object) {
-        for (key, value) in object {
-            let Some(name) = sanitize_richpost_css_var_name(key) else {
-                continue;
-            };
-            let Some(text) = richpost_css_var_string(value) else {
-                continue;
-            };
-            map.insert(name, text);
-        }
-    }
-    if let Some(object) = tokens
-        .get("roleCssVars")
-        .and_then(|value| value.get(role))
-        .and_then(Value::as_object)
-    {
-        for (key, value) in object {
-            let Some(name) = sanitize_richpost_css_var_name(key) else {
-                continue;
-            };
-            let Some(text) = richpost_css_var_string(value) else {
-                continue;
-            };
-            map.insert(name, text);
-        }
-    }
-    if let Some(object) = style_overrides.and_then(Value::as_object) {
-        for (key, value) in object {
-            let Some(name) = sanitize_richpost_css_var_name(key) else {
-                continue;
-            };
-            let Some(text) = richpost_css_var_string(value) else {
-                continue;
-            };
-            map.insert(name, text);
-        }
-    }
-    map
-}
-
-fn richpost_css_var_style_attr(vars: &BTreeMap<String, String>) -> String {
-    vars.iter()
-        .map(|(key, value)| format!("{}:{};", escape_html(key), escape_html(value)))
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-fn richpost_token_value(tokens: &Value, key: &str) -> String {
-    tokens
-        .get("cssVars")
-        .and_then(Value::as_object)
-        .and_then(|object| object.get(key))
-        .and_then(richpost_css_var_string)
-        .unwrap_or_default()
 }
 
 fn richpost_zone_html(
