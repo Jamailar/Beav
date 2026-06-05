@@ -19,6 +19,7 @@
     "version:sync": "node ./scripts/sync-version.mjs",
     "brand:sync": "node ./scripts/sync-brand.mjs",
     "brand:sync:thrive": "node ./scripts/sync-brand.mjs --variant thrive",
+    "check:architecture": "pnpm check:ipc-boundaries && pnpm check:store-locks",
     "check:ipc-boundaries": "node ./scripts/check-renderer-ipc-boundaries.mjs",
     "check:store-locks": "node ./scripts/check-store-locks.mjs",
     "ipc:inventory": "node ./scripts/extract-ipc-inventory.mjs",
