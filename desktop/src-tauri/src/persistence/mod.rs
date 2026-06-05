@@ -13,8 +13,8 @@ use crate::runtime::SkillRecord;
 use crate::scheduler::sync_redclaw_job_definitions;
 use crate::skills::builtin_skill_records;
 use crate::store::{
-    media as media_store, redclaw as redclaw_store, spaces as spaces_store,
-    subjects as subjects_store,
+    assistant as assistant_store, media as media_store, redclaw as redclaw_store,
+    spaces as spaces_store, subjects as subjects_store,
 };
 use crate::workspace_loaders::{
     load_chat_rooms_from_fs, load_chatroom_messages_from_fs, load_memories_from_fs,
@@ -971,24 +971,6 @@ pub fn default_store() -> AppStore {
     }
 }
 
-fn should_enable_assistant_daemon_by_default(state: &AssistantStateRecord) -> bool {
-    if state.enabled || !state.auto_start || state.listening {
-        return false;
-    }
-
-    if state.last_error.as_deref() == Some("RedClaw assistant daemon stopped.") {
-        return false;
-    }
-
-    state.active_task_count == 0
-        && state.queued_peer_count == 0
-        && state.in_flight_keys.is_empty()
-        && matches!(
-            state.last_error.as_deref(),
-            None | Some("RedClaw assistant daemon is idle.")
-        )
-}
-
 pub fn load_store(path: &PathBuf) -> AppStore {
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
@@ -996,12 +978,7 @@ pub fn load_store(path: &PathBuf) -> AppStore {
     };
     let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
     store.debug_logs.clear();
-    store.assistant_state.listening = false;
-    if store.assistant_state.last_error.as_deref()
-        == Some("RedClaw assistant daemon local listener is running.")
-    {
-        store.assistant_state.last_error = Some("RedClaw assistant daemon is idle.".to_string());
-    }
+    assistant_store::reset_runtime_state_after_load(&mut store);
     let embedded_session_artifacts = take_session_artifacts_from_store(&mut store);
 
     // Prefer per-session JSONL if available, fall back to legacy disk artifacts
@@ -1036,12 +1013,7 @@ pub fn load_store(path: &PathBuf) -> AppStore {
     }
     let skills_migrated = ensure_builtin_skills_present(&mut store);
     let assistant_daemon_migrated =
-        if should_enable_assistant_daemon_by_default(&store.assistant_state) {
-            store.assistant_state.enabled = true;
-            true
-        } else {
-            false
-        };
+        assistant_store::enable_daemon_by_default_after_load(&mut store);
     crate::session_manager::enforce_default_retention(&mut store);
     if skills_migrated
         || assistant_daemon_migrated
