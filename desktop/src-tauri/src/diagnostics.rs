@@ -6,6 +6,7 @@ use tauri::State;
 
 use crate::persistence::with_store;
 use crate::runtime::{runtime_approval_snapshot, RuntimeWarmEntry, SessionToolResultRecord};
+use crate::store::redclaw as redclaw_store;
 use crate::{cli_runtime, media_runtime, now_i64, payload_string, AppState};
 
 const DIAGNOSTIC_HISTORY_LIMIT: usize = 100;
@@ -576,10 +577,10 @@ pub fn build_runtime_diagnostics_summary(state: &State<'_, AppState>) -> Result<
             let mut tool_results = store.session_tool_results.clone();
             tool_results.sort_by(|left, right| right.created_at.cmp(&left.created_at));
             tool_results.truncate(DIAGNOSTIC_HISTORY_LIMIT);
-            let redclaw_task_summary = build_redclaw_task_summary(
-                &store.redclaw_job_definitions,
-                &store.redclaw_job_executions,
-            );
+            let redclaw_job_definitions = redclaw_store::list_job_definitions(&store);
+            let redclaw_job_executions = redclaw_store::list_job_executions(&store);
+            let redclaw_task_summary =
+                build_redclaw_task_summary(&redclaw_job_definitions, &redclaw_job_executions);
             Ok((
                 advisor_names,
                 session_advisors,
@@ -675,19 +676,21 @@ pub fn build_background_worker_summary(state: &State<'_, AppState>) -> Value {
 
     let store_summary = with_store(state, |store| {
         let redclaw_execution_status = count_values(
-            store
-                .redclaw_job_executions
+            redclaw_store::list_job_executions(&store)
                 .iter()
                 .map(|item| item.status.clone()),
         );
-        let redclaw_definition_status =
-            count_values(store.redclaw_job_definitions.iter().map(|item| {
-                if item.enabled {
-                    "enabled".to_string()
-                } else {
-                    "disabled".to_string()
-                }
-            }));
+        let redclaw_definition_status = count_values(
+            redclaw_store::list_job_definitions(&store)
+                .iter()
+                .map(|item| {
+                    if item.enabled {
+                        "enabled".to_string()
+                    } else {
+                        "disabled".to_string()
+                    }
+                }),
+        );
         let cli_status = count_values(store.cli_executions.iter().map(|item| {
             serde_json::to_value(&item.status)
                 .ok()
