@@ -390,6 +390,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted CLI runtime IPC payload parsing, renderer enum shape normalization and execution status label mapping into `commands/cli_runtime/ipc_codec`.
 - Extracted CLI runtime tool installation command inference, managed install environment setup, install execution, detection writeback and install events into `commands/cli_runtime/install`.
 - Extracted CLI runtime tool discovery, detection, inspect, metadata merge and diagnose value handlers into `commands/cli_runtime/tools`, leaving the root command module focused on environment creation, execution lifecycle and channel dispatch.
+- Extracted CLI runtime tool source ranking, effective-environment metadata attachment and stored/detected tool merge helpers into `commands/cli_runtime/tools/metadata`.
 - Extracted advisor template discovery, JSON loading and template normalization into `commands/advisor_ops/templates`.
 - Extracted advisor knowledge file selection expansion, recursive folder collection, file copy and advisor knowledge-file writeback into `commands/advisor_ops/knowledge_files`.
 - Extracted advisor YouTube channel refresh, yt-dlp fetch handling, channel metadata merge and advisor video upsert logic into `commands/advisor_ops/videos`.
