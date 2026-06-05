@@ -194,6 +194,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted manuscript richpost render-model helpers for CSS variable layering, style-attribute serialization and token lookup into `commands/manuscripts/richpost_render_model.rs`, keeping HTML template rendering unchanged.
 - Extended manuscript richpost render-model helpers with zone HTML rendering and master-fragment placeholder replacement, keeping page HTML and file persistence orchestration unchanged.
 - Moved manuscript richpost single-page HTML rendering and master-fragment lookup into `commands/manuscripts/richpost_render_model.rs`, leaving root command code focused on page plan persistence.
+- Moved manuscript richpost preview shell rendering into `commands/manuscripts/richpost_render_model.rs`, leaving root command code focused on writing page artifacts.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
