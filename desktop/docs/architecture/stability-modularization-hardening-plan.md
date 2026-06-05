@@ -202,6 +202,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted manuscript package media asset binding, bound richpost asset collection, media source resolution and video package Remotion seed updates into `commands/manuscripts/assets.rs`, keeping package/timeline/richpost callers on shared asset helpers.
 - Extracted manuscript editor command planning, motion-item generation, AI command normalization and command application into `commands/manuscripts/editor_commands.rs`, leaving root manuscript command code focused on routing and package persistence entry points.
 - Extracted manuscript richpost scaffold/theme facade helpers and default master scaffold content into `commands/manuscripts/richpost_scaffold.rs`, preserving existing crate-level theme state exports for package hydration.
+- Extracted manuscript content persistence, package script body writes, richpost HTML sync and richpost page-plan persistence entrypoints into `commands/manuscripts/content_persistence.rs`, reducing the root manuscript command module to routing/re-export glue plus tests.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
