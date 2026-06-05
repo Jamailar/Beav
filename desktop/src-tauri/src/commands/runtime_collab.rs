@@ -7,6 +7,8 @@ mod review_approval;
 mod task_panel;
 #[path = "runtime_collab/team_guide.rs"]
 mod team_guide;
+#[path = "runtime_collab/team_tools.rs"]
+mod team_tools;
 #[path = "runtime_collab/team_wake.rs"]
 mod team_wake;
 
@@ -34,11 +36,15 @@ use crate::runtime::{
 };
 use crate::session_manager::create_session;
 use crate::store::redclaw as redclaw_store;
-use crate::subagents::{execute_team_tool, team_tool_descriptors, tick_team_wake_runtime};
+use crate::subagents::tick_team_wake_runtime;
 use crate::{now_i64, parse_timestamp_ms, payload_string, AppState};
 use review_approval::{request_review_docket_runtime_approval, route_review_docket_action};
 pub use task_panel::task_panel_list_value;
 pub use team_guide::guide_create_value;
+pub use team_tools::{
+    execute_mcp_tool_value, execute_tool_value, list_agent_backends_value, mcp_contract_value,
+    tool_descriptors_value,
+};
 use team_wake::{emit_team_action_result_events, schedule_message_target_wake};
 #[cfg(test)]
 use team_wake::{non_coordinator_members_settled, team_member_session_metadata};
@@ -58,13 +64,6 @@ fn emit_collab_event(
     payload: Value,
 ) {
     emit_runtime_event(app, event_type, owner_session_id, None, payload);
-}
-
-fn team_mcp_host_action(tool_name: &str) -> Option<&'static str> {
-    crate::mcp::team_mcp_tool_contracts()
-        .into_iter()
-        .find(|tool| tool.name == tool_name)
-        .map(|tool| tool.host_action)
 }
 
 pub fn list_sessions_value(state: &State<'_, AppState>) -> Result<Value, String> {
@@ -499,55 +498,6 @@ pub fn tick_reports_value(
         json!({ "collabSessionId": session_id, "outcome": outcome }),
     );
     Ok(json!(outcome))
-}
-
-pub fn tool_descriptors_value() -> Value {
-    json!(team_tool_descriptors())
-}
-
-pub fn execute_tool_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let action = payload_string(payload, "action").ok_or_else(|| "缺少 action".to_string())?;
-    let tool_payload = payload.get("payload").unwrap_or(payload);
-    let value = with_store_mut(state, |store| {
-        execute_team_tool(store, &action, tool_payload)
-    })?;
-    emit_team_action_result_events(app, state, &action, &value);
-    Ok(value)
-}
-
-pub fn mcp_contract_value() -> Value {
-    json!({
-        "serverName": "redbox-team",
-        "tools": crate::mcp::team_mcp_tool_contracts(),
-        "toolsListResponse": crate::mcp::team_mcp_tools_list_response()
-    })
-}
-
-pub fn execute_mcp_tool_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let tool_name =
-        payload_string(payload, "toolName").ok_or_else(|| "缺少 toolName".to_string())?;
-    let arguments = payload.get("arguments").unwrap_or(payload);
-    let value = with_store_mut(state, |store| {
-        crate::mcp::execute_team_mcp_tool(store, &tool_name, arguments)
-    })?;
-    if let Some(host_action) = team_mcp_host_action(&tool_name) {
-        emit_team_action_result_events(app, state, host_action, &value);
-    }
-    Ok(value)
-}
-
-pub fn list_agent_backends_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    with_store(state, |store| {
-        Ok(json!(crate::agent_hub::list_agent_backends(&store)))
-    })
 }
 
 #[cfg(test)]
