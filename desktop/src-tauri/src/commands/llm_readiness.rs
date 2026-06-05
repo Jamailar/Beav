@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::store::settings as settings_store;
 use crate::{
     auth, infer_protocol, now_iso, now_ms, payload_string, refresh_runtime_warm_state, with_store,
     with_store_mut, AppState,
@@ -169,7 +170,7 @@ fn merge_custom_source_settings(
 }
 
 fn get_readiness_state(state: &State<'_, AppState>) -> Result<Value, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let runtime = state
         .auth_runtime
         .lock()
@@ -206,7 +207,7 @@ fn configure_custom_source(
         }
     });
 
-    let mut settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let mut settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let source = merge_custom_source_settings(
         &mut settings,
         &source_id,
