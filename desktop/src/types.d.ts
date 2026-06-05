@@ -1651,6 +1651,8 @@ declare global {
       };
       getAppVersion: () => Promise<string>;
       checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string } }>;
+      onAppUpdateAvailable: (listener: (...args: unknown[]) => void) => void;
+      offAppUpdateAvailable: (listener: (...args: unknown[]) => void) => void;
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
       openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
       clipboardReadText: () => Promise<string>;
@@ -1744,6 +1746,8 @@ declare global {
         create: () => Promise<unknown>;
         rename: (payload: { id: string; name: string }) => Promise<unknown>;
         delete: (spaceId: string) => Promise<unknown>;
+        onChanged: (listener: (...args: unknown[]) => void) => void;
+        offChanged: (listener: (...args: unknown[]) => void) => void;
       };
       advisors: {
         list: <T = Record<string, unknown>>() => Promise<Array<T>>;

@@ -415,9 +415,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     const handleSpaceChanged = () => {
       void loadSpaces();
     };
-    window.ipcRenderer.on('space:changed', handleSpaceChanged);
+    window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
     return () => {
-      window.ipcRenderer.off('space:changed', handleSpaceChanged);
+      window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
     };
   }, [loadSpaces]);
 
@@ -586,11 +586,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         console.warn('[AppUpdate] check failed:', error);
       });
     }, 1800);
-    window.ipcRenderer.on('app:update-available', handleUpdateNotice);
+    window.ipcRenderer.onAppUpdateAvailable(handleUpdateNotice);
     window.addEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
     return () => {
       window.clearTimeout(updateCheckTimer);
-      window.ipcRenderer.off('app:update-available', handleUpdateNotice);
+      window.ipcRenderer.offAppUpdateAvailable(handleUpdateNotice);
       window.removeEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
     };
   }, []);
