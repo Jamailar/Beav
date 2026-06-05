@@ -120,6 +120,17 @@ pub(crate) fn list_job_definitions(store: &AppStore) -> Vec<RedclawJobDefinition
     store.redclaw_job_definitions.clone()
 }
 
+pub(crate) fn job_definition_by_id(
+    store: &AppStore,
+    job_definition_id: &str,
+) -> Option<RedclawJobDefinitionRecord> {
+    store
+        .redclaw_job_definitions
+        .iter()
+        .find(|item| item.id == job_definition_id)
+        .cloned()
+}
+
 pub(crate) fn find_confirmable_job_definition(
     store: &AppStore,
     owner_scope: &str,
@@ -141,6 +152,12 @@ pub(crate) fn push_job_definition(
     definition: RedclawJobDefinitionRecord,
 ) {
     store.redclaw_job_definitions.push(definition);
+}
+
+pub(crate) fn remove_job_definition(store: &mut AppStore, job_definition_id: &str) {
+    store
+        .redclaw_job_definitions
+        .retain(|item| item.id != job_definition_id);
 }
 
 pub(crate) fn list_job_executions(store: &AppStore) -> Vec<RedclawJobExecutionRecord> {

@@ -148,18 +148,13 @@ pub fn handle_task_confirm(
         .unwrap_or(false);
 
     let result = with_store_mut(state, |store| {
-        let draft = store
-            .redclaw_job_definitions
-            .iter()
-            .find(|item| item.id == draft_id && item.requires_confirmation)
-            .cloned()
+        let draft = redclaw_store::job_definition_by_id(store, &draft_id)
+            .filter(|item| item.requires_confirmation)
             .ok_or_else(|| "任务草稿不存在".to_string())?;
 
         if !confirm {
             mark_review_dockets_for_draft(store, &draft_id, "rejected");
-            store
-                .redclaw_job_definitions
-                .retain(|item| item.id != draft_id);
+            redclaw_store::remove_job_definition(store, &draft_id);
             return Ok(json!({
                 "confirmed": false,
                 "cancelled": true,
@@ -174,9 +169,7 @@ pub fn handle_task_confirm(
                 .ok_or_else(|| "任务草稿缺少 intent".to_string())?,
         )?;
         let mut preview_store = store.clone();
-        preview_store
-            .redclaw_job_definitions
-            .retain(|item| item.id != draft_id);
+        redclaw_store::remove_job_definition(&mut preview_store, &draft_id);
         let preview = preview_task_intent(&preview_store, &intent, now_i64())?;
         if matches!(preview.policy_decision, TaskPolicyDecisionKind::Reject) {
             return Err(preview
@@ -188,9 +181,7 @@ pub fn handle_task_confirm(
 
         let definition = promote_draft_definition(store, &draft, &intent, &preview)?;
         mark_review_dockets_for_draft(store, &draft_id, "approved");
-        store
-            .redclaw_job_definitions
-            .retain(|item| item.id != draft_id);
+        redclaw_store::remove_job_definition(store, &draft_id);
         Ok(json!({
             "confirmed": true,
             "draftId": draft_id,
@@ -265,11 +256,7 @@ pub fn handle_task_update(
         .unwrap_or_else(|| json!({}));
 
     let result = with_store_mut(state, |store| {
-        let existing = store
-            .redclaw_job_definitions
-            .iter()
-            .find(|item| item.id == job_definition_id)
-            .cloned()
+        let existing = redclaw_store::job_definition_by_id(store, &job_definition_id)
             .ok_or_else(|| "任务定义不存在".to_string())?;
         if existing.requires_confirmation {
             return Err("草稿任务请重新 preview/create/confirm，不支持直接 update".to_string());
@@ -294,11 +281,7 @@ pub fn handle_task_update(
         }
         apply_intent_update(store, &existing, &intent, &preview, &reason)?;
         sync_redclaw_job_definitions(store);
-        let updated = store
-            .redclaw_job_definitions
-            .iter()
-            .find(|item| item.id == job_definition_id)
-            .cloned()
+        let updated = redclaw_store::job_definition_by_id(store, &job_definition_id)
             .ok_or_else(|| "更新后任务定义不存在".to_string())?;
         Ok(json!({
             "jobDefinitionId": job_definition_id,
@@ -338,16 +321,10 @@ pub fn handle_task_cancel(
         .unwrap_or(false);
 
     let result = with_store_mut(state, |store| {
-        let definition = store
-            .redclaw_job_definitions
-            .iter()
-            .find(|item| item.id == job_definition_id)
-            .cloned()
+        let definition = redclaw_store::job_definition_by_id(store, &job_definition_id)
             .ok_or_else(|| "任务定义不存在".to_string())?;
         if definition.requires_confirmation {
-            store
-                .redclaw_job_definitions
-                .retain(|item| item.id != job_definition_id);
+            redclaw_store::remove_job_definition(store, &job_definition_id);
             return Ok(json!({
                 "cancelled": true,
                 "jobDefinitionId": job_definition_id,
@@ -374,9 +351,7 @@ pub fn handle_task_cancel(
                     }
                 }
                 _ => {
-                    store
-                        .redclaw_job_definitions
-                        .retain(|item| item.id != job_definition_id);
+                    redclaw_store::remove_job_definition(store, &job_definition_id);
                 }
             }
             if let Some(source_task_id) = definition.source_task_id.clone() {
