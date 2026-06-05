@@ -291,6 +291,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted official session access/refresh projections, refresh-window calculation and session merge helpers into `commands/official/session`.
 - Extracted official points payload normalization, cached points projection, silent-refresh decision and remote points fetch into `commands/official/points`.
 - Moved official API key extraction, record merge, plaintext-key detection and ensure-default key handling into `commands/official/api_keys`.
+- Extracted official route credential sync, realm switching, auth-state clearing and settings merge preservation into `commands/official/settings_sync`.
 
 ### 1. Bridge Contract Layer
 
