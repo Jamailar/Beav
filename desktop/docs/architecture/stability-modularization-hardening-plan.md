@@ -152,6 +152,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed RedClaw runner status value projections through `store::redclaw`.
 - Added `store::subjects` catalog snapshot helper and routed subject character-card generation reads through it.
 - Routed voice-service subject read snapshots through `store::subjects`, while leaving voice workspace persistence writeback unchanged.
+- Routed diagnostics RedClaw job definition/execution reads through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
