@@ -14,6 +14,7 @@ use crate::logging::{
     event::{LogLevel, LogSource},
 };
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
+use crate::store::settings as settings_store;
 use crate::{
     ffmpeg_executable, file_content_hash, guess_mime_and_kind, make_id, media_root,
     normalize_legacy_workspace_path, now_iso, now_rfc3339, official_ai_api_key_from_settings,
@@ -306,7 +307,7 @@ fn resolve_voice_config(
     state: &State<'_, AppState>,
     payload: Option<&Value>,
 ) -> Result<VoiceGatewayConfig, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let tts_route = crate::ai_model_manager::AiModelManager::resolve(
         &settings,
         crate::ai_model_manager::AiModelScope::VoiceTts,
