@@ -95,6 +95,8 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Verified each atomic bridge slice with `pnpm --dir desktop exec tsc --noEmit` and `pnpm --dir desktop build`.
 - Added an App Shell `AppIntent` contract plus legacy navigation detail normalization in `features/app-shell`.
 - Centralized renderer navigation event dispatch through `dispatchAppIntent` / `dispatchAppNavigateDetail`, while preserving existing legacy notification payloads.
+- Extracted pure YouTube clipboard parsing into `features/capture/youtubeClipboard.ts`, leaving clipboard polling and save orchestration in the capture hook.
+- Moved RedClaw and Advisors context-session guarded calls to domain bridge methods instead of page-level raw channel construction.
 
 ### 1. Bridge Contract Layer
 
