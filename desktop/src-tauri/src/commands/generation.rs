@@ -1,7 +1,9 @@
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::events::emit_runtime_tool_partial;
 use crate::persistence::{with_store, with_store_mut};
-use crate::store::{media as media_store, settings as settings_store};
+use crate::store::{
+    media as media_store, settings as settings_store, work_items as work_items_store,
+};
 use crate::*;
 use serde_json::{json, Value};
 use std::fs;
@@ -855,34 +857,37 @@ pub fn handle_generation_channel(
                 for asset in &execution.assets {
                     media_store::push_asset(store, asset.clone());
                 }
-                store.work_items.push(create_work_item(
-                    "image-generation",
-                    execution
-                        .title
-                        .clone()
-                        .unwrap_or_else(|| "图片生成".to_string()),
-                    normalize_optional_string(Some(if execution.used_configured_endpoint {
-                        format!(
-                            "{} 已通过已配置 endpoint 执行真实生成。",
-                            app_brand_display_name()
-                        )
-                    } else {
-                        format!(
+                work_items_store::push_item(
+                    store,
+                    create_work_item(
+                        "image-generation",
+                        execution
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| "图片生成".to_string()),
+                        normalize_optional_string(Some(if execution.used_configured_endpoint {
+                            format!(
+                                "{} 已通过已配置 endpoint 执行真实生成。",
+                                app_brand_display_name()
+                            )
+                        } else {
+                            format!(
                             "{} 已保存生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。",
                             app_brand_display_name()
                         )
-                    })),
-                    execution.prompt.clone(),
-                    execution.project_id.clone().map(|value| {
-                        json!({
-                            "projectId": value,
-                            "generationChannel": channel,
-                            "usedConfiguredEndpoint": execution.used_configured_endpoint,
-                            "batchCount": execution.assets.len(),
-                        })
-                    }),
-                    2,
-                ));
+                        })),
+                        execution.prompt.clone(),
+                        execution.project_id.clone().map(|value| {
+                            json!({
+                                "projectId": value,
+                                "generationChannel": channel,
+                                "usedConfiguredEndpoint": execution.used_configured_endpoint,
+                                "batchCount": execution.assets.len(),
+                            })
+                        }),
+                        2,
+                    ),
+                );
                 Ok(())
             })?;
             persist_media_workspace_catalog(state)?;
@@ -999,25 +1004,31 @@ pub fn handle_generation_channel(
                 for asset in &created {
                     media_store::push_asset(store, asset.clone());
                 }
-                store.work_items.push(create_work_item(
-                    "image-generation",
-                    title.clone().unwrap_or_else(|| "图片生成".to_string()),
-                    normalize_optional_string(Some(if used_configured_endpoint {
-                        format!("{} 已通过已配置 endpoint 并发执行多图生成。", app_brand_display_name())
-                    } else {
-                        format!("{} 已保存多图生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。", app_brand_display_name())
-                    })),
-                    prompt.clone(),
-                    project_id.clone().map(|value| {
-                        json!({
-                            "projectId": value,
-                            "generationChannel": channel,
-                            "usedConfiguredEndpoint": used_configured_endpoint,
-                            "batchCount": created.len()
-                        })
-                    }),
-                    2,
-                ));
+                work_items_store::push_item(
+                    store,
+                    create_work_item(
+                        "image-generation",
+                        title.clone().unwrap_or_else(|| "图片生成".to_string()),
+                        normalize_optional_string(Some(if used_configured_endpoint {
+                            format!(
+                                "{} 已通过已配置 endpoint 并发执行多图生成。",
+                                app_brand_display_name()
+                            )
+                        } else {
+                            format!("{} 已保存多图生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。", app_brand_display_name())
+                        })),
+                        prompt.clone(),
+                        project_id.clone().map(|value| {
+                            json!({
+                                "projectId": value,
+                                "generationChannel": channel,
+                                "usedConfiguredEndpoint": used_configured_endpoint,
+                                "batchCount": created.len()
+                            })
+                        }),
+                        2,
+                    ),
+                );
                 Ok(())
             })?;
             persist_media_workspace_catalog(state)?;
@@ -1444,45 +1455,48 @@ pub fn handle_generation_channel(
             for asset in &created {
                 media_store::push_asset(store, asset.clone());
             }
-            store.work_items.push(create_work_item(
-                if channel == "video-gen:generate" {
-                    "video-generation"
-                } else {
-                    "image-generation"
-                },
-                title.clone().unwrap_or_else(|| {
+            work_items_store::push_item(
+                store,
+                create_work_item(
                     if channel == "video-gen:generate" {
-                        "视频生成"
+                        "video-generation"
                     } else {
-                        "图片生成"
-                    }
-                    .to_string()
-                }),
-                normalize_optional_string(Some(if used_configured_endpoint {
-                    format!(
-                        "{} 已通过已配置 endpoint 执行真实生成。",
-                        app_brand_display_name()
-                    )
-                } else {
-                    format!(
-                        "{} 已保存生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。",
-                        app_brand_display_name()
-                    )
-                })),
-                if channel == "image-gen:generate" {
-                    effective_image_prompt.clone()
-                } else {
-                    prompt.clone()
-                },
-                project_id.clone().map(|value| {
-                    json!({
-                        "projectId": value,
-                        "generationChannel": channel,
-                        "usedConfiguredEndpoint": used_configured_endpoint
-                    })
-                }),
-                2,
-            ));
+                        "image-generation"
+                    },
+                    title.clone().unwrap_or_else(|| {
+                        if channel == "video-gen:generate" {
+                            "视频生成"
+                        } else {
+                            "图片生成"
+                        }
+                        .to_string()
+                    }),
+                    normalize_optional_string(Some(if used_configured_endpoint {
+                        format!(
+                            "{} 已通过已配置 endpoint 执行真实生成。",
+                            app_brand_display_name()
+                        )
+                    } else {
+                        format!(
+                            "{} 已保存生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。",
+                            app_brand_display_name()
+                        )
+                    })),
+                    if channel == "image-gen:generate" {
+                        effective_image_prompt.clone()
+                    } else {
+                        prompt.clone()
+                    },
+                    project_id.clone().map(|value| {
+                        json!({
+                            "projectId": value,
+                            "generationChannel": channel,
+                            "usedConfiguredEndpoint": used_configured_endpoint
+                        })
+                    }),
+                    2,
+                ),
+            );
             Ok(())
         })?;
         persist_media_workspace_catalog(state)?;
