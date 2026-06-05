@@ -4,6 +4,7 @@ mod auth_flow;
 mod billing;
 mod call_records;
 mod models;
+mod points;
 mod session;
 
 use serde_json::{json, Value};
@@ -18,15 +19,14 @@ use crate::{
     fetch_official_models_for_settings, make_id, normalize_base_url,
     normalize_official_auth_session, now_iso, now_ms, official_access_token_from_settings,
     official_account_summary_local, official_ai_api_key_from_settings, official_base_url_for_realm,
-    official_base_url_from_settings, official_fallback_products, official_points_snapshot,
-    official_realm_from_settings, official_realms_payload, official_response_items,
-    official_settings_api_keys, official_settings_call_records_list, official_settings_models,
-    official_settings_orders, official_settings_points, official_settings_pricing,
-    official_settings_session, official_settings_wechat_login, official_sync_source_into_settings,
-    official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
-    run_official_public_json_request, run_official_public_json_request_response,
-    upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
-    AppState,
+    official_base_url_from_settings, official_fallback_products, official_realm_from_settings,
+    official_realms_payload, official_response_items, official_settings_api_keys,
+    official_settings_call_records_list, official_settings_models, official_settings_orders,
+    official_settings_pricing, official_settings_session, official_settings_wechat_login,
+    official_sync_source_into_settings, official_unwrap_response_payload, open_payment_form,
+    payload_field, payload_string, run_official_public_json_request,
+    run_official_public_json_request_response, upsert_official_settings_session,
+    write_settings_json_array, write_settings_json_value, AppState,
 };
 #[cfg(test)]
 use call_records::value_as_f64;
@@ -36,13 +36,17 @@ use call_records::{
     OFFICIAL_CALL_RECORDS_PAGE_SIZE,
 };
 #[cfg(test)]
+use points::normalize_official_points_payload;
+use points::{
+    cached_official_points, fetch_remote_official_points, official_points_need_silent_refresh,
+};
+#[cfg(test)]
 use session::session_refresh_window_ms;
 use session::{
     merge_session_with_existing, official_session_logged_in, official_session_needs_refresh,
     session_access_token, session_refresh_token, session_refresh_token_app_slug,
 };
 
-const OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS: i64 = 60_000;
 const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 24] = [
     "redbox_official_realm",
     "redbox_official_base_url",
@@ -78,104 +82,6 @@ fn cached_official_user(settings: &Value) -> Value {
     official_settings_session(settings)
         .and_then(|session| session.get("user").cloned())
         .unwrap_or_else(|| json!({}))
-}
-
-fn normalize_official_points_payload(payload: &Value) -> Option<Value> {
-    if !payload.is_object() || official_response_is_unauthorized(200, payload) {
-        return None;
-    }
-
-    let balance = [
-        "points",
-        "balance",
-        "pointsBalance",
-        "current_points",
-        "currentPoints",
-        "available_points",
-        "availablePoints",
-    ]
-    .into_iter()
-    .find_map(|key| payload_f64(payload, key));
-    let total_earned =
-        payload_f64(payload, "total_earned").or_else(|| payload_f64(payload, "totalEarned"));
-    let total_spent =
-        payload_f64(payload, "total_spent").or_else(|| payload_f64(payload, "totalSpent"));
-
-    if balance.is_none() && total_earned.is_none() && total_spent.is_none() {
-        return None;
-    }
-
-    let balance = balance.unwrap_or(0.0);
-    let pricing_source = payload.get("pricing");
-    let points_per_yuan = pricing_source
-        .and_then(|value| payload_f64(value, "points_per_yuan"))
-        .or_else(|| pricing_source.and_then(|value| payload_f64(value, "pointsPerYuan")))
-        .or_else(|| payload_f64(payload, "points_per_yuan"))
-        .or_else(|| payload_f64(payload, "pointsPerYuan"))
-        .unwrap_or(100.0);
-    let refreshed_at_ms = payload_i64(payload, "refreshedAtMs").unwrap_or_else(|| now_ms() as i64);
-    let refreshed_at = payload_string(payload, "refreshedAt").unwrap_or_else(now_iso);
-    let pricing = json!({
-        "unit": pricing_source
-            .and_then(|value| payload_string(value, "unit"))
-            .unwrap_or_else(|| "points".to_string()),
-        "rules": pricing_source
-            .and_then(|value| value.get("rules").cloned())
-            .unwrap_or_else(|| json!({})),
-        "text_chat_cost": pricing_source
-            .and_then(|value| payload_field(value, "text_chat_cost").cloned())
-            .unwrap_or(Value::Null),
-        "voice_chat_cost": pricing_source
-            .and_then(|value| payload_field(value, "voice_chat_cost").cloned())
-            .unwrap_or(Value::Null),
-        "points_per_yuan": points_per_yuan,
-    });
-
-    Some(json!({
-        "points": balance,
-        "balance": balance,
-        "pointsBalance": balance,
-        "currentPoints": balance,
-        "availablePoints": balance,
-        "totalEarned": total_earned,
-        "totalSpent": total_spent,
-        "appId": payload_string(payload, "app_id"),
-        "userId": payload_string(payload, "user_id"),
-        "sourceUpdatedAt": payload_string(payload, "sourceUpdatedAt")
-            .or_else(|| payload_string(payload, "updated_at"))
-            .or_else(|| payload_string(payload, "updatedAt")),
-        "refreshedAt": refreshed_at,
-        "refreshedAtMs": refreshed_at_ms,
-        "pricing": pricing,
-    }))
-}
-
-fn cached_official_points(settings: &Value) -> Value {
-    official_settings_points(settings)
-        .and_then(|payload| normalize_official_points_payload(&payload))
-        .unwrap_or_else(|| {
-            normalize_official_points_payload(&official_points_snapshot(settings))
-                .unwrap_or_else(|| official_points_snapshot(settings))
-        })
-}
-
-fn official_points_need_silent_refresh(settings: &Value) -> bool {
-    if !official_session_logged_in(settings) {
-        return false;
-    }
-
-    match official_settings_points(settings)
-        .and_then(|payload| normalize_official_points_payload(&payload))
-    {
-        Some(points) => match payload_i64(&points, "refreshedAtMs") {
-            Some(refreshed_at) if refreshed_at > 0 => {
-                (now_ms() as i64).saturating_sub(refreshed_at)
-                    >= OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS
-            }
-            _ => true,
-        },
-        None => true,
-    }
 }
 
 fn upsert_session_api_key(session: &mut Value, api_key: &str) {
@@ -1143,26 +1049,6 @@ fn fetch_official_models_with_recovery(
         }
         Err(_) => official_settings_models(settings),
     }
-}
-
-fn fetch_remote_official_points(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: &mut Value,
-    expected_generation: Option<u64>,
-) -> Result<Value, String> {
-    let response = run_authenticated_official_request(
-        app,
-        state,
-        settings,
-        "GET",
-        "/users/me/points",
-        None,
-        expected_generation,
-    )?;
-    let payload = official_unwrap_response_payload(&response);
-    normalize_official_points_payload(&payload)
-        .ok_or_else(|| "官方积分接口返回了无法识别的数据结构".to_string())
 }
 
 fn sync_remote_orders_into_settings(settings: &mut Value, order: &Value) {
