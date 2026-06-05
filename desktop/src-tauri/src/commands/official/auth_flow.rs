@@ -183,7 +183,7 @@ pub(super) fn handle_auth_channel(
             });
             write_settings_json_value(&mut settings, "redbox_auth_wechat_login_json", &data);
             with_store_mut(state, |store| {
-                store.settings = settings;
+                settings_store::replace_settings(store, settings);
                 Ok(json!({ "success": true, "data": data }))
             })
         })()),
