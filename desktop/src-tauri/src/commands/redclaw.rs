@@ -2,6 +2,8 @@
 mod redclaw_export_content;
 #[path = "redclaw/export_files.rs"]
 mod redclaw_export_files;
+#[path = "redclaw/export_markdown.rs"]
+mod redclaw_export_markdown;
 #[path = "redclaw/media_export.rs"]
 mod redclaw_media_export;
 #[path = "redclaw/profile_channels.rs"]
