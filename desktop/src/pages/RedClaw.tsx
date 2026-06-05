@@ -1208,9 +1208,9 @@ export function RedClaw({
                 void loadOnboardingBundle();
             }
         };
-        window.ipcRenderer.on('space:changed', onSpaceChanged);
+        window.ipcRenderer.spaces.onChanged(onSpaceChanged);
         return () => {
-            window.ipcRenderer.off('space:changed', onSpaceChanged);
+            window.ipcRenderer.spaces.offChanged(onSpaceChanged);
         };
     }, [initSession, isActive, loadOnboardingBundle, loadRunnerStatus, loadSkills, shouldLoadHistory]);
 
@@ -1230,9 +1230,9 @@ export function RedClaw({
             if (!status || typeof status !== 'object') return;
             setRunnerStatus(status);
         };
-        window.ipcRenderer.on('redclaw:runner-status', onRunnerStatus);
+        window.ipcRenderer.redclawRunner.onStatus(onRunnerStatus);
         return () => {
-            window.ipcRenderer.off('redclaw:runner-status', onRunnerStatus);
+            window.ipcRenderer.redclawRunner.offStatus(onRunnerStatus);
         };
     }, [isActive]);
 
@@ -1256,9 +1256,9 @@ export function RedClaw({
                     }
             ))));
         };
-        window.ipcRenderer.on('chat:session-title-updated', onSessionTitleUpdated);
+        window.ipcRenderer.chat.onSessionTitleUpdated(onSessionTitleUpdated);
         return () => {
-            window.ipcRenderer.off('chat:session-title-updated', onSessionTitleUpdated);
+            window.ipcRenderer.chat.offSessionTitleUpdated(onSessionTitleUpdated);
         };
     }, [shouldLoadHistory]);
 
