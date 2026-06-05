@@ -845,35 +845,15 @@ fn update_redclaw_project_section(
     if !allowed.iter().any(|item| item == &section_id.as_str()) {
         return Err("sectionId is not supported".to_string());
     }
+    let now = now_iso();
     with_store_mut(state, |store| {
-        let project = store
-            .redclaw_state
-            .projects
-            .iter_mut()
-            .find(|item| item.id == project_id)
-            .ok_or_else(|| "RedClaw project not found".to_string())?;
-        let now = now_iso();
-        let mut metadata = project
-            .metadata
-            .clone()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let mut drafts = metadata
-            .get("sectionDrafts")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        drafts.insert(
-            section_id.clone(),
-            json!({
-                "content": content,
-                "updatedAt": now,
-                "source": "user_edit"
-            }),
-        );
-        metadata.insert("sectionDrafts".to_string(), Value::Object(drafts));
-        project.metadata = Some(Value::Object(metadata));
-        project.updated_at = now;
+        let project = redclaw_store::update_project_section_draft(
+            store,
+            &project_id,
+            &section_id,
+            content,
+            &now,
+        )?;
         Ok(json!({
             "success": true,
             "project": project,
