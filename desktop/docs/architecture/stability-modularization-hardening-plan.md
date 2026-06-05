@@ -244,6 +244,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed assistant HTTP runtime snapshots through `store::assistant`.
 - Routed chat audio transcription model settings reads through `store::settings`.
 - Routed library YouTube summary and cover-generation settings reads through `store::settings`.
+- Routed library document-import active-space reads through `store::spaces`.
 
 ### 1. Bridge Contract Layer
 
