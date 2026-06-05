@@ -1,16 +1,17 @@
 use serde_json::{json, Value};
-use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
 use crate::{
-    copy_image_to_clipboard, cover_root, media_root, payload_string, pick_save_file_native,
-    resolve_local_path, resolve_manuscript_path, workspace_root, AppState,
+    cover_root, media_root, payload_string, pick_save_file_native, resolve_local_path,
+    resolve_manuscript_path, workspace_root, AppState,
 };
 
+mod actions;
 mod archive;
 mod preview;
 
+use actions::{copy_image, save_as, show_in_folder};
 use archive::write_zip_archive;
 use preview::{resolve_preview_target, resolve_virtual_resource_path};
 
@@ -199,49 +200,16 @@ pub fn handle_file_ops_channel(
         match channel {
             "file:show-in-folder" => {
                 let source = payload_string(payload, "source").unwrap_or_default();
-                let path = match resolve_file_action_path(state, &source) {
-                    Ok(path) => path,
-                    Err(error) => return Ok(json!({ "success": false, "error": error })),
-                };
-                let target = if path.is_file() {
-                    path.parent()
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or(path)
-                } else {
-                    path
-                };
-                open::that(&target).map_err(|error| error.to_string())?;
-                Ok(json!({ "success": true }))
+                show_in_folder(state, &source)
             }
             "file:copy-image" => {
                 let source = payload_string(payload, "source").unwrap_or_default();
-                let path = match resolve_file_action_path(state, &source) {
-                    Ok(path) => path,
-                    Err(error) => return Ok(json!({ "success": false, "error": error })),
-                };
-                copy_image_to_clipboard(&path)?;
-                Ok(json!({ "success": true }))
+                copy_image(state, &source)
             }
             "file:save-as" => {
                 let source = payload_string(payload, "source").unwrap_or_default();
-                let path = match resolve_file_action_path(state, &source) {
-                    Ok(path) => path,
-                    Err(error) => return Ok(json!({ "success": false, "error": error })),
-                };
-                let default_name = payload_string(payload, "defaultName")
-                    .filter(|value| !value.trim().is_empty())
-                    .or_else(|| {
-                        path.file_name()
-                            .and_then(|value| value.to_str())
-                            .map(ToString::to_string)
-                    })
-                    .unwrap_or_else(|| "generated-asset".to_string());
-                let selected = pick_save_file_native("选择保存位置", &default_name, path.parent())?;
-                let Some(target_path) = selected else {
-                    return Ok(json!({ "success": false, "canceled": true }));
-                };
-                fs::copy(&path, &target_path).map_err(|error| error.to_string())?;
-                Ok(json!({ "success": true, "path": target_path }))
+                let default_name = payload_string(payload, "defaultName");
+                save_as(state, &source, default_name)
             }
             "file:save-zip" => {
                 let default_name = payload_string(payload, "defaultName")
