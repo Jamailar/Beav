@@ -7,6 +7,8 @@ mod member_values;
 mod message_report_values;
 #[path = "runtime_collab/review_approval.rs"]
 mod review_approval;
+#[path = "runtime_collab/review_values.rs"]
+mod review_values;
 #[path = "runtime_collab/session_values.rs"]
 mod session_values;
 #[path = "runtime_collab/task_panel.rs"]
@@ -29,11 +31,9 @@ use crate::commands::redclaw::redclaw_task_control;
 use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    archive_review_docket, create_review_docket, decide_review_docket, get_review_docket,
-    list_review_dockets, request_runtime_approval, resolve_review_docket_waiters,
-    resolve_runtime_approval_by_approval_id, review_docket_stats, CollabMailboxMessageRecord,
-    CollabMemberRecord, CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord,
-    ReviewDocketRecord, RuntimeApprovalDetails, RuntimeApprovalRecord,
+    request_runtime_approval, CollabMailboxMessageRecord, CollabMemberRecord,
+    CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord, ReviewDocketRecord,
+    RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
 use crate::session_manager::create_session;
 use crate::store::redclaw as redclaw_store;
@@ -46,7 +46,10 @@ pub use message_report_values::{
     list_messages_value, list_reports_value, post_message_value, read_mailbox_value,
     request_report_value, submit_report_value,
 };
-use review_approval::{request_review_docket_runtime_approval, route_review_docket_action};
+pub use review_values::{
+    archive_review_docket_value, create_review_docket_value, decide_review_docket_value,
+    get_review_docket_value, list_review_dockets_value, review_docket_stats_value,
+};
 pub use session_values::{
     create_session_value, list_sessions_value, session_snapshot_value, tick_reports_value,
     update_session_status_value,
@@ -80,103 +83,6 @@ fn emit_collab_event(
     payload: Value,
 ) {
     emit_runtime_event(app, event_type, owner_session_id, None, payload);
-}
-
-pub fn list_review_dockets_value(
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    with_store(state, |store| {
-        Ok(json!(list_review_dockets(&store, payload)))
-    })
-}
-
-pub fn get_review_docket_value(
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let docket_id =
-        payload_string(payload, "docketId").ok_or_else(|| "缺少 docketId".to_string())?;
-    with_store(state, |store| {
-        get_review_docket(&store, &docket_id)
-            .map(|docket| json!(docket))
-            .ok_or_else(|| "审批项不存在".to_string())
-    })
-}
-
-pub fn review_docket_stats_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    with_store(state, |store| Ok(review_docket_stats(&store)))
-}
-
-pub fn create_review_docket_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let docket = with_store_mut(state, |store| create_review_docket(store, payload))?;
-    let call_id = payload_string(payload, "callId").or_else(|| {
-        payload
-            .get("proposedAction")
-            .and_then(Value::as_object)
-            .and_then(|value| value.get("callId"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-    });
-    let approval = request_review_docket_runtime_approval(state, &docket, call_id.as_deref())?;
-    let docket_id = docket.id.clone();
-    emit_collab_event(
-        app,
-        "runtime:review-docket-changed",
-        None,
-        json!({ "docketId": docket_id, "docket": docket.clone(), "approval": approval }),
-    );
-    Ok(json!(docket))
-}
-
-pub fn decide_review_docket_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let decision = with_store_mut(state, |store| decide_review_docket(store, payload))?;
-    let docket_id = decision.docket_id.clone();
-    let action_result = route_review_docket_action(app, state, &docket_id, &decision)?;
-    let confirmed = decision.decision == "approved";
-    let runtime_approval = resolve_runtime_approval_by_approval_id(state, &docket_id, confirmed)?;
-    let outcome = json!({
-        "docketId": docket_id,
-        "decision": decision.clone(),
-        "confirmed": confirmed,
-        "runtimeApproval": runtime_approval,
-        "actionResult": action_result.json(),
-    });
-    resolve_review_docket_waiters(state, &docket_id, outcome.clone())?;
-    emit_collab_event(app, "runtime:review-docket-changed", None, outcome);
-    Ok(json!(decision))
-}
-
-pub fn archive_review_docket_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-    status: &str,
-) -> Result<Value, String> {
-    let docket = with_store_mut(state, |store| archive_review_docket(store, payload, status))?;
-    let docket_id = docket.id.clone();
-    let runtime_approval = resolve_runtime_approval_by_approval_id(state, &docket_id, false)?;
-    let outcome = json!({
-        "docketId": docket_id,
-        "docket": docket.clone(),
-        "confirmed": false,
-        "runtimeApproval": runtime_approval,
-        "actionResult": {
-            "kind": "archive",
-            "status": status,
-        },
-    });
-    resolve_review_docket_waiters(state, &docket_id, outcome.clone())?;
-    emit_collab_event(app, "runtime:review-docket-changed", None, outcome);
-    Ok(json!(docket))
 }
 
 #[cfg(test)]
