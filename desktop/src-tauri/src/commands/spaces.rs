@@ -6,6 +6,7 @@ use crate::persistence::{
     apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
     with_store_mut,
 };
+use crate::store::settings as settings_store;
 use crate::{
     active_space_workspace_root_from_store, emit_space_changed, emit_space_renamed,
     ensure_redclaw_space_writing_style_skill, now_iso, payload_string, payload_value_as_string,
@@ -148,8 +149,9 @@ pub fn handle_spaces_channel(
                     result.get("activeSpaceId").and_then(|value| value.as_str())
                 {
                     if deleted_active_space {
-                        let settings_snapshot =
-                            with_store(state, |store| Ok(store.settings.clone()))?;
+                        let settings_snapshot = with_store(state, |store| {
+                            Ok(settings_store::settings_snapshot(&store))
+                        })?;
                         let _ = update_workspace_root_cache(
                             state,
                             &settings_snapshot,
@@ -193,7 +195,8 @@ pub fn handle_spaces_channel(
                 if let Some(active_space_id) =
                     result.get("activeSpaceId").and_then(|value| value.as_str())
                 {
-                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let settings_snapshot =
+                        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                     let _ =
                         update_workspace_root_cache(state, &settings_snapshot, active_space_id)?;
                     let _ = ensure_redclaw_space_writing_style_skill(state)?;
