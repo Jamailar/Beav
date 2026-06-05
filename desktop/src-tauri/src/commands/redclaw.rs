@@ -8,39 +8,38 @@ mod redclaw_export_markdown;
 mod redclaw_media_export;
 #[path = "redclaw/profile_channels.rs"]
 mod redclaw_profile_channels;
+#[path = "redclaw/runner_lifecycle.rs"]
+mod redclaw_runner_lifecycle;
 #[path = "redclaw/runner_tasks.rs"]
 mod redclaw_runner_tasks;
 #[path = "redclaw_task_control.rs"]
 pub(crate) mod redclaw_task_control;
 
 use serde_json::{json, Value};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
-use crate::commands::redclaw_runtime::execute_redclaw_run;
 use crate::memory::append_memory_record;
-use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
+use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     add_collab_member, collab_session_snapshot, create_collab_session, create_collab_task,
     plan_redclaw_orchestration, redclaw_orchestration_registry_value, runtime_direct_route_record,
-    CollabSessionSnapshot, RedclawAgentId, RedclawOrchestrationPlan, RedclawRuntime,
+    CollabSessionSnapshot, RedclawAgentId, RedclawOrchestrationPlan,
 };
-use crate::scheduler::{run_redclaw_job_runner, run_redclaw_scheduler};
 use crate::store::{
     redclaw as redclaw_store, runtime_tasks as runtime_tasks_store, spaces as spaces_store,
 };
 use crate::{
-    ffmpeg_executable, load_redbox_prompt_or_embedded, now_i64, now_iso,
-    parse_json_value_from_text, payload_field, payload_string, AppState, UserMemoryRecord,
+    ffmpeg_executable, now_i64, now_iso, parse_json_value_from_text, payload_string, AppState,
+    UserMemoryRecord,
 };
 use redclaw_export_files::{
     export_redclaw_publish_package, export_redclaw_review_report, export_redclaw_xhs_package,
 };
 use redclaw_media_export::{export_redclaw_media_plan, render_redclaw_rough_cut};
 use redclaw_profile_channels::handle_redclaw_profile_channel;
+pub use redclaw_runner_lifecycle::ensure_redclaw_runtime_running;
+use redclaw_runner_lifecycle::handle_redclaw_runner_lifecycle_channel;
+pub(crate) use redclaw_runner_lifecycle::redclaw_runner_status_value;
 use redclaw_runner_tasks::handle_redclaw_runner_task_channel;
 use redclaw_task_control::{
     handle_task_cancel, handle_task_confirm, handle_task_create, handle_task_list,
@@ -49,21 +48,6 @@ use redclaw_task_control::{
 
 fn payload_bool(payload: &Value, key: &str) -> bool {
     payload.get(key).and_then(Value::as_bool).unwrap_or(false)
-}
-
-fn runner_config_patch_from_payload(payload: &Value) -> redclaw_store::RunnerConfigPatch {
-    redclaw_store::RunnerConfigPatch {
-        interval_minutes: payload_field(payload, "intervalMinutes").and_then(|v| v.as_i64()),
-        max_automation_per_tick: payload_field(payload, "maxAutomationPerTick")
-            .and_then(|v| v.as_i64()),
-        heartbeat_enabled: payload_field(payload, "heartbeatEnabled").and_then(|v| v.as_bool()),
-        heartbeat_interval_minutes: payload_field(payload, "heartbeatIntervalMinutes")
-            .and_then(|v| v.as_i64()),
-        heartbeat_suppress_empty_report: payload_field(payload, "heartbeatSuppressEmptyReport")
-            .and_then(|v| v.as_bool()),
-        heartbeat_report_to_main_session: payload_field(payload, "heartbeatReportToMainSession")
-            .and_then(|v| v.as_bool()),
-    }
 }
 
 fn require_confirmed_redclaw_team_plan(payload: &Value) -> Result<(), String> {
@@ -78,58 +62,9 @@ fn require_confirmed_redclaw_team_plan(payload: &Value) -> Result<(), String> {
     Err("创建 team 前必须先向用户列出团队成员和分工，并等待用户明确确认。确认后再传入 userConfirmedTeamPlan=true。".to_string())
 }
 
-pub(crate) fn redclaw_runner_status_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let _ = ensure_store_hydrated_for_redclaw(state);
-    with_store(state, |store| Ok(redclaw_store::state_value(&store)))
-}
-
 #[tauri::command]
 pub async fn redclaw_runner_status(state: State<'_, AppState>) -> Result<Value, String> {
     redclaw_runner_status_value(&state)
-}
-
-fn stop_redclaw_runtime(runtime: &mut RedclawRuntime) {
-    runtime.stop.store(true, Ordering::Relaxed);
-    if let Some(join) = runtime.scheduler_join.take() {
-        join.abort();
-    }
-    if let Some(join) = runtime.runner_join.take() {
-        join.abort();
-    }
-}
-
-pub fn ensure_redclaw_runtime_running(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-) -> Result<bool, String> {
-    let (should_run, should_recover_tick) = with_store(state, |store| {
-        Ok(redclaw_store::runtime_start_decision(&store))
-    })?;
-
-    if should_recover_tick {
-        let _ = with_store_mut(state, |store| {
-            redclaw_store::recover_ticking_if_needed(store);
-            Ok(())
-        });
-    }
-
-    if !should_run {
-        return Ok(false);
-    }
-    if let Ok(mut runtime_guard) = state.redclaw_runtime.lock() {
-        if runtime_guard.is_none() {
-            let stop = Arc::new(AtomicBool::new(false));
-            let scheduler_join = run_redclaw_scheduler(app.clone(), stop.clone());
-            let runner_join = run_redclaw_job_runner(app.clone(), stop.clone());
-            *runtime_guard = Some(RedclawRuntime {
-                stop,
-                scheduler_join: Some(scheduler_join),
-                runner_join: Some(runner_join),
-            });
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 pub fn handle_redclaw_channel(
@@ -139,7 +74,6 @@ pub fn handle_redclaw_channel(
     payload: &Value,
 ) -> Option<Result<Value, String>> {
     let result: Result<Value, String> = match channel {
-        "redclaw:runner-status" => redclaw_runner_status_value(state),
         "redclaw:list-projects" => with_store(state, |store| {
             let projects = redclaw_store::list_projects_sorted(&store);
             Ok(json!({ "success": true, "items": projects, "count": projects.len() }))
@@ -164,51 +98,6 @@ pub fn handle_redclaw_channel(
         | "redclaw:profile:complete-style-definition" => {
             handle_redclaw_profile_channel(app, state, channel, payload)?
         }
-        "redclaw:runner-start" => (|| {
-            let patch = runner_config_patch_from_payload(payload);
-            let status = with_store_mut(state, |store| {
-                Ok(redclaw_store::start_runner(
-                    store,
-                    now_iso(),
-                    (now_i64() + 10 * 60 * 1000).to_string(),
-                    patch,
-                ))
-            })?;
-            let _ = ensure_redclaw_runtime_running(app, state)?;
-            let _ = app.emit("redclaw:runner-status", status.clone());
-            Ok(status)
-        })(),
-        "redclaw:runner-stop" => (|| {
-            if let Ok(mut runtime_guard) = state.redclaw_runtime.lock() {
-                if let Some(mut runtime) = runtime_guard.take() {
-                    stop_redclaw_runtime(&mut runtime);
-                }
-            }
-            let status = with_store_mut(state, |store| Ok(redclaw_store::stop_runner(store)))?;
-            let _ = app.emit("redclaw:runner-status", status.clone());
-            Ok(status)
-        })(),
-        "redclaw:runner-run-now" => (|| {
-            let prompt = load_redbox_prompt_or_embedded(
-                "runtime/redclaw/runner_run_now_default.txt",
-                include_str!("../../../prompts/library/runtime/redclaw/runner_run_now_default.txt"),
-            );
-            let run_result = execute_redclaw_run(app, state, prompt, "runner-run-now")?;
-            let status = with_store_mut(state, |store| {
-                Ok(redclaw_store::mark_runner_tick(store, now_iso()))
-            })?;
-            let _ = app.emit("redclaw:runner-status", status.clone());
-            Ok(json!({ "success": true, "status": status, "run": run_result }))
-        })(),
-        "redclaw:runner-set-project" => Ok(json!({ "success": true, "deprecated": true })),
-        "redclaw:runner-set-config" => (|| {
-            let patch = runner_config_patch_from_payload(payload);
-            let status = with_store_mut(state, |store| {
-                Ok(redclaw_store::apply_runner_config(store, patch))
-            })?;
-            let _ = app.emit("redclaw:runner-status", status.clone());
-            Ok(status)
-        })(),
         "redclaw:task-preview" => handle_task_preview(app, state, payload),
         "redclaw:task-create" => handle_task_create(app, state, payload),
         "redclaw:task-confirm" => handle_task_confirm(app, state, payload),
@@ -216,7 +105,10 @@ pub fn handle_redclaw_channel(
         "redclaw:task-cancel" => handle_task_cancel(app, state, payload),
         "redclaw:task-list" => handle_task_list(state, payload),
         "redclaw:task-stats" => handle_task_stats(state),
-        _ => return handle_redclaw_runner_task_channel(app, state, channel, payload),
+        _ => {
+            return handle_redclaw_runner_lifecycle_channel(app, state, channel, payload)
+                .or_else(|| handle_redclaw_runner_task_channel(app, state, channel, payload));
+        }
     };
     Some(result)
 }
