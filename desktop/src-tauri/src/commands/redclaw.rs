@@ -444,14 +444,14 @@ pub fn handle_redclaw_channel(
                     task.updated_at = now_iso();
                 }
                 if enabled {
-                    if let Some(definition) =
-                        store.redclaw_job_definitions.iter_mut().find(|item| {
-                            item.source_kind.as_deref() == Some("scheduled")
-                                && item.source_task_id.as_deref() == Some(task_id.as_str())
-                        })
-                    {
-                        clear_definition_cooldown(definition);
-                    }
+                    redclaw_store::update_job_definition_by_source(
+                        store,
+                        "scheduled",
+                        &task_id,
+                        |definition| {
+                            clear_definition_cooldown(definition);
+                        },
+                    );
                 }
                 sync_redclaw_job_definitions(store);
                 Ok(json!({ "success": true }))
@@ -488,10 +488,7 @@ pub fn handle_redclaw_channel(
                         &definition_id,
                         "manual-scheduled-now",
                     )?;
-                    let definition = store
-                        .redclaw_job_definitions
-                        .iter()
-                        .find(|item| item.id == definition_id)
+                    let definition = redclaw_store::job_definition_by_id(store, &definition_id)
                         .ok_or_else(|| "未找到定时任务定义".to_string())?;
                     Ok((
                         execution_id,
@@ -576,10 +573,7 @@ pub fn handle_redclaw_channel(
                         &definition_id,
                         "manual-long-cycle-now",
                     )?;
-                    let definition = store
-                        .redclaw_job_definitions
-                        .iter()
-                        .find(|item| item.id == definition_id)
+                    let definition = redclaw_store::job_definition_by_id(store, &definition_id)
                         .ok_or_else(|| "未找到长期任务定义".to_string())?;
                     Ok((
                         execution_id,
@@ -765,14 +759,14 @@ pub fn handle_redclaw_channel(
                     task.updated_at = now_iso();
                 }
                 if enabled {
-                    if let Some(definition) =
-                        store.redclaw_job_definitions.iter_mut().find(|item| {
-                            item.source_kind.as_deref() == Some("long_cycle")
-                                && item.source_task_id.as_deref() == Some(task_id.as_str())
-                        })
-                    {
-                        clear_definition_cooldown(definition);
-                    }
+                    redclaw_store::update_job_definition_by_source(
+                        store,
+                        "long_cycle",
+                        &task_id,
+                        |definition| {
+                            clear_definition_cooldown(definition);
+                        },
+                    );
                 }
                 sync_redclaw_job_definitions(store);
                 Ok(json!({ "success": true }))
