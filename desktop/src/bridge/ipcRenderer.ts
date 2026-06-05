@@ -7,6 +7,7 @@ import { createCliRuntimeBridge } from './domains/cliRuntimeBridge';
 import { createGenerationBridge } from './domains/generationBridge';
 import { createKnowledgeBridge } from './domains/knowledgeBridge';
 import { createManuscriptsBridge } from './domains/manuscriptsBridge';
+import { createMcpBridge } from './domains/mcpBridge';
 import { createMediaBridge } from './domains/mediaBridge';
 import { createPluginsBridge } from './domains/pluginsBridge';
 import { createRedClawBridge } from './domains/redclawBridge';
@@ -122,6 +123,7 @@ function createIpcRenderer() {
     ...createPluginsBridge(core),
     ...createToolsBridge(core),
     ...createAuthBridge(core),
+    ...createMcpBridge(core),
     sessions: {
       list: () => invokeChannel('sessions:list'),
       get: (sessionId: string) => invokeChannel('sessions:get', { sessionId }),
@@ -245,36 +247,6 @@ function createIpcRenderer() {
       createDraft: (payload: Record<string, unknown>) => invokeChannel('wechat-official:create-draft', payload)
     },
     listSkills: () => invokeChannel('skills:list'),
-    mcp: {
-      list: () => invokeChannel('mcp:list'),
-      add: (payload: {
-        name: string;
-        url?: string;
-        command?: string;
-        args?: string[];
-        env?: Record<string, string>;
-        cwd?: string;
-        transport?: string;
-        enabled?: boolean;
-        bearerTokenEnvVar?: string;
-      }) => invokeChannel('mcp:add', payload),
-      get: (serverId: string) => invokeChannel('mcp:get', { serverId }),
-      remove: (serverId: string) => invokeChannel('mcp:remove', { serverId }),
-      enable: (serverId: string) => invokeChannel('mcp:enable', { serverId }),
-      disable: (serverId: string) => invokeChannel('mcp:disable', { serverId }),
-      save: (servers: unknown[]) => invokeChannel('mcp:save', { servers }),
-      test: (server: unknown) => invokeChannel('mcp:test', { server }),
-      call: (server: unknown, method: string, params?: unknown) => invokeChannel('mcp:call', { server, method, params: params ?? {} }),
-      sessions: () => invokeChannel('mcp:sessions'),
-      listTools: (server: unknown) => invokeChannel('mcp:list-tools', { server }),
-      listResources: (server: unknown) => invokeChannel('mcp:list-resources', { server }),
-      listResourceTemplates: (server: unknown) => invokeChannel('mcp:list-resource-templates', { server }),
-      disconnect: (server: unknown) => invokeChannel('mcp:disconnect', { server }),
-      disconnectAll: () => invokeChannel('mcp:disconnect-all'),
-      discoverLocal: () => invokeChannel('mcp:discover-local'),
-      importLocal: () => invokeChannel('mcp:import-local'),
-      oauthStatus: (serverId: string) => invokeChannel('mcp:oauth-status', { serverId })
-    },
     fetchYoutubeInfo: (channelUrl: string) => invokeChannel('advisors:fetch-youtube-info', { channelUrl }),
     downloadYoutubeSubtitles: (params: Record<string, unknown>) => invokeChannel('advisors:download-youtube-subtitles', params),
     refreshVideos: (advisorId: string, limit?: number) => invokeChannel('advisors:refresh-videos', { advisorId, limit }),
