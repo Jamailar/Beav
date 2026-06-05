@@ -5,7 +5,7 @@ use crate::persistence::{
     ensure_store_hydrated_for_cover, ensure_store_hydrated_for_knowledge,
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
-use crate::store::settings as settings_store;
+use crate::store::{settings as settings_store, spaces as spaces_store};
 use crate::*;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -1580,7 +1580,7 @@ pub fn handle_library_channel(
                     let display_name = format!(
                         "{} · {}",
                         title,
-                        with_store(state, |store| Ok(store.active_space_id.clone()))?
+                        with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?
                     );
                     return import_selected_knowledge_files(app, state, &selected, &display_name);
                 } else {
@@ -1611,7 +1611,7 @@ pub fn handle_library_channel(
                 let display_name = format!(
                     "{} · {}",
                     fallback_name,
-                    with_store(state, |store| Ok(store.active_space_id.clone()))?
+                    with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?
                 );
                 knowledge::add_document_source(
                     app,
