@@ -127,6 +127,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added `store::settings` snapshot helper and routed LLM readiness settings reads through it.
 - Moved `embedding:get-sorted-sources` embedding computation outside the store lock; the lock now only snapshots settings and source texts.
 - Extended `check:store-locks` to reject embedding computation inside store lock closures.
+- Routed media upload/transcription command settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
