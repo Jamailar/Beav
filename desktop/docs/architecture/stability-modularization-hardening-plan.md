@@ -132,6 +132,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed remote notification command settings reads through `store::settings`.
 - Routed space delete/switch workspace-root cache settings reads through `store::settings`.
 - Routed image/video generation command settings reads through `store::settings`.
+- Routed manuscript transcription and Remotion generation settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
