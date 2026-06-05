@@ -334,6 +334,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted Thrive plugin marketplace registry loading, GitHub manifest probing, release asset selection, package download and marketplace install flow into `commands/plugin/marketplace`.
 - Extracted Thrive plugin data-source capability checks, manuscript tree projection, read-data command handling and home widget/action assembly into `commands/plugin/data_sources`.
 - Extracted Thrive plugin enabled-manifest enumeration, skill discovery, MCP config parsing and runtime capability sync into `commands/plugin/runtime_sync`.
+- Extracted brand workspace AI index markdown assembly and index file regeneration into `commands/brand_workspace/ai_index`, leaving the root command module focused on SQLite setup, CRUD and channel routing.
 - Extracted RedClaw publish/review/XHS package builders, markdown renderers, output artifact parsing and deterministic XHS compliance checks into `commands/redclaw/export_content`.
 - Extracted RedClaw publish/review/XHS package filesystem export, export slugging and metadata writebacks into `commands/redclaw/export_files`, keeping `export_content` focused on pure payload/markdown assembly.
 - Extracted RedClaw media-plan export assembly, ffconcat generation, ffconcat input validation and rough-cut ffmpeg rendering into `commands/redclaw/media_export`.
