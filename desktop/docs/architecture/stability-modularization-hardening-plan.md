@@ -109,6 +109,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed archive sample-created subscriptions through the archives bridge facade.
 - Routed RedClaw page space, runner status and chat session title subscriptions through bridge facades.
 - Routed Advisors download and YouTube fetch progress subscriptions through the advisors bridge facade.
+- Routed ManuscriptEditorHost data, render progress and write proposal subscriptions through bridge facades.
 
 ### 1. Bridge Contract Layer
 
