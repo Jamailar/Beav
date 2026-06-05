@@ -24,6 +24,8 @@ const SESSION_RESOURCE_MAX_DEPTH: usize = 8;
 
 #[path = "session_runtime/bundle_store.rs"]
 mod bundle_store;
+#[path = "session_runtime/checkpoint_events.rs"]
+mod checkpoint_events;
 #[path = "session_runtime/context.rs"]
 mod context;
 #[path = "session_runtime/history.rs"]
@@ -45,6 +47,7 @@ use bundle_store::{
     load_session_runtime_bundle, persist_session_runtime_bundle, remove_session_bundle_meta,
     resolve_session_id_or_latest, session_runtime_bundle_path,
 };
+pub use checkpoint_events::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
 pub use context::{
     append_compact_boundary_entry, bundle_messages_for_runtime,
     runtime_context_messages_for_session, session_context_usage_value,
@@ -300,59 +303,6 @@ pub fn session_bridge_detail_value(
     background_tasks: &[Value],
 ) -> Value {
     crate::session_manager::session_bridge_detail_value(store, session_id, background_tasks, None)
-}
-
-pub fn persist_runtime_query_checkpoints(
-    store: &mut AppStore,
-    session_id: &str,
-    route_reasoning: &str,
-    route_value: Value,
-    orchestration: Option<Value>,
-) {
-    append_session_checkpoint(
-        store,
-        session_id,
-        "runtime.route",
-        if route_reasoning.trim().is_empty() {
-            "runtime route".to_string()
-        } else {
-            route_reasoning.to_string()
-        },
-        Some(route_value),
-    );
-    if let Some(orchestration_value) = orchestration {
-        append_session_checkpoint(
-            store,
-            session_id,
-            "runtime.orchestration",
-            "subagent orchestration completed".to_string(),
-            Some(orchestration_value),
-        );
-    }
-}
-
-pub fn runtime_query_checkpoint_events(
-    route_reasoning: &str,
-    route_value: Value,
-    orchestration: Option<Value>,
-) -> Vec<(String, String, Option<Value>)> {
-    let mut events = vec![(
-        "runtime.route".to_string(),
-        if route_reasoning.trim().is_empty() {
-            "runtime route".to_string()
-        } else {
-            route_reasoning.to_string()
-        },
-        Some(route_value),
-    )];
-    if let Some(orchestration_value) = orchestration {
-        events.push((
-            "runtime.orchestration".to_string(),
-            "subagent orchestration completed".to_string(),
-            Some(orchestration_value),
-        ));
-    }
-    events
 }
 
 #[cfg(test)]
