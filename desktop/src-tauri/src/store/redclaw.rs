@@ -1,11 +1,14 @@
 use super::types::AppStore;
+use serde_json::Value;
+
+use crate::redclaw_state_value;
 use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawJobExecutionRecord, RedclawLongCycleTaskRecord,
-    RedclawProjectRecord, RedclawScheduledTaskRecord, RedclawStateRecord,
+    RedclawProjectRecord, RedclawScheduledTaskRecord,
 };
 
-pub(crate) fn state_snapshot(store: &AppStore) -> RedclawStateRecord {
-    store.redclaw_state.clone()
+pub(crate) fn state_value(store: &AppStore) -> Value {
+    redclaw_state_value(&store.redclaw_state)
 }
 
 pub(crate) fn list_projects_sorted(store: &AppStore) -> Vec<RedclawProjectRecord> {
