@@ -691,27 +691,30 @@ mod tests {
     #[test]
     fn derived_background_tasks_excludes_media_followup_runtime_tasks() {
         let mut store = AppStore::default();
-        store.runtime_tasks.push(RuntimeTaskRecord {
-            id: "task-1".to_string(),
-            task_type: "media-followup".to_string(),
-            status: "running".to_string(),
-            runtime_mode: "default".to_string(),
-            owner_session_id: Some("session-1".to_string()),
-            goal: Some("等待图片完成".to_string()),
-            checkpoints: vec![RuntimeCheckpointRecord::new(
-                "media-followup.started",
-                "execute_tools",
-                "waiting",
-                None,
-            )],
-            metadata: Some(json!({
-                "title": "图片结果回传 · 6 张",
-                "latestText": "等待图片生成完成",
-            })),
-            created_at: 1,
-            updated_at: 2,
-            ..RuntimeTaskRecord::default()
-        });
+        runtime_task_store::push_task(
+            &mut store,
+            RuntimeTaskRecord {
+                id: "task-1".to_string(),
+                task_type: "media-followup".to_string(),
+                status: "running".to_string(),
+                runtime_mode: "default".to_string(),
+                owner_session_id: Some("session-1".to_string()),
+                goal: Some("等待图片完成".to_string()),
+                checkpoints: vec![RuntimeCheckpointRecord::new(
+                    "media-followup.started",
+                    "execute_tools",
+                    "waiting",
+                    None,
+                )],
+                metadata: Some(json!({
+                    "title": "图片结果回传 · 6 张",
+                    "latestText": "等待图片生成完成",
+                })),
+                created_at: 1,
+                updated_at: 2,
+                ..RuntimeTaskRecord::default()
+            },
+        );
 
         let tasks = derived_background_tasks(&store);
 
