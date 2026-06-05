@@ -240,6 +240,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed legacy store import settings and space migration access through `store::settings` and `store::spaces`.
 - Routed background-task bridge runtime-task cancellation through `store::runtime_tasks`.
 - Routed assistant daemon load-time runtime-state repair and default enablement through `store::assistant`.
+- Routed profile-learning AI distillation model settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
