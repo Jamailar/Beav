@@ -157,6 +157,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed scheduler background-task runtime-task reads through `store::runtime_tasks`.
 - Routed RedClaw manual-run definition resolution reads through `store::redclaw`.
 - Routed runtime-collab RedClaw panel definition/execution reads through `store::redclaw`.
+- Routed RedClaw task-control list/stats definition and execution reads through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
