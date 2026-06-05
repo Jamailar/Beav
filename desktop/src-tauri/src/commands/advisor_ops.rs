@@ -5,6 +5,7 @@ use crate::member_skill::{
     remove_member_skill_package, rollback_member_skill_version,
 };
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
+use crate::store::settings as settings_store;
 use crate::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -746,7 +747,8 @@ pub fn handle_advisor_channel(
                     .or_else(|error| Ok(json!({ "success": false, "error": error })))
             }
             "advisors:optimize-prompt" => {
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let info = payload_string(payload, "info").unwrap_or_default();
                 let system_prompt = load_redbox_prompt_or_embedded(
                     "runtime/advisors/optimize_system.txt",
@@ -763,7 +765,8 @@ pub fn handle_advisor_channel(
                 Ok(json!({ "success": true, "prompt": optimized }))
             }
             "advisors:optimize-prompt-deep" => {
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let name =
                     payload_string(payload, "name").unwrap_or_else(|| "智囊团成员".to_string());
                 let personality = payload_string(payload, "personality").unwrap_or_default();
@@ -803,7 +806,8 @@ pub fn handle_advisor_channel(
             }
             "advisors:generate-persona" => {
                 let started_at = now_ms();
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let advisor_id = payload_string(payload, "advisorId").unwrap_or_default();
                 let channel_name = payload_string(payload, "channelName")
                     .unwrap_or_else(|| "YouTube 频道".to_string());
