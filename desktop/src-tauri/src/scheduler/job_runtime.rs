@@ -538,53 +538,35 @@ fn claim_execution(
     preferred_execution_id: Option<&str>,
 ) -> Result<Option<PreparedJobExecution>, String> {
     let now_iso = now_iso();
-    let candidate_index = if let Some(execution_id) = preferred_execution_id {
-        store.redclaw_job_executions.iter().position(|item| {
-            item.id == execution_id
-                && matches!(item.status.as_str(), "queued" | "retrying" | "cancelled")
-                && parse_millis_string(item.retry_not_before_at.as_deref()).unwrap_or(0) <= now
-        })
-    } else {
-        store.redclaw_job_executions.iter().position(|item| {
-            item.status == "queued"
-                && parse_millis_string(item.retry_not_before_at.as_deref()).unwrap_or(0) <= now
-        })
-    };
-    let Some(index) = candidate_index else {
+    let claimed = redclaw_store::claim_job_execution(
+        store,
+        preferred_execution_id,
+        |retry_not_before_at| parse_millis_string(retry_not_before_at).unwrap_or(0) <= now,
+        |execution| {
+            if execution.status == "cancelled" {
+                execution.completed_at = None;
+                transition_execution_status(execution, "queued", &now_iso)?;
+            }
+            lease_execution(
+                execution,
+                "redclaw-runner",
+                "main-process",
+                DEFAULT_HEARTBEAT_TIMEOUT_MS,
+                &now_iso,
+            );
+            execution.attempt_count += 1;
+            execution.attempt_no = execution.attempt_count;
+            execution.retry_not_before_at = None;
+            execution.retry_bucket = Some("claimed".to_string());
+            append_execution_turn(&mut *execution, &now_iso, "system", "Execution leased");
+            Ok(())
+        },
+    )?;
+
+    let Some(claimed) = claimed else {
         return Ok(None);
     };
-
-    let definition_id = store.redclaw_job_executions[index].definition_id.clone();
-    if preferred_execution_id.is_none()
-        && store.redclaw_job_executions.iter().any(|item| {
-            item.definition_id == definition_id
-                && matches!(item.status.as_str(), "leased" | "running")
-        })
-    {
-        return Ok(None);
-    }
-
-    {
-        let execution = &mut store.redclaw_job_executions[index];
-        if execution.status == "cancelled" {
-            execution.completed_at = None;
-            transition_execution_status(execution, "queued", &now_iso)?;
-        }
-        lease_execution(
-            execution,
-            "redclaw-runner",
-            "main-process",
-            DEFAULT_HEARTBEAT_TIMEOUT_MS,
-            &now_iso,
-        );
-        execution.attempt_count += 1;
-        execution.attempt_no = execution.attempt_count;
-        execution.retry_not_before_at = None;
-        execution.retry_bucket = Some("claimed".to_string());
-        append_execution_turn(&mut *execution, &now_iso, "system", "Execution leased");
-    }
-
-    let prepared = prepare_execution(store, &store.redclaw_job_executions[index])?;
+    let prepared = prepare_execution(store, &claimed)?;
     Ok(Some(prepared))
 }
 

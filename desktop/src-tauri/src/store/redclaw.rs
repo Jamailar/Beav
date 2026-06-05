@@ -613,3 +613,38 @@ pub(crate) fn for_each_job_execution_mut(
         update(execution);
     }
 }
+
+pub(crate) fn claim_job_execution(
+    store: &mut AppStore,
+    preferred_execution_id: Option<&str>,
+    mut retry_ready: impl FnMut(Option<&str>) -> bool,
+    mut claim: impl FnMut(&mut RedclawJobExecutionRecord) -> Result<(), String>,
+) -> Result<Option<RedclawJobExecutionRecord>, String> {
+    let candidate_index = if let Some(execution_id) = preferred_execution_id {
+        store.redclaw_job_executions.iter().position(|item| {
+            item.id == execution_id
+                && matches!(item.status.as_str(), "queued" | "retrying" | "cancelled")
+                && retry_ready(item.retry_not_before_at.as_deref())
+        })
+    } else {
+        store.redclaw_job_executions.iter().position(|item| {
+            item.status == "queued" && retry_ready(item.retry_not_before_at.as_deref())
+        })
+    };
+    let Some(index) = candidate_index else {
+        return Ok(None);
+    };
+
+    let definition_id = store.redclaw_job_executions[index].definition_id.clone();
+    if preferred_execution_id.is_none()
+        && store.redclaw_job_executions.iter().any(|item| {
+            item.definition_id == definition_id
+                && matches!(item.status.as_str(), "leased" | "running")
+        })
+    {
+        return Ok(None);
+    }
+
+    claim(&mut store.redclaw_job_executions[index])?;
+    Ok(Some(store.redclaw_job_executions[index].clone()))
+}
