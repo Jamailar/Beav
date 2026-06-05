@@ -1018,9 +1018,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         totalSteps: Number.isFinite(Number(data.totalSteps)) ? Number(data.totalSteps) : undefined,
       });
     };
-    window.ipcRenderer.on('wander:progress', handleWanderProgress as (...args: unknown[]) => void);
+    window.ipcRenderer.wander.onProgress(handleWanderProgress as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('wander:progress', handleWanderProgress as (...args: unknown[]) => void);
+      window.ipcRenderer.wander.offProgress(handleWanderProgress as (...args: unknown[]) => void);
     };
   }, [upsertProgressCard]);
 
@@ -1070,9 +1070,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       activeRequestIdRef.current = '';
     };
 
-    window.ipcRenderer.on('wander:result', handleWanderResult as (...args: unknown[]) => void);
+    window.ipcRenderer.wander.onResult(handleWanderResult as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('wander:result', handleWanderResult as (...args: unknown[]) => void);
+      window.ipcRenderer.wander.offResult(handleWanderResult as (...args: unknown[]) => void);
     };
   }, [loadHistoryList]);
 
