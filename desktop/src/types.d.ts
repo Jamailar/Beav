@@ -1690,6 +1690,8 @@ declare global {
         syncCapabilities: () => Promise<{ success: boolean; pluginIds?: string[]; skills?: number; mcpServers?: number; error?: string }>;
         readData: (payload: { pluginId: string; source: string; limit?: number; kind?: string; query?: string }) => Promise<{ success: boolean; pluginId?: string; source?: string; data?: Record<string, unknown>; error?: string }>;
         home: () => Promise<ThrivePluginHomeResponse>;
+        onChanged: (listener: (...args: unknown[]) => void) => void;
+        offChanged: (listener: (...args: unknown[]) => void) => void;
       };
       aiRoles: {
         list: () => Promise<RoleSpec[]>;

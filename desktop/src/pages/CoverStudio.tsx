@@ -440,9 +440,9 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
             void loadSettings();
             void loadSpaceContext();
         };
-        window.ipcRenderer.on('space:changed', handleSpaceChanged);
+        window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
         return () => {
-            window.ipcRenderer.off('space:changed', handleSpaceChanged);
+            window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
         };
     }, [loadSettings, loadSpaceContext]);
 

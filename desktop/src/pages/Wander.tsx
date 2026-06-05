@@ -943,9 +943,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     const handleSettingsUpdated = () => {
       void syncWanderSettings();
     };
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
     return () => {
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
     };
   }, [isActive, syncWanderSettings]);
 
