@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense, type ReactNode } from 'react';
 import { FileText, Loader2, MessageSquareWarning } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
@@ -14,6 +14,7 @@ import { OfficialLoginGate } from './features/app-shell/OfficialLoginGate';
 import { StartupMigrationGate } from './features/app-shell/StartupMigrationGate';
 import { useFeedbackReportDialog } from './features/app-shell/useFeedbackReportDialog';
 import { useGlobalIntentRouter } from './features/app-shell/useGlobalIntentRouter';
+import { useOfficialAuthNotice } from './features/app-shell/useOfficialAuthNotice';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
 import type { GenerationIntent, ImmersiveMode, PendingChatMessage, RedClawNavigationAction, SettingsNavigationTarget } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
@@ -36,11 +37,6 @@ const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subject
 const AutomationPage = lazy(async () => ({ default: (await import('./pages/Automation')).Automation }));
 const ApprovalPage = lazy(async () => ({ default: (await import('./pages/Approval')).Approval }));
 
-const OFFICIAL_AUTH_NOTICE_ENABLED = false;
-const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
-  'redbox-auth:panel-display',
-] as const;
-
 function ViewLoadingFallback() {
   const { t } = useI18n();
   return (
@@ -51,22 +47,7 @@ function ViewLoadingFallback() {
   );
 }
 
-function clearStaleOfficialAuthSnapshots(): boolean {
-  let cleared = false;
-  try {
-    for (const key of OFFICIAL_AUTH_SNAPSHOT_KEYS) {
-      if (window.localStorage.getItem(key) == null) continue;
-      window.localStorage.removeItem(key);
-      cleared = true;
-    }
-  } catch {
-    return cleared;
-  }
-  return cleared;
-}
-
 function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => void }) {
-  const { t } = useI18n();
   const {
     currentView,
     setCurrentView,
@@ -86,14 +67,13 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   const [redClawTitleBarActions, setRedClawTitleBarActions] = useState<ReactNode>(null);
   const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
-  const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
   const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
   const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
   const [approvalTargetDocketId, setApprovalTargetDocketId] = useState('');
 
-  const lastAuthStatusRef = useRef('');
+  const globalAuthNotice = useOfficialAuthNotice();
 
   const openSubjectsModal = useCallback(() => {
     setSubjectsModalOpen(true);
@@ -110,62 +90,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     closeFeedbackReport,
     notifyFeedbackReportSubmitted,
   } = useFeedbackReportDialog(currentView);
-
-  useEffect(() => {
-    let mounted = true;
-    const handleAuthStateChanged = (event: { payload?: { status?: string } } | { status?: string } | null | undefined) => {
-      const payload = (event && typeof event === 'object' && 'payload' in event)
-        ? (event as { payload?: { status?: string } }).payload
-        : (event as { status?: string } | null | undefined);
-      const nextStatus = String((payload as { status?: string } | null | undefined)?.status || '');
-      const prevStatus = lastAuthStatusRef.current;
-      lastAuthStatusRef.current = nextStatus;
-      if (!mounted) {
-        return;
-      }
-      if (nextStatus === 'reauthRequired') {
-        clearStaleOfficialAuthSnapshots();
-        setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? t('app.authExpired') : null);
-        return;
-      }
-      if (nextStatus === 'anonymous') {
-        const cleared = clearStaleOfficialAuthSnapshots();
-        setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? t('app.authExpired') : null);
-        return;
-      }
-      if (prevStatus === 'reauthRequired') {
-        setGlobalAuthNotice(null);
-      }
-      if (prevStatus === 'anonymous') {
-        setGlobalAuthNotice(null);
-      }
-    };
-
-    void window.ipcRenderer.auth.getState()
-      .then((snapshot) => {
-        if (!mounted) return;
-        const nextStatus = String((snapshot as { status?: string } | null | undefined)?.status || '');
-        lastAuthStatusRef.current = nextStatus;
-        if (nextStatus === 'reauthRequired') {
-          clearStaleOfficialAuthSnapshots();
-          setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? t('app.authExpired') : null);
-          return;
-        }
-        if (nextStatus === 'anonymous') {
-          const cleared = clearStaleOfficialAuthSnapshots();
-          setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? t('app.authExpired') : null);
-          return;
-        }
-        setGlobalAuthNotice(null);
-      })
-      .catch(() => {});
-
-    window.ipcRenderer.auth.onStateChanged(handleAuthStateChanged);
-    return () => {
-      mounted = false;
-      window.ipcRenderer.auth.offStateChanged(handleAuthStateChanged);
-    };
-  }, [t]);
 
   useGlobalIntentRouter({
     navigateToView,
