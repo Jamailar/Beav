@@ -15,6 +15,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::store::assistant as assistant_store;
 use crate::{
     background_command, now_iso, payload_string, run_curl_json, url_encode_component, with_store,
     AppState, AssistantSidecarRuntime, AssistantStateRecord,
@@ -858,7 +859,7 @@ pub(crate) fn execute_assistant_message(
     body: &str,
 ) -> Result<Value, String> {
     let state = app.state::<AppState>();
-    let assistant_snapshot = with_store(&state, |store| Ok(store.assistant_state.clone()))?;
+    let assistant_snapshot = with_store(&state, |store| Ok(assistant_store::snapshot(&store)))?;
     let parsed_body = serde_json::from_str::<Value>(body).unwrap_or_else(|_| json!({}));
     if let Some(response) =
         validate_assistant_request(route_kind, headers, &parsed_body, &assistant_snapshot)?
@@ -955,7 +956,7 @@ pub(crate) fn run_assistant_listener(
                         &format!("assistant daemon request from {}: {}", addr, first_line),
                     );
                     let assistant_snapshot = with_store(&app.state::<AppState>(), |store| {
-                        Ok(store.assistant_state.clone())
+                        Ok(assistant_store::snapshot(&store))
                     })
                     .unwrap_or_else(|_| AssistantStateRecord::default());
                     let (raw_headers, body) = parse_http_request_parts(&request);
