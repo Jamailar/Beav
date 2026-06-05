@@ -179,6 +179,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed memory creation active-space fallback through `store::spaces`.
 - Routed CLI runtime workspace-root active-space reads through `store::spaces`.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
+- Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
