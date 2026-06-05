@@ -271,6 +271,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted remote notification path construction, response wrapping and official context projection into `commands/notifications/remote`.
 - Extracted file preview path projection, virtual path validation, mime/kind classification and manuscript package preview tests into `commands/file_ops/preview`.
 - Extracted file zip archive entry sanitization, unique naming and zip writing into `commands/file_ops/archive`.
+- Extracted file show-in-folder, copy-image and save-as behavior into `commands/file_ops/actions`.
 
 ### 1. Bridge Contract Layer
 
