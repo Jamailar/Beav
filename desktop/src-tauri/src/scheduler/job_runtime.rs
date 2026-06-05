@@ -945,16 +945,9 @@ pub fn cancel_job_execution(
     reason: &str,
 ) -> Option<(String, String)> {
     let now_iso = now_iso();
-    if let Some(task) = store
-        .redclaw_state
-        .scheduled_tasks
-        .iter_mut()
-        .find(|item| item.id == task_id)
+    if let Some(cancelled_id) =
+        redclaw_store::cancel_scheduled_task(store, task_id, reason, &now_iso)
     {
-        let cancelled_id = task.id.clone();
-        task.enabled = false;
-        task.last_error = Some(reason.to_string());
-        task.updated_at = now_iso.clone();
         if let Some(execution_id) =
             redclaw_store::job_definition_id_by_source(store, "scheduled", task_id).and_then(
                 |definition_id| {
@@ -966,17 +959,9 @@ pub fn cancel_job_execution(
         }
         return Some((cancelled_id, "scheduled-task".to_string()));
     }
-    if let Some(task) = store
-        .redclaw_state
-        .long_cycle_tasks
-        .iter_mut()
-        .find(|item| item.id == task_id)
+    if let Some(cancelled_id) =
+        redclaw_store::cancel_long_cycle_task(store, task_id, reason, &now_iso)
     {
-        let cancelled_id = task.id.clone();
-        task.enabled = false;
-        task.status = "cancelled".to_string();
-        task.last_error = Some(reason.to_string());
-        task.updated_at = now_iso.clone();
         if let Some(execution_id) =
             redclaw_store::job_definition_id_by_source(store, "long_cycle", task_id).and_then(
                 |definition_id| {
