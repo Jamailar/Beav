@@ -289,6 +289,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted single-image generation provider request handling, placeholder fallback, generated asset writes and asset record assembly into `commands/generation/image_single`.
 - Extracted official value parsing, unauthorized response detection, timestamp normalization and call-record normalization into `commands/official/call_records`.
 - Extracted official session access/refresh projections, refresh-window calculation and session merge helpers into `commands/official/session`.
+- Extracted official points payload normalization, cached points projection, silent-refresh decision and remote points fetch into `commands/official/points`.
 
 ### 1. Bridge Contract Layer
 
