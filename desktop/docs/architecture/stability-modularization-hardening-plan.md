@@ -255,6 +255,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Centralized root renderer event subscriptions in `bridge/appEvents.ts` and extended the renderer IPC boundary guard to keep page/component code off root `window.ipcRenderer.on*/off*` compatibility methods.
 - Extracted App Shell update-notice lifecycle, release-note event handling and release-page opening into `features/app-shell/useAppUpdateNotice`.
 - Extracted App Shell global knowledge search state, shortcut handling, debounced query and navigation dispatch into `features/app-shell/useGlobalKnowledgeSearch`.
+- Extracted App Shell theme preference, system-theme subscription, custom-theme sync and Tauri window-theme application into `features/app-shell/useLayoutTheme`.
 
 ### 1. Bridge Contract Layer
 
