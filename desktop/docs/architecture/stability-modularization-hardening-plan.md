@@ -219,6 +219,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed assistant daemon state snapshots/config/listener/Weixin status updates through `store::assistant` and extended the domain-store boundary guard for assistant state.
 - Routed MCP server and runtime hook state access through `store::mcp_tools` and extended the domain-store boundary guard for MCP/tool state.
 - Routed LLM readiness settings writeback through `store::settings` so the command no longer writes `store.settings` directly.
+- Routed tool executor MCP server snapshots through `store::mcp_tools`, reducing direct AppStore coupling in tool dispatch paths.
 
 ### 1. Bridge Contract Layer
 
