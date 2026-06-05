@@ -348,6 +348,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted review docket listing, lookup, stats, creation, decision mapping and archive handling into `runtime/collab_runtime/review_docket`.
 - Extracted collaboration report listing/submission/retention, mailbox listing/post/read/cleanup, artifact attachment, blocker raising and report requests into `runtime/collab_runtime/mailbox_reports`.
 - Extracted collaboration member listing, creation, rename and shutdown handling into `runtime/collab_runtime/member_management`.
+- Extracted collaboration session creation/listing/status/coordinator handling and snapshot assembly into `runtime/collab_runtime/session_core`.
 
 ### 1. Bridge Contract Layer
 
