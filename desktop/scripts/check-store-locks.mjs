@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(__dirname, '..', 'src-tauri', 'src');
 const storeClosurePattern = /with_store(?:_mut)?\s*\([^|]*\|[^|]+\|\s*\{/g;
-const slowOperationPattern = /(\bfs::|std::fs::|\.await\b|reqwest::|Command::new|spawn_blocking|tauri::async_runtime::spawn\s*\(|compute_embedding_with_settings\s*\()/;
+const slowOperationPattern = /(\bfs::|std::fs::|\.await\b|reqwest::|Command::new|spawn_blocking|tauri::async_runtime::spawn\s*\(|compute_embedding_with_settings\s*\(|run_official_\w+\s*\(|run_authenticated_official_\w+\s*\(|fetch_remote_official_\w+\s*\()/;
 
 function listRustFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
