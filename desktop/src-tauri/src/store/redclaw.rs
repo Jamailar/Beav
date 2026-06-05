@@ -231,3 +231,18 @@ pub(crate) fn update_job_definition_by_source<R>(
 pub(crate) fn list_job_executions(store: &AppStore) -> Vec<RedclawJobExecutionRecord> {
     store.redclaw_job_executions.clone()
 }
+
+pub(crate) fn job_execution_count(store: &AppStore) -> usize {
+    store.redclaw_job_executions.len()
+}
+
+pub(crate) fn job_execution_id_exists(store: &AppStore, execution_id: &str) -> bool {
+    store
+        .redclaw_job_executions
+        .iter()
+        .any(|item| item.id == execution_id)
+}
+
+pub(crate) fn push_job_execution(store: &mut AppStore, execution: RedclawJobExecutionRecord) {
+    store.redclaw_job_executions.push(execution);
+}
