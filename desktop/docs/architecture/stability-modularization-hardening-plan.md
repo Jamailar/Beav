@@ -170,6 +170,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed RedClaw task draft definition lookup/write paths through `store::redclaw`.
 - Routed RedClaw task definition get/remove paths through `store::redclaw`.
 - Routed RedClaw task definition mutable update paths through `store::redclaw`.
+- Routed RedClaw command manual-run and cooldown definition access through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
