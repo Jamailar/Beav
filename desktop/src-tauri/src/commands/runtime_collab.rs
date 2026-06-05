@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
+#[path = "runtime_collab/member_values.rs"]
+mod member_values;
 #[path = "runtime_collab/review_approval.rs"]
 mod review_approval;
 #[path = "runtime_collab/session_values.rs"]
@@ -23,20 +25,22 @@ use crate::commands::redclaw::redclaw_task_control;
 use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    add_collab_member, archive_review_docket, create_collab_task, create_review_docket,
-    decide_review_docket, get_review_docket, list_collab_members, list_collab_messages,
-    list_collab_reports, list_collab_tasks, list_review_dockets, pin_collab_task_session,
-    post_collab_message, read_collab_mailbox, rename_collab_member, request_collab_report,
-    request_runtime_approval, resolve_review_docket_waiters,
+    archive_review_docket, create_collab_task, create_review_docket, decide_review_docket,
+    get_review_docket, list_collab_messages, list_collab_reports, list_collab_tasks,
+    list_review_dockets, pin_collab_task_session, post_collab_message, read_collab_mailbox,
+    request_collab_report, request_runtime_approval, resolve_review_docket_waiters,
     resolve_runtime_approval_by_approval_id, retry_collab_task, review_docket_stats,
-    set_collab_session_coordinator, shutdown_collab_member, submit_collab_report,
-    transition_collab_task, update_collab_task, CollabMailboxMessageRecord, CollabMemberRecord,
-    CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord, ReviewDocketRecord,
-    RuntimeApprovalDetails, RuntimeApprovalRecord,
+    submit_collab_report, transition_collab_task, update_collab_task, CollabMailboxMessageRecord,
+    CollabMemberRecord, CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord,
+    ReviewDocketRecord, RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
 use crate::session_manager::create_session;
 use crate::store::redclaw as redclaw_store;
 use crate::{now_i64, parse_timestamp_ms, payload_string, AppState};
+pub use member_values::{
+    add_member_value, list_members_value, rename_member_value, set_session_coordinator_value,
+    shutdown_member_value,
+};
 use review_approval::{request_review_docket_runtime_approval, route_review_docket_action};
 pub use session_values::{
     create_session_value, list_sessions_value, session_snapshot_value, tick_reports_value,
@@ -67,14 +71,6 @@ fn emit_collab_event(
     payload: Value,
 ) {
     emit_runtime_event(app, event_type, owner_session_id, None, payload);
-}
-
-pub fn list_members_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    let session_id =
-        payload_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
-    with_store(state, |store| {
-        Ok(json!(list_collab_members(&store, &session_id)))
-    })
 }
 
 pub fn list_tasks_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
@@ -128,68 +124,6 @@ pub fn list_reports_value(state: &State<'_, AppState>, payload: &Value) -> Resul
             limit,
         )))
     })
-}
-
-pub fn add_member_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let member = with_store_mut(state, |store| add_collab_member(store, payload))?;
-    emit_collab_event(
-        app,
-        "runtime:collab-member-changed",
-        None,
-        json!({ "collabSessionId": member.session_id, "member": member }),
-    );
-    Ok(json!(member))
-}
-
-pub fn set_session_coordinator_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let session = with_store_mut(state, |store| {
-        set_collab_session_coordinator(store, payload)
-    })?;
-    emit_collab_event(
-        app,
-        "runtime:collab-session-changed",
-        session.owner_session_id.as_deref(),
-        json!({ "collabSessionId": session.id, "session": session }),
-    );
-    Ok(json!(session))
-}
-
-pub fn rename_member_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let member = with_store_mut(state, |store| rename_collab_member(store, payload))?;
-    emit_collab_event(
-        app,
-        "runtime:collab-member-changed",
-        None,
-        json!({ "collabSessionId": member.session_id, "member": member }),
-    );
-    Ok(json!(member))
-}
-
-pub fn shutdown_member_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let member = with_store_mut(state, |store| shutdown_collab_member(store, payload))?;
-    emit_collab_event(
-        app,
-        "runtime:collab-member-changed",
-        None,
-        json!({ "collabSessionId": member.session_id, "member": member }),
-    );
-    Ok(json!(member))
 }
 
 pub fn create_task_value(
