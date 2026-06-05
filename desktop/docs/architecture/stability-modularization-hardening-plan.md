@@ -328,6 +328,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted authenticated official request preflight-refresh and retry handling into `commands/official/request`.
 - Extracted official auth refresh, AI-request reauth and refresh failure handling into `commands/official/auth_refresh`.
 - Extracted official settings update application, model-default repair, auth runtime sync and update event emission into `commands/official/settings_update`.
+- Extracted chat knowledge/asset reference normalization, inline asset mention resolution, media task-intent inference and user-message metadata assembly into `commands/chat/references`.
 - Extracted Thrive plugin manifest primitive validation for names, versions, capabilities, UI slots, home sources and network hosts into `commands/plugin/manifest_primitives`.
 - Extracted Thrive plugin manifest discovery, relative-path validation, file loading, interface prompt limits and home extension validation into `commands/plugin/manifest`.
 - Extracted Thrive plugin secure directory copy, archive extraction, temp cleanup and source-root resolution into `commands/plugin/install_files`.
