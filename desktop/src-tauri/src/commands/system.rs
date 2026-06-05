@@ -1,5 +1,6 @@
 mod app_update;
 mod feedback;
+mod renderer_log;
 
 use app_update::{check_app_update, APP_UPDATE_DOWNLOAD_PAGE_URL};
 use arboard::Clipboard;
@@ -9,11 +10,10 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::file_ops::resolve_file_action_path;
-use crate::logging::event::LogLevel;
 use crate::logging::{
     create_report_from_trigger, dismiss_pending_report, export_bundle_for_report,
-    list_pending_reports_value, log_renderer_event, recent_value,
-    status_value as logging_status_value, update_upload_consent, upload_pending_report,
+    list_pending_reports_value, recent_value, status_value as logging_status_value,
+    update_upload_consent, upload_pending_report,
 };
 use crate::persistence::{
     apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
@@ -458,32 +458,7 @@ pub fn handle_system_channel(
                         .unwrap_or(false);
                     update_upload_consent(state, &consent, auto_send_same_crash)
                 }
-                "logs:append-renderer" => {
-                    let level =
-                        payload_string(payload, "level").unwrap_or_else(|| "error".to_string());
-                    let category = payload_string(payload, "category")
-                        .unwrap_or_else(|| "plugin.bridge".to_string());
-                    let event = payload_string(payload, "event")
-                        .unwrap_or_else(|| "renderer.log".to_string());
-                    let message = payload_string(payload, "message")
-                        .unwrap_or_else(|| "renderer log".to_string());
-                    log_renderer_event(
-                        match level.to_ascii_lowercase().as_str() {
-                            "trace" => LogLevel::Trace,
-                            "debug" => LogLevel::Debug,
-                            "warn" => LogLevel::Warn,
-                            "error" => LogLevel::Error,
-                            _ => LogLevel::Info,
-                        },
-                        &category,
-                        &event,
-                        &message,
-                        payload_field(payload, "fields")
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    );
-                    Ok(json!({ "success": true }))
-                }
+                "logs:append-renderer" => renderer_log::append_renderer_log(payload),
                 "clipboard:read-text" => Ok(json!(Clipboard::new()
                     .and_then(|mut clipboard| clipboard.get_text())
                     .unwrap_or_default())),
