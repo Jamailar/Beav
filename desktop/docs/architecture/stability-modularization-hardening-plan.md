@@ -216,6 +216,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added a domain-store boundary guard to block direct RedClaw AppStore internals outside `store::redclaw` and persistence hydration.
 - Routed Spaces list/rename/delete/switch memory-state access through `store::spaces` and extended the domain-store boundary guard for Spaces.
 - Routed runtime task creation/resume entrypoints through `store::runtime_tasks` and extended the domain-store boundary guard for runtime tasks.
+- Routed assistant daemon state snapshots/config/listener/Weixin status updates through `store::assistant` and extended the domain-store boundary guard for assistant state.
 
 ### 1. Bridge Contract Layer
 
