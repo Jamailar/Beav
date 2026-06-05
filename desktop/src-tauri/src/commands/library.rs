@@ -120,9 +120,8 @@ fn backfill_video_thumbnails_for_media_assets(
 ) -> Result<(), String> {
     let root = media_root(state)?;
     let candidates = with_store(state, |store| {
-        Ok(store
-            .media_assets
-            .iter()
+        Ok(media_store::list_assets(&store)
+            .into_iter()
             .filter(|asset| !media_thumbnail_url_is_usable(asset.thumbnail_url.as_deref()))
             .filter_map(|asset| {
                 let source_path =
@@ -162,14 +161,10 @@ fn backfill_video_thumbnails_for_media_assets(
 
     with_store_mut(state, |store| {
         for (asset_id, thumbnail_url) in &updates {
-            if let Some(asset) = store
-                .media_assets
-                .iter_mut()
-                .find(|asset| asset.id == *asset_id)
-            {
+            media_store::update_asset(store, asset_id, |asset| {
                 asset.thumbnail_url = Some(thumbnail_url.clone());
                 asset.updated_at = now_rfc3339();
-            }
+            });
         }
         Ok(())
     })?;
@@ -210,36 +205,30 @@ pub(crate) fn existing_media_asset_by_content_hash(
     }
     let root = media_root(state)?;
     let exact_match = with_store(state, |store| {
-        Ok(store
-            .media_assets
-            .iter()
-            .find(|asset| {
-                if asset.content_hash.as_deref() != Some(normalized_hash) || !asset.exists {
-                    return false;
-                }
-                if asset
-                    .absolute_path
-                    .as_deref()
-                    .is_some_and(|path| Path::new(path).exists())
-                {
-                    return true;
-                }
-                asset
-                    .relative_path
-                    .as_deref()
-                    .is_some_and(|rel| root.join(rel).exists())
-            })
-            .cloned())
+        Ok(media_store::list_assets(&store).into_iter().find(|asset| {
+            if asset.content_hash.as_deref() != Some(normalized_hash) || !asset.exists {
+                return false;
+            }
+            if asset
+                .absolute_path
+                .as_deref()
+                .is_some_and(|path| Path::new(path).exists())
+            {
+                return true;
+            }
+            asset
+                .relative_path
+                .as_deref()
+                .is_some_and(|rel| root.join(rel).exists())
+        }))
     })?;
     if exact_match.is_some() {
         return Ok(exact_match);
     }
     let candidates = with_store(state, |store| {
-        Ok(store
-            .media_assets
-            .iter()
+        Ok(media_store::list_assets(&store)
+            .into_iter()
             .filter(|asset| asset.content_hash.is_none() && asset.exists)
-            .cloned()
             .collect::<Vec<_>>())
     })?;
     for asset in candidates {
@@ -1645,13 +1634,8 @@ pub fn handle_library_channel(
             }
             "media:open" => {
                 let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                let asset = with_store(state, |store| {
-                    Ok(store
-                        .media_assets
-                        .iter()
-                        .find(|item| item.id == asset_id)
-                        .cloned())
-                })?;
+                let asset =
+                    with_store(state, |store| Ok(media_store::get_asset(&store, &asset_id)))?;
                 let Some(asset) = asset else {
                     return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
                 };
@@ -1669,19 +1653,18 @@ pub fn handle_library_channel(
             "media:update" => {
                 let result = with_store_mut(state, |store| {
                     let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                    let Some(asset) = store
-                        .media_assets
-                        .iter_mut()
-                        .find(|item| item.id == asset_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
-                    };
-                    asset.title = normalize_optional_string(payload_string(payload, "title"));
-                    asset.project_id =
-                        normalize_optional_string(payload_string(payload, "projectId"));
-                    asset.prompt = normalize_optional_string(payload_string(payload, "prompt"));
-                    asset.updated_at = now_rfc3339();
-                    Ok(json!({ "success": true, "asset": asset.clone() }))
+                    let result = media_store::update_asset(store, &asset_id, |asset| {
+                        asset.title = normalize_optional_string(payload_string(payload, "title"));
+                        asset.project_id =
+                            normalize_optional_string(payload_string(payload, "projectId"));
+                        asset.prompt = normalize_optional_string(payload_string(payload, "prompt"));
+                        asset.updated_at = now_rfc3339();
+                        asset.clone()
+                    });
+                    Ok(match result {
+                        Some(asset) => json!({ "success": true, "asset": asset }),
+                        None => json!({ "success": false, "error": "媒体资产不存在" }),
+                    })
                 })?;
                 persist_media_workspace_catalog(state)?;
                 Ok(result)
@@ -1694,16 +1677,15 @@ pub fn handle_library_channel(
                     .filter(|value| !value.is_empty());
                 let result = with_store_mut(state, |store| {
                     let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                    let Some(asset) = store
-                        .media_assets
-                        .iter_mut()
-                        .find(|item| item.id == asset_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
-                    };
-                    asset.bound_manuscript_path = manuscript_path.clone();
-                    asset.updated_at = now_rfc3339();
-                    Ok(json!({ "success": true, "asset": asset.clone() }))
+                    let result = media_store::update_asset(store, &asset_id, |asset| {
+                        asset.bound_manuscript_path = manuscript_path.clone();
+                        asset.updated_at = now_rfc3339();
+                        asset.clone()
+                    });
+                    Ok(match result {
+                        Some(asset) => json!({ "success": true, "asset": asset }),
+                        None => json!({ "success": false, "error": "媒体资产不存在" }),
+                    })
                 })?;
                 persist_media_workspace_catalog(state)?;
                 if result.get("success").and_then(Value::as_bool) == Some(true) {
