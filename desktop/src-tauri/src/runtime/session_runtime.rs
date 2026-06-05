@@ -2297,9 +2297,9 @@ mod tests {
         let mut store = crate::AppStore::default();
         let session = test_session("session-1");
         store.chat_sessions.push(session.clone());
-        store
-            .runtime_tasks
-            .push(crate::runtime::create_runtime_task(
+        crate::store::runtime_tasks::push_task(
+            &mut store,
+            crate::runtime::create_runtime_task(
                 "manual",
                 "pending",
                 "default".to_string(),
@@ -2307,7 +2307,8 @@ mod tests {
                 Some("draft".to_string()),
                 crate::runtime::runtime_direct_route_record("default", "draft", None),
                 None,
-            ));
+            ),
+        );
 
         let summary = session_bridge_summary_value(&session, &store);
         assert_eq!(

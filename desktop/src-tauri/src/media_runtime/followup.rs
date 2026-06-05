@@ -73,9 +73,8 @@ pub(crate) fn tick_media_followups(
     state: &tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let candidates = with_store(state, |store| {
-        Ok(store
-            .runtime_tasks
-            .iter()
+        Ok(runtime_tasks_store::list_tasks(&store)
+            .into_iter()
             .filter(|task| {
                 task.task_type == "media-followup"
                     && matches!(task.status.as_str(), "pending" | "running")
@@ -475,31 +474,27 @@ fn mark_media_followup_notifying(
     latest_text: &str,
 ) -> Result<bool, String> {
     with_store_mut(state, |store| {
-        let Some(task) = store
-            .runtime_tasks
-            .iter_mut()
-            .find(|item| item.id == task_id)
-        else {
-            return Ok(false);
-        };
-        if !matches!(task.status.as_str(), "pending" | "running") {
-            return Ok(false);
-        }
-        task.status = "notifying".to_string();
-        task.updated_at = now_i64();
-        task.current_node = Some("respond".to_string());
-        if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
-            metadata.insert("latestText".to_string(), json!(latest_text));
-            metadata.insert("notificationStatus".to_string(), json!("sending"));
-        }
-        set_runtime_graph_node(
-            &mut task.graph,
-            "execute_tools",
-            "completed",
-            Some("media job reached terminal state".to_string()),
-            None,
-        );
-        Ok(true)
+        Ok(runtime_tasks_store::update_task(store, task_id, |task| {
+            if !matches!(task.status.as_str(), "pending" | "running") {
+                return false;
+            }
+            task.status = "notifying".to_string();
+            task.updated_at = now_i64();
+            task.current_node = Some("respond".to_string());
+            if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
+                metadata.insert("latestText".to_string(), json!(latest_text));
+                metadata.insert("notificationStatus".to_string(), json!("sending"));
+            }
+            set_runtime_graph_node(
+                &mut task.graph,
+                "execute_tools",
+                "completed",
+                Some("media job reached terminal state".to_string()),
+                None,
+            );
+            true
+        })
+        .unwrap_or(false))
     })
 }
 
@@ -512,55 +507,54 @@ fn mark_media_followup_progress_notifying(
 ) -> Result<bool, String> {
     let unit = kind_unit(kind);
     with_store_mut(state, |store| {
-        let Some(task) = store
-            .runtime_tasks
-            .iter_mut()
-            .find(|item| item.id == task_id)
-        else {
-            return Ok(false);
-        };
-        if !matches!(task.status.as_str(), "pending" | "running") {
-            return Ok(false);
+        let updated = runtime_tasks_store::update_task(store, task_id, |task| {
+            if !matches!(task.status.as_str(), "pending" | "running") {
+                return false;
+            }
+            let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) else {
+                return false;
+            };
+            let already_notified = metadata
+                .get("progressNotifiedCount")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(0);
+            let progress_status = metadata
+                .get("progressNotificationStatus")
+                .and_then(Value::as_str)
+                .unwrap_or("idle");
+            if delivered_count <= already_notified || progress_status == "sending" {
+                return false;
+            }
+            metadata.insert(
+                "latestText".to_string(),
+                json!(format!(
+                    "已生成 {delivered_count}/{total_count} {unit}，准备回传进度。"
+                )),
+            );
+            metadata.insert("progressNotificationStatus".to_string(), json!("sending"));
+            metadata.insert(
+                "progressNotificationTarget".to_string(),
+                json!(delivered_count),
+            );
+            metadata.insert("progressRetryNotBefore".to_string(), json!(0));
+            task.updated_at = now_i64();
+            true
+        })
+        .unwrap_or(false);
+        if updated {
+            append_runtime_task_trace(
+                store,
+                task_id,
+                "media-followup.progress.pending",
+                Some(json!({
+                    "completedCount": delivered_count,
+                    "expectedCount": total_count,
+                    "kind": normalize_followup_kind(kind),
+                })),
+            );
         }
-        let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) else {
-            return Ok(false);
-        };
-        let already_notified = metadata
-            .get("progressNotifiedCount")
-            .and_then(Value::as_u64)
-            .map(|value| value as usize)
-            .unwrap_or(0);
-        let progress_status = metadata
-            .get("progressNotificationStatus")
-            .and_then(Value::as_str)
-            .unwrap_or("idle");
-        if delivered_count <= already_notified || progress_status == "sending" {
-            return Ok(false);
-        }
-        metadata.insert(
-            "latestText".to_string(),
-            json!(format!(
-                "已生成 {delivered_count}/{total_count} {unit}，准备回传进度。"
-            )),
-        );
-        metadata.insert("progressNotificationStatus".to_string(), json!("sending"));
-        metadata.insert(
-            "progressNotificationTarget".to_string(),
-            json!(delivered_count),
-        );
-        metadata.insert("progressRetryNotBefore".to_string(), json!(0));
-        task.updated_at = now_i64();
-        append_runtime_task_trace(
-            store,
-            task_id,
-            "media-followup.progress.pending",
-            Some(json!({
-                "completedCount": delivered_count,
-                "expectedCount": total_count,
-                "kind": normalize_followup_kind(kind),
-            })),
-        );
-        Ok(true)
+        Ok(updated)
     })
 }
 
@@ -574,53 +568,52 @@ fn finish_media_followup_progress_notification(
 ) {
     let unit = kind_unit(kind);
     let _ = with_store_mut(state, |store| {
-        let Some(task) = store
-            .runtime_tasks
-            .iter_mut()
-            .find(|item| item.id == task_id)
-        else {
-            return Ok(());
-        };
-        let now = now_i64();
-        task.updated_at = now;
-        if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
-            metadata.insert("progressNotificationStatus".to_string(), json!("idle"));
-            metadata.insert(
-                "progressRetryNotBefore".to_string(),
-                json!(if error.is_some() { now + 5_000 } else { 0 }),
-            );
-            if error.is_none() {
-                metadata.insert("progressNotifiedCount".to_string(), json!(delivered_count));
+        let updated = runtime_tasks_store::update_task(store, task_id, |task| {
+            let now = now_i64();
+            task.updated_at = now;
+            if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
+                metadata.insert("progressNotificationStatus".to_string(), json!("idle"));
                 metadata.insert(
-                    "latestText".to_string(),
-                    json!(format!(
-                        "已回传进度 {delivered_count}/{total_count} {unit}。"
-                    )),
+                    "progressRetryNotBefore".to_string(),
+                    json!(if error.is_some() { now + 5_000 } else { 0 }),
                 );
-            } else {
-                metadata.insert(
-                    "latestText".to_string(),
-                    json!(format!(
-                        "进度回传失败（{delivered_count}/{total_count} {unit}），稍后重试。"
-                    )),
-                );
+                if error.is_none() {
+                    metadata.insert("progressNotifiedCount".to_string(), json!(delivered_count));
+                    metadata.insert(
+                        "latestText".to_string(),
+                        json!(format!(
+                            "已回传进度 {delivered_count}/{total_count} {unit}。"
+                        )),
+                    );
+                } else {
+                    metadata.insert(
+                        "latestText".to_string(),
+                        json!(format!(
+                            "进度回传失败（{delivered_count}/{total_count} {unit}），稍后重试。"
+                        )),
+                    );
+                }
             }
+            true
+        })
+        .unwrap_or(false);
+        if updated {
+            append_runtime_task_trace(
+                store,
+                task_id,
+                if error.is_none() {
+                    "media-followup.progress.sent"
+                } else {
+                    "media-followup.progress.failed"
+                },
+                Some(json!({
+                    "completedCount": delivered_count,
+                    "expectedCount": total_count,
+                    "kind": normalize_followup_kind(kind),
+                    "error": error,
+                })),
+            );
         }
-        append_runtime_task_trace(
-            store,
-            task_id,
-            if error.is_none() {
-                "media-followup.progress.sent"
-            } else {
-                "media-followup.progress.failed"
-            },
-            Some(json!({
-                "completedCount": delivered_count,
-                "expectedCount": total_count,
-                "kind": normalize_followup_kind(kind),
-                "error": error,
-            })),
-        );
         Ok(())
     });
 }
@@ -732,83 +725,79 @@ fn finish_media_followup_task(
     projection: Option<&Value>,
 ) {
     let _ = with_store_mut(state, |store| {
-        let Some(task) = store
-            .runtime_tasks
-            .iter_mut()
-            .find(|item| item.id == task_id)
-        else {
-            return Ok(());
-        };
-        let finished_at = now_i64();
-        task.status = status.to_string();
-        task.updated_at = finished_at;
-        task.completed_at = Some(finished_at);
-        task.last_error = error.clone();
-        task.current_node = Some(if status == "completed" {
-            "save_artifact".to_string()
-        } else {
-            "respond".to_string()
-        });
-        if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
-            metadata.insert("latestText".to_string(), json!(summary));
-            metadata.insert(
-                "notificationStatus".to_string(),
-                json!(if status == "completed" {
-                    "sent"
-                } else {
-                    "failed"
-                }),
-            );
-        }
-        set_runtime_graph_node(
-            &mut task.graph,
-            "respond",
-            if status == "completed" {
-                "completed"
+        let payload = runtime_tasks_store::update_task(store, task_id, |task| {
+            let finished_at = now_i64();
+            task.status = status.to_string();
+            task.updated_at = finished_at;
+            task.completed_at = Some(finished_at);
+            task.last_error = error.clone();
+            task.current_node = Some(if status == "completed" {
+                "save_artifact".to_string()
             } else {
-                "failed"
-            },
-            Some(summary.to_string()),
-            error.clone(),
-        );
-        if status == "completed" {
-            let artifacts = projection
-                .map(runtime_artifacts_from_projection)
-                .unwrap_or_default();
-            if !artifacts.is_empty() {
-                task.artifacts = artifacts;
-                set_runtime_graph_node(
-                    &mut task.graph,
-                    "save_artifact",
-                    "completed",
-                    Some("generated images saved".to_string()),
-                    None,
+                "respond".to_string()
+            });
+            if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
+                metadata.insert("latestText".to_string(), json!(summary));
+                metadata.insert(
+                    "notificationStatus".to_string(),
+                    json!(if status == "completed" {
+                        "sent"
+                    } else {
+                        "failed"
+                    }),
                 );
             }
-        }
-        let payload = projection.map(|value| {
-            json!({
-                "jobId": value.get("jobId").cloned().unwrap_or(Value::Null),
-                "status": value.get("status").cloned().unwrap_or(Value::Null),
-                "artifactCount": value
-                    .get("artifacts")
-                    .and_then(Value::as_array)
-                    .map(|items| items.len())
-                    .unwrap_or(0),
-            })
-        });
-        task.checkpoints.push(RuntimeCheckpointRecord::new(
+            set_runtime_graph_node(
+                &mut task.graph,
+                "respond",
+                if status == "completed" {
+                    "completed"
+                } else {
+                    "failed"
+                },
+                Some(summary.to_string()),
+                error.clone(),
+            );
             if status == "completed" {
-                "media-followup.completed"
-            } else {
-                "media-followup.failed"
-            },
-            task.current_node
-                .clone()
-                .unwrap_or_else(|| "respond".to_string()),
-            summary.to_string(),
-            payload.clone(),
-        ));
+                let artifacts = projection
+                    .map(runtime_artifacts_from_projection)
+                    .unwrap_or_default();
+                if !artifacts.is_empty() {
+                    task.artifacts = artifacts;
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "save_artifact",
+                        "completed",
+                        Some("generated images saved".to_string()),
+                        None,
+                    );
+                }
+            }
+            let payload = projection.map(|value| {
+                json!({
+                    "jobId": value.get("jobId").cloned().unwrap_or(Value::Null),
+                    "status": value.get("status").cloned().unwrap_or(Value::Null),
+                    "artifactCount": value
+                        .get("artifacts")
+                        .and_then(Value::as_array)
+                        .map(|items| items.len())
+                        .unwrap_or(0),
+                })
+            });
+            task.checkpoints.push(RuntimeCheckpointRecord::new(
+                if status == "completed" {
+                    "media-followup.completed"
+                } else {
+                    "media-followup.failed"
+                },
+                task.current_node
+                    .clone()
+                    .unwrap_or_else(|| "respond".to_string()),
+                summary.to_string(),
+                payload.clone(),
+            ));
+            payload
+        });
         append_runtime_task_trace(
             store,
             task_id,

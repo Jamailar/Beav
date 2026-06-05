@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::mcp_tools as mcp_tools_store;
 
 pub(super) fn handle(
     executor: &AppCliExecutor<'_>,
@@ -19,11 +20,7 @@ pub(super) fn handle(
             .filter(|value| !value.is_empty())
         {
             return with_store(executor.state, |store| {
-                store
-                    .mcp_servers
-                    .iter()
-                    .find(|server| server.id == server_id || server.name == server_id)
-                    .cloned()
+                mcp_tools_store::find_server(&store, &server_id)
                     .ok_or_else(|| format!("MCP server `{server_id}` not found"))
             });
         }
