@@ -15,6 +15,7 @@ import { AppSubjectsModal } from './features/app-shell/AppSubjectsModal';
 import { StartupMigrationGate } from './features/app-shell/StartupMigrationGate';
 import { useExecutionPersistence } from './features/app-shell/useExecutionPersistence';
 import { useFeedbackReportDialog } from './features/app-shell/useFeedbackReportDialog';
+import { useGenerationShellNavigation } from './features/app-shell/useGenerationShellNavigation';
 import { useGlobalIntentRouter } from './features/app-shell/useGlobalIntentRouter';
 import { useOfficialAuthNotice } from './features/app-shell/useOfficialAuthNotice';
 import { useRedClawShellNavigation } from './features/app-shell/useRedClawShellNavigation';
@@ -22,7 +23,6 @@ import { useSubjectsModal } from './features/app-shell/useSubjectsModal';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
 import type { GenerationIntent, ImmersiveMode, SettingsNavigationTarget } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
-import { uiTraceInteraction } from './utils/uiDebug';
 
 export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
 
@@ -66,7 +66,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   } = useViewNavigation();
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
   const [redClawTitleBarActions, setRedClawTitleBarActions] = useState<ReactNode>(null);
-  const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
@@ -107,6 +106,14 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setImmersiveMode,
   });
 
+  const {
+    pendingGenerationIntent,
+    setPendingGenerationIntent,
+    navigateToGenerationStudio,
+    clearPendingGenerationIntent,
+    returnToFreeCreation,
+  } = useGenerationShellNavigation({ setCurrentView });
+
   useGlobalIntentRouter({
     navigateToView,
     setCurrentView,
@@ -117,26 +124,12 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setPendingGenerationIntent,
   });
 
-  const navigateToGenerationStudio = (intent: GenerationIntent) => {
-    uiTraceInteraction('app', 'nav_to_generation_studio', { to: 'generation-studio', mode: intent.mode, source: intent.source });
-    setPendingGenerationIntent(intent);
-    setCurrentView('generation-studio');
-  };
-
-  const clearPendingGenerationIntent = () => {
-    setPendingGenerationIntent(null);
-  };
-
   const {
     handleWanderExecutionStateChange,
     handleRedClawExecutionStateChange,
     handleGenerationStudioExecutionStateChange,
     handleCoverStudioExecutionStateChange,
   } = useExecutionPersistence(setViewPersistent);
-
-  const returnToFreeCreation = useCallback(() => {
-    setCurrentView('generation-studio');
-  }, []);
 
   const isManuscriptEditorActive = currentView === 'redclaw' && Boolean(activeManuscriptEditorFile);
   const effectiveImmersiveMode: ImmersiveMode = isManuscriptEditorActive ? false : immersiveMode;
