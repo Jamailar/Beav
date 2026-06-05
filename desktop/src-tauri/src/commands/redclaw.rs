@@ -1952,29 +1952,38 @@ fn export_redclaw_media_plan(
     let root = workspace_root(state)?;
     let export_dir = root.join("redclaw").join("media-plans");
     std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
-    with_store_mut(state, |store| {
+    let project_snapshot = with_store(state, |store| {
+        store
+            .redclaw_state
+            .projects
+            .iter()
+            .find(|item| item.id == project_id)
+            .cloned()
+            .ok_or_else(|| "RedClaw project not found".to_string())
+    })?;
+
+    let export_value = build_redclaw_media_plan_export(&project_snapshot);
+    let package_dir = export_dir.join(safe_export_slug(&project_snapshot.id));
+    std::fs::create_dir_all(&package_dir).map_err(|error| error.to_string())?;
+    let path = package_dir.join("media-plan.json");
+    let concat_path = package_dir.join("rough-cut.ffconcat");
+    let readme_path = package_dir.join("README.md");
+    let body = serde_json::to_string_pretty(&export_value).map_err(|error| error.to_string())?;
+    write_text_file(&path, &body)?;
+    let concat_items = media_plan_concat_items(&export_value);
+    write_text_file(&concat_path, &build_ffconcat(&concat_items))?;
+    write_text_file(
+        &readme_path,
+        &build_media_plan_readme(&project_snapshot.id, &concat_items),
+    )?;
+
+    let updated_project = with_store_mut(state, |store| {
         let project = store
             .redclaw_state
             .projects
             .iter_mut()
             .find(|item| item.id == project_id)
             .ok_or_else(|| "RedClaw project not found".to_string())?;
-        let export_value = build_redclaw_media_plan_export(project);
-        let package_dir = export_dir.join(safe_export_slug(&project.id));
-        std::fs::create_dir_all(&package_dir).map_err(|error| error.to_string())?;
-        let path = package_dir.join("media-plan.json");
-        let concat_path = package_dir.join("rough-cut.ffconcat");
-        let readme_path = package_dir.join("README.md");
-        let body =
-            serde_json::to_string_pretty(&export_value).map_err(|error| error.to_string())?;
-        write_text_file(&path, &body)?;
-        let concat_items = media_plan_concat_items(&export_value);
-        write_text_file(&concat_path, &build_ffconcat(&concat_items))?;
-        write_text_file(
-            &readme_path,
-            &build_media_plan_readme(&project.id, &concat_items),
-        )?;
-
         let now = now_iso();
         let mut metadata = project
             .metadata
@@ -1997,16 +2006,18 @@ fn export_redclaw_media_plan(
         metadata.insert("mediaPlanExports".to_string(), Value::Array(exports));
         project.metadata = Some(Value::Object(metadata));
         project.updated_at = now;
-        Ok(json!({
-            "success": true,
-            "project": project,
-            "path": path.display().to_string(),
-            "packagePath": package_dir.display().to_string(),
-            "concatPath": concat_path.display().to_string(),
-            "readmePath": readme_path.display().to_string(),
-            "plan": export_value
-        }))
-    })
+        Ok(project.clone())
+    })?;
+
+    Ok(json!({
+        "success": true,
+        "project": updated_project,
+        "path": path.display().to_string(),
+        "packagePath": package_dir.display().to_string(),
+        "concatPath": concat_path.display().to_string(),
+        "readmePath": readme_path.display().to_string(),
+        "plan": export_value
+    }))
 }
 
 fn render_redclaw_rough_cut(
