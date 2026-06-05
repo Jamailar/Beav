@@ -637,54 +637,15 @@ fn activate_definition_cooldown(
         return;
     }
 
-    if let Some(definition) = store
-        .redclaw_job_definitions
-        .iter_mut()
-        .find(|item| item.id == prepared.definition_id)
-    {
-        definition.enabled = false;
-        definition.updated_at = now_iso.to_string();
-        if let Some(object) = definition.payload.as_object_mut() {
-            object.insert(
-                "cooldown".to_string(),
-                json!({
-                    "state": "active",
-                    "activatedAt": now_iso,
-                    "consecutiveFailures": consecutive,
-                    "reason": error,
-                }),
-            );
-        }
-    }
-
-    match prepared.source_kind.as_deref() {
-        Some("scheduled") => {
-            if let Some(task) = store
-                .redclaw_state
-                .scheduled_tasks
-                .iter_mut()
-                .find(|item| prepared.source_task_id.as_deref() == Some(item.id.as_str()))
-            {
-                task.enabled = false;
-                task.last_error = Some(error.to_string());
-                task.updated_at = now_iso.to_string();
-            }
-        }
-        Some("long_cycle") => {
-            if let Some(task) = store
-                .redclaw_state
-                .long_cycle_tasks
-                .iter_mut()
-                .find(|item| prepared.source_task_id.as_deref() == Some(item.id.as_str()))
-            {
-                task.enabled = false;
-                task.status = "paused".to_string();
-                task.last_error = Some(error.to_string());
-                task.updated_at = now_iso.to_string();
-            }
-        }
-        _ => {}
-    }
+    redclaw_store::activate_job_definition_cooldown(
+        store,
+        &prepared.definition_id,
+        prepared.source_kind.as_deref(),
+        prepared.source_task_id.as_deref(),
+        error,
+        now_iso,
+        consecutive,
+    );
 }
 
 fn mark_execution_succeeded(

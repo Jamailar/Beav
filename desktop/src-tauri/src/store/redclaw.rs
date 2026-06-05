@@ -196,6 +196,65 @@ pub(crate) fn update_source_task_next_run(
     }
 }
 
+pub(crate) fn activate_job_definition_cooldown(
+    store: &mut AppStore,
+    definition_id: &str,
+    source_kind: Option<&str>,
+    source_task_id: Option<&str>,
+    error: &str,
+    now_iso: &str,
+    consecutive_failures: usize,
+) {
+    if let Some(definition) = store
+        .redclaw_job_definitions
+        .iter_mut()
+        .find(|item| item.id == definition_id)
+    {
+        definition.enabled = false;
+        definition.updated_at = now_iso.to_string();
+        if let Some(object) = definition.payload.as_object_mut() {
+            object.insert(
+                "cooldown".to_string(),
+                json!({
+                    "state": "active",
+                    "activatedAt": now_iso,
+                    "consecutiveFailures": consecutive_failures,
+                    "reason": error,
+                }),
+            );
+        }
+    }
+
+    match source_kind {
+        Some("scheduled") => {
+            if let Some(task) = store
+                .redclaw_state
+                .scheduled_tasks
+                .iter_mut()
+                .find(|item| Some(item.id.as_str()) == source_task_id)
+            {
+                task.enabled = false;
+                task.last_error = Some(error.to_string());
+                task.updated_at = now_iso.to_string();
+            }
+        }
+        Some("long_cycle") => {
+            if let Some(task) = store
+                .redclaw_state
+                .long_cycle_tasks
+                .iter_mut()
+                .find(|item| Some(item.id.as_str()) == source_task_id)
+            {
+                task.enabled = false;
+                task.status = "paused".to_string();
+                task.last_error = Some(error.to_string());
+                task.updated_at = now_iso.to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn job_definition_sync_snapshot(
     store: &AppStore,
 ) -> (
