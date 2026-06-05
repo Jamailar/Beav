@@ -4,10 +4,11 @@ use std::path::Path;
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
-use super::{
-    attach_effective_environment_metadata, execution_status_label, load_host_env,
-    merge_detected_tool_with_stored, parse_payload, to_ipc_value, tool_source_for_environment,
+use super::tools::{
+    attach_effective_environment_metadata, load_host_env, merge_detected_tool_with_stored,
+    tool_source_for_environment,
 };
+use super::{execution_status_label, parse_payload, to_ipc_value};
 use crate::cli_runtime::{
     add_installed_tool_to_environment, build_cli_tool_manifest, build_effective_environment,
     detect_tool_with_shell_probe, emit_cli_install_finished, emit_cli_install_started,
