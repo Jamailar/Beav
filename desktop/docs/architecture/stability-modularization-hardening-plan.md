@@ -245,6 +245,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed chat audio transcription model settings reads through `store::settings`.
 - Routed library YouTube summary and cover-generation settings reads through `store::settings`.
 - Routed library document-import active-space reads through `store::spaces`.
+- Routed library media catalog/list/delete/import asset access through `store::media`.
 
 ### 1. Bridge Contract Layer
 
