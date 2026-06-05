@@ -5,7 +5,10 @@ use crate::persistence::{
     ensure_store_hydrated_for_cover, ensure_store_hydrated_for_knowledge,
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
-use crate::store::{media as media_store, settings as settings_store, spaces as spaces_store};
+use crate::store::{
+    media as media_store, settings as settings_store, spaces as spaces_store,
+    work_items as work_items_store,
+};
 use crate::*;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -2302,18 +2305,26 @@ pub fn handle_library_channel(
                     for asset in &created {
                         store.cover_assets.push(asset.clone());
                     }
-                    store.work_items.push(create_work_item(
-                        "cover-generation",
-                        template_name.clone().unwrap_or_else(|| "封面生成".to_string()),
-                        normalize_optional_string(Some(if real_image_config.is_some() {
-                            format!("{} 已通过已配置图片 endpoint 生成封面。", app_brand_display_name())
-                        } else {
-                            format!("{} 已保存封面生成请求；当前缺少图片 endpoint 配置，仅生成了本地占位方案。", app_brand_display_name())
-                        })),
-                        normalize_optional_string(Some(prompt.clone())),
-                        None,
-                        2,
-                    ));
+                    work_items_store::push_item(
+                        store,
+                        create_work_item(
+                            "cover-generation",
+                            template_name
+                                .clone()
+                                .unwrap_or_else(|| "封面生成".to_string()),
+                            normalize_optional_string(Some(if real_image_config.is_some() {
+                                format!(
+                                    "{} 已通过已配置图片 endpoint 生成封面。",
+                                    app_brand_display_name()
+                                )
+                            } else {
+                                format!("{} 已保存封面生成请求；当前缺少图片 endpoint 配置，仅生成了本地占位方案。", app_brand_display_name())
+                            })),
+                            normalize_optional_string(Some(prompt.clone())),
+                            None,
+                            2,
+                        ),
+                    );
                     Ok(())
                 })?;
                 persist_cover_workspace_catalog(state)?;
