@@ -97,6 +97,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Centralized renderer navigation event dispatch through `dispatchAppIntent` / `dispatchAppNavigateDetail`, while preserving existing legacy notification payloads.
 - Extracted pure YouTube clipboard parsing into `features/capture/youtubeClipboard.ts`, leaving clipboard polling and save orchestration in the capture hook.
 - Moved RedClaw and Advisors context-session guarded calls to domain bridge methods instead of page-level raw channel construction.
+- Routed Wander brainstorm dispatch through the Wander bridge domain, leaving no page-level raw `window.ipcRenderer.send/invoke` calls in `desktop/src`.
 
 ### 1. Bridge Contract Layer
 
