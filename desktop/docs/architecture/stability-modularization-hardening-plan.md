@@ -356,6 +356,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted collaboration message listing, mailbox reads, message delivery, report requests and report submission event handling into `commands/runtime_collab/message_report_values`.
 - Extracted review docket listing, detail lookup, stats, creation, decision and archive value wrappers into `commands/runtime_collab/review_values`.
 - Extracted CLI runtime IPC payload parsing, renderer enum shape normalization and execution status label mapping into `commands/cli_runtime/ipc_codec`.
+- Extracted CLI runtime tool installation command inference, managed install environment setup, install execution, detection writeback and install events into `commands/cli_runtime/install`.
 - Extracted advisor template discovery, JSON loading and template normalization into `commands/advisor_ops/templates`.
 - Extracted advisor knowledge file selection expansion, recursive folder collection, file copy and advisor knowledge-file writeback into `commands/advisor_ops/knowledge_files`.
 - Extracted advisor YouTube channel refresh, yt-dlp fetch handling, channel metadata merge and advisor video upsert logic into `commands/advisor_ops/videos`.
