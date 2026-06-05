@@ -27,6 +27,7 @@ mod content_persistence;
 mod editor_ai_commands;
 mod editor_commands;
 mod editor_project;
+mod editor_project_ffmpeg;
 mod editor_project_markers;
 mod editor_project_model;
 mod editor_runtime_state;
