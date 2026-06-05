@@ -1,5 +1,6 @@
 import { createAccountsBridge } from './domains/accountsBridge';
 import { createAdvisorsBridge } from './domains/advisorsBridge';
+import { createAiConfigBridge } from './domains/aiConfigBridge';
 import { createArchivesBridge } from './domains/archivesBridge';
 import { createAudioVoiceBridge } from './domains/audioVoiceBridge';
 import { createAuthBridge } from './domains/authBridge';
@@ -73,11 +74,7 @@ function createIpcRenderer() {
     ...createChatBridge(core),
     ...createSubjectsBridge(core),
     ...createVideoEditorBridge(core),
-    aiRoles: {
-      list: () => invokeChannel('ai:roles:list')
-    },
-    detectAiProtocol: (config: unknown) => invokeChannel('ai:detect-protocol', config),
-    testAiConnection: (config: unknown) => invokeChannel('ai:test-connection', config),
+    ...createAiConfigBridge(core),
     ...createGenerationBridge(core),
     ...createRedClawBridge(core),
     assistantDaemon: {
