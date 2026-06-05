@@ -333,27 +333,7 @@ pub fn handle_task_cancel(
         }
 
         if delete_source {
-            match definition.source_kind.as_deref() {
-                Some("scheduled") => {
-                    if let Some(source_task_id) = definition.source_task_id.as_deref() {
-                        store
-                            .redclaw_state
-                            .scheduled_tasks
-                            .retain(|item| item.id != source_task_id);
-                    }
-                }
-                Some("long_cycle") => {
-                    if let Some(source_task_id) = definition.source_task_id.as_deref() {
-                        store
-                            .redclaw_state
-                            .long_cycle_tasks
-                            .retain(|item| item.id != source_task_id);
-                    }
-                }
-                _ => {
-                    redclaw_store::remove_job_definition(store, &job_definition_id);
-                }
-            }
+            redclaw_store::remove_source_task_for_definition(store, &definition);
             if let Some(source_task_id) = definition.source_task_id.clone() {
                 let _ = cancel_job_execution(store, &source_task_id, &reason);
             }
@@ -366,34 +346,7 @@ pub fn handle_task_cancel(
             }));
         }
 
-        match definition.source_kind.as_deref() {
-            Some("scheduled") => {
-                if let Some(task) = store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .iter_mut()
-                    .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
-                {
-                    task.enabled = false;
-                    task.last_error = Some(reason.clone());
-                    task.updated_at = now_iso();
-                }
-            }
-            Some("long_cycle") => {
-                if let Some(task) = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter_mut()
-                    .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
-                {
-                    task.enabled = false;
-                    task.status = "paused".to_string();
-                    task.last_error = Some(reason.clone());
-                    task.updated_at = now_iso();
-                }
-            }
-            _ => {}
-        }
+        redclaw_store::pause_source_task_for_definition(store, &definition, &reason, &now_iso());
 
         if let Some(source_task_id) = definition.source_task_id.clone() {
             let _ = cancel_job_execution(store, &source_task_id, &reason);

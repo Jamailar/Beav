@@ -354,6 +354,63 @@ pub(crate) fn set_long_cycle_task_enabled(
         .is_some()
 }
 
+pub(crate) fn remove_source_task_for_definition(
+    store: &mut AppStore,
+    definition: &RedclawJobDefinitionRecord,
+) {
+    match definition.source_kind.as_deref() {
+        Some("scheduled") => {
+            if let Some(source_task_id) = definition.source_task_id.as_deref() {
+                remove_scheduled_task(store, source_task_id);
+            }
+        }
+        Some("long_cycle") => {
+            if let Some(source_task_id) = definition.source_task_id.as_deref() {
+                remove_long_cycle_task(store, source_task_id);
+            }
+        }
+        _ => {
+            remove_job_definition(store, &definition.id);
+        }
+    }
+}
+
+pub(crate) fn pause_source_task_for_definition(
+    store: &mut AppStore,
+    definition: &RedclawJobDefinitionRecord,
+    reason: &str,
+    updated_at: &str,
+) {
+    match definition.source_kind.as_deref() {
+        Some("scheduled") => {
+            if let Some(task) = store
+                .redclaw_state
+                .scheduled_tasks
+                .iter_mut()
+                .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
+            {
+                task.enabled = false;
+                task.last_error = Some(reason.to_string());
+                task.updated_at = updated_at.to_string();
+            }
+        }
+        Some("long_cycle") => {
+            if let Some(task) = store
+                .redclaw_state
+                .long_cycle_tasks
+                .iter_mut()
+                .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
+            {
+                task.enabled = false;
+                task.status = "paused".to_string();
+                task.last_error = Some(reason.to_string());
+                task.updated_at = updated_at.to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn update_source_task_next_run(
     store: &mut AppStore,
     source_kind: Option<&str>,
