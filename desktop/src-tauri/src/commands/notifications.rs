@@ -2,11 +2,13 @@ use serde_json::{json, Value};
 use tauri::{plugin::PermissionState, AppHandle, State};
 use tauri_plugin_notification::NotificationExt;
 
+mod remote;
+
 use crate::store::settings as settings_store;
-use crate::{
-    app_brand_slug, auth, official_base_url_from_settings, official_realm_from_settings,
-    official_unwrap_response_payload, payload_string, run_official_json_request_response,
-    with_store, AppState,
+use crate::{auth, with_store, AppState};
+use remote::{
+    list_notifications_path, mark_notification_read_path, notification_response,
+    sync_notifications_path,
 };
 
 fn permission_state_label(state: PermissionState) -> &'static str {
@@ -68,48 +70,6 @@ pub fn notifications_show_system(
     Ok(json!({ "success": true }))
 }
 
-fn normalized_limit(limit: Option<u64>, fallback: u64) -> u64 {
-    limit.unwrap_or(fallback).clamp(1, 100)
-}
-
-fn encode_query_value(value: &str) -> String {
-    urlencoding::encode(value).into_owned()
-}
-
-fn official_notification_context(settings: &Value) -> Value {
-    let session = crate::official_settings_session(settings).unwrap_or_else(|| json!({}));
-    let user = session.get("user").cloned().unwrap_or_else(|| json!({}));
-    let user_id = payload_string(&user, "id")
-        .or_else(|| payload_string(&user, "userId"))
-        .or_else(|| payload_string(&user, "user_id"))
-        .or_else(|| payload_string(&session, "userId"))
-        .or_else(|| payload_string(&session, "user_id"))
-        .unwrap_or_default();
-    json!({
-        "appSlug": app_brand_slug(),
-        "userId": user_id,
-        "realm": official_realm_from_settings(settings),
-        "baseUrl": official_base_url_from_settings(settings),
-    })
-}
-
-fn notification_response(
-    settings: &Value,
-    method: &str,
-    path: &str,
-    body: Option<Value>,
-) -> Result<Value, String> {
-    let response = run_official_json_request_response(settings, method, path, body)?;
-    let payload = official_unwrap_response_payload(&response.body);
-    Ok(json!({
-        "success": (200..300).contains(&response.status),
-        "status": response.status,
-        "data": payload,
-        "raw": response.body,
-        "context": official_notification_context(settings),
-    }))
-}
-
 fn ensure_notification_auth(state: &State<'_, AppState>) -> Result<(), String> {
     let snapshot = auth::auth_state_snapshot(state).unwrap_or_default();
     if !snapshot.logged_in
@@ -131,18 +91,7 @@ pub fn notifications_sync_remote(
     unread_only: Option<bool>,
 ) -> Result<Value, String> {
     ensure_notification_auth(&state)?;
-    let limit = normalized_limit(limit, 20);
-    let mut query = vec![format!("limit={limit}")];
-    if let Some(cursor_value) = cursor
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        query.push(format!("cursor={}", encode_query_value(&cursor_value)));
-    }
-    if unread_only.unwrap_or(false) {
-        query.push("unread_only=1".to_string());
-    }
-    let path = format!("/users/me/notifications/sync?{}", query.join("&"));
+    let path = sync_notifications_path(cursor, limit, unread_only);
     let settings = with_store(&state, |store| {
         Ok(settings_store::settings_snapshot(&store))
     })?;
@@ -156,12 +105,7 @@ pub fn notifications_list_remote(
     unread_only: Option<bool>,
 ) -> Result<Value, String> {
     ensure_notification_auth(&state)?;
-    let limit = normalized_limit(limit, 50);
-    let mut query = vec![format!("limit={limit}")];
-    if unread_only.unwrap_or(false) {
-        query.push("unread_only=1".to_string());
-    }
-    let path = format!("/users/me/notifications?{}", query.join("&"));
+    let path = list_notifications_path(limit, unread_only);
     let settings = with_store(&state, |store| {
         Ok(settings_store::settings_snapshot(&store))
     })?;
@@ -174,14 +118,7 @@ pub fn notifications_mark_remote_read(
     notification_id: String,
 ) -> Result<Value, String> {
     ensure_notification_auth(&state)?;
-    let trimmed_id = notification_id.trim();
-    if trimmed_id.is_empty() {
-        return Err("notification_id is required".to_string());
-    }
-    let path = format!(
-        "/users/me/notifications/{}/read",
-        encode_query_value(trimmed_id)
-    );
+    let path = mark_notification_read_path(&notification_id)?;
     let settings = with_store(&state, |store| {
         Ok(settings_store::settings_snapshot(&store))
     })?;
