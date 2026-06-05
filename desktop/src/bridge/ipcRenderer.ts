@@ -1,6 +1,7 @@
 import { createAccountsBridge } from './domains/accountsBridge';
 import { createArchivesBridge } from './domains/archivesBridge';
 import { createAudioVoiceBridge } from './domains/audioVoiceBridge';
+import { createAuthBridge } from './domains/authBridge';
 import { createBridgeCore } from './core';
 import { createCliRuntimeBridge } from './domains/cliRuntimeBridge';
 import { createGenerationBridge } from './domains/generationBridge';
@@ -15,7 +16,7 @@ import { createSystemBridge } from './domains/systemBridge';
 import { createTeamRuntimeBridge } from './domains/teamRuntimeBridge';
 import { createToolsBridge } from './domains/toolsBridge';
 import { createWanderBridge } from './domains/wanderBridge';
-import type { InvokeGuardOptions, Listener } from './types';
+import type { InvokeGuardOptions } from './types';
 import { preflightInlineAttachmentPayload } from '../utils/mediaReferencePreflight';
 
 function createIpcRenderer() {
@@ -120,37 +121,7 @@ function createIpcRenderer() {
     ...createAudioVoiceBridge(core),
     ...createPluginsBridge(core),
     ...createToolsBridge(core),
-    officialAuth: {
-      bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
-      refresh: () => invokeChannel('redbox-auth:refresh'),
-      getConfig: () => invokeChannel('redbox-auth:get-config'),
-      getWechatStatus: (payload: { sessionId: string }) => invokeChannel('redbox-auth:wechat-status', payload),
-      getWechatUrl: (payload?: { state?: string }) => invokeChannel('redbox-auth:wechat-url', payload || {}),
-      sendSmsCode: (payload: { phone: string }) => invokeChannel('redbox-auth:send-sms-code', payload),
-      loginSms: (payload: { phone: string; code: string; inviteCode?: string }) => invokeChannel('redbox-auth:login-sms', payload),
-      registerSms: (payload: { phone: string; code: string; inviteCode?: string }) => invokeChannel('redbox-auth:register-sms', payload),
-      getPricing: () => invokeChannel('redbox-auth:pricing'),
-      refreshPricing: () => invokeChannel('redbox-auth:pricing-refresh')
-    },
-    llmReadiness: {
-      getState: () => invokeChannel('llm-readiness:get-state'),
-      refresh: () => invokeChannel('llm-readiness:refresh'),
-      configureCustomSource: (payload: unknown) => invokeChannel('llm-readiness:configure-custom-source', payload),
-      onStateChanged: (listener: Listener) => on('llm-readiness:state-changed', listener),
-      offStateChanged: (listener: Listener) => off('llm-readiness:state-changed', listener),
-    },
-    auth: {
-      getState: () => invokeChannel('auth:get-state'),
-      loginSms: (payload: { phone: string; code: string; inviteCode?: string }) => invokeChannel('auth:login-sms', payload),
-      loginWechatStart: (payload?: { state?: string }) => invokeChannel('auth:login-wechat-start', payload || {}),
-      loginWechatPoll: (payload: { sessionId: string }) => invokeChannel('auth:login-wechat-poll', payload),
-      logout: () => invokeChannel('auth:logout'),
-      refreshNow: () => invokeChannel('auth:refresh-now'),
-      onStateChanged: (listener: Listener) => on('auth:state-changed', listener),
-      offStateChanged: (listener: Listener) => off('auth:state-changed', listener),
-      onDataChanged: (listener: Listener) => on('auth:data-changed', listener),
-      offDataChanged: (listener: Listener) => off('auth:data-changed', listener),
-    },
+    ...createAuthBridge(core),
     sessions: {
       list: () => invokeChannel('sessions:list'),
       get: (sessionId: string) => invokeChannel('sessions:get', { sessionId }),
