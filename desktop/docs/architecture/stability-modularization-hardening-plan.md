@@ -148,6 +148,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed App CLI video-analysis model config settings reads through `store::settings`.
 - Added `store::runtime_tasks` helpers and routed runtime task create/list/get/cancel/trace commands through them.
 - Added `store::media` read helpers and routed plugin media count/recent data-source reads through them.
+- Routed plugin subject count/list data-source reads through `store::subjects`.
 
 ### 1. Bridge Contract Layer
 
