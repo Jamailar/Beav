@@ -1973,6 +1973,8 @@ declare global {
           updatedAt: number;
         }>;
         bindEditorSession: (payload: Record<string, unknown>) => Promise<unknown>;
+        onSessionTitleUpdated: (listener: (...args: unknown[]) => void) => void;
+        offSessionTitleUpdated: (listener: (...args: unknown[]) => void) => void;
       };
       media: {
         list: <T = unknown>(payload?: Record<string, unknown>) => Promise<T>;

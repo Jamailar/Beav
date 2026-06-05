@@ -1,5 +1,5 @@
 import { preflightInlineAttachmentPayload } from '../../utils/mediaReferencePreflight';
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createChatBridge(core: BridgeCore) {
   return {
@@ -99,6 +99,8 @@ export function createChatBridge(core: BridgeCore) {
       getRuntimeState: (sessionId: string) => core.invokeChannel('chat:get-runtime-state', sessionId),
       bindEditorSession: (payload: Record<string, unknown>) =>
         core.invokeChannel('chat:bind-editor-session', payload),
+      onSessionTitleUpdated: (listener: Listener) => core.on('chat:session-title-updated', listener),
+      offSessionTitleUpdated: (listener: Listener) => core.off('chat:session-title-updated', listener),
     },
   };
 }
