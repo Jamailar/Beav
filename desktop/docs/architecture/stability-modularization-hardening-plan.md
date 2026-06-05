@@ -324,6 +324,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted advisor YouTube channel refresh, yt-dlp fetch handling, channel metadata merge and advisor video upsert logic into `commands/advisor_ops/videos`.
 - Extracted advisor member-skill distillation feature gating, publish fallback handling and member-skill channel actions into `commands/advisor_ops/member_skills`.
 - Extracted advisor prompt optimization and deep prompt optimization handlers into `commands/advisor_ops/prompt_ops`.
+- Extracted advisor persona generation research, evidence rendering, web-search summarization, final prompt synthesis and persona metrics into `commands/advisor_ops/persona`.
 
 ### 1. Bridge Contract Layer
 
