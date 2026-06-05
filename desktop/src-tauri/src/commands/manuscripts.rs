@@ -20,6 +20,7 @@ use std::fs;
 use std::io::Write;
 use tauri::{AppHandle, State};
 
+mod auto_naming;
 mod content_blocks;
 mod editor_project;
 mod export_helpers;
@@ -56,10 +57,13 @@ const RICHPOST_DEFAULT_MASTER_NAMES: [&str; 3] = [
     RICHPOST_MASTER_ENDING,
 ];
 
+use auto_naming::{
+    choose_auto_named_manuscript_relative, first_markdown_heading_text,
+    is_auto_generated_manuscript_stem, is_untitled_manuscript_label,
+};
 use content_blocks::{
-    build_package_content_blocks, package_content_map_value, parse_markdown_heading,
-    render_package_block_fragment, render_package_block_fragment_parts, PackageBoundAsset,
-    PackageContentBlock,
+    build_package_content_blocks, package_content_map_value, render_package_block_fragment,
+    render_package_block_fragment_parts, PackageBoundAsset, PackageContentBlock,
 };
 use export_helpers::{
     ensure_export_extension, instructions_request_visual_text_layers, remotion_export_scale,
@@ -547,105 +551,6 @@ pub(crate) fn richpost_theme_state_value(
 
 fn package_block_is_page_break(kind: &str) -> bool {
     kind == "page-break"
-}
-
-fn normalize_manuscript_title_candidate(value: &str) -> String {
-    let mut normalized = String::new();
-    let mut last_was_space = false;
-    for ch in value.trim().chars() {
-        let mapped = if matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
-            '-'
-        } else {
-            ch
-        };
-        if mapped.is_whitespace() {
-            if !last_was_space {
-                normalized.push(' ');
-                last_was_space = true;
-            }
-            continue;
-        }
-        normalized.push(mapped);
-        last_was_space = false;
-    }
-    normalized.trim().to_string()
-}
-
-fn is_untitled_manuscript_label(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    normalized.is_empty() || normalized == "未命名" || normalized.starts_with("untitled-")
-}
-
-fn is_auto_generated_manuscript_stem(value: &str) -> bool {
-    let trimmed = value.trim();
-    !trimmed.is_empty()
-        && (trimmed.chars().all(|ch| ch.is_ascii_digit())
-            || trimmed.eq_ignore_ascii_case("untitled")
-            || trimmed.to_ascii_lowercase().starts_with("untitled-"))
-}
-
-fn first_markdown_heading_text(content: &str) -> Option<String> {
-    let normalized = strip_markdown_frontmatter(content).replace("\r\n", "\n");
-    normalized
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .find_map(|line| parse_markdown_heading(line).map(|(_, text)| text))
-        .map(|text| normalize_manuscript_title_candidate(&text))
-        .filter(|text| !text.is_empty())
-}
-
-fn build_manuscript_renamed_relative_path(
-    current_relative: &str,
-    current_file_name: &str,
-    next_stem: &str,
-) -> String {
-    let parent_rel = normalize_relative_path(
-        current_relative
-            .rsplit_once('/')
-            .map(|(parent, _)| parent)
-            .unwrap_or(""),
-    );
-    let target_relative = join_relative(&parent_rel, next_stem);
-    if current_file_name.ends_with(".md") && !target_relative.contains('.') {
-        ensure_markdown_extension(&target_relative)
-    } else {
-        normalize_relative_path(&target_relative)
-    }
-}
-
-fn choose_auto_named_manuscript_relative(
-    state: &State<'_, AppState>,
-    current_relative: &str,
-    current_file_name: &str,
-    next_title: &str,
-) -> Result<String, String> {
-    let base_title = normalize_manuscript_title_candidate(next_title);
-    if base_title.is_empty() {
-        return Ok(normalize_relative_path(current_relative));
-    }
-    let current_normalized = normalize_relative_path(current_relative);
-    let mut attempt = 0usize;
-    loop {
-        let candidate_title = if attempt == 0 {
-            base_title.clone()
-        } else {
-            format!("{}-{}", base_title, attempt + 1)
-        };
-        let candidate_relative = build_manuscript_renamed_relative_path(
-            &current_normalized,
-            current_file_name,
-            &candidate_title,
-        );
-        if candidate_relative == current_normalized {
-            return Ok(candidate_relative);
-        }
-        let candidate_path = resolve_manuscript_path(state, &candidate_relative)?;
-        if !candidate_path.exists() {
-            return Ok(candidate_relative);
-        }
-        attempt += 1;
-    }
 }
 
 fn min_clip_duration_ms_for_asset_kind(asset_kind: &str) -> i64 {
