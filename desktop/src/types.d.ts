@@ -1990,6 +1990,7 @@ declare global {
         deleteHistory: (id: string) => Promise<unknown>;
         getGuidedItems: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         getRandom: <T = unknown>() => Promise<T>;
+        brainstorm: (payload: Record<string, unknown>) => void;
       };
       imageGeneration: {
         generate: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
