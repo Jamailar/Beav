@@ -24,6 +24,7 @@ use crate::runtime::{
     RuntimeApprovalRecord,
 };
 use crate::session_manager::create_session;
+use crate::store::redclaw as redclaw_store;
 use crate::subagents::{execute_team_tool, team_tool_descriptors, tick_team_wake_runtime};
 use crate::{now_i64, parse_timestamp_ms, payload_string, AppState};
 
@@ -1412,9 +1413,10 @@ pub fn task_panel_list_value(
             }));
         }
 
-        for definition in &store.redclaw_job_definitions {
-            let latest_execution = store
-                .redclaw_job_executions
+        let redclaw_definitions = redclaw_store::list_job_definitions(&store);
+        let redclaw_executions = redclaw_store::list_job_executions(&store);
+        for definition in &redclaw_definitions {
+            let latest_execution = redclaw_executions
                 .iter()
                 .filter(|item| item.definition_id == definition.id)
                 .max_by(|left, right| left.updated_at.cmp(&right.updated_at));
