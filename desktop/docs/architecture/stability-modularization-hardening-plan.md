@@ -151,6 +151,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed plugin subject count/list data-source reads through `store::subjects`.
 - Routed RedClaw runner status value projections through `store::redclaw`.
 - Added `store::subjects` catalog snapshot helper and routed subject character-card generation reads through it.
+- Routed voice-service subject read snapshots through `store::subjects`, while leaving voice workspace persistence writeback unchanged.
 
 ### 1. Bridge Contract Layer
 
