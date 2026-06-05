@@ -1778,6 +1778,8 @@ declare global {
         optimizePromptDeep: (payload: Record<string, unknown>) => Promise<unknown>;
         generatePersona: (payload: Record<string, unknown>) => Promise<unknown>;
         selectAvatar: () => Promise<unknown>;
+        onDownloadProgress: (listener: (...args: unknown[]) => void) => void;
+        offDownloadProgress: (listener: (...args: unknown[]) => void) => void;
       };
       knowledge: {
         listNotes: <T = Record<string, unknown>>() => Promise<Array<T>>;
@@ -1873,6 +1875,8 @@ declare global {
 
       // YouTube Import
       fetchYoutubeInfo: (channelUrl: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+      onFetchYoutubeInfoProgress: (listener: (...args: unknown[]) => void) => void;
+      offFetchYoutubeInfoProgress: (listener: (...args: unknown[]) => void) => void;
       downloadYoutubeSubtitles: (params: { channelUrl: string; videoCount: number; advisorId: string }) => Promise<{ success: boolean; successCount?: number; failCount?: number; error?: string }>;
       readYoutubeSubtitle: (videoId: string) => Promise<{ success: boolean; subtitleContent?: string; hasSubtitle?: boolean; error?: string }>;
 

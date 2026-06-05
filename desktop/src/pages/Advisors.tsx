@@ -228,9 +228,9 @@ export function Advisors({
             }
         };
 
-        window.ipcRenderer.on('advisors:download-progress', handleDownloadProgress);
+        window.ipcRenderer.advisors.onDownloadProgress(handleDownloadProgress);
         return () => {
-            window.ipcRenderer.off('advisors:download-progress', handleDownloadProgress);
+            window.ipcRenderer.advisors.offDownloadProgress(handleDownloadProgress);
         };
     }, [isActive, loadAdvisors]);
 
@@ -1921,8 +1921,8 @@ export function AdvisorModal({
 
     useEffect(() => {
         const handleProgress = (_: unknown, msg: string) => setFetchMsg(msg);
-        window.ipcRenderer.on('youtube:fetch-info-progress', handleProgress);
-        return () => window.ipcRenderer.off('youtube:fetch-info-progress', handleProgress);
+        window.ipcRenderer.onFetchYoutubeInfoProgress(handleProgress);
+        return () => window.ipcRenderer.offFetchYoutubeInfoProgress(handleProgress);
     }, []);
 
     const handleFetchYoutube = async () => {
