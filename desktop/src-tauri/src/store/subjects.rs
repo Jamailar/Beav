@@ -13,6 +13,15 @@ pub(crate) fn list_subject_categories(store: &AppStore) -> Vec<SubjectCategory> 
     store.categories.clone()
 }
 
+pub(crate) fn replace_catalog(
+    store: &mut AppStore,
+    categories: Vec<SubjectCategory>,
+    subjects: Vec<SubjectRecord>,
+) {
+    store.categories = categories;
+    store.subjects = subjects;
+}
+
 pub(crate) fn catalog_snapshot(store: &AppStore) -> (Vec<SubjectCategory>, Vec<SubjectRecord>) {
     (list_subject_categories(store), list_subjects(store))
 }

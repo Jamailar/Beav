@@ -6,7 +6,7 @@ use tauri::{AppHandle, State};
 use crate::commands::generation::generate_image_assets;
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store};
-use crate::store::subjects as subject_store;
+use crate::store::{media as media_store, subjects as subject_store};
 use crate::{
     file_content_hash, handle_subject_category_create, handle_subject_category_delete,
     handle_subject_category_update, handle_subject_create, handle_subject_delete,
@@ -238,9 +238,8 @@ fn handle_subject_generate_character_card(
     latest_subjects[index] = updated_subject.clone();
 
     crate::persistence::with_store_mut(state, |store| {
-        store.media_assets.push(generated_asset.clone());
-        store.categories = latest_categories.clone();
-        store.subjects = latest_subjects.clone();
+        media_store::push_asset(store, generated_asset.clone());
+        subject_store::replace_catalog(store, latest_categories.clone(), latest_subjects.clone());
         Ok(())
     })?;
     persist_subjects_workspace(

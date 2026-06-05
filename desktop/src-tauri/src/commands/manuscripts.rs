@@ -12,7 +12,7 @@ use crate::runtime::{
     request_runtime_approval, resolve_runtime_approval_by_source_key,
     ManuscriptScriptConfirmPayload, RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
-use crate::store::settings as settings_store;
+use crate::store::{media as media_store, settings as settings_store};
 use crate::*;
 use base64::Engine;
 use pulldown_cmark::{
@@ -1503,8 +1503,8 @@ fn collect_package_bound_assets(
             .unwrap_or_default();
     with_store(state, |store| {
         let resolve_asset = |asset_id: &str| -> Option<PackageBoundAsset> {
-            let asset = store.media_assets.iter().find(|item| item.id == asset_id)?;
-            let url = asset_prompt_url(asset)?;
+            let asset = media_store::get_asset(&store, asset_id)?;
+            let url = asset_prompt_url(&asset)?;
             Some(PackageBoundAsset {
                 id: asset.id.clone(),
                 title: asset

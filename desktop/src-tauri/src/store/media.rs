@@ -8,6 +8,14 @@ pub(crate) fn count_assets(store: &AppStore) -> usize {
     store.media_assets.len()
 }
 
+pub(crate) fn get_asset(store: &AppStore, asset_id: &str) -> Option<MediaAssetRecord> {
+    store
+        .media_assets
+        .iter()
+        .find(|item| item.id == asset_id)
+        .cloned()
+}
+
 pub(crate) fn push_asset(store: &mut AppStore, asset: MediaAssetRecord) {
     store.media_assets.push(asset);
 }
