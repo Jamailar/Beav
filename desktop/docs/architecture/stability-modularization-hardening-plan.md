@@ -266,6 +266,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted App Shell RedClaw pending message, onboarding, manuscript and session navigation state into `features/app-shell/useRedClawShellNavigation`.
 - Extracted App Shell generation pending intent and free-creation navigation state into `features/app-shell/useGenerationShellNavigation`.
 - Extracted App Shell settings navigation target state into `features/app-shell/useSettingsShellNavigation`.
+- Extracted LLM readiness source parsing, local endpoint detection, default model fallback and settings merge helpers into `commands/llm_readiness/config`.
 
 ### 1. Bridge Contract Layer
 
