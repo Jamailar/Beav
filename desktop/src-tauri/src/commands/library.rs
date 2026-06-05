@@ -5,7 +5,7 @@ use crate::persistence::{
     ensure_store_hydrated_for_cover, ensure_store_hydrated_for_knowledge,
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
-use crate::store::{settings as settings_store, spaces as spaces_store};
+use crate::store::{media as media_store, settings as settings_store, spaces as spaces_store};
 use crate::*;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -101,7 +101,7 @@ fn path_file_stem_string(path: &std::path::Path) -> String {
 }
 
 pub(crate) fn persist_media_workspace_catalog(state: &State<'_, AppState>) -> Result<(), String> {
-    let assets = with_store(state, |store| Ok(store.media_assets.clone()))?;
+    let assets = with_store(state, |store| Ok(media_store::list_assets(&store)))?;
     write_json_value(
         &media_root(state)?.join("catalog.json"),
         &json!({
@@ -1630,7 +1630,7 @@ pub fn handle_library_channel(
                 let _ = ensure_store_hydrated_for_media(state);
                 let _ = backfill_video_thumbnails_for_media_assets(app, state);
                 with_store(state, |store| {
-                    let mut assets = store.media_assets.clone();
+                    let mut assets = media_store::list_assets(&store);
                     assets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                     Ok(json!({ "success": true, "assets": assets }))
                 })
@@ -1771,9 +1771,7 @@ pub fn handle_library_channel(
             "media:delete" => {
                 let asset_id = payload_string(payload, "assetId").unwrap_or_default();
                 let result = with_store_mut(state, |store| {
-                    let before = store.media_assets.len();
-                    store.media_assets.retain(|item| item.id != asset_id);
-                    if before == store.media_assets.len() {
+                    if !media_store::remove_asset(store, &asset_id) {
                         return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
                     }
                     Ok(json!({ "success": true }))
@@ -1851,7 +1849,7 @@ pub fn handle_library_channel(
                 if !new_assets.is_empty() {
                     with_store_mut(state, |store| {
                         for asset in &new_assets {
-                            store.media_assets.push(asset.clone());
+                            media_store::push_asset(store, asset.clone());
                         }
                         Ok(())
                     })?;
