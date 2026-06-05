@@ -300,6 +300,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Moved official WeChat login snapshot update helper into `commands/official/auth_flow`.
 - Extracted authenticated official request preflight-refresh and retry handling into `commands/official/request`.
 - Extracted official auth refresh, AI-request reauth and refresh failure handling into `commands/official/auth_refresh`.
+- Extracted official settings update application, model-default repair, auth runtime sync and update event emission into `commands/official/settings_update`.
 
 ### 1. Bridge Contract Layer
 
