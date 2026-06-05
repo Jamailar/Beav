@@ -185,6 +185,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted manuscript package content-block parsing, stable block-id reuse, content-map projection and block HTML fragment rendering into `commands/manuscripts/content_blocks.rs`, keeping package/richpost callers on the same data contract.
 - Extracted manuscript export helpers for output extension normalization, Remotion downscale calculation and incidental text-layer stripping into `commands/manuscripts/export_helpers.rs`.
 - Extracted manuscript auto-naming helpers for title sanitization, untitled/auto-generated detection, first-heading extraction and same-folder rename path selection into `commands/manuscripts/auto_naming.rs`.
+- Extracted manuscript timeline model helpers for default clip duration, asset/track kind projection, clip construction and split behavior into `commands/manuscripts/timeline_model.rs`, while preserving the existing exported `timeline_clip_duration_ms` API.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
