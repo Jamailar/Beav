@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::settings as settings_store;
 
 pub(super) fn handle_auth_channel(
     app: &AppHandle,
@@ -10,7 +11,8 @@ pub(super) fn handle_auth_channel(
     match channel {
         "redbox-auth:set-realm" => Some((|| -> Result<Value, String> {
             let realm = payload_string(payload, "realm").unwrap_or_default();
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             switch_official_realm(&mut settings, &realm)?;
             apply_official_settings_update(
@@ -35,7 +37,7 @@ pub(super) fn handle_auth_channel(
             with_store(state, |store| {
                 Ok(json!({
                     "success": true,
-                    "session": official_settings_session(&store.settings)
+                    "session": official_settings_session(&settings_store::settings_snapshot(&store))
                 }))
             })
         })()),
@@ -49,7 +51,8 @@ pub(super) fn handle_auth_channel(
         "redbox-auth:logout" => Some((|| -> Result<Value, String> {
             log_official_auth(state, "logout-request", "manual logout");
             let logout_generation = auth::bump_auth_generation(state, "logout")?;
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             clear_official_auth_state(&mut settings);
             apply_official_settings_update(
@@ -68,15 +71,15 @@ pub(super) fn handle_auth_channel(
             if phone.trim().is_empty() {
                 Ok(json!({ "success": false, "error": "请输入手机号" }))
             } else {
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let request = json!({ "phone": phone });
-                let result = with_store(state, |store| {
-                    run_official_public_json_request(
-                        &store.settings,
-                        "POST",
-                        "/auth/send-sms-code",
-                        Some(request.clone()),
-                    )
-                });
+                let result = run_official_public_json_request(
+                    &settings_snapshot,
+                    "POST",
+                    "/auth/send-sms-code",
+                    Some(request),
+                );
                 match result {
                     Ok(_) => Ok(json!({ "success": true })),
                     Err(error) => Ok(json!({ "success": false, "error": error })),
@@ -91,7 +94,8 @@ pub(super) fn handle_auth_channel(
                 if phone.trim().is_empty() || code.trim().is_empty() {
                     return Ok(json!({ "success": false, "error": "请输入手机号和验证码" }));
                 }
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let mut settings = settings_snapshot.clone();
                 let response = run_official_public_json_request(
                     &settings,
@@ -154,30 +158,31 @@ pub(super) fn handle_auth_channel(
             })())
         }
         "redbox-auth:wechat-url" => Some((|| -> Result<Value, String> {
+            let mut settings =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
+            let state_text = payload_string(payload, "state")
+                .unwrap_or_else(|| "redconvert-desktop".to_string());
+            let response = run_official_public_json_request(
+                &settings,
+                "GET",
+                &format!(
+                    "/auth/login/wechat/url?state={}",
+                    state_text.replace(' ', "%20")
+                ),
+                None,
+            )?;
+            let payload = official_unwrap_response_payload(&response);
+            let data = json!({
+                "enabled": payload_field(&payload, "enabled").and_then(|value| value.as_bool()).unwrap_or(true),
+                "sessionId": payload_string(&payload, "session_id").or_else(|| payload_string(&payload, "sessionId")).unwrap_or_default(),
+                "qrContentUrl": payload_string(&payload, "qr_content_url").or_else(|| payload_string(&payload, "qrContentUrl")).or_else(|| payload_string(&payload, "url")).unwrap_or_default(),
+                "url": payload_string(&payload, "url").unwrap_or_default(),
+                "expiresIn": payload_field(&payload, "expires_in").or_else(|| payload_field(&payload, "expiresIn")).and_then(|value| value.as_i64()).unwrap_or(120),
+                "status": payload_string(&payload, "status").unwrap_or_else(|| "PENDING".to_string()),
+                "createdAt": now_ms(),
+            });
+            write_settings_json_value(&mut settings, "redbox_auth_wechat_login_json", &data);
             with_store_mut(state, |store| {
-                let mut settings = store.settings.clone();
-                let state_text = payload_string(payload, "state")
-                    .unwrap_or_else(|| "redconvert-desktop".to_string());
-                let response = run_official_public_json_request(
-                    &settings,
-                    "GET",
-                    &format!(
-                        "/auth/login/wechat/url?state={}",
-                        state_text.replace(' ', "%20")
-                    ),
-                    None,
-                )?;
-                let payload = official_unwrap_response_payload(&response);
-                let data = json!({
-                    "enabled": payload_field(&payload, "enabled").and_then(|value| value.as_bool()).unwrap_or(true),
-                    "sessionId": payload_string(&payload, "session_id").or_else(|| payload_string(&payload, "sessionId")).unwrap_or_default(),
-                    "qrContentUrl": payload_string(&payload, "qr_content_url").or_else(|| payload_string(&payload, "qrContentUrl")).or_else(|| payload_string(&payload, "url")).unwrap_or_default(),
-                    "url": payload_string(&payload, "url").unwrap_or_default(),
-                    "expiresIn": payload_field(&payload, "expires_in").or_else(|| payload_field(&payload, "expiresIn")).and_then(|value| value.as_i64()).unwrap_or(120),
-                    "status": payload_string(&payload, "status").unwrap_or_else(|| "PENDING".to_string()),
-                    "createdAt": now_ms(),
-                });
-                write_settings_json_value(&mut settings, "redbox_auth_wechat_login_json", &data);
                 store.settings = settings;
                 Ok(json!({ "success": true, "data": data }))
             })
@@ -187,7 +192,8 @@ pub(super) fn handle_auth_channel(
                 .official_wechat_status_lock
                 .lock()
                 .map_err(|_| "微信登录状态锁已损坏".to_string())?;
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let pending = official_settings_wechat_login(&settings).unwrap_or_else(|| json!({}));
             let requested_session_id = payload_string(payload, "sessionId").unwrap_or_default();
@@ -310,7 +316,8 @@ pub(super) fn handle_auth_channel(
             if code.trim().is_empty() {
                 return Ok(json!({ "success": false, "error": "缺少微信授权 code" }));
             }
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let response = run_official_public_json_request(
                 &settings,
@@ -348,7 +355,8 @@ pub(super) fn handle_auth_channel(
             Ok(response)
         })()),
         "redbox-auth:refresh" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             if !official_session_logged_in(&settings_snapshot) {
                 return Ok(json!({ "success": false, "error": "官方账号未登录" }));
             }
@@ -365,20 +373,23 @@ pub(super) fn handle_auth_channel(
         })()),
         "redbox-auth:me" => Some((|| -> Result<Value, String> {
             with_store(state, |store| {
+                let settings = settings_store::settings_snapshot(&store);
                 Ok(json!({
                     "success": true,
-                    "user": cached_official_user(&store.settings),
+                    "user": cached_official_user(&settings),
                 }))
             })
         })()),
         "official:auth:get-session" => Some((|| -> Result<Value, String> {
             with_store(state, |store| {
-                let session = official_settings_session(&store.settings);
+                let settings = settings_store::settings_snapshot(&store);
+                let session = official_settings_session(&settings);
                 Ok(json!({ "success": true, "session": session }))
             })
         })()),
         "official:auth:set-session" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let session = payload_field(payload, "session")
                 .cloned()
@@ -401,7 +412,8 @@ pub(super) fn handle_auth_channel(
             Ok(json!({ "success": true, "session": session }))
         })()),
         "official:auth:clear-session" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             clear_official_auth_state(&mut settings);
             let generation = auth::bump_auth_generation(state, "official-auth-clear-session")?;
