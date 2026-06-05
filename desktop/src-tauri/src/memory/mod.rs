@@ -21,7 +21,7 @@ pub(crate) use store::{
 };
 
 use crate::persistence::{with_store, with_store_mut};
-use crate::store::spaces as spaces_store;
+use crate::store::{settings as settings_store, spaces as spaces_store};
 use crate::{
     log_timing_event, make_id, now_i64, now_ms, payload_field, payload_string, AppState,
     MemoryHistoryRecord, UserMemoryRecord,
@@ -100,7 +100,8 @@ pub(crate) fn handle_memory_channel(
                 let request_id = format!("memory:maintenance-status:{}", started_at);
                 let workspace_status = memory_maintenance_status_from_workspace(state)?;
                 let fallback_status = with_store(state, |store| {
-                    Ok(memory_maintenance_status_from_settings(&store.settings))
+                    let settings = settings_store::settings_snapshot(&store);
+                    Ok(memory_maintenance_status_from_settings(&settings))
                 })?;
                 let response = json!(workspace_status
                     .or(fallback_status)
@@ -283,8 +284,9 @@ pub(crate) fn handle_memory_channel(
                 persist_memory_workspace_state(state, &workspace_snapshot)?;
                 let workspace_status = memory_maintenance_status_from_workspace(state)?;
                 let pending = with_store(state, |store| {
+                    let settings = settings_store::settings_snapshot(&store);
                     Ok(workspace_status
-                        .or_else(|| memory_maintenance_status_from_settings(&store.settings))
+                        .or_else(|| memory_maintenance_status_from_settings(&settings))
                         .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
                         .unwrap_or(0))
                 })?;
