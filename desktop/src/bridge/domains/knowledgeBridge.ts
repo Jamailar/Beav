@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createKnowledgeBridge(core: BridgeCore) {
   return {
@@ -116,6 +116,10 @@ export function createKnowledgeBridge(core: BridgeCore) {
       addDocFolder: () => core.invokeChannel('knowledge:docs:add-folder'),
       addObsidianVault: () => core.invokeChannel('knowledge:docs:add-obsidian-vault'),
       deleteDocSource: (sourceId: string) => core.invokeChannel('knowledge:docs:delete-source', sourceId),
+      onChanged: (listener: Listener) => core.on('knowledge:changed', listener),
+      offChanged: (listener: Listener) => core.off('knowledge:changed', listener),
+      onCatalogUpdated: (listener: Listener) => core.on('knowledge:catalog-updated', listener),
+      offCatalogUpdated: (listener: Listener) => core.off('knowledge:catalog-updated', listener),
     },
 
     embedding: {
