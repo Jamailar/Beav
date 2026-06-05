@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::runtime::RedclawProjectRecord;
+use crate::store::redclaw as redclaw_store;
 use crate::{make_id, now_iso, payload_string, AppStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1508,26 +1509,10 @@ pub fn sync_redclaw_project_from_runtime_task(
             "runtimeTaskStatus": task.status,
             "runtimeTaskError": task.last_error,
         })),
-        created_at: store
-            .redclaw_state
-            .projects
-            .iter()
-            .find(|item| item.id == project_id)
-            .and_then(|item| item.created_at.clone())
-            .or_else(|| Some(now.clone())),
-        updated_at: now,
+        created_at: None,
+        updated_at: now.clone(),
     };
-    if let Some(existing) = store
-        .redclaw_state
-        .projects
-        .iter_mut()
-        .find(|item| item.id == project_id)
-    {
-        *existing = record.clone();
-    } else {
-        store.redclaw_state.projects.push(record.clone());
-    }
-    store.redclaw_state.current_project_id = Some(project_id);
+    let record = redclaw_store::upsert_project_preserving_created_at(store, record, &now);
     if let Some(session_id) = record.collab_session_id.as_deref() {
         if let Some(session) = store
             .collab_sessions

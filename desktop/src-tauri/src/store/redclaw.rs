@@ -130,6 +130,33 @@ pub(crate) fn project_by_id(store: &AppStore, project_id: &str) -> Option<Redcla
         .cloned()
 }
 
+pub(crate) fn upsert_project_preserving_created_at(
+    store: &mut AppStore,
+    mut record: RedclawProjectRecord,
+    default_created_at: &str,
+) -> RedclawProjectRecord {
+    if let Some(existing) = store
+        .redclaw_state
+        .projects
+        .iter_mut()
+        .find(|item| item.id == record.id)
+    {
+        record.created_at = existing
+            .created_at
+            .clone()
+            .or(record.created_at)
+            .or_else(|| Some(default_created_at.to_string()));
+        *existing = record.clone();
+    } else {
+        record.created_at = record
+            .created_at
+            .or_else(|| Some(default_created_at.to_string()));
+        store.redclaw_state.projects.push(record.clone());
+    }
+    store.redclaw_state.current_project_id = Some(record.id.clone());
+    record
+}
+
 pub(crate) fn append_project_metadata_array_record(
     store: &mut AppStore,
     project_id: &str,
