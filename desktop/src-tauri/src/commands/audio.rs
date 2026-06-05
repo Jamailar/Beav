@@ -11,6 +11,10 @@ use tauri::{AppHandle, State};
 
 use crate::{now_ms, AppState};
 
+mod capability;
+
+use capability::{audio_error_reason, capture_capability_value};
+
 const PREFERRED_INPUT_SAMPLE_RATE: u32 = 48_000;
 const MIN_REASONABLE_INPUT_SAMPLE_RATE: u32 = 8_000;
 const MAX_REASONABLE_INPUT_SAMPLE_RATE: u32 = 96_000;
@@ -39,74 +43,11 @@ fn active_audio_recording() -> &'static Mutex<Option<ActiveAudioRecording>> {
     ACTIVE_AUDIO_RECORDING.get_or_init(|| Mutex::new(None))
 }
 
-fn classify_audio_error(error: &str) -> &'static str {
-    let normalized = error.trim().to_lowercase();
-    if normalized.is_empty() {
-        return "unknown";
-    }
-    if normalized.contains("permission")
-        || normalized.contains("not permitted")
-        || normalized.contains("unauthorized")
-        || normalized.contains("access denied")
-        || normalized.contains("operation not permitted")
-    {
-        return "permission_denied";
-    }
-    if normalized.contains("device")
-        || normalized.contains("input")
-        || normalized.contains("microphone")
-        || normalized.contains("stream")
-    {
-        return "device_unavailable";
-    }
-    "host_error"
-}
-
-fn capture_capability_value() -> Value {
-    let host = cpal::default_host();
-    let recording_active = active_audio_recording()
+fn recording_active() -> bool {
+    active_audio_recording()
         .lock()
         .map(|guard| guard.is_some())
-        .unwrap_or(false);
-    let platform = std::env::consts::OS;
-    let Some(device) = host.default_input_device() else {
-        return json!({
-            "success": true,
-            "available": false,
-            "activeRecording": recording_active,
-            "platform": platform,
-            "reason": "no_input_device",
-            "message": "未检测到可用麦克风设备",
-        });
-    };
-
-    let device_name = device.name().unwrap_or_else(|_| "默认输入设备".to_string());
-
-    match device.default_input_config() {
-        Ok(config) => json!({
-            "success": true,
-            "available": true,
-            "activeRecording": recording_active,
-            "platform": platform,
-            "reason": Value::Null,
-            "deviceName": device_name,
-            "sampleRate": config.sample_rate().0,
-            "channels": config.channels(),
-            "sampleFormat": format!("{:?}", config.sample_format()),
-        }),
-        Err(error) => {
-            let message = error.to_string();
-            json!({
-                "success": true,
-                "available": false,
-                "activeRecording": recording_active,
-                "platform": platform,
-                "reason": classify_audio_error(&message),
-                "deviceName": device_name,
-                "message": message,
-            })
-        }
-    }
+        .unwrap_or(false)
 }
 
 fn push_f32_samples(buffer: &Arc<Mutex<Vec<i16>>>, data: &[f32]) {
@@ -328,7 +269,7 @@ fn start_recording() -> Result<Value, String> {
             let _ = join.join();
             return Ok(json!({
                 "success": false,
-                "reason": classify_audio_error(&error),
+                "reason": audio_error_reason(&error),
                 "error": error,
             }));
         }
@@ -401,7 +342,7 @@ fn stop_recording(discard: bool) -> Result<Value, String> {
             "success": false,
             "reason": runtime_error
                 .as_deref()
-                .map(classify_audio_error)
+                .map(audio_error_reason)
                 .unwrap_or("empty_recording"),
             "error": runtime_error.unwrap_or_else(|| "录音未采集到有效音频".to_string()),
         }));
@@ -410,7 +351,7 @@ fn stop_recording(discard: bool) -> Result<Value, String> {
     if let Some(error) = runtime_error {
         return Ok(json!({
             "success": false,
-            "reason": classify_audio_error(&error),
+            "reason": audio_error_reason(&error),
             "error": format!("录音流中途中断，请重新录制：{error}"),
             "durationMs": duration_ms,
         }));
@@ -477,7 +418,7 @@ pub fn handle_audio_channel(
     _payload: &Value,
 ) -> Option<Result<Value, String>> {
     let result = match channel {
-        "audio:get-capture-capability" => Ok(capture_capability_value()),
+        "audio:get-capture-capability" => Ok(capture_capability_value(recording_active())),
         "audio:start-recording" => start_recording(),
         "audio:stop-recording" => stop_recording(false),
         "audio:cancel-recording" => stop_recording(true),
