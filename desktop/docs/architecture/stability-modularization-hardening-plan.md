@@ -332,6 +332,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted collaboration runtime payload readers and object merge helpers into `runtime/collab_runtime/payload`, keeping store mutation logic separate from JSON field parsing.
 - Extracted collaboration runtime id generation, session/member/task validation, task status transitions and task metadata normalization into `runtime/collab_runtime/state_helpers`.
 - Moved collaboration task dependency back-link synchronization, ready-dependent promotion and completion-claim payload assembly into `runtime/collab_runtime/state_helpers`.
+- Extracted session runtime trace, checkpoint and tool-result query helpers into `runtime/session_runtime/query`, preserving the existing `runtime::*` public API via re-export.
 
 ### 1. Bridge Contract Layer
 
