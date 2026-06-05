@@ -124,15 +124,15 @@ fn resolve_task_definition_id_for_manual_run(
     source_kind: &str,
     task_id: &str,
 ) -> Result<String, String> {
-    if let Some(definition) = store
-        .redclaw_job_definitions
+    let definitions = redclaw_store::list_job_definitions(store);
+    if let Some(definition) = definitions
         .iter()
         .find(|item| item.id == task_id && item.source_kind.as_deref() == Some(source_kind))
     {
         return Ok(definition.id.clone());
     }
 
-    if let Some(definition) = store.redclaw_job_definitions.iter().find(|item| {
+    if let Some(definition) = definitions.iter().find(|item| {
         item.source_kind.as_deref() == Some(source_kind)
             && item.source_task_id.as_deref() == Some(task_id)
     }) {
