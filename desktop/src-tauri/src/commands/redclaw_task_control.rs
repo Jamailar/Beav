@@ -264,13 +264,13 @@ pub fn handle_task_update(
         let mut intent = intent_from_definition(store, &existing)?;
         merge_patch_into_intent(&mut intent, &patch)?;
         let mut preview_store = store.clone();
-        if let Some(existing_definition) = preview_store
-            .redclaw_job_definitions
-            .iter_mut()
-            .find(|item| item.id == job_definition_id)
-        {
-            clear_definition_cooldown(existing_definition);
-        }
+        redclaw_store::update_job_definition(
+            &mut preview_store,
+            &job_definition_id,
+            |existing_definition| {
+                clear_definition_cooldown(existing_definition);
+            },
+        );
         let preview = preview_task_intent(&preview_store, &intent, now_i64())?;
         if matches!(preview.policy_decision, TaskPolicyDecisionKind::Reject) {
             return Err(preview
@@ -933,29 +933,29 @@ fn promote_draft_definition(
     };
 
     sync_redclaw_job_definitions(store);
-    let definition = store
-        .redclaw_job_definitions
-        .iter_mut()
-        .find(|item| {
-            item.source_kind.as_deref() == Some(source_key.0.as_str())
-                && item.source_task_id.as_deref() == Some(source_key.1.as_str())
-        })
-        .ok_or_else(|| "新建任务定义同步失败".to_string())?;
-
-    definition.definition_fingerprint = draft.definition_fingerprint.clone();
-    definition.task_contract_version = draft.task_contract_version.clone();
-    definition.agent_intent_ref = draft.agent_intent_ref.clone();
-    definition.policy_signature = draft.policy_signature.clone();
-    definition.owner_scope = draft.owner_scope.clone();
-    definition.created_by = draft.created_by.clone();
-    definition.creator_mode = draft.creator_mode.clone();
-    definition.requires_confirmation = false;
-    definition.draft_id = draft.draft_id.clone();
-    definition.timezone = draft.timezone.clone();
-    definition.missed_run_policy = draft.missed_run_policy.clone();
-    definition.updated_at = now;
-    definition.payload = merge_definition_payload(&definition.payload, draft, intent, preview);
-    Ok(definition.clone())
+    redclaw_store::update_job_definition_by_source(
+        store,
+        &source_key.0,
+        &source_key.1,
+        |definition| {
+            definition.definition_fingerprint = draft.definition_fingerprint.clone();
+            definition.task_contract_version = draft.task_contract_version.clone();
+            definition.agent_intent_ref = draft.agent_intent_ref.clone();
+            definition.policy_signature = draft.policy_signature.clone();
+            definition.owner_scope = draft.owner_scope.clone();
+            definition.created_by = draft.created_by.clone();
+            definition.creator_mode = draft.creator_mode.clone();
+            definition.requires_confirmation = false;
+            definition.draft_id = draft.draft_id.clone();
+            definition.timezone = draft.timezone.clone();
+            definition.missed_run_policy = draft.missed_run_policy.clone();
+            definition.updated_at = now;
+            definition.payload =
+                merge_definition_payload(&definition.payload, draft, intent, preview);
+            definition.clone()
+        },
+    )
+    .ok_or_else(|| "新建任务定义同步失败".to_string())
 }
 
 fn merge_definition_payload(
@@ -1197,11 +1197,7 @@ fn apply_intent_update(
     }
 
     sync_redclaw_job_definitions(store);
-    if let Some(updated) = store
-        .redclaw_job_definitions
-        .iter_mut()
-        .find(|item| item.id == definition.id)
-    {
+    redclaw_store::update_job_definition(store, &definition.id, |updated| {
         clear_definition_cooldown(updated);
         updated.definition_fingerprint = Some(preview.definition_fingerprint.clone());
         updated.policy_signature = Some(preview.policy_signature.clone());
@@ -1227,7 +1223,7 @@ fn apply_intent_update(
             object.insert("policyWarnings".to_string(), json!(preview.policy_warnings));
             object.insert("lastUpdatedReason".to_string(), json!(reason));
         }
-    }
+    });
     Ok(())
 }
 
