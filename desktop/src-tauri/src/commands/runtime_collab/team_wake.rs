@@ -1,5 +1,7 @@
 use super::*;
-use crate::runtime::{list_collab_members, list_collab_tasks};
+use crate::runtime::{
+    list_collab_members, list_collab_tasks, post_collab_message, submit_collab_report,
+};
 use serde_json::Map;
 
 fn team_wake_key(session_id: &str, member_id: &str) -> String {
