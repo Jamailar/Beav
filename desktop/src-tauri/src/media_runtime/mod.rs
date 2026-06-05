@@ -28,6 +28,7 @@ pub use types::MediaGenerationRuntime;
 use types::*;
 
 static MEDIA_RUNTIME_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+const MEDIA_JOB_CANCEL_REQUESTED_ERROR: &str = "MEDIA_JOB_CANCEL_REQUESTED";
 
 pub(crate) use followup::{
     spawn_media_job_followup, spawn_media_job_followup_for_kind, tick_media_followups,
@@ -1299,6 +1300,7 @@ fn retry_policy_for_stage(stage: &str) -> Option<(&'static str, &'static str, us
     match stage {
         "image-submit" => Some(("queued", "retry_image_submit", 3, 1_500)),
         "video-submit" => Some(("queued", "retry_video_submit", 3, 2_500)),
+        "video-sequence-submit" => Some(("queued", "retry_video_sequence_submit", 2, 5_000)),
         "video-poll" => Some(("polling", "retry_video_poll", 120, 5_000)),
         "video-download" => Some(("downloading", "retry_video_download", 3, 2_500)),
         "audio-submit" => Some(("queued", "retry_audio_submit", 3, 1_500)),
@@ -3519,6 +3521,51 @@ fn complete_job_cancelled(app: &AppHandle, job_id: &str, message: &str) -> Resul
     Ok(())
 }
 
+fn is_media_job_cancel_requested(
+    state: &State<'_, AppState>,
+    job_id: &str,
+) -> Result<bool, String> {
+    let conn = open_media_runtime_connection(state)?;
+    let status = conn
+        .query_row(
+            "SELECT status FROM media_jobs WHERE job_id = ?1",
+            params![job_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    Ok(status.as_deref() == Some("cancel_requested"))
+}
+
+fn renew_media_job_stage_lease(
+    state: &State<'_, AppState>,
+    loaded: &LoadedJob,
+    lease_owner: &str,
+    expected_attempt_status: &str,
+) -> Result<(), String> {
+    let conn = open_media_runtime_connection(state)?;
+    conn.execute(
+        r#"
+        UPDATE media_job_attempts
+        SET lease_expires_at = ?1,
+            updated_at = ?2
+        WHERE attempt_id = ?3
+          AND status = ?4
+          AND lease_owner = ?5
+          AND lease_expires_at IS NOT NULL
+        "#,
+        params![
+            now_i64() + ACTIVE_STAGE_LEASE_MS,
+            now_iso(),
+            loaded.attempt.attempt_id,
+            expected_attempt_status,
+            lease_owner,
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 async fn run_video_generation_request_async(
     endpoint: &str,
     api_key: Option<&str>,
@@ -4279,6 +4326,7 @@ fn video_sequence_segments(request: &Value) -> Result<Vec<Value>, String> {
 }
 
 async fn run_video_segment_generation(
+    state: &State<'_, AppState>,
     settings: &Value,
     loaded: &LoadedJob,
     payload: &Value,
@@ -4316,9 +4364,23 @@ async fn run_video_segment_generation(
     };
     let provider_status_url = extract_status_url(&response);
     let deadline = now_i64() + VIDEO_PROVIDER_POLL_TIMEOUT_MS;
+    let mut last_lease_renewal_at = 0_i64;
     loop {
-        if now_i64() > deadline {
+        let now = now_i64();
+        if now > deadline {
             return Err("video sequence segment timed out while polling provider".to_string());
+        }
+        if is_media_job_cancel_requested(state, &loaded.job.job_id)? {
+            return Err(MEDIA_JOB_CANCEL_REQUESTED_ERROR.to_string());
+        }
+        if now.saturating_sub(last_lease_renewal_at) >= ACTIVE_STAGE_LEASE_MS / 3 {
+            renew_media_job_stage_lease(
+                state,
+                loaded,
+                "media-runtime:video-sequence-submit",
+                "submitting",
+            )?;
+            last_lease_renewal_at = now;
         }
         tokio::time::sleep(Duration::from_millis(DEFAULT_POLL_INTERVAL_MS as u64)).await;
         match poll_video_generation_once(
@@ -4974,7 +5036,19 @@ async fn run_video_sequence_submit_worker(
                 );
             }
             let (provider_response, bytes) =
-                run_video_segment_generation(&settings, &loaded, segment_payload).await?;
+                match run_video_segment_generation(&state, &settings, &loaded, segment_payload)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) if error == MEDIA_JOB_CANCEL_REQUESTED_ERROR => {
+                        return complete_job_cancelled(
+                            &app,
+                            &loaded.job.job_id,
+                            "User requested cancellation",
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
             let (relative_path, absolute_path, preview_url, segment_path) =
                 write_video_sequence_segment_bytes(&state, &loaded.job.job_id, index + 1, &bytes)?;
             let metadata = json!({
@@ -5802,7 +5876,10 @@ mod tests {
             retry_policy_for_stage("video-submit"),
             Some(("queued", "retry_video_submit", 3, 2_500))
         );
-        assert_eq!(retry_policy_for_stage("video-sequence-submit"), None);
+        assert_eq!(
+            retry_policy_for_stage("video-sequence-submit"),
+            Some(("queued", "retry_video_sequence_submit", 2, 5_000))
+        );
         assert_eq!(
             retry_policy_for_stage("video-poll"),
             Some(("polling", "retry_video_poll", 120, 5_000))
