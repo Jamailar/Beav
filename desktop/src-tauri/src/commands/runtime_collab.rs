@@ -3,6 +3,8 @@ use tauri::{AppHandle, Manager, State};
 
 #[path = "runtime_collab/member_values.rs"]
 mod member_values;
+#[path = "runtime_collab/message_report_values.rs"]
+mod message_report_values;
 #[path = "runtime_collab/review_approval.rs"]
 mod review_approval;
 #[path = "runtime_collab/session_values.rs"]
@@ -28,12 +30,10 @@ use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     archive_review_docket, create_review_docket, decide_review_docket, get_review_docket,
-    list_collab_messages, list_collab_reports, list_review_dockets, post_collab_message,
-    read_collab_mailbox, request_collab_report, request_runtime_approval,
-    resolve_review_docket_waiters, resolve_runtime_approval_by_approval_id, review_docket_stats,
-    submit_collab_report, CollabMailboxMessageRecord, CollabMemberRecord,
-    CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord, ReviewDocketRecord,
-    RuntimeApprovalDetails, RuntimeApprovalRecord,
+    list_review_dockets, request_runtime_approval, resolve_review_docket_waiters,
+    resolve_runtime_approval_by_approval_id, review_docket_stats, CollabMailboxMessageRecord,
+    CollabMemberRecord, CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord,
+    ReviewDocketRecord, RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
 use crate::session_manager::create_session;
 use crate::store::redclaw as redclaw_store;
@@ -41,6 +41,10 @@ use crate::{now_i64, parse_timestamp_ms, payload_string, AppState};
 pub use member_values::{
     add_member_value, list_members_value, rename_member_value, set_session_coordinator_value,
     shutdown_member_value,
+};
+pub use message_report_values::{
+    list_messages_value, list_reports_value, post_message_value, read_mailbox_value,
+    request_report_value, submit_report_value,
 };
 use review_approval::{request_review_docket_runtime_approval, route_review_docket_action};
 pub use session_values::{
@@ -76,51 +80,6 @@ fn emit_collab_event(
     payload: Value,
 ) {
     emit_runtime_event(app, event_type, owner_session_id, None, payload);
-}
-
-pub fn list_messages_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    let session_id =
-        payload_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
-    let member_id = payload_string(payload, "memberId");
-    let task_id = payload_string(payload, "taskId");
-    let unread_only = payload
-        .get("unreadOnly")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let limit = payload_limit(payload, "limit");
-    with_store(state, |store| {
-        Ok(json!(list_collab_messages(
-            &store,
-            &session_id,
-            member_id.as_deref(),
-            task_id.as_deref(),
-            unread_only,
-            limit,
-        )))
-    })
-}
-
-pub fn read_mailbox_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    with_store_mut(state, |store| {
-        Ok(json!(read_collab_mailbox(store, payload)?))
-    })
-}
-
-pub fn list_reports_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    let session_id =
-        payload_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
-    let task_id = payload_string(payload, "taskId");
-    let member_id = payload_string(payload, "memberId");
-    let limit = payload_limit(payload, "limit");
-    with_store(state, |store| {
-        Ok(json!(list_collab_reports(
-            &store,
-            &session_id,
-            task_id.as_deref(),
-            member_id.as_deref(),
-            limit,
-        )))
-    })
 }
 
 pub fn list_review_dockets_value(
@@ -218,53 +177,6 @@ pub fn archive_review_docket_value(
     resolve_review_docket_waiters(state, &docket_id, outcome.clone())?;
     emit_collab_event(app, "runtime:review-docket-changed", None, outcome);
     Ok(json!(docket))
-}
-
-pub fn post_message_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let message = with_store_mut(state, |store| post_collab_message(store, payload))?;
-    schedule_message_target_wake(app, state, &message, "mailbox_message");
-    emit_collab_event(
-        app,
-        "runtime:collab-message-delivered",
-        None,
-        json!({ "collabSessionId": message.session_id, "message": message }),
-    );
-    Ok(json!(message))
-}
-
-pub fn request_report_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let message = with_store_mut(state, |store| request_collab_report(store, payload))?;
-    schedule_message_target_wake(app, state, &message, "report_request");
-    emit_collab_event(
-        app,
-        "runtime:collab-message-delivered",
-        None,
-        json!({ "collabSessionId": message.session_id, "message": message }),
-    );
-    Ok(json!(message))
-}
-
-pub fn submit_report_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let report = with_store_mut(state, |store| submit_collab_report(store, payload))?;
-    emit_collab_event(
-        app,
-        "runtime:collab-report-submitted",
-        None,
-        json!({ "collabSessionId": report.session_id, "report": report }),
-    );
-    Ok(json!(report))
 }
 
 #[cfg(test)]
