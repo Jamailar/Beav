@@ -277,6 +277,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted feedback report content normalization, diagnostic report creation and official feedback upload into `commands/system/feedback`.
 - Extracted renderer log level normalization and append-renderer event forwarding into `commands/system/renderer_log`.
 - Extracted settings projection, model-default merge, workspace hydration and visual-index backfill triggers into `commands/system/settings_ops`.
+- Extracted release-page opening, knowledge API guide resource lookup, generic open-path handling and workspace directory picking into `commands/system/app_actions`.
 
 ### 1. Bridge Contract Layer
 
