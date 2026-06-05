@@ -53,6 +53,12 @@ export function createChatBridge(core: BridgeCore) {
         core.invokeChannel('chat:create-diagnostics-session', payload || {}),
       listContextSessions: (payload: { contextId: string; contextType: string }) =>
         core.invokeChannel('chat:list-context-sessions', payload),
+      listContextSessionsGuarded: <T = Record<string, unknown>>(payload: { contextId: string; contextType: string }) =>
+        core.invokeChannelGuarded<Array<T> | null>('chat:list-context-sessions', payload, {
+          timeoutMs: 3200,
+          fallback: null,
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        }),
       createContextSession: (payload: {
         contextId: string;
         contextType: string;
@@ -61,6 +67,17 @@ export function createChatBridge(core: BridgeCore) {
         workingDirectory?: string;
         metadata?: Record<string, unknown>;
       }) => core.invokeChannel('chat:create-context-session', payload),
+      createContextSessionGuarded: <T = Record<string, unknown>>(payload: {
+        contextId: string;
+        contextType: string;
+        title?: string;
+        initialContext?: string;
+        workingDirectory?: string;
+        metadata?: Record<string, unknown>;
+      }) => core.invokeChannelGuarded<T | null>('chat:create-context-session', payload, {
+        timeoutMs: 3200,
+        fallback: null,
+      }),
       getOrCreateContextSession: (params: {
         contextId: string;
         contextType: string;

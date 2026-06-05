@@ -1690,6 +1690,7 @@ declare global {
       cancelChat: () => void;
       confirmTool: (callId: string, confirmed: boolean) => void;
       listSkills: () => Promise<SkillDefinition[]>;
+      listSkillsGuarded: <T = SkillDefinition>() => Promise<T[] | null>;
       skills: {
         save: (payload: Record<string, unknown>) => Promise<unknown>;
         create: (payload: { name: string }) => Promise<unknown>;
@@ -1921,7 +1922,9 @@ declare global {
         createSession: (title?: string) => Promise<ChatSession>;
         createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) => Promise<ChatSession>;
         listContextSessions: (payload: { contextId: string; contextType: string }) => Promise<ContextChatSessionListItem[]>;
+        listContextSessionsGuarded: <T = ContextChatSessionListItem>(payload: { contextId: string; contextType: string }) => Promise<T[] | null>;
         createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
+        createContextSessionGuarded: <T = ChatSession>(payload: { contextId: string; contextType: string; title?: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) => Promise<T | null>;
         getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
         renameSession: (payload: { sessionId: string; title: string }) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
         deleteSession: (sessionId: string) => Promise<{ success: boolean }>;

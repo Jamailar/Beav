@@ -307,13 +307,9 @@ export function Advisors({
         }
 
         try {
-            const list = await window.ipcRenderer.invokeGuarded<ContextChatSessionListItem[] | null>('chat:list-context-sessions', {
+            const list = await window.ipcRenderer.chat.listContextSessionsGuarded<ContextChatSessionListItem>({
                 contextId: advisor.id,
                 contextType: ADVISOR_CHAT_CONTEXT_TYPE,
-            }, {
-                timeoutMs: 3200,
-                fallback: null,
-                normalize: (value) => Array.isArray(value) ? value as ContextChatSessionListItem[] : [],
             });
             if (requestId !== advisorSessionRequestRef.current) return;
             if (list == null) {
@@ -334,15 +330,12 @@ export function Advisors({
                         : items[0]?.id || null;
 
             if (items.length === 0 && shouldCreateIfEmpty) {
-                const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                const created = await window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                     contextId: advisor.id,
                     contextType: ADVISOR_CHAT_CONTEXT_TYPE,
                     title: `与 ${advisor.name} 聊聊`,
                     initialContext: buildAdvisorInitialContext(advisor),
                     metadata: buildAdvisorSessionMetadata(advisor),
-                }, {
-                    timeoutMs: 3200,
-                    fallback: null,
                 });
                 if (!created) {
                     if (!hasAdvisorSessionSnapshotRef.current) {
@@ -455,15 +448,12 @@ export function Advisors({
         if (!selectedAdvisor) return;
         setIsHistoryLoading(true);
         try {
-            const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+            const created = await window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                 contextId: selectedAdvisor.id,
                 contextType: ADVISOR_CHAT_CONTEXT_TYPE,
                 title: `与 ${selectedAdvisor.name} 聊聊`,
                 initialContext: buildAdvisorInitialContext(selectedAdvisor),
                 metadata: buildAdvisorSessionMetadata(selectedAdvisor),
-            }, {
-                timeoutMs: 3200,
-                fallback: null,
             });
             if (!created) {
                 throw new Error('create advisor session timed out');
