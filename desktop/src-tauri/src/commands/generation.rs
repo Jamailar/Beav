@@ -1,6 +1,7 @@
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::events::emit_runtime_tool_partial;
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::settings as settings_store;
 use crate::*;
 use serde_json::{json, Value};
 use std::fs;
@@ -460,7 +461,8 @@ pub(crate) fn generate_image_assets(
             .or_else(|| payload_string(payload, "imageQuality"))
             .or_else(|| payload_string(payload, "image_quality")),
     );
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let settings_snapshot = {
         let auth_runtime = state
             .auth_runtime
@@ -926,7 +928,8 @@ pub fn handle_generation_channel(
         } else {
             Some("image/png".to_string())
         };
-        let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+        let settings_snapshot =
+            with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
         let settings_snapshot = {
             let auth_runtime = state
                 .auth_runtime
