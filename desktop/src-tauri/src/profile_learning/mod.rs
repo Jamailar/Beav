@@ -6,6 +6,7 @@ use crate::knowledge::{
 use crate::llm_transport::run_openai_json_chat_completion_transport;
 use crate::persistence::with_store;
 use crate::runtime::resolve_chat_config;
+use crate::store::settings as settings_store;
 use crate::{now_iso, AppState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -199,7 +200,7 @@ fn run_ai_distillation(
         fs::read_to_string(&account_root.join("distillation").join("data-draft.md")).ok()?;
 
     // 获取 LLM 配置
-    let settings = with_store(state, |store| Ok(store.settings.clone())).ok()?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store))).ok()?;
     let config = resolve_chat_config(&settings, None)?;
 
     // 构建蒸馏 prompt
