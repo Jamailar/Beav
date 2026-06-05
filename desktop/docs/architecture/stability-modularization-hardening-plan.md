@@ -106,6 +106,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed the shared runtime event stream subscription through the runtime bridge facade.
 - Routed startup migration status subscriptions through the startup migration bridge facade.
 - Routed CoverStudio, Wander and Home refresh event subscriptions through spaces/system/plugins bridge facades.
+- Routed archive sample-created subscriptions through the archives bridge facade.
 
 ### 1. Bridge Contract Layer
 
