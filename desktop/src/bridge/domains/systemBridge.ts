@@ -85,6 +85,8 @@ export function createSystemBridge(core: BridgeCore) {
       dismissReport: (reportId: string) => core.invokeChannel('logs:dismiss-report', { reportId }),
       setUploadConsent: (payload: { consent: 'none' | 'prompt' | 'approved'; autoSendSameCrash?: boolean }) => core.invokeChannel('logs:set-upload-consent', payload),
       appendRenderer: (payload: { level?: 'trace' | 'debug' | 'info' | 'warn' | 'error'; category?: string; event?: string; message?: string; fields?: unknown }) => core.invokeChannel('logs:append-renderer', payload),
+      onReportPending: (listener: Listener) => core.on('diagnostics:report-pending', listener),
+      offReportPending: (listener: Listener) => core.off('diagnostics:report-pending', listener),
     },
     startupMigration: {
       getStatus: <T = Record<string, unknown>>() => core.invokeChannelGuarded<T>(
