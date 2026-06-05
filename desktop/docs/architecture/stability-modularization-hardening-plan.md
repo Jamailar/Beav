@@ -193,6 +193,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed job source-task due snapshots and next-run writebacks through `store::redclaw`.
 - Routed job definition/source-task cooldown updates through `store::redclaw`.
 - Routed job source-task success/failure result projections through `store::redclaw`.
+- Routed scheduler runner snapshot event payload projection through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
