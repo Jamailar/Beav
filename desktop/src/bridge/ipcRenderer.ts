@@ -6,6 +6,7 @@ import { createKnowledgeBridge } from './domains/knowledgeBridge';
 import { createManuscriptsBridge } from './domains/manuscriptsBridge';
 import { createMediaBridge } from './domains/mediaBridge';
 import { createRedClawBridge } from './domains/redclawBridge';
+import { createRuntimeBridge } from './domains/runtimeBridge';
 import { createSkillsBridge } from './domains/skillsBridge';
 import { createSystemBridge } from './domains/systemBridge';
 import { createWanderBridge } from './domains/wanderBridge';
@@ -108,6 +109,7 @@ function createIpcRenderer() {
     ...createWanderBridge(core),
 
     ...createSystemBridge(core),
+    ...createRuntimeBridge(core),
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh'),
@@ -155,18 +157,6 @@ function createIpcRenderer() {
       createSession: (payload?: Record<string, unknown>) => invokeChannel('session-bridge:create-session', payload || {}),
       sendMessage: (payload: { sessionId: string; message: string }) => invokeChannel('session-bridge:send-message', payload),
       resolvePermission: (payload: { requestId: string; outcome: 'proceed_once' | 'proceed_always' | 'cancel' }) => invokeChannel('session-bridge:resolve-permission', payload)
-    },
-    runtime: {
-      query: (payload: { sessionId?: string; message: string; modelConfig?: unknown }) => invokeChannel('runtime:query', payload),
-      resume: (payload: { sessionId: string }) => invokeChannel('runtime:resume', payload),
-      forkSession: (payload: { sessionId: string }) => invokeChannel('runtime:fork-session', payload),
-      getTrace: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-trace', payload),
-      getCheckpoints: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-checkpoints', payload),
-      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
-      listApprovals: () => invokeChannel('runtime:list-approvals')
-    },
-    taskPanel: {
-      list: (payload?: { limit?: number }) => invokeChannel('task-panel:list', payload || {})
     },
     teamRuntime: {
       listSessions: () => invokeChannel('team-runtime:list-sessions'),
@@ -319,30 +309,6 @@ function createIpcRenderer() {
       list: () => invokeChannel('tools:hooks:list'),
       register: (hook: unknown) => invokeChannel('tools:hooks:register', hook),
       remove: (hookId: string) => invokeChannel('tools:hooks:remove', { hookId })
-    },
-    backgroundTasks: {
-      list: () => invokeChannel('background-tasks:list'),
-      get: (taskId: string) => invokeChannel('background-tasks:get', { taskId }),
-      cancel: (taskId: string) => invokeChannel('background-tasks:cancel', { taskId }),
-      retry: (taskId: string) => invokeChannel('background-tasks:retry', { taskId }),
-      archive: (taskId: string) => invokeChannel('background-tasks:archive', { taskId })
-    },
-    backgroundWorkers: {
-      getPoolState: () => invokeChannel('background-workers:get-pool-state')
-    },
-    tasks: {
-      create: (payload?: Record<string, unknown>) => invokeChannel('tasks:create', payload || {}),
-      list: (payload?: Record<string, unknown>) => invokeChannel('tasks:list', payload || {}),
-      get: (payload: { taskId: string }) => invokeChannel('tasks:get', payload),
-      resume: (payload: { taskId: string }) => invokeChannel('tasks:resume', payload),
-      cancel: (payload: { taskId: string }) => invokeChannel('tasks:cancel', payload),
-      trace: (payload: { taskId: string; limit?: number }) => invokeChannel('tasks:trace', payload)
-    },
-    work: {
-      list: (payload?: Record<string, unknown>) => invokeChannel('work:list', payload || {}),
-      get: (payload: { id: string }) => invokeChannel('work:get', payload),
-      ready: (payload?: Record<string, unknown>) => invokeChannel('work:ready', payload || {}),
-      update: (payload: Record<string, unknown>) => invokeChannel('work:update', payload)
     },
     subjects: {
       list: (payload?: Record<string, unknown>) => invokeChannel('subjects:list', payload || {}),
