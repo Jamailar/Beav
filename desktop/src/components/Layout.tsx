@@ -1,4 +1,4 @@
-import { Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
@@ -13,6 +13,7 @@ import { selectNotificationUnreadCount, useNotificationStore } from '../notifica
 import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { useAppUpdateNotice } from '../features/app-shell/useAppUpdateNotice';
 import { useGlobalKnowledgeSearch } from '../features/app-shell/useGlobalKnowledgeSearch';
+import { useLayoutSidebar } from '../features/app-shell/useLayoutSidebar';
 import { useLayoutTheme } from '../features/app-shell/useLayoutTheme';
 import { uiMeasure } from '../utils/uiDebug';
 
@@ -53,27 +54,6 @@ const NAV_ITEMS: SidebarNavItem[] = [
 interface WorkspaceSpace {
   id: string;
   name: string;
-}
-
-const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
-const SIDEBAR_WIDTH_STORAGE_KEY = 'redbox:layout-sidebar-width:v1';
-const SIDEBAR_DEFAULT_WIDTH = 320;
-const SIDEBAR_MIN_WIDTH = 240;
-const SIDEBAR_MAX_WIDTH = 460;
-const SIDEBAR_CONTENT_ANIMATION_MS = 280;
-function readInitialSidebarCollapsed(): boolean {
-  if (typeof window === 'undefined') return false;
-  return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
-}
-
-function clampSidebarWidth(width: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
-}
-
-function readInitialSidebarWidth(): number {
-  if (typeof window === 'undefined') return SIDEBAR_DEFAULT_WIDTH;
-  const storedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
-  return Number.isFinite(storedWidth) ? clampSidebarWidth(storedWidth) : SIDEBAR_DEFAULT_WIDTH;
 }
 
 type AppTitleBarPlatform = 'mac' | 'windows' | null;
@@ -253,10 +233,6 @@ function AppTitleBar({
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const { t } = useI18n();
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readInitialSidebarCollapsed);
-  const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
-  const [isSidebarAnimating, setIsSidebarAnimating] = useState(false);
-  const [sidebarAnimationDirection, setSidebarAnimationDirection] = useState<'collapsing' | 'expanding' | null>(null);
   const [activeSpaceId, setActiveSpaceId] = useState<string>('');
   const [isSwitchingSpace, setIsSwitchingSpace] = useState(false);
   const [isSpaceMenuOpen, setIsSpaceMenuOpen] = useState(false);
@@ -270,11 +246,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
   const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
   const spaceMenuRef = useRef<HTMLDivElement | null>(null);
-  const sidebarAnimationTimerRef = useRef<number | null>(null);
-  const sidebarResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
-  const sidebarResizeFrameRef = useRef<number | null>(null);
-  const pendingSidebarWidthRef = useRef(sidebarWidth);
-  const sidebarWidthPersistTimerRef = useRef<number | null>(null);
   const isFixedViewportView = false;
   const titleBarPlatform = getAppTitleBarPlatform();
   const usesAppTitleBar = titleBarPlatform !== null;
@@ -282,7 +253,14 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const { themeMode, setManualThemeMode } = useLayoutTheme(immersiveMode);
   const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
   const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
-  const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
+  const {
+    isSidebarCollapsed,
+    sidebarWidth,
+    isSidebarAnimating,
+    sidebarVisualCollapsed,
+    toggleSidebarCollapsed,
+    startSidebarResize,
+  } = useLayoutSidebar(() => setIsSpaceMenuOpen(false));
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const {
     updateNotice,
@@ -358,36 +336,10 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [isSpaceMenuOpen]);
 
   useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
-  }, [isSidebarCollapsed]);
-
-  useEffect(() => {
-    if (sidebarWidthPersistTimerRef.current !== null) {
-      window.clearTimeout(sidebarWidthPersistTimerRef.current);
-    }
-    sidebarWidthPersistTimerRef.current = window.setTimeout(() => {
-      sidebarWidthPersistTimerRef.current = null;
-      window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
-    }, 160);
-  }, [sidebarWidth]);
-
-  useEffect(() => {
     if (sidebarVisualCollapsed) {
       setIsSpaceMenuOpen(false);
     }
   }, [sidebarVisualCollapsed]);
-
-  useEffect(() => () => {
-    if (sidebarAnimationTimerRef.current !== null) {
-      window.clearTimeout(sidebarAnimationTimerRef.current);
-    }
-    if (sidebarResizeFrameRef.current !== null) {
-      window.cancelAnimationFrame(sidebarResizeFrameRef.current);
-    }
-    if (sidebarWidthPersistTimerRef.current !== null) {
-      window.clearTimeout(sidebarWidthPersistTimerRef.current);
-    }
-  }, []);
 
   const handleSwitchSpace = useCallback(async (nextSpaceId: string) => {
     if (!nextSpaceId) return;
@@ -456,85 +408,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     setSpaceDialogName('');
     setSpaceDialogTargetId(null);
   }, [isSpaceDialogSubmitting]);
-
-  const toggleSidebarCollapsed = useCallback(() => {
-    setIsSpaceMenuOpen(false);
-    if (isSidebarAnimating) return;
-
-    if (sidebarAnimationTimerRef.current !== null) {
-      window.clearTimeout(sidebarAnimationTimerRef.current);
-      sidebarAnimationTimerRef.current = null;
-    }
-
-    setIsSidebarAnimating(true);
-
-    if (isSidebarCollapsed) {
-      setSidebarAnimationDirection('expanding');
-      setIsSidebarCollapsed(false);
-      sidebarAnimationTimerRef.current = window.setTimeout(() => {
-        setIsSidebarAnimating(false);
-        setSidebarAnimationDirection(null);
-        sidebarAnimationTimerRef.current = null;
-      }, SIDEBAR_CONTENT_ANIMATION_MS);
-      return;
-    }
-
-    setSidebarAnimationDirection('collapsing');
-    sidebarAnimationTimerRef.current = window.setTimeout(() => {
-      setIsSidebarCollapsed(true);
-      setIsSidebarAnimating(false);
-      setSidebarAnimationDirection(null);
-      sidebarAnimationTimerRef.current = null;
-    }, SIDEBAR_CONTENT_ANIMATION_MS);
-  }, [isSidebarAnimating, isSidebarCollapsed]);
-
-  const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (sidebarVisualCollapsed || isSidebarAnimating) return;
-    event.preventDefault();
-    event.stopPropagation();
-    sidebarResizeStateRef.current = {
-      startX: event.clientX,
-      startWidth: sidebarWidth,
-    };
-    pendingSidebarWidthRef.current = sidebarWidth;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      const resizeState = sidebarResizeStateRef.current;
-      if (!resizeState) return;
-      const nextWidth = clampSidebarWidth(resizeState.startWidth + moveEvent.clientX - resizeState.startX);
-      if (pendingSidebarWidthRef.current === nextWidth) return;
-      pendingSidebarWidthRef.current = nextWidth;
-      if (sidebarResizeFrameRef.current !== null) return;
-      sidebarResizeFrameRef.current = window.requestAnimationFrame(() => {
-        sidebarResizeFrameRef.current = null;
-        setSidebarWidth((current) => (
-          current === pendingSidebarWidthRef.current ? current : pendingSidebarWidthRef.current
-        ));
-      });
-    };
-
-    const stopResize = () => {
-      sidebarResizeStateRef.current = null;
-      if (sidebarResizeFrameRef.current !== null) {
-        window.cancelAnimationFrame(sidebarResizeFrameRef.current);
-        sidebarResizeFrameRef.current = null;
-      }
-      setSidebarWidth((current) => (
-        current === pendingSidebarWidthRef.current ? current : pendingSidebarWidthRef.current
-      ));
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', stopResize);
-      window.removeEventListener('pointercancel', stopResize);
-    };
-
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', stopResize);
-    window.addEventListener('pointercancel', stopResize);
-  }, [isSidebarAnimating, sidebarVisualCollapsed, sidebarWidth]);
 
   const submitSpaceDialog = useCallback(async () => {
     const trimmedName = spaceDialogName.trim();
