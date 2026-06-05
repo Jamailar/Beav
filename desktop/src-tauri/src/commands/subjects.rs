@@ -174,9 +174,8 @@ fn handle_subject_generate_character_card(
         return Ok(json!({ "success": false, "error": "缺少角色 id" }));
     };
     let subjects_root_path = subjects_root(state)?;
-    let (categories, subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (categories, subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     let Some(subject) = subjects.iter().find(|item| item.id == id).cloned() else {
         return Ok(json!({ "success": false, "error": "角色不存在" }));
     };
@@ -220,9 +219,8 @@ fn handle_subject_generate_character_card(
     let card_relative_path =
         copy_generated_card_to_subject(subjects_root_path.as_path(), &subject.id, generated_path)?;
 
-    let (latest_categories, mut latest_subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (latest_categories, mut latest_subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     let Some(index) = latest_subjects
         .iter()
         .position(|item| item.id == subject.id)
