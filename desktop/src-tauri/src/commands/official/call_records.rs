@@ -1,7 +1,10 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use tauri::{AppHandle, State};
 
+use super::run_authenticated_official_request;
+use crate::AppState;
 use crate::{now_iso, official_unwrap_response_payload, payload_field, payload_string};
 
 pub(super) const OFFICIAL_CALL_RECORDS_PAGE_SIZE: usize = 30;
@@ -274,4 +277,26 @@ pub(super) fn normalize_official_call_records_value(value: &Value) -> Vec<Value>
     let payload = official_unwrap_response_payload(value);
     let items = extract_official_call_record_rows(&payload);
     normalize_official_call_record_items(&items)
+}
+
+pub(super) fn fetch_remote_official_call_records(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+    expected_generation: Option<u64>,
+) -> Result<Vec<Value>, String> {
+    let response = run_authenticated_official_request(
+        app,
+        state,
+        settings,
+        "GET",
+        &format!("/users/me/ai-usage-logs?limit={OFFICIAL_CALL_RECORDS_PAGE_SIZE}&page=1"),
+        None,
+        expected_generation,
+    )?;
+    let items = normalize_official_call_records_value(&response);
+    if items.is_empty() {
+        return Err("官方调用记录接口返回了无法识别的数据结构".to_string());
+    }
+    Ok(items)
 }
