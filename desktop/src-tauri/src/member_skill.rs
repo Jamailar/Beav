@@ -9,6 +9,7 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
     merge_requested_skills_into_metadata, refresh_skill_store_catalog, SkillActivationSource,
 };
+use crate::store::settings as settings_store;
 use crate::{
     advisor_knowledge_dir, build_excerpt_around, now_i64, now_iso, slug_from_relative_path,
     workspace_root, AdvisorRecord, AppState, AppStore,
@@ -64,7 +65,8 @@ pub(crate) fn member_feature_flag_enabled_for_store(
     flag_name: &str,
     default_value: bool,
 ) -> bool {
-    member_feature_flag_enabled(&store.settings, flag_name, default_value)
+    let settings = settings_store::settings_snapshot(store);
+    member_feature_flag_enabled(&settings, flag_name, default_value)
 }
 
 fn member_feature_flag_names(flag_name: &str) -> Vec<String> {
