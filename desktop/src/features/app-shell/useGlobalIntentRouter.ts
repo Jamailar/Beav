@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { REDBOX_NAVIGATE_EVENT } from '../../notifications/types';
-import type { RedClawNavigationAction, SettingsNavigationTarget, ViewType } from './types';
+import type { AppIntent, LegacyNavigateEventDetail, RedClawNavigationAction, SettingsNavigationTarget, ViewType } from './types';
 
 function recordFromUnknown(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -24,6 +24,39 @@ function shouldAutoOpenTeamSession(session: Record<string, unknown>): boolean {
     || Boolean(metadata.sourceTaskId || metadata.intent || metadata.recommendedRole);
 }
 
+function normalizeNavigateIntent(detail: LegacyNavigateEventDetail | null | undefined): AppIntent | null {
+  const view = detail?.view;
+  if (!view) return null;
+
+  if (view === 'settings') {
+    return {
+      type: 'settings.open',
+      tab: detail.settingsTab,
+      aiModelSubTab: detail.aiModelSubTab,
+    };
+  }
+
+  if (view === 'redclaw') {
+    return {
+      type: 'redclaw.open',
+      action: detail.redclawAction,
+      sessionId: detail.teamSessionId || detail.sessionId,
+    };
+  }
+
+  if (view === 'approval') {
+    return {
+      type: 'approval.open',
+      docketId: detail.docketId,
+    };
+  }
+
+  return {
+    type: 'view.open',
+    view,
+  };
+}
+
 type UseGlobalIntentRouterParams = {
   navigateToView: (view: ViewType) => void;
   setCurrentView: (view: ViewType) => void;
@@ -43,42 +76,65 @@ export function useGlobalIntentRouter({
 }: UseGlobalIntentRouterParams) {
   useEffect(() => {
     const handleNavigate = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        view?: ViewType;
-        settingsTab?: SettingsNavigationTarget['tab'];
-        aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
-        redclawAction?: RedClawNavigationAction['action'];
-        teamSessionId?: string;
-        docketId?: string;
-      }>).detail;
-      const nextView = detail?.view;
-      if (!nextView) return;
-      if (nextView === 'settings') {
+      const intent = normalizeNavigateIntent((event as CustomEvent<LegacyNavigateEventDetail>).detail);
+      if (!intent) return;
+
+      if (intent.type === 'settings.open') {
         setSettingsNavigationTarget({
-          tab: detail.settingsTab,
-          aiModelSubTab: detail.aiModelSubTab,
+          tab: intent.tab,
+          aiModelSubTab: intent.aiModelSubTab,
           nonce: Date.now(),
         });
+        navigateToView('settings');
+        return;
       }
-      if (nextView === 'redclaw' && detail.redclawAction === 'new') {
+
+      if (intent.type === 'redclaw.open' && intent.action === 'new') {
         setActiveManuscriptEditorFile(null);
         setRedClawNavigationAction({
           action: 'new',
           nonce: Date.now(),
         });
+        navigateToView('redclaw');
+        return;
       }
-      if (nextView === 'redclaw' && detail.redclawAction === 'open-team' && detail.teamSessionId) {
+
+      if (intent.type === 'redclaw.open' && intent.action === 'open-team' && intent.sessionId) {
         setActiveManuscriptEditorFile(null);
         setRedClawNavigationAction({
           action: 'open-team',
-          sessionId: detail.teamSessionId,
+          sessionId: intent.sessionId,
           nonce: Date.now(),
         });
+        navigateToView('redclaw');
+        return;
       }
-      if (nextView === 'approval') {
-        setApprovalTargetDocketId(String(detail.docketId || ''));
+
+      if (intent.type === 'redclaw.open' && intent.action === 'open-session' && intent.sessionId) {
+        setActiveManuscriptEditorFile(null);
+        setRedClawNavigationAction({
+          action: 'open-session',
+          sessionId: intent.sessionId,
+          nonce: Date.now(),
+        });
+        navigateToView('redclaw');
+        return;
       }
-      navigateToView(nextView);
+
+      if (intent.type === 'redclaw.open') {
+        navigateToView('redclaw');
+        return;
+      }
+
+      if (intent.type === 'approval.open') {
+        setApprovalTargetDocketId(String(intent.docketId || ''));
+        navigateToView('approval');
+        return;
+      }
+
+      if (intent.type === 'view.open') {
+        navigateToView(intent.view);
+      }
     };
 
     window.addEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
