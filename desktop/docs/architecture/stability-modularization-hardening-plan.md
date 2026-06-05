@@ -334,6 +334,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Moved collaboration task dependency back-link synchronization, ready-dependent promotion and completion-claim payload assembly into `runtime/collab_runtime/state_helpers`.
 - Extracted session runtime trace, checkpoint and tool-result query helpers into `runtime/session_runtime/query`, preserving the existing `runtime::*` public API via re-export.
 - Extracted session runtime bundle path resolution, bundle index load/persist/rebuild, corrupt-index quarantine and bundle save/load pruning into `runtime/session_runtime/bundle_store`.
+- Extracted session transcript JSONL path resolution, entry append/load, transcript index persistence, metadata snapshots and git-branch lookup into `runtime/session_runtime/transcript_store`.
 
 ### 1. Bridge Contract Layer
 
