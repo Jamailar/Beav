@@ -11,6 +11,7 @@ use crate::runtime::{
     append_session_checkpoint, request_runtime_approval, runtime_approval_confirmed_by_call_id,
     RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
+use crate::store::mcp_tools as mcp_tools_store;
 use crate::tools::plan::build_tool_registry_plan_for_session_with_mcp;
 use crate::tools::router::{McpResourcePreparedCall, PreparedToolCall, ToolRouter};
 use crate::tools::tool_search::tool_search_payload;
@@ -46,7 +47,9 @@ impl<'a> InteractiveToolExecutor<'a> {
         name: &str,
         arguments: &Value,
     ) -> Result<PreparedToolCall, String> {
-        let mcp_servers = with_store(self.state, |store| Ok(store.mcp_servers.clone()))?;
+        let mcp_servers = with_store(self.state, |store| {
+            Ok(mcp_tools_store::list_servers(&store))
+        })?;
         let mcp_inventory = self.state.mcp_manager.list_all_tools(&mcp_servers).ok();
         let plan = with_store(self.state, |store| {
             Ok(build_tool_registry_plan_for_session_with_mcp(
@@ -78,7 +81,9 @@ impl<'a> InteractiveToolExecutor<'a> {
             return None;
         }
         Some((|| {
-            let mcp_servers = with_store(self.state, |store| Ok(store.mcp_servers.clone()))?;
+            let mcp_servers = with_store(self.state, |store| {
+                Ok(mcp_tools_store::list_servers(&store))
+            })?;
             let mcp_inventory = self.state.mcp_manager.list_all_tools(&mcp_servers).ok();
             let plan = with_store(self.state, |store| {
                 Ok(build_tool_registry_plan_for_session_with_mcp(
@@ -95,7 +100,9 @@ impl<'a> InteractiveToolExecutor<'a> {
     pub fn dispatch_mcp_tool(&self, prepared: &PreparedToolCall) -> Option<Result<Value, String>> {
         let tool = prepared.mcp_tool.clone()?;
         Some((|| {
-            let mcp_servers = with_store(self.state, |store| Ok(store.mcp_servers.clone()))?;
+            let mcp_servers = with_store(self.state, |store| {
+                Ok(mcp_tools_store::list_servers(&store))
+            })?;
             let server = mcp_servers
                 .iter()
                 .find(|server| server.id == tool.server_id)
@@ -291,7 +298,9 @@ impl<'a> InteractiveToolExecutor<'a> {
     ) -> Option<Result<Value, String>> {
         let resource_call = prepared.mcp_resource.clone()?;
         Some((|| {
-            let mcp_servers = with_store(self.state, |store| Ok(store.mcp_servers.clone()))?;
+            let mcp_servers = with_store(self.state, |store| {
+                Ok(mcp_tools_store::list_servers(&store))
+            })?;
             let server_id = prepared
                 .arguments
                 .get("serverId")
