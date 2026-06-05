@@ -227,6 +227,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed official model-default repair settings writeback through `store::settings`.
 - Routed memory maintenance fallback settings reads through `store::settings`.
 - Routed post-exchange agent memory-maintenance settings fallback and legacy cleanup through `store::settings`.
+- Routed memory-maintenance mutation fallback and legacy cleanup through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
