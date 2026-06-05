@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use tauri::{plugin::PermissionState, AppHandle, State};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::store::settings as settings_store;
 use crate::{
     app_brand_slug, auth, official_base_url_from_settings, official_realm_from_settings,
     official_unwrap_response_payload, payload_string, run_official_json_request_response,
@@ -142,7 +143,9 @@ pub fn notifications_sync_remote(
         query.push("unread_only=1".to_string());
     }
     let path = format!("/users/me/notifications/sync?{}", query.join("&"));
-    let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(&state, |store| {
+        Ok(settings_store::settings_snapshot(&store))
+    })?;
     notification_response(&settings, "GET", &path, None)
 }
 
@@ -159,7 +162,9 @@ pub fn notifications_list_remote(
         query.push("unread_only=1".to_string());
     }
     let path = format!("/users/me/notifications?{}", query.join("&"));
-    let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(&state, |store| {
+        Ok(settings_store::settings_snapshot(&store))
+    })?;
     notification_response(&settings, "GET", &path, None)
 }
 
@@ -177,13 +182,17 @@ pub fn notifications_mark_remote_read(
         "/users/me/notifications/{}/read",
         encode_query_value(trimmed_id)
     );
-    let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(&state, |store| {
+        Ok(settings_store::settings_snapshot(&store))
+    })?;
     notification_response(&settings, "POST", &path, None)
 }
 
 #[tauri::command]
 pub fn notifications_mark_all_remote_read(state: State<'_, AppState>) -> Result<Value, String> {
     ensure_notification_auth(&state)?;
-    let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(&state, |store| {
+        Ok(settings_store::settings_snapshot(&store))
+    })?;
     notification_response(&settings, "POST", "/users/me/notifications/read-all", None)
 }
