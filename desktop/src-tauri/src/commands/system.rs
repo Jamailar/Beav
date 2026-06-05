@@ -2,6 +2,7 @@ mod ai_model_ops;
 mod app_actions;
 mod app_update;
 mod feedback;
+mod logging_ops;
 mod renderer_log;
 mod settings_ops;
 
@@ -10,12 +11,7 @@ use arboard::Clipboard;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-use crate::logging::{
-    create_report_from_trigger, dismiss_pending_report, export_bundle_for_report,
-    list_pending_reports_value, recent_value, status_value as logging_status_value,
-    update_upload_consent, upload_pending_report,
-};
-use crate::{payload_field, payload_string, store_root, AppState};
+use crate::{payload_field, payload_string, AppState};
 
 pub fn handle_system_channel(
     app: &AppHandle,
@@ -70,73 +66,19 @@ pub fn handle_system_channel(
                 "ai-model-manager:resolve" => ai_model_ops::resolve(state, payload),
                 "db:get-settings" => settings_ops::get_settings(state),
                 "db:save-settings" => settings_ops::save_settings(app, state, payload),
-                "debug:get-status" | "logs:get-status" => logging_status_value(state),
-                "debug:get-recent" => {
-                    let limit = payload_field(payload, "limit")
-                        .and_then(|value| value.as_i64())
-                        .unwrap_or(50)
-                        .clamp(1, 200) as usize;
-                    Ok(recent_value(limit))
-                }
+                "debug:get-status" | "logs:get-status" => logging_ops::status(state),
+                "debug:get-recent" => logging_ops::recent(payload),
                 "debug:get-runtime-summary" => crate::build_runtime_diagnostics_summary(state),
-                "debug:open-log-dir" | "logs:open-dir" => {
-                    let path = store_root(state)?.join("logs");
-                    open::that(&path).map_err(|error| error.to_string())?;
-                    Ok(json!({ "success": true, "path": path.display().to_string() }))
-                }
-                "logs:get-recent" => {
-                    let limit = payload_field(payload, "limit")
-                        .and_then(|value| value.as_i64())
-                        .unwrap_or(50)
-                        .clamp(1, 200) as usize;
-                    Ok(recent_value(limit))
-                }
-                "logs:list-pending-reports" => list_pending_reports_value(),
-                "logs:export-bundle" => {
-                    let report_id = if let Some(report_id) = payload_string(payload, "reportId") {
-                        report_id
-                    } else {
-                        create_report_from_trigger(
-                            state,
-                            "manual-export",
-                            "用户手动导出诊断包",
-                            payload
-                                .get("includeAdvancedContext")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false),
-                            json!({
-                                "source": "settings",
-                            }),
-                        )?
-                        .id
-                    };
-                    let path = export_bundle_for_report(state, &report_id)?;
-                    Ok(
-                        json!({ "success": true, "reportId": report_id, "path": path.display().to_string() }),
-                    )
-                }
+                "debug:open-log-dir" | "logs:open-dir" => logging_ops::open_dir(state),
+                "logs:get-recent" => logging_ops::recent(payload),
+                "logs:list-pending-reports" => logging_ops::list_pending_reports(),
+                "logs:export-bundle" => logging_ops::export_bundle(state, payload),
                 "logs:create-feedback-report" => {
                     feedback::create_feedback_report_command(app, state, payload)
                 }
-                "logs:upload-report" => {
-                    let report_id = payload_string(payload, "reportId")
-                        .ok_or_else(|| "reportId is required".to_string())?;
-                    upload_pending_report(state, &report_id)
-                }
-                "logs:dismiss-report" => {
-                    let report_id = payload_string(payload, "reportId")
-                        .ok_or_else(|| "reportId is required".to_string())?;
-                    dismiss_pending_report(&report_id)
-                }
-                "logs:set-upload-consent" => {
-                    let consent =
-                        payload_string(payload, "consent").unwrap_or_else(|| "none".to_string());
-                    let auto_send_same_crash = payload
-                        .get("autoSendSameCrash")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    update_upload_consent(state, &consent, auto_send_same_crash)
-                }
+                "logs:upload-report" => logging_ops::upload_report(state, payload),
+                "logs:dismiss-report" => logging_ops::dismiss_report(payload),
+                "logs:set-upload-consent" => logging_ops::set_upload_consent(state, payload),
                 "logs:append-renderer" => renderer_log::append_renderer_log(payload),
                 "clipboard:read-text" => Ok(json!(Clipboard::new()
                     .and_then(|mut clipboard| clipboard.get_text())
