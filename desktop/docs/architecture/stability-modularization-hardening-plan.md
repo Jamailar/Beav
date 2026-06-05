@@ -242,6 +242,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed assistant daemon load-time runtime-state repair and default enablement through `store::assistant`.
 - Routed profile-learning AI distillation model settings reads through `store::settings`.
 - Routed assistant HTTP runtime snapshots through `store::assistant`.
+- Routed chat audio transcription model settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
