@@ -1,9 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+mod ipc_codec;
+
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
+
+use ipc_codec::{execution_status_label, normalize_output_with_key, parse_payload, to_ipc_value};
 
 use crate::cli_runtime::{
     add_installed_tool_to_environment, approve_cli_escalation, build_cli_sandbox_spec,
@@ -39,93 +43,6 @@ struct CliDiagnoseRequest {
     environment_id: Option<String>,
     cwd: Option<String>,
     execution_mode: Option<CliExecutionMode>,
-}
-
-fn cli_runtime_execution_status_label(status: &CliExecutionStatus) -> String {
-    match status {
-        CliExecutionStatus::AwaitingEscalation => "waiting-approval".to_string(),
-        other => serde_json::to_value(other)
-            .ok()
-            .and_then(|value| value.as_str().map(|text| text.replace('_', "-")))
-            .unwrap_or_else(|| "unknown".to_string()),
-    }
-}
-
-fn normalize_cli_runtime_input_with_key(key: Option<&str>, value: Value) -> Value {
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .into_iter()
-                .map(|(child_key, child_value)| {
-                    (
-                        child_key.clone(),
-                        normalize_cli_runtime_input_with_key(Some(&child_key), child_value),
-                    )
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(
-            items
-                .into_iter()
-                .map(|item| normalize_cli_runtime_input_with_key(None, item))
-                .collect(),
-        ),
-        Value::String(text)
-            if matches!(key, Some("scope" | "preferredScope")) && text.contains('-') =>
-        {
-            Value::String(text.replace('-', "_"))
-        }
-        other => other,
-    }
-}
-
-fn parse_cli_runtime_payload<T: DeserializeOwned>(payload: &Value) -> Result<T, String> {
-    serde_json::from_value(normalize_cli_runtime_input_with_key(None, payload.clone()))
-        .map_err(|error| error.to_string())
-}
-
-fn cli_runtime_enum_output(key: &str, value: &str) -> Option<String> {
-    match key {
-        "scope" | "source" | "health" | "verificationStatus" => Some(value.replace('_', "-")),
-        "status" => Some(match value {
-            "awaiting_escalation" => "waiting-approval".to_string(),
-            other => other.replace('_', "-"),
-        }),
-        _ => None,
-    }
-}
-
-fn normalize_cli_runtime_output_with_key(key: Option<&str>, value: Value) -> Value {
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .into_iter()
-                .map(|(child_key, child_value)| {
-                    (
-                        child_key.clone(),
-                        normalize_cli_runtime_output_with_key(Some(&child_key), child_value),
-                    )
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(
-            items
-                .into_iter()
-                .map(|item| normalize_cli_runtime_output_with_key(None, item))
-                .collect(),
-        ),
-        Value::String(text) => key
-            .and_then(|field| cli_runtime_enum_output(field, &text))
-            .map(Value::String)
-            .unwrap_or(Value::String(text)),
-        other => other,
-    }
-}
-
-fn to_cli_runtime_ipc_value<T: Serialize>(value: T) -> Result<Value, String> {
-    serde_json::to_value(value)
-        .map(|raw| normalize_cli_runtime_output_with_key(None, raw))
-        .map_err(|error| error.to_string())
 }
 
 fn list_tool_commands(state: &State<'_, AppState>) -> Result<Vec<String>, String> {
@@ -416,7 +333,7 @@ fn detect_registered_tools(
 }
 
 fn discover_tools_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    let request: CliDiscoverRequest = parse_cli_runtime_payload(payload)?;
+    let request: CliDiscoverRequest = parse_payload(payload)?;
     let query = request
         .query
         .as_deref()
@@ -488,11 +405,11 @@ fn inspect_tool_value(
         tool = merge_detected_tool_with_stored(tool, None, environment.as_ref(), Some(&manifest));
     }
     let tool = upsert_cli_tool_record(state, tool)?;
-    Ok(Some(to_cli_runtime_ipc_value(tool)?))
+    Ok(Some(to_ipc_value(tool)?))
 }
 
 fn diagnose_tool_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    let request: CliDiagnoseRequest = parse_cli_runtime_payload(payload)?;
+    let request: CliDiagnoseRequest = parse_payload(payload)?;
     let command = request.command.trim();
     if command.is_empty() {
         return Err("cli diagnose requires command".to_string());
@@ -578,7 +495,7 @@ fn diagnose_tool_value(state: &State<'_, AppState>, payload: &Value) -> Result<V
 }
 
 fn create_environment_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    let request: CliCreateEnvironmentRequest = parse_cli_runtime_payload(payload)?;
+    let request: CliCreateEnvironmentRequest = parse_payload(payload)?;
     let environment = match request.scope {
         CliEnvironmentScope::AppGlobal => ensure_app_global_environment(state)?,
         CliEnvironmentScope::WorkspaceLocal => {
@@ -602,7 +519,7 @@ fn create_environment_value(state: &State<'_, AppState>, payload: &Value) -> Res
             create_task_ephemeral_environment(state, task_id)?
         }
     };
-    to_cli_runtime_ipc_value(environment)
+    to_ipc_value(environment)
 }
 
 fn execute_value(
@@ -610,13 +527,13 @@ fn execute_value(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let request: CliExecuteRequest = parse_cli_runtime_payload(payload)?;
+    let request: CliExecuteRequest = parse_payload(payload)?;
     let execution = execute_cli_command(app, state, request)?;
     let max_chars = payload
         .get("maxChars")
         .and_then(Value::as_u64)
         .unwrap_or(4_000) as usize;
-    let mut value = to_cli_runtime_ipc_value(&execution)?;
+    let mut value = to_ipc_value(&execution)?;
     if let Some(snapshot) = load_cli_execution_snapshot(state, &execution.id, max_chars)? {
         if let Value::Object(object) = &mut value {
             object.insert(
@@ -771,7 +688,7 @@ fn install_value(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let request: CliInstallRequest = parse_cli_runtime_payload(payload)?;
+    let request: CliInstallRequest = parse_payload(payload)?;
     let environment = if let Some(environment_id) = request
         .environment_id
         .as_deref()
@@ -863,11 +780,11 @@ fn install_value(
         Some(&execution.id),
         Some(&environment.id),
         &tool_name,
-        &cli_runtime_execution_status_label(&execution.status),
+        &execution_status_label(&execution.status),
         &summary,
     );
 
-    to_cli_runtime_ipc_value(CliInstallResult {
+    to_ipc_value(CliInstallResult {
         success: installed || execution.status == CliExecutionStatus::AwaitingEscalation,
         installed,
         install_id,
@@ -898,7 +815,7 @@ fn poll_execution_value(
     let _ = refresh_cli_execution(app, &execution_id)?;
     let snapshot = load_cli_execution_snapshot(state, &execution_id, max_chars)?;
     match snapshot {
-        Some(snapshot) => to_cli_runtime_ipc_value(snapshot),
+        Some(snapshot) => to_ipc_value(snapshot),
         None => Ok(Value::Null),
     }
 }
@@ -908,12 +825,12 @@ fn verify_execution_value(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let request: CliVerifyExecutionRequest = parse_cli_runtime_payload(payload)?;
+    let request: CliVerifyExecutionRequest = parse_payload(payload)?;
     let execution = find_cli_execution_by_id(state, &request.execution_id)?
         .ok_or_else(|| format!("cli execution not found: {}", request.execution_id))?;
     let outcome = run_cli_verification(state, execution, &request.rules)?;
     emit_cli_verification_finished(app, &outcome.execution, &outcome.summary);
-    to_cli_runtime_ipc_value(CliVerifyResult {
+    to_ipc_value(CliVerifyResult {
         success: outcome.execution.verification_status
             != crate::cli_runtime::CliVerificationStatus::Failed,
         execution_id: outcome.execution.id.clone(),
@@ -936,7 +853,7 @@ fn cancel_execution_value(
         "success": true,
         "supported": true,
         "executionId": execution_id,
-        "status": cli_runtime_execution_status_label(&execution.status),
+        "status": execution_status_label(&execution.status),
         "execution": execution,
     }))
 }
@@ -946,7 +863,7 @@ fn approve_escalation_value(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let request: CliApproveEscalationRequest = parse_cli_runtime_payload(payload)?;
+    let request: CliApproveEscalationRequest = parse_payload(payload)?;
     let resolution = approve_cli_escalation(state, &request)?;
     if resolution.changed {
         if let Some(execution) = resolution.execution.as_ref() {
@@ -970,7 +887,7 @@ fn deny_escalation_value(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let request: CliDenyEscalationRequest = parse_cli_runtime_payload(payload)?;
+    let request: CliDenyEscalationRequest = parse_payload(payload)?;
     let resolution = deny_cli_escalation(state, &request)?;
     if resolution.changed {
         if let Some(execution) = resolution.execution.as_ref() {
@@ -994,8 +911,7 @@ pub fn handle_cli_runtime_channel(
     let result = match channel {
         "cli-runtime:detect" => (|| -> Result<Value, String> {
             let request =
-                parse_cli_runtime_payload::<crate::cli_runtime::CliDetectRequest>(payload)
-                    .unwrap_or_default();
+                parse_payload::<crate::cli_runtime::CliDetectRequest>(payload).unwrap_or_default();
             let tools = if request.commands.is_empty() {
                 discover_detected_tools(state, None, 500)?
             } else {
@@ -1007,16 +923,14 @@ pub fn handle_cli_runtime_channel(
             }))
         })(),
         "cli-runtime:list-tools" => {
-            discover_detected_tools(state, None, 500).and_then(to_cli_runtime_ipc_value)
+            discover_detected_tools(state, None, 500).and_then(to_ipc_value)
         }
         "cli-runtime:inspect" => {
             inspect_tool_value(state, payload).map(|value| value.unwrap_or(Value::Null))
         }
         "cli-runtime:diagnose" => diagnose_tool_value(state, payload),
         "cli-runtime:discover" => discover_tools_value(state, payload),
-        "cli-runtime:list-environments" => {
-            list_cli_environments(state).and_then(to_cli_runtime_ipc_value)
-        }
+        "cli-runtime:list-environments" => list_cli_environments(state).and_then(to_ipc_value),
         "cli-runtime:create-environment" => create_environment_value(state, payload),
         "cli-runtime:install" => install_value(app, state, payload),
         "cli-runtime:execute" => execute_value(app, state, payload),
@@ -1029,56 +943,13 @@ pub fn handle_cli_runtime_channel(
         _ => return None,
     };
 
-    Some(result.map(|value| normalize_cli_runtime_output_with_key(None, value)))
+    Some(result.map(|value| normalize_output_with_key(None, value)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli_runtime::CliInstallMethod;
-
-    #[test]
-    fn normalize_cli_runtime_input_accepts_kebab_case_scope() {
-        let normalized = normalize_cli_runtime_input_with_key(
-            None,
-            json!({
-                "scope": "workspace-local",
-                "preferredScope": "task-ephemeral",
-            }),
-        );
-        assert_eq!(
-            normalized.get("scope").and_then(Value::as_str),
-            Some("workspace_local")
-        );
-        assert_eq!(
-            normalized.get("preferredScope").and_then(Value::as_str),
-            Some("task_ephemeral")
-        );
-    }
-
-    #[test]
-    fn normalize_cli_runtime_output_uses_renderer_enum_shapes() {
-        let normalized = normalize_cli_runtime_output_with_key(
-            None,
-            json!({
-                "scope": "workspace_local",
-                "source": "app_managed",
-                "status": "awaiting_escalation",
-            }),
-        );
-        assert_eq!(
-            normalized.get("scope").and_then(Value::as_str),
-            Some("workspace-local")
-        );
-        assert_eq!(
-            normalized.get("source").and_then(Value::as_str),
-            Some("app-managed")
-        );
-        assert_eq!(
-            normalized.get("status").and_then(Value::as_str),
-            Some("waiting-approval")
-        );
-    }
 
     #[test]
     fn prepare_cli_install_uses_scope_specific_package_manager_forms() {
