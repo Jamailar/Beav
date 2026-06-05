@@ -233,6 +233,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed official WeChat auth settings writeback through `store::settings`.
 - Routed startup model-config/default repair, workspace-root and logging settings access through `store::settings` and `store::spaces`.
 - Routed startup migration workspace settings, active-space and space-count access through `store::settings` and `store::spaces`.
+- Routed workspace hydration subject/media/RedClaw state replacement and active-space root reads through store helpers.
 
 ### 1. Bridge Contract Layer
 
