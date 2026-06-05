@@ -19,7 +19,7 @@ use crate::persistence::{
     apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
     with_store_mut,
 };
-use crate::store::settings as settings_store;
+use crate::store::{settings as settings_store, spaces as spaces_store};
 use crate::{
     app_brand_display_name, is_same_path, now_iso, payload_field, payload_string,
     payload_value_as_string, pick_files_native, refresh_runtime_warm_state, store_root,
@@ -591,8 +591,8 @@ pub fn handle_system_channel(
                         .auth_runtime
                         .lock()
                         .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
-                    let projected =
-                        crate::auth::project_settings_for_runtime(&store.settings, &runtime);
+                    let settings = settings_store::settings_snapshot(&store);
+                    let projected = crate::auth::project_settings_for_runtime(&settings, &runtime);
                     serde_json::to_value(crate::ai_model_manager::AiModelManager::snapshot(
                         &projected,
                     ))
@@ -608,8 +608,9 @@ pub fn handle_system_channel(
                             .auth_runtime
                             .lock()
                             .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+                        let settings = settings_store::settings_snapshot(&store);
                         let projected =
-                            crate::auth::project_settings_for_runtime(&store.settings, &runtime);
+                            crate::auth::project_settings_for_runtime(&settings, &runtime);
                         let resolved = if let Some(action) = action.as_deref() {
                             crate::ai_model_manager::AiModelManager::resolve_for_tool(
                                 &projected,
@@ -642,8 +643,9 @@ pub fn handle_system_channel(
                         .auth_runtime
                         .lock()
                         .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+                    let settings = settings_store::settings_snapshot(&store);
                     let mut projected =
-                        crate::auth::project_settings_for_runtime(&store.settings, &runtime);
+                        crate::auth::project_settings_for_runtime(&settings, &runtime);
                     crate::ai_model_manager::legacy_projection::normalize_settings_projection(
                         &mut projected,
                     );
@@ -652,22 +654,24 @@ pub fn handle_system_channel(
                 }),
                 "db:save-settings" => {
                     let previous_workspace_root = with_store(state, |store| {
+                        let settings = settings_store::settings_snapshot(&store);
+                        let active_space_id = spaces_store::active_space_id(&store);
                         Ok(workspace_root_from_snapshot(
-                            &store.settings,
-                            &store.active_space_id,
+                            &settings,
+                            &active_space_id,
                             &state.store_path,
                         )
                         .ok())
                     })?;
                     let (active_space_id, settings_snapshot) = with_store_mut(state, |store| {
-                        store.settings = merged_settings_payload(&store.settings, payload);
-                        crate::ai_model_manager::legacy_projection::normalize_settings_projection(
-                            &mut store.settings,
+                        let settings_snapshot = settings_store::update_settings(
+                            store,
+                            |settings| {
+                                *settings = merged_settings_payload(settings, payload);
+                                crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
+                            },
                         );
-                        Ok((
-                            store.active_space_id.clone(),
-                            settings_store::settings_snapshot(&store),
-                        ))
+                        Ok((spaces_store::active_space_id(store), settings_snapshot))
                     })?;
                     crate::ai_model_manager::store::sync_model_config_file(
                         &state.store_path,
