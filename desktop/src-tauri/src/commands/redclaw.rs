@@ -33,7 +33,7 @@ use crate::{
     ffmpeg_executable, handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded,
     load_redclaw_onboarding_state, load_redclaw_profile_prompt_bundle, load_redclaw_style_profile,
     mark_redclaw_style_definition_started, now_i64, now_iso, parse_json_value_from_text,
-    payload_field, payload_string, redclaw_state_value, save_redclaw_mvp_onboarding_progress,
+    payload_field, payload_string, save_redclaw_mvp_onboarding_progress,
     update_redclaw_profile_doc, workspace_root, write_text_file, AppState,
 };
 use redclaw_task_control::{
@@ -59,10 +59,7 @@ fn require_confirmed_redclaw_team_plan(payload: &Value) -> Result<(), String> {
 
 pub(crate) fn redclaw_runner_status_value(state: &State<'_, AppState>) -> Result<Value, String> {
     let _ = ensure_store_hydrated_for_redclaw(state);
-    with_store(state, |store| {
-        let snapshot = redclaw_store::state_snapshot(&store);
-        Ok(redclaw_state_value(&snapshot))
-    })
+    with_store(state, |store| Ok(redclaw_store::state_value(&store)))
 }
 
 #[tauri::command]
@@ -299,7 +296,7 @@ pub fn handle_redclaw_channel(
                         object.insert("enabled".to_string(), json!(heartbeat));
                     }
                 }
-                Ok(redclaw_state_value(&store.redclaw_state))
+                Ok(redclaw_store::state_value(&store))
             })?;
             let _ = ensure_redclaw_runtime_running(app, state)?;
             let _ = app.emit("redclaw:runner-status", status.clone());
@@ -314,7 +311,7 @@ pub fn handle_redclaw_channel(
             let status = with_store_mut(state, |store| {
                 store.redclaw_state.enabled = false;
                 store.redclaw_state.is_ticking = false;
-                Ok(redclaw_state_value(&store.redclaw_state))
+                Ok(redclaw_store::state_value(&store))
             })?;
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(status)
@@ -327,7 +324,7 @@ pub fn handle_redclaw_channel(
             let run_result = execute_redclaw_run(app, state, prompt, "runner-run-now")?;
             let status = with_store_mut(state, |store| {
                 store.redclaw_state.last_tick_at = Some(now_iso());
-                Ok(redclaw_state_value(&store.redclaw_state))
+                Ok(redclaw_store::state_value(&store))
             })?;
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(json!({ "success": true, "status": status, "run": run_result }))
@@ -367,7 +364,7 @@ pub fn handle_redclaw_channel(
                         object.insert("reportToMainSession".to_string(), json!(value));
                     }
                 }
-                Ok(redclaw_state_value(&store.redclaw_state))
+                Ok(redclaw_store::state_value(&store))
             })?;
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(status)
@@ -449,7 +446,7 @@ pub fn handle_redclaw_channel(
                     .cloned()
                     .ok_or_else(|| "任务创建成功但源记录不存在".to_string())
             })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
+            let status = with_store(state, |store| Ok(redclaw_store::state_value(&store)))?;
             let _ = app.emit("redclaw:runner-status", status);
             Ok(json!({ "success": true, "task": task }))
         })(),
@@ -465,7 +462,7 @@ pub fn handle_redclaw_channel(
             });
             match result {
                 Ok(result) => {
-                    match with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state))) {
+                    match with_store(state, |store| Ok(redclaw_store::state_value(&store))) {
                         Ok(status) => {
                             let _ = app.emit("redclaw:runner-status", status);
                             Ok(result)
@@ -509,7 +506,7 @@ pub fn handle_redclaw_channel(
             });
             match result {
                 Ok(result) => {
-                    match with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state))) {
+                    match with_store(state, |store| Ok(redclaw_store::state_value(&store))) {
                         Ok(status) => {
                             let _ = app.emit("redclaw:runner-status", status);
                             Ok(result)
@@ -765,7 +762,7 @@ pub fn handle_redclaw_channel(
                     .cloned()
                     .ok_or_else(|| "任务创建成功但源记录不存在".to_string())
             })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
+            let status = with_store(state, |store| Ok(redclaw_store::state_value(&store)))?;
             let _ = app.emit("redclaw:runner-status", status);
             Ok(json!({ "success": true, "task": task }))
         })(),
@@ -781,7 +778,7 @@ pub fn handle_redclaw_channel(
             });
             match result {
                 Ok(result) => {
-                    match with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state))) {
+                    match with_store(state, |store| Ok(redclaw_store::state_value(&store))) {
                         Ok(status) => {
                             let _ = app.emit("redclaw:runner-status", status);
                             Ok(result)
@@ -830,7 +827,7 @@ pub fn handle_redclaw_channel(
             });
             match result {
                 Ok(result) => {
-                    match with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state))) {
+                    match with_store(state, |store| Ok(redclaw_store::state_value(&store))) {
                         Ok(status) => {
                             let _ = app.emit("redclaw:runner-status", status);
                             Ok(result)
