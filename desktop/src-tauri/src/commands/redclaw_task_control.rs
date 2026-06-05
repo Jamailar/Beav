@@ -1,3 +1,5 @@
+#[path = "redclaw_task_control/cancel.rs"]
+mod cancel;
 #[path = "redclaw_task_control/listing.rs"]
 mod listing;
 #[path = "redclaw_task_control/updates.rs"]
@@ -16,13 +18,12 @@ use crate::scheduler::task_policy::{
     preview_task_intent, task_contract_version, TaskIntentSchema, TaskPolicyDecisionKind,
     TaskPreviewResult,
 };
-use crate::scheduler::{
-    cancel_job_execution, emit_scheduler_snapshot, sync_redclaw_job_definitions,
-};
+use crate::scheduler::{emit_scheduler_snapshot, sync_redclaw_job_definitions};
 use crate::store::redclaw as redclaw_store;
 use crate::{
     make_id, normalize_optional_string, now_i64, now_iso, payload_field, payload_string, AppState,
 };
+pub use cancel::handle_task_cancel;
 pub use listing::{handle_task_list, handle_task_stats};
 pub use updates::handle_task_update;
 
@@ -245,71 +246,6 @@ pub fn create_confirmed_task_from_intent(
         .get("result")
         .cloned()
         .unwrap_or_else(|| json!({ "confirmed": true })))
-}
-
-pub fn handle_task_cancel(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let job_definition_id = payload_string(payload, "jobDefinitionId")
-        .or_else(|| payload_string(payload, "draftId"))
-        .ok_or_else(|| "jobDefinitionId is required".to_string())?;
-    let reason = payload_string(payload, "reason")
-        .unwrap_or_else(|| "Cancelled by task control".to_string());
-    let delete_source = payload_field(payload, "deleteSource")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    let result = with_store_mut(state, |store| {
-        let definition = redclaw_store::job_definition_by_id(store, &job_definition_id)
-            .ok_or_else(|| "任务定义不存在".to_string())?;
-        if definition.requires_confirmation {
-            redclaw_store::remove_job_definition(store, &job_definition_id);
-            return Ok(json!({
-                "cancelled": true,
-                "jobDefinitionId": job_definition_id,
-                "draft": true,
-            }));
-        }
-
-        if delete_source {
-            redclaw_store::remove_source_task_for_definition(store, &definition);
-            if let Some(source_task_id) = definition.source_task_id.clone() {
-                let _ = cancel_job_execution(store, &source_task_id, &reason);
-            }
-            sync_redclaw_job_definitions(store);
-            return Ok(json!({
-                "cancelled": true,
-                "deleted": true,
-                "jobDefinitionId": job_definition_id,
-                "reason": reason,
-            }));
-        }
-
-        redclaw_store::pause_source_task_for_definition(store, &definition, &reason, &now_iso());
-
-        if let Some(source_task_id) = definition.source_task_id.clone() {
-            let _ = cancel_job_execution(store, &source_task_id, &reason);
-        }
-        sync_redclaw_job_definitions(store);
-        Ok(json!({
-            "cancelled": true,
-            "jobDefinitionId": job_definition_id,
-            "reason": reason,
-        }))
-    })?;
-
-    emit_runtime_task_checkpoint_saved(
-        app,
-        Some(&job_definition_id),
-        None,
-        "task.cancelled",
-        "Task definition cancelled",
-        Some(result.clone()),
-    );
-    emit_scheduler_snapshot(app, state);
-    Ok(json!({ "success": true, "result": result }))
 }
 
 pub(super) fn parse_task_intent(payload: &Value) -> Result<TaskIntentSchema, String> {
