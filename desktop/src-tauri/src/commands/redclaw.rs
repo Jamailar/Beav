@@ -27,6 +27,7 @@ use crate::scheduler::{
     enqueue_manual_job_execution_for_definition, run_job_queue_once, run_redclaw_job_runner,
     run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
+use crate::store::redclaw as redclaw_store;
 use crate::{
     complete_redclaw_mvp_onboarding, complete_redclaw_style_definition_from_interview,
     ffmpeg_executable, handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded,
@@ -58,7 +59,10 @@ fn require_confirmed_redclaw_team_plan(payload: &Value) -> Result<(), String> {
 
 pub(crate) fn redclaw_runner_status_value(state: &State<'_, AppState>) -> Result<Value, String> {
     let _ = ensure_store_hydrated_for_redclaw(state);
-    with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))
+    with_store(state, |store| {
+        let snapshot = redclaw_store::state_snapshot(&store);
+        Ok(redclaw_state_value(&snapshot))
+    })
 }
 
 #[tauri::command]
@@ -150,8 +154,7 @@ pub fn handle_redclaw_channel(
     let result: Result<Value, String> = match channel {
         "redclaw:runner-status" => redclaw_runner_status_value(state),
         "redclaw:list-projects" => with_store(state, |store| {
-            let mut projects = store.redclaw_state.projects.clone();
-            projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            let projects = redclaw_store::list_projects_sorted(&store);
             Ok(json!({ "success": true, "items": projects, "count": projects.len() }))
         }),
         "redclaw:orchestration-plan" => plan_redclaw_orchestration(payload).map(|plan| json!(plan)),
@@ -370,13 +373,13 @@ pub fn handle_redclaw_channel(
             Ok(status)
         })(),
         "redclaw:runner-list-scheduled" => with_store(state, |store| {
-            Ok(json!(store.redclaw_state.scheduled_tasks.clone()))
+            Ok(json!(redclaw_store::list_scheduled_tasks(&store)))
         }),
         "redclaw:runner-list-job-definitions" => with_store(state, |store| {
-            Ok(json!(store.redclaw_job_definitions.clone()))
+            Ok(json!(redclaw_store::list_job_definitions(&store)))
         }),
         "redclaw:runner-list-job-executions" => with_store(state, |store| {
-            Ok(json!(store.redclaw_job_executions.clone()))
+            Ok(json!(redclaw_store::list_job_executions(&store)))
         }),
         "redclaw:task-preview" => handle_task_preview(app, state, payload),
         "redclaw:task-create" => handle_task_create(app, state, payload),
@@ -701,7 +704,7 @@ pub fn handle_redclaw_channel(
             }))
         })(),
         "redclaw:runner-list-long-cycle" => with_store(state, |store| {
-            Ok(json!(store.redclaw_state.long_cycle_tasks.clone()))
+            Ok(json!(redclaw_store::list_long_cycle_tasks(&store)))
         }),
         "redclaw:runner-add-long-cycle" => (|| {
             let enabled = payload_field(payload, "enabled")
@@ -1953,12 +1956,7 @@ fn export_redclaw_media_plan(
     let export_dir = root.join("redclaw").join("media-plans");
     std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
     let project_snapshot = with_store(state, |store| {
-        store
-            .redclaw_state
-            .projects
-            .iter()
-            .find(|item| item.id == project_id)
-            .cloned()
+        redclaw_store::project_by_id(&store, &project_id)
             .ok_or_else(|| "RedClaw project not found".to_string())
     })?;
 
