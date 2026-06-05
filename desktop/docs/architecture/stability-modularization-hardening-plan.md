@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: not_started
+execution_status: in_progress
 last_updated: 2026-06-05
 ---
 
@@ -83,6 +83,16 @@ Page/UI -> feature model/hooks -> bridge domain facade -> host command -> servic
 Reverse dependencies are not allowed. Host modules should emit events or return typed snapshots instead of importing UI assumptions.
 
 ## Module Plans
+
+## Execution Log
+
+### 2026-06-05
+
+- Completed the bridge contract layer hardening for the current renderer assembly path.
+- Reduced `desktop/src/bridge/ipcRenderer.ts` to a compatibility installer and domain assembly file.
+- Moved runtime, team runtime, CLI runtime, audio voice, plugins, tools, auth, MCP, chat, subjects, brand workspace, cover, video editor, advisors, spaces, AI config, assistant control and legacy skills alias facades into `desktop/src/bridge/domains/*`.
+- Routed the generated official AI panel through `window.ipcRenderer.officialAuth.*` instead of local raw `window.ipcRenderer.invoke(channel, payload)` calls.
+- Verified each atomic bridge slice with `pnpm --dir desktop exec tsc --noEmit` and `pnpm --dir desktop build`.
 
 ### 1. Bridge Contract Layer
 
