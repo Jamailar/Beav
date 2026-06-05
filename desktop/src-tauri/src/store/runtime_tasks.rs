@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::types::AppStore;
 use crate::runtime::{
-    append_runtime_task_trace, cancel_runtime_task,
+    append_runtime_task_trace, cancel_runtime_task, get_runtime_task,
     get_runtime_task_value as runtime_task_lookup_value,
     list_runtime_task_traces_value as runtime_task_traces_lookup_value, list_runtime_tasks,
     store_runtime_task, RuntimeRouteRecord, RuntimeTaskRecord,
@@ -32,6 +32,14 @@ pub(crate) fn store_task(
 
 pub(crate) fn list_tasks(store: &AppStore) -> Vec<RuntimeTaskRecord> {
     list_runtime_tasks(store)
+}
+
+pub(crate) fn get_task(store: &AppStore, task_id: &str) -> Option<RuntimeTaskRecord> {
+    get_runtime_task(store, task_id)
+}
+
+pub(crate) fn push_task(store: &mut AppStore, task: RuntimeTaskRecord) {
+    store.runtime_tasks.push(task);
 }
 
 pub(crate) fn task_value(store: &AppStore, task_id: &str) -> Value {
