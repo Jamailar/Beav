@@ -198,6 +198,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed retrying job execution requeue updates through `store::redclaw`.
 - Routed stale job execution recovery scans through `store::redclaw`.
 - Routed job execution claim selection and snapshot return through `store::redclaw`.
+- Routed job execution completion/failure updates through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
