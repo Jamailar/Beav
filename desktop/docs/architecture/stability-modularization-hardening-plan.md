@@ -237,6 +237,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added `store::work_items` and routed workspace work-item list/get/update commands through it.
 - Routed runtime task resume work-item writebacks through `store::work_items`.
 - Routed image/video generation, media runtime and RedClaw run work-item writebacks through `store::work_items`.
+- Routed legacy store import settings and space migration access through `store::settings` and `store::spaces`.
 
 ### 1. Bridge Contract Layer
 
