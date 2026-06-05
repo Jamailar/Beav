@@ -10,6 +10,7 @@ use crate::cli_runtime::{
     merge_execution_env, CliEnvironmentRecord, CliEnvironmentScope,
 };
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::spaces as spaces_store;
 use crate::{
     active_space_workspace_root_from_store, is_same_path, now_i64, slug_from_relative_path,
     store_root, AppState, AppStore,
@@ -309,7 +310,8 @@ pub fn find_cli_environment_by_id(
 
 pub fn active_workspace_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     with_store(state, |store| {
-        active_space_workspace_root_from_store(&store, &store.active_space_id, &state.store_path)
+        let active_space_id = spaces_store::active_space_id(&store);
+        active_space_workspace_root_from_store(&store, &active_space_id, &state.store_path)
     })
 }
 
