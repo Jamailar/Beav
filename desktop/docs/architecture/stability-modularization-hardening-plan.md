@@ -349,6 +349,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted RedClaw task-control list/stat read projections into `commands/redclaw_task_control/listing`, keeping draft/create/update/cancel write paths in the root task-control module.
 - Extracted RedClaw task-control update handling, definition-to-intent reconstruction, patch merging and source-task writebacks into `commands/redclaw_task_control/updates`.
 - Extracted RedClaw task-control cancel handling, source-task delete/pause behavior and running execution cancellation into `commands/redclaw_task_control/cancel`.
+- Extracted RedClaw task-control draft definition construction, review-docket lifecycle, draft promotion and confirmed scheduled/long-cycle task materialization into `commands/redclaw_task_control/drafts`.
 - Extracted collaboration task-panel status mapping, review counts, RedClaw job projection and sorted panel item assembly into `commands/runtime_collab/task_panel`.
 - Extracted collaboration team-member wake scheduling, mailbox consumption, member session metadata, agent-turn execution and team action event fanout into `commands/runtime_collab/team_wake`.
 - Extracted review-docket runtime approval construction, proposed action routing, CLI escalation decisions and RedClaw draft confirmations into `commands/runtime_collab/review_approval`.
