@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createManuscriptsBridge(core: BridgeCore) {
   return {
@@ -23,6 +23,10 @@ export function createManuscriptsBridge(core: BridgeCore) {
       confirmPackageScript: <T = unknown>(payload: { filePath: string }) => core.invokeChannel('manuscripts:confirm-package-script', payload) as Promise<T>,
       getLayout: <T = unknown>() => core.invokeChannel('manuscripts:get-layout') as Promise<T>,
       saveLayout: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('manuscripts:save-layout', payload) as Promise<T>,
+      onRenderProgress: (listener: Listener) => core.on('manuscripts:render-progress', listener),
+      offRenderProgress: (listener: Listener) => core.off('manuscripts:render-progress', listener),
+      onWriteProposal: (listener: Listener) => core.on('manuscripts:write-proposal', listener),
+      offWriteProposal: (listener: Listener) => core.off('manuscripts:write-proposal', listener),
     },
   };
 }

@@ -540,9 +540,9 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
             }
         };
-        window.ipcRenderer.on('data:changed', handleDataChanged);
+        window.ipcRenderer.onDataChanged(handleDataChanged);
         return () => {
-            window.ipcRenderer.off('data:changed', handleDataChanged);
+            window.ipcRenderer.offDataChanged(handleDataChanged);
         };
     }, [isActive, loadAssets, loadTree]);
 
@@ -1440,9 +1440,9 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 setIsExportVideoModalOpen(true);
             }
         };
-        window.ipcRenderer.on('manuscripts:render-progress', handleProgress);
+        window.ipcRenderer.manuscripts.onRenderProgress(handleProgress);
         return () => {
-            window.ipcRenderer.off('manuscripts:render-progress', handleProgress);
+            window.ipcRenderer.manuscripts.offRenderProgress(handleProgress);
         };
     }, [editorFile]);
 
@@ -1547,9 +1547,9 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 setEditorReviewBody('');
             }
         };
-        window.ipcRenderer.on('manuscripts:write-proposal', handleProposalChanged);
+        window.ipcRenderer.manuscripts.onWriteProposal(handleProposalChanged);
         return () => {
-            window.ipcRenderer.off('manuscripts:write-proposal', handleProposalChanged);
+            window.ipcRenderer.manuscripts.offWriteProposal(handleProposalChanged);
         };
     }, [editorDescriptor?.draftType, editorFile]);
 

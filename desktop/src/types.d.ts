@@ -2045,6 +2045,10 @@ declare global {
         confirmPackageScript: <T = unknown>(payload: { filePath: string }) => Promise<T>;
         getLayout: <T = unknown>() => Promise<T>;
         saveLayout: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        onRenderProgress: (listener: (...args: unknown[]) => void) => void;
+        offRenderProgress: (listener: (...args: unknown[]) => void) => void;
+        onWriteProposal: (listener: (...args: unknown[]) => void) => void;
+        offWriteProposal: (listener: (...args: unknown[]) => void) => void;
       };
       generation: {
         submitImage: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
