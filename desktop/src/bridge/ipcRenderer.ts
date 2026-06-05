@@ -3,6 +3,7 @@ import { createArchivesBridge } from './domains/archivesBridge';
 import { createAudioVoiceBridge } from './domains/audioVoiceBridge';
 import { createAuthBridge } from './domains/authBridge';
 import { createBridgeCore } from './core';
+import { createChatBridge } from './domains/chatBridge';
 import { createCliRuntimeBridge } from './domains/cliRuntimeBridge';
 import { createGenerationBridge } from './domains/generationBridge';
 import { createKnowledgeBridge } from './domains/knowledgeBridge';
@@ -18,7 +19,6 @@ import { createTeamRuntimeBridge } from './domains/teamRuntimeBridge';
 import { createToolsBridge } from './domains/toolsBridge';
 import { createWanderBridge } from './domains/wanderBridge';
 import type { InvokeGuardOptions } from './types';
-import { preflightInlineAttachmentPayload } from '../utils/mediaReferencePreflight';
 
 function createIpcRenderer() {
   const core = createBridgeCore();
@@ -124,23 +124,7 @@ function createIpcRenderer() {
     ...createToolsBridge(core),
     ...createAuthBridge(core),
     ...createMcpBridge(core),
-    sessions: {
-      list: () => invokeChannel('sessions:list'),
-      get: (sessionId: string) => invokeChannel('sessions:get', { sessionId }),
-      resume: (sessionId: string) => invokeChannel('sessions:resume', { sessionId }),
-      fork: (sessionId: string) => invokeChannel('sessions:fork', { sessionId }),
-      getTranscript: (sessionId: string, limit?: number) => invokeChannel('sessions:get-transcript', { sessionId, limit }),
-      getToolResults: (sessionId: string, limit?: number) => invokeChannel('sessions:get-tool-results', { sessionId, limit })
-    },
-    sessionBridge: {
-      getStatus: () => invokeChannel('session-bridge:status'),
-      listSessions: () => invokeChannel('session-bridge:list-sessions'),
-      getSession: (sessionId: string) => invokeChannel('session-bridge:get-session', { sessionId }),
-      listPermissions: (payload?: { sessionId?: string }) => invokeChannel('session-bridge:list-permissions', payload || {}),
-      createSession: (payload?: Record<string, unknown>) => invokeChannel('session-bridge:create-session', payload || {}),
-      sendMessage: (payload: { sessionId: string; message: string }) => invokeChannel('session-bridge:send-message', payload),
-      resolvePermission: (payload: { requestId: string; outcome: 'proceed_once' | 'proceed_always' | 'cancel' }) => invokeChannel('session-bridge:resolve-permission', payload)
-    },
+    ...createChatBridge(core),
     subjects: {
       list: (payload?: Record<string, unknown>) => invokeChannel('subjects:list', payload || {}),
       get: (payload: { id: string }) => invokeChannel('subjects:get', payload),
@@ -191,45 +175,6 @@ function createIpcRenderer() {
     },
     detectAiProtocol: (config: unknown) => invokeChannel('ai:detect-protocol', config),
     testAiConnection: (config: unknown) => invokeChannel('ai:test-connection', config),
-    startChat: (message: string, modelConfig?: unknown) => sendChannel('ai:start-chat', { message, modelConfig }),
-    cancelChat: () => sendChannel('ai:cancel'),
-    confirmTool: (callId: string, confirmed: boolean) => sendChannel('ai:confirm-tool', { callId, confirmed }),
-    chat: {
-      send: (data: Record<string, unknown>) => sendChannel('chat:send-message', data),
-      pickAttachment: (payload?: { sessionId?: string }) => invokeChannel('chat:pick-attachment', payload || {}),
-      createPathAttachment: (payload: { path: string; sessionId?: string }) =>
-        invokeChannel('chat:create-path-attachment', payload),
-      createInlineAttachment: async (payload: { dataUrl: string; fileName?: string; sessionId?: string }) =>
-        invokeChannel('chat:create-inline-attachment', await preflightInlineAttachmentPayload(payload)),
-      createVideoThumbnail: (payload: { path?: string; source?: string; sessionId?: string }) =>
-        invokeChannel('chat:create-video-thumbnail', payload),
-      discardAttachments: (payload: { attachments: unknown[] }) =>
-        invokeChannel('chat:discard-attachments', payload),
-      transcribeAudio: (payload: Record<string, unknown>) => invokeChannel('chat:transcribe-audio', payload),
-      cancel: (data?: { sessionId?: string } | string) => sendChannel('chat:cancel', data),
-      confirmTool: (callId: string, confirmed: boolean) => sendChannel('chat:confirm-tool', { callId, confirmed }),
-      getSessions: () => invokeChannel('chat:get-sessions'),
-      createSession: (title?: string) => invokeChannel('chat:create-session', title),
-      createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) =>
-        invokeChannel('chat:create-diagnostics-session', payload || {}),
-      listContextSessions: (payload: { contextId: string; contextType: string }) =>
-        invokeChannel('chat:list-context-sessions', payload),
-      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) =>
-        invokeChannel('chat:create-context-session', payload),
-      getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) =>
-        invokeChannel('chat:getOrCreateContextSession', params),
-      renameSession: (payload: { sessionId: string; title: string }) => invokeChannel('chat:rename-session', payload),
-      deleteSession: (sessionId: string) => invokeChannel('chat:delete-session', sessionId),
-      archiveSession: (sessionId: string) => invokeChannel('chat:archive-session', sessionId),
-      unarchiveSession: (sessionId: string) => invokeChannel('chat:unarchive-session', sessionId),
-      listArchivedSessions: () => invokeChannel('chat:list-archived-sessions'),
-      getMessages: (sessionId: string) => invokeChannel('chat:get-messages', sessionId),
-      clearMessages: (sessionId: string) => invokeChannel('chat:clear-messages', sessionId),
-      compactContext: (sessionId: string) => invokeChannel('chat:compact-context', sessionId),
-      getContextUsage: (sessionId: string) => invokeChannel('chat:get-context-usage', sessionId),
-      getRuntimeState: (sessionId: string) => invokeChannel('chat:get-runtime-state', sessionId),
-      bindEditorSession: (payload: Record<string, unknown>) => invokeChannel('chat:bind-editor-session', payload)
-    },
     ...createGenerationBridge(core),
     ...createRedClawBridge(core),
     assistantDaemon: {
