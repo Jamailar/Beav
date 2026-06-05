@@ -17,118 +17,14 @@ use payload::{
     value_string_array_or_default, value_vec,
 };
 use state_helpers::{
-    apply_task_status, merge_task_metadata, next_collab_id, normalize_task_defaults, touch_session,
+    apply_task_status, completion_claim_payload, merge_task_metadata, next_collab_id,
+    normalize_task_defaults, promote_ready_dependents, sync_task_dependency_links, touch_session,
     valid_task_transition, validate_member, validate_session, validate_task,
 };
 
 const DEFAULT_PROGRESS_INTERVAL_MS: i64 = 15 * 60 * 1000;
 const COLLAB_MAILBOX_READ_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const COLLAB_REPORTS_KEEP_LATEST_PER_TASK: usize = 200;
-
-fn sync_task_dependency_links(store: &mut AppStore, session_id: &str) {
-    let session_task_ids = store
-        .collab_tasks
-        .iter()
-        .filter(|task| task.session_id == session_id)
-        .map(|task| task.id.clone())
-        .collect::<std::collections::HashSet<_>>();
-    let edges = store
-        .collab_tasks
-        .iter()
-        .filter(|task| task.session_id == session_id)
-        .flat_map(|task| {
-            task.depends_on_task_ids
-                .iter()
-                .filter(|dependency_id| session_task_ids.contains(*dependency_id))
-                .map(|dependency_id| (dependency_id.clone(), task.id.clone()))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    for task in store
-        .collab_tasks
-        .iter_mut()
-        .filter(|task| task.session_id == session_id)
-    {
-        task.blocks_task_ids
-            .retain(|blocked_id| !session_task_ids.contains(blocked_id));
-    }
-    for (dependency_id, blocked_task_id) in edges {
-        if let Some(task) = store
-            .collab_tasks
-            .iter_mut()
-            .find(|task| task.session_id == session_id && task.id == dependency_id)
-        {
-            if !task.blocks_task_ids.contains(&blocked_task_id) {
-                task.blocks_task_ids.push(blocked_task_id);
-            }
-        }
-    }
-}
-
-fn promote_ready_dependents(store: &mut AppStore, session_id: &str, now: i64) {
-    let completed_task_ids = store
-        .collab_tasks
-        .iter()
-        .filter(|task| task.session_id == session_id && task.status == "completed")
-        .map(|task| task.id.clone())
-        .collect::<std::collections::HashSet<_>>();
-    for task in store
-        .collab_tasks
-        .iter_mut()
-        .filter(|task| task.session_id == session_id)
-    {
-        if task.depends_on_task_ids.is_empty()
-            || !matches!(task.status.as_str(), "todo" | "backlog" | "blocked")
-        {
-            continue;
-        }
-        if task
-            .depends_on_task_ids
-            .iter()
-            .all(|dependency_id| completed_task_ids.contains(dependency_id))
-        {
-            task.status = "ready".to_string();
-            task.blocked_by_task_ids
-                .retain(|task_id| !completed_task_ids.contains(task_id));
-            task.updated_at = now;
-        }
-    }
-}
-
-fn completion_claim_payload(
-    payload: &Value,
-    session_id: &str,
-    member_id: &str,
-    status: &str,
-    summary: &str,
-) -> Option<Value> {
-    if status != "completed" {
-        return value_object(payload, "payload");
-    }
-    let mut object = value_object(payload, "payload")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    object.insert(
-        "completionClaim".to_string(),
-        json!({
-            "sessionId": session_id,
-            "taskId": value_string(payload, "taskId"),
-            "memberId": member_id,
-            "status": "completed",
-            "summary": summary,
-            "evidence": value_vec(payload, "evidence").unwrap_or_default(),
-            "artifactRefs": value_vec(payload, "artifacts")
-                .unwrap_or_default()
-                .into_iter()
-                .chain(value_string_array(payload, "artifactIds").into_iter().map(|id| json!({ "id": id })))
-                .collect::<Vec<_>>(),
-            "handoff": value_string(payload, "handoff"),
-            "risks": value_string_array(payload, "risks")
-        }),
-    );
-    Some(Value::Object(object))
-}
 
 fn role_profile_defaults(role_id: &str) -> Value {
     let role_spec = runtime_subagent_role_spec(role_id);
