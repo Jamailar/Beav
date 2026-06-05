@@ -145,6 +145,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed logging diagnostics, agent session context and runtime warm-state settings reads through `store::settings`.
 - Routed media runtime provider/model resolution, voice gateway config and official model-default repair settings reads through `store::settings`.
 - Routed knowledge-index provider config, workspace-root cache, chat auto-title and memory maintenance settings reads through `store::settings`.
+- Routed App CLI video-analysis model config settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
