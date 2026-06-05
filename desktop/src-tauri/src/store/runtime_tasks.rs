@@ -5,7 +5,7 @@ use crate::runtime::{
     append_runtime_task_trace, cancel_runtime_task, get_runtime_task,
     get_runtime_task_value as runtime_task_lookup_value,
     list_runtime_task_traces_value as runtime_task_traces_lookup_value, list_runtime_tasks,
-    store_runtime_task, RuntimeRouteRecord, RuntimeTaskRecord,
+    resume_runtime_task_snapshot, store_runtime_task, RuntimeRouteRecord, RuntimeTaskRecord,
 };
 
 pub(crate) fn store_task(
@@ -40,6 +40,26 @@ pub(crate) fn get_task(store: &AppStore, task_id: &str) -> Option<RuntimeTaskRec
 
 pub(crate) fn push_task(store: &mut AppStore, task: RuntimeTaskRecord) {
     store.runtime_tasks.push(task);
+}
+
+pub(crate) fn update_task<R>(
+    store: &mut AppStore,
+    task_id: &str,
+    update: impl FnOnce(&mut RuntimeTaskRecord) -> R,
+) -> Option<R> {
+    store
+        .runtime_tasks
+        .iter_mut()
+        .find(|item| item.id == task_id)
+        .map(update)
+}
+
+pub(crate) fn resume_task_snapshot(
+    store: &mut AppStore,
+    task_id: &str,
+    summary: &str,
+) -> Option<RuntimeTaskRecord> {
+    resume_runtime_task_snapshot(store, task_id, summary)
 }
 
 pub(crate) fn task_value(store: &AppStore, task_id: &str) -> Value {

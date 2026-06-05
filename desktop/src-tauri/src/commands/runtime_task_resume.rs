@@ -9,6 +9,7 @@ use crate::runtime::{
     build_repair_goal, reviewer_rejected, route_for_task_snapshot, PreparedTaskResumeExecution,
     RuntimeArtifact, RuntimeCheckpointEvent, RuntimeNodeEvent, RuntimeTaskRecord,
 };
+use crate::store::runtime_tasks as runtime_tasks_store;
 use crate::store::settings as settings_store;
 use crate::{payload_string, AppState};
 
@@ -102,7 +103,7 @@ pub fn handle_runtime_task_resume(
 ) -> Result<Value, String> {
     let task_id = payload_string(payload, "taskId").unwrap_or_default();
     let task_snapshot = crate::persistence::with_store_mut(state, |store| {
-        Ok(crate::runtime::resume_runtime_task_snapshot(
+        Ok(runtime_tasks_store::resume_task_snapshot(
             store,
             &task_id,
             "route and execution plan resumed",

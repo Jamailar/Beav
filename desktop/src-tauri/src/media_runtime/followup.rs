@@ -9,9 +9,9 @@ use crate::agent::{
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_runtime_task_trace, mark_task_running, runtime_direct_route_record,
-    set_runtime_graph_node, store_runtime_task, RuntimeArtifact, RuntimeCheckpointRecord,
-    RuntimeTaskRecord,
+    set_runtime_graph_node, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeTaskRecord,
 };
+use crate::store::runtime_tasks as runtime_tasks_store;
 use crate::{file_url_for_path, now_i64, AppState};
 
 const MEDIA_FOLLOWUP_TIMEOUT_MS: u64 = 60 * 60 * 1000;
@@ -391,7 +391,7 @@ fn create_media_followup_task(
     });
     let route = runtime_direct_route_record(runtime_mode, &goal, Some(&metadata));
     with_store_mut(state, |store| {
-        let task = store_runtime_task(
+        let task = runtime_tasks_store::store_task(
             store,
             "media-followup",
             "pending",
@@ -402,28 +402,26 @@ fn create_media_followup_task(
             Some(metadata.clone()),
         );
         let task_id = task.id.clone();
-        let task = store
-            .runtime_tasks
-            .iter_mut()
-            .find(|item| item.id == task_id)
-            .ok_or_else(|| "failed to initialize media follow-up task".to_string())?;
-        mark_task_running(task, "waiting for media job completion");
-        task.current_node = Some("execute_tools".to_string());
-        set_runtime_graph_node(
-            &mut task.graph,
-            "plan",
-            "completed",
-            Some("follow-up task created".to_string()),
-            None,
-        );
-        set_runtime_graph_node(
-            &mut task.graph,
-            "execute_tools",
-            "running",
-            Some("waiting for media job completion".to_string()),
-            None,
-        );
-        let snapshot = task.clone();
+        let snapshot = runtime_tasks_store::update_task(store, &task_id, |task| {
+            mark_task_running(task, "waiting for media job completion");
+            task.current_node = Some("execute_tools".to_string());
+            set_runtime_graph_node(
+                &mut task.graph,
+                "plan",
+                "completed",
+                Some("follow-up task created".to_string()),
+                None,
+            );
+            set_runtime_graph_node(
+                &mut task.graph,
+                "execute_tools",
+                "running",
+                Some("waiting for media job completion".to_string()),
+                None,
+            );
+            task.clone()
+        })
+        .ok_or_else(|| "failed to initialize media follow-up task".to_string())?;
         append_runtime_task_trace(
             store,
             &task_id,

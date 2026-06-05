@@ -19,8 +19,7 @@ use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_sto
 use crate::runtime::{
     add_collab_member, collab_session_snapshot, create_collab_session, create_collab_task,
     plan_redclaw_orchestration, redclaw_orchestration_registry_value, runtime_direct_route_record,
-    store_runtime_task, CollabSessionSnapshot, RedclawAgentId, RedclawOrchestrationPlan,
-    RedclawRuntime,
+    CollabSessionSnapshot, RedclawAgentId, RedclawOrchestrationPlan, RedclawRuntime,
 };
 use crate::scheduler::task_policy::TaskIntentSchema;
 use crate::scheduler::{
@@ -28,7 +27,9 @@ use crate::scheduler::{
     enqueue_manual_job_execution_for_definition, run_job_queue_once, run_redclaw_job_runner,
     run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
-use crate::store::{redclaw as redclaw_store, spaces as spaces_store};
+use crate::store::{
+    redclaw as redclaw_store, runtime_tasks as runtime_tasks_store, spaces as spaces_store,
+};
 use crate::{
     complete_redclaw_mvp_onboarding, complete_redclaw_style_definition_from_interview,
     ffmpeg_executable, handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded,
@@ -2308,7 +2309,7 @@ fn create_redclaw_orchestration_run(
             "releasePolicy": plan.release_policy
         });
         let route = runtime_direct_route_record("redclaw", &plan.graph.goal, Some(&metadata));
-        let task = store_runtime_task(
+        let task = runtime_tasks_store::store_task(
             store,
             "redclaw_orchestration",
             "pending",
