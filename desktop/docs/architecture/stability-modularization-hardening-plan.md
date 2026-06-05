@@ -324,6 +324,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Moved official API key extraction, record merge, plaintext-key detection and ensure-default key handling into `commands/official/api_keys`.
 - Extracted official route credential sync, realm switching, auth-state clearing and settings merge preservation into `commands/official/settings_sync`.
 - Moved official order status fallback and cached-order merge helpers into `commands/official/billing`.
+- Extracted official billing order settings sync and remote status fallback querying into `commands/official/billing/orders`, keeping billing channel dispatch and endpoint fallback order unchanged.
 - Extracted official pricing payload validation and startup pricing cache refresh into `commands/official/pricing`, preserving the existing startup-facing API.
 - Moved official remote call-record fetch into `commands/official/call_records` beside its response normalization.
 - Moved official model recovery fetch and cached-model source seeding into `commands/official/models`.
