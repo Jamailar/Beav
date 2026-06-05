@@ -8,7 +8,7 @@ use tauri::State;
 
 const YTDLP_DISABLED_MESSAGE: &str = "内置 yt-dlp 服务已移除。";
 
-pub(super) fn refresh_advisor_videos(
+pub(crate) fn refresh_advisor_videos(
     state: &State<'_, AppState>,
     advisor_id: &str,
     limit: i64,
