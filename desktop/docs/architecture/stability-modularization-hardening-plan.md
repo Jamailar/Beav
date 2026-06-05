@@ -343,6 +343,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted transcript listing/detail helpers, resume-message assembly, session bundle save/load/remove and duplicate handling into `runtime/session_runtime/transcript_api`.
 - Extracted runtime route/orchestration checkpoint persistence and checkpoint event tuple construction into `runtime/session_runtime/checkpoint_events`.
 - Extracted collaboration member role profile defaults, agent-card overlay merging and member metadata construction into `runtime/collab_runtime/member_profile`.
+- Extracted collaboration member matching, executor capacity checks, member task-plan upsert/removal and speech queue updates into `runtime/collab_runtime/member_workload`.
 
 ### 1. Bridge Contract Layer
 
