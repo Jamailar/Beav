@@ -20,6 +20,7 @@ pub(crate) use store::{
 };
 
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::spaces as spaces_store;
 use crate::{
     log_timing_event, make_id, now_i64, now_ms, payload_field, payload_string, AppState,
     MemoryHistoryRecord, UserMemoryRecord,
@@ -170,7 +171,7 @@ pub(crate) fn handle_memory_channel(
                             space_id: normalized_optional_string(payload_string(
                                 payload, "spaceId",
                             ))
-                            .or_else(|| Some(store.active_space_id.clone())),
+                            .or_else(|| Some(spaces_store::active_space_id(store))),
                             project_id: normalized_optional_string(payload_string(
                                 payload,
                                 "projectId",
