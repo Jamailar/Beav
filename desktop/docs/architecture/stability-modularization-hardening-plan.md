@@ -112,6 +112,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed ManuscriptEditorHost data, render progress and write proposal subscriptions through bridge facades.
 - Routed Chat page advisors, knowledge, space, settings and auth refresh subscriptions through bridge facades.
 - Routed renderer diagnostics report-pending subscription through the logs bridge facade.
+- Added Knowledge, assistant daemon and background task event facades for remaining dirty-page migrations.
 
 ### 1. Bridge Contract Layer
 
