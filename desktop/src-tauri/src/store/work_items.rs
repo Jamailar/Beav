@@ -21,6 +21,10 @@ pub(crate) fn get_item(store: &AppStore, id: &str) -> Option<WorkItemRecord> {
     store.work_items.iter().find(|item| item.id == id).cloned()
 }
 
+pub(crate) fn extend_items(store: &mut AppStore, items: Vec<WorkItemRecord>) {
+    store.work_items.extend(items);
+}
+
 pub(crate) fn update_item(
     store: &mut AppStore,
     id: &str,

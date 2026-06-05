@@ -5,6 +5,7 @@ use crate::runtime::{
     RuntimeArtifact, RuntimeCheckpointRecord, RuntimeGraph, RuntimeGraphNodeRecord,
     RuntimeRouteRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
 };
+use crate::store::work_items as work_items_store;
 use crate::{create_work_item, make_id, now_i64, payload_string, AppStore, WorkItemRecord};
 
 pub type RuntimeNodeEvent = (String, String, Option<String>, Option<String>);
@@ -517,7 +518,7 @@ pub fn apply_task_resume_execution(
         task.completed_at = Some(now_i64());
         task.updated_at = now_i64();
     }
-    store.work_items.extend(work_items_to_push);
+    work_items_store::extend_items(store, work_items_to_push);
     append_resume_traces(
         store,
         task_id,
