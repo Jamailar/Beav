@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
 use crate::commands::chat_state::{apply_context_binding_metadata, ensure_chat_session};
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::spaces as spaces_store;
 use crate::{
     create_work_item, make_id, now_iso, redclaw_root, resolve_manuscript_path,
     slug_from_relative_path, write_text_file, AppState, ChatMessageRecord,
@@ -81,7 +82,7 @@ pub fn ensure_redclaw_task_session_record(
     source_task_id: Option<&str>,
     title: &str,
 ) -> Result<String, String> {
-    let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
+    let active_space_id = with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?;
     let context_id = redclaw_context_id_for_space(&active_space_id);
     let session_id = match (source_kind, source_task_id) {
         (Some(kind), Some(task_id)) if !kind.trim().is_empty() && !task_id.trim().is_empty() => {
@@ -336,7 +337,7 @@ pub fn execute_redclaw_run(
     prompt: String,
     source_label: &str,
 ) -> Result<Value, String> {
-    let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
+    let active_space_id = with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?;
     let session_id = redclaw_session_id_for_space(&active_space_id);
     let context_id = redclaw_context_id_for_space(&active_space_id);
     execute_redclaw_run_in_session(
@@ -368,7 +369,7 @@ pub fn execute_redclaw_task_run(
     };
     let session_id =
         ensure_redclaw_task_session_record(state, source_kind, source_task_id, &session_title)?;
-    let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
+    let active_space_id = with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?;
     let context_id = redclaw_context_id_for_space(&active_space_id);
     execute_redclaw_run_in_session(
         app,
