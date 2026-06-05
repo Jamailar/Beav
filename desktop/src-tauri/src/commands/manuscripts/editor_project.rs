@@ -1,5 +1,10 @@
 use super::*;
 
+use super::ffmpeg_edit::{
+    execute_ffmpeg_edit_recipe, ffmpeg_asset_items, ffmpeg_recipe_duration_ms,
+    ffmpeg_recipe_source_asset_ids,
+};
+
 pub(super) fn handle_editor_project_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
