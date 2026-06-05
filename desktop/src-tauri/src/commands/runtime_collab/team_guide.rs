@@ -1,5 +1,7 @@
 use super::*;
-use crate::runtime::{add_collab_member, create_collab_session, ensure_collab_session_coordinator};
+use crate::runtime::{
+    add_collab_member, create_collab_session, create_collab_task, ensure_collab_session_coordinator,
+};
 use serde_json::Map;
 
 fn payload_bool(payload: &Value, key: &str) -> bool {

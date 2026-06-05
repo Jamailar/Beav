@@ -9,6 +9,8 @@ mod review_approval;
 mod session_values;
 #[path = "runtime_collab/task_panel.rs"]
 mod task_panel;
+#[path = "runtime_collab/task_values.rs"]
+mod task_values;
 #[path = "runtime_collab/team_guide.rs"]
 mod team_guide;
 #[path = "runtime_collab/team_tools.rs"]
@@ -25,14 +27,13 @@ use crate::commands::redclaw::redclaw_task_control;
 use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    archive_review_docket, create_collab_task, create_review_docket, decide_review_docket,
-    get_review_docket, list_collab_messages, list_collab_reports, list_collab_tasks,
-    list_review_dockets, pin_collab_task_session, post_collab_message, read_collab_mailbox,
-    request_collab_report, request_runtime_approval, resolve_review_docket_waiters,
-    resolve_runtime_approval_by_approval_id, retry_collab_task, review_docket_stats,
-    submit_collab_report, transition_collab_task, update_collab_task, CollabMailboxMessageRecord,
-    CollabMemberRecord, CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord,
-    ReviewDocketRecord, RuntimeApprovalDetails, RuntimeApprovalRecord,
+    archive_review_docket, create_review_docket, decide_review_docket, get_review_docket,
+    list_collab_messages, list_collab_reports, list_review_dockets, post_collab_message,
+    read_collab_mailbox, request_collab_report, request_runtime_approval,
+    resolve_review_docket_waiters, resolve_runtime_approval_by_approval_id, review_docket_stats,
+    submit_collab_report, CollabMailboxMessageRecord, CollabMemberRecord,
+    CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord, ReviewDocketRecord,
+    RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
 use crate::session_manager::create_session;
 use crate::store::redclaw as redclaw_store;
@@ -47,6 +48,10 @@ pub use session_values::{
     update_session_status_value,
 };
 pub use task_panel::task_panel_list_value;
+pub use task_values::{
+    create_task_value, list_tasks_value, pin_task_session_value, retry_task_value,
+    transition_task_value, update_task_value,
+};
 pub use team_guide::guide_create_value;
 pub use team_tools::{
     execute_mcp_tool_value, execute_tool_value, list_agent_backends_value, mcp_contract_value,
@@ -71,14 +76,6 @@ fn emit_collab_event(
     payload: Value,
 ) {
     emit_runtime_event(app, event_type, owner_session_id, None, payload);
-}
-
-pub fn list_tasks_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    let session_id =
-        payload_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
-    with_store(state, |store| {
-        Ok(json!(list_collab_tasks(&store, &session_id)))
-    })
 }
 
 pub fn list_messages_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
@@ -124,84 +121,6 @@ pub fn list_reports_value(state: &State<'_, AppState>, payload: &Value) -> Resul
             limit,
         )))
     })
-}
-
-pub fn create_task_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let task = with_store_mut(state, |store| create_collab_task(store, payload))?;
-    emit_collab_event(
-        app,
-        "runtime:collab-task-changed",
-        None,
-        json!({ "collabSessionId": task.session_id, "task": task }),
-    );
-    Ok(json!(task))
-}
-
-pub fn update_task_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let task = with_store_mut(state, |store| update_collab_task(store, payload))?;
-    emit_collab_event(
-        app,
-        "runtime:collab-task-changed",
-        None,
-        json!({ "collabSessionId": task.session_id, "task": task }),
-    );
-    Ok(json!(task))
-}
-
-pub fn transition_task_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-    transition: &str,
-) -> Result<Value, String> {
-    let task = with_store_mut(state, |store| {
-        transition_collab_task(store, payload, transition)
-    })?;
-    emit_collab_event(
-        app,
-        "runtime:collab-task-changed",
-        None,
-        json!({ "collabSessionId": task.session_id, "task": task, "transition": transition }),
-    );
-    Ok(json!(task))
-}
-
-pub fn pin_task_session_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let task = with_store_mut(state, |store| pin_collab_task_session(store, payload))?;
-    emit_collab_event(
-        app,
-        "runtime:collab-task-changed",
-        None,
-        json!({ "collabSessionId": task.session_id, "task": task, "transition": "pin-session" }),
-    );
-    Ok(json!(task))
-}
-
-pub fn retry_task_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let task = with_store_mut(state, |store| retry_collab_task(store, payload))?;
-    emit_collab_event(
-        app,
-        "runtime:collab-task-changed",
-        None,
-        json!({ "collabSessionId": task.session_id, "task": task, "transition": "retry" }),
-    );
-    Ok(json!(task))
 }
 
 pub fn list_review_dockets_value(
