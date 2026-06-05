@@ -2052,53 +2052,45 @@ fn export_redclaw_review_report(
         .join("review-reports")
         .join(safe_export_slug(&project_id));
     std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
-    with_store_mut(state, |store| {
-        let project = store
-            .redclaw_state
-            .projects
-            .iter_mut()
-            .find(|item| item.id == project_id)
-            .ok_or_else(|| "RedClaw project not found".to_string())?;
-        let report = review_report_from_project(project);
-        let report_path = export_dir.join("review-report.json");
-        let markdown_path = export_dir.join("review-report.md");
-        write_text_file(
-            &report_path,
-            &serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?,
-        )?;
-        write_text_file(&markdown_path, &build_review_report_markdown(&report))?;
+    let project_snapshot = with_store(state, |store| {
+        redclaw_store::project_by_id(&store, &project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())
+    })?;
+    let report = review_report_from_project(&project_snapshot);
+    let report_path = export_dir.join("review-report.json");
+    let markdown_path = export_dir.join("review-report.md");
+    write_text_file(
+        &report_path,
+        &serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?,
+    )?;
+    write_text_file(&markdown_path, &build_review_report_markdown(&report))?;
 
-        let now = now_iso();
-        let export_record = json!({
-            "packagePath": export_dir.display().to_string(),
-            "jsonPath": report_path.display().to_string(),
-            "markdownPath": markdown_path.display().to_string(),
-            "schema": "redclaw.reviewReport.v1",
-            "createdAt": now,
-        });
-        let mut metadata = project
-            .metadata
-            .clone()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let mut exports = metadata
-            .get("reviewReportExports")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        exports.push(export_record);
-        metadata.insert("reviewReportExports".to_string(), Value::Array(exports));
-        project.metadata = Some(Value::Object(metadata));
-        project.updated_at = now;
-        Ok(json!({
-            "success": true,
-            "project": project,
-            "packagePath": export_dir.display().to_string(),
-            "jsonPath": report_path.display().to_string(),
-            "markdownPath": markdown_path.display().to_string(),
-            "report": report,
-        }))
-    })
+    let now = now_iso();
+    let export_record = json!({
+        "packagePath": export_dir.display().to_string(),
+        "jsonPath": report_path.display().to_string(),
+        "markdownPath": markdown_path.display().to_string(),
+        "schema": "redclaw.reviewReport.v1",
+        "createdAt": now,
+    });
+    let updated_project = with_store_mut(state, |store| {
+        redclaw_store::append_project_metadata_array_record(
+            store,
+            &project_id,
+            "reviewReportExports",
+            export_record,
+            &now,
+        )
+    })?;
+
+    Ok(json!({
+        "success": true,
+        "project": updated_project,
+        "packagePath": export_dir.display().to_string(),
+        "jsonPath": report_path.display().to_string(),
+        "markdownPath": markdown_path.display().to_string(),
+        "report": report,
+    }))
 }
 
 fn export_redclaw_xhs_package(
