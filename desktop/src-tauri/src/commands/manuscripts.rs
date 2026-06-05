@@ -46,6 +46,7 @@ mod script_state;
 mod subtitles;
 mod timeline;
 mod timeline_model;
+mod timeline_tracks;
 mod tree;
 mod write_proposals;
 
