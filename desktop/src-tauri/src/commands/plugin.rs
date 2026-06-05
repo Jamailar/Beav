@@ -14,7 +14,9 @@ use crate::{
     read_json_value_or,
     runtime::{McpServerRecord, SkillRecord},
     skills::discover_skill_records_from_root,
-    slug_from_relative_path, store_root, workspace_root, write_json_value, AppState,
+    slug_from_relative_path,
+    store::media as media_store,
+    store_root, workspace_root, write_json_value, AppState,
 };
 
 const THRIVE_PLUGIN_SCHEMA_VERSION: u32 = 1;
@@ -1792,13 +1794,11 @@ fn plugin_data_source_value(
             Ok(json!({
                 "success": true,
                 "source": source,
-                "total": store.media_assets.len(),
+                "total": media_store::count_assets(&store),
             }))
         }),
         "media.recent" | "media.assets" => with_store(state, |store| {
-            let mut assets = store.media_assets.clone();
-            assets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            assets.truncate(limit);
+            let assets = media_store::list_recent_assets(&store, limit);
             Ok(json!({ "success": true, "source": source, "assets": assets }))
         }),
         "subjects.count" => with_store(state, |store| {
