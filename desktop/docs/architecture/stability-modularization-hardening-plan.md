@@ -93,6 +93,8 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Moved runtime, team runtime, CLI runtime, audio voice, plugins, tools, auth, MCP, chat, subjects, brand workspace, cover, video editor, advisors, spaces, AI config, assistant control and legacy skills alias facades into `desktop/src/bridge/domains/*`.
 - Routed the generated official AI panel through `window.ipcRenderer.officialAuth.*` instead of local raw `window.ipcRenderer.invoke(channel, payload)` calls.
 - Verified each atomic bridge slice with `pnpm --dir desktop exec tsc --noEmit` and `pnpm --dir desktop build`.
+- Added an App Shell `AppIntent` contract plus legacy navigation detail normalization in `features/app-shell`.
+- Centralized renderer navigation event dispatch through `dispatchAppIntent` / `dispatchAppNavigateDetail`, while preserving existing legacy notification payloads.
 
 ### 1. Bridge Contract Layer
 
