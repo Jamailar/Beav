@@ -1,9 +1,9 @@
-import { dispatchAppIntent } from '../features/app-shell/appIntent';
-import { REDBOX_NAVIGATE_EVENT, type NotificationAction } from './types';
+import { dispatchAppIntent, dispatchAppNavigateDetail } from '../features/app-shell/appIntent';
+import type { NotificationAction } from './types';
 
 export async function runNotificationAction(action: NotificationAction): Promise<void> {
   if (action.action === 'navigate') {
-    window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, { detail: action.payload }));
+    dispatchAppNavigateDetail(action.payload);
     return;
   }
 
