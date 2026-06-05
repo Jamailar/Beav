@@ -702,47 +702,12 @@ fn mark_execution_succeeded(
         definition.updated_at = now_iso.clone();
     }
 
-    match prepared.source_kind.as_deref() {
-        Some("scheduled") => {
-            if let Some(task) = store
-                .redclaw_state
-                .scheduled_tasks
-                .iter_mut()
-                .find(|item| prepared.source_task_id.as_deref() == Some(item.id.as_str()))
-            {
-                task.last_run_at = Some(now_iso.clone());
-                task.last_result = Some("success".to_string());
-                task.last_error = None;
-                task.updated_at = now_iso.clone();
-                if task.mode == "once" {
-                    task.enabled = false;
-                    task.next_run_at = None;
-                }
-            }
-        }
-        Some("long_cycle") => {
-            if let Some(task) = store
-                .redclaw_state
-                .long_cycle_tasks
-                .iter_mut()
-                .find(|item| prepared.source_task_id.as_deref() == Some(item.id.as_str()))
-            {
-                task.completed_rounds += 1;
-                task.last_run_at = Some(now_iso.clone());
-                task.last_result = Some("success".to_string());
-                task.last_error = None;
-                task.updated_at = now_iso.clone();
-                task.status = if task.completed_rounds >= task.total_rounds {
-                    task.enabled = false;
-                    task.next_run_at = None;
-                    "completed".to_string()
-                } else {
-                    "running".to_string()
-                };
-            }
-        }
-        _ => {}
-    }
+    redclaw_store::mark_source_task_succeeded(
+        store,
+        prepared.source_kind.as_deref(),
+        prepared.source_task_id.as_deref(),
+        &now_iso,
+    );
     Ok(())
 }
 
@@ -780,34 +745,13 @@ fn mark_execution_failed(
         append_execution_turn(execution, &now_iso, "system", "Retry scheduled");
     }
 
-    match prepared.source_kind.as_deref() {
-        Some("scheduled") => {
-            if let Some(task) = store
-                .redclaw_state
-                .scheduled_tasks
-                .iter_mut()
-                .find(|item| prepared.source_task_id.as_deref() == Some(item.id.as_str()))
-            {
-                task.last_error = Some(error.to_string());
-                task.last_result = Some("failed".to_string());
-                task.updated_at = now_iso.clone();
-            }
-        }
-        Some("long_cycle") => {
-            if let Some(task) = store
-                .redclaw_state
-                .long_cycle_tasks
-                .iter_mut()
-                .find(|item| prepared.source_task_id.as_deref() == Some(item.id.as_str()))
-            {
-                task.last_error = Some(error.to_string());
-                task.last_result = Some("failed".to_string());
-                task.status = "failed".to_string();
-                task.updated_at = now_iso.clone();
-            }
-        }
-        _ => {}
-    }
+    redclaw_store::mark_source_task_failed(
+        store,
+        prepared.source_kind.as_deref(),
+        prepared.source_task_id.as_deref(),
+        error,
+        &now_iso,
+    );
 
     activate_definition_cooldown(store, prepared, error, &now_iso);
 
