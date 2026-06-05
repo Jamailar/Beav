@@ -147,10 +147,7 @@ pub(crate) fn find_confirmable_job_definition(
         .cloned()
 }
 
-pub(crate) fn push_job_definition(
-    store: &mut AppStore,
-    definition: RedclawJobDefinitionRecord,
-) {
+pub(crate) fn push_job_definition(store: &mut AppStore, definition: RedclawJobDefinitionRecord) {
     store.redclaw_job_definitions.push(definition);
 }
 
@@ -158,6 +155,34 @@ pub(crate) fn remove_job_definition(store: &mut AppStore, job_definition_id: &st
     store
         .redclaw_job_definitions
         .retain(|item| item.id != job_definition_id);
+}
+
+pub(crate) fn update_job_definition<R>(
+    store: &mut AppStore,
+    job_definition_id: &str,
+    update: impl FnOnce(&mut RedclawJobDefinitionRecord) -> R,
+) -> Option<R> {
+    store
+        .redclaw_job_definitions
+        .iter_mut()
+        .find(|item| item.id == job_definition_id)
+        .map(update)
+}
+
+pub(crate) fn update_job_definition_by_source<R>(
+    store: &mut AppStore,
+    source_kind: &str,
+    source_task_id: &str,
+    update: impl FnOnce(&mut RedclawJobDefinitionRecord) -> R,
+) -> Option<R> {
+    store
+        .redclaw_job_definitions
+        .iter_mut()
+        .find(|item| {
+            item.source_kind.as_deref() == Some(source_kind)
+                && item.source_task_id.as_deref() == Some(source_task_id)
+        })
+        .map(update)
 }
 
 pub(crate) fn list_job_executions(store: &AppStore) -> Vec<RedclawJobExecutionRecord> {
