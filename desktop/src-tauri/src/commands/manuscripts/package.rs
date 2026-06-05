@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::settings as settings_store;
+use crate::store::{media as media_store, settings as settings_store};
 
 pub(super) fn handle_package_channel(
     app: &AppHandle,
@@ -584,7 +584,7 @@ pub(super) fn handle_package_channel(
                         thumbnail_url,
                         exists: true,
                     };
-                    store.media_assets.push(asset.clone());
+                    media_store::push_asset(store, asset.clone());
                     Ok(asset)
                 })?;
                 persist_media_workspace_catalog(state)?;
