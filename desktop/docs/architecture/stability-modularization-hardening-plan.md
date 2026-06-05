@@ -155,6 +155,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed diagnostics RedClaw job definition/execution reads through `store::redclaw`.
 - Added runtime-task get/push helpers and routed subagent production task read/write paths through `store::runtime_tasks`.
 - Routed scheduler background-task runtime-task reads through `store::runtime_tasks`.
+- Routed RedClaw manual-run definition resolution reads through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
