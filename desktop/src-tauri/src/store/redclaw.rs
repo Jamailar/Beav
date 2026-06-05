@@ -138,6 +138,64 @@ pub(crate) fn list_long_cycle_tasks(store: &AppStore) -> Vec<RedclawLongCycleTas
     store.redclaw_state.long_cycle_tasks.clone()
 }
 
+pub(crate) fn scheduled_task_by_id(
+    store: &AppStore,
+    task_id: &str,
+) -> Option<RedclawScheduledTaskRecord> {
+    store
+        .redclaw_state
+        .scheduled_tasks
+        .iter()
+        .find(|item| item.id == task_id)
+        .cloned()
+}
+
+pub(crate) fn long_cycle_task_by_id(
+    store: &AppStore,
+    task_id: &str,
+) -> Option<RedclawLongCycleTaskRecord> {
+    store
+        .redclaw_state
+        .long_cycle_tasks
+        .iter()
+        .find(|item| item.id == task_id)
+        .cloned()
+}
+
+pub(crate) fn update_source_task_next_run(
+    store: &mut AppStore,
+    source_kind: Option<&str>,
+    source_task_id: Option<&str>,
+    next_run_at: Option<String>,
+    updated_at: &str,
+) {
+    match source_kind {
+        Some("scheduled") => {
+            if let Some(task) = store
+                .redclaw_state
+                .scheduled_tasks
+                .iter_mut()
+                .find(|item| Some(item.id.as_str()) == source_task_id)
+            {
+                task.next_run_at = next_run_at;
+                task.updated_at = updated_at.to_string();
+            }
+        }
+        Some("long_cycle") => {
+            if let Some(task) = store
+                .redclaw_state
+                .long_cycle_tasks
+                .iter_mut()
+                .find(|item| Some(item.id.as_str()) == source_task_id)
+            {
+                task.next_run_at = next_run_at;
+                task.updated_at = updated_at.to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn job_definition_sync_snapshot(
     store: &AppStore,
 ) -> (

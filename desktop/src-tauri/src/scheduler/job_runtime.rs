@@ -164,24 +164,22 @@ fn next_definition_due_after(
     after_ms: i64,
 ) -> Option<String> {
     match definition.source_kind.as_deref() {
-        Some("scheduled") => store
-            .redclaw_state
-            .scheduled_tasks
-            .iter()
-            .find(|task| definition.source_task_id.as_deref() == Some(task.id.as_str()))
+        Some("scheduled") => definition
+            .source_task_id
+            .as_deref()
+            .and_then(|task_id| redclaw_store::scheduled_task_by_id(store, task_id))
             .and_then(|task| {
-                next_scheduled_timestamp(task, after_ms, definition.timezone.as_deref())
+                next_scheduled_timestamp(&task, after_ms, definition.timezone.as_deref())
             }),
-        Some("long_cycle") => store
-            .redclaw_state
-            .long_cycle_tasks
-            .iter()
-            .find(|task| definition.source_task_id.as_deref() == Some(task.id.as_str()))
+        Some("long_cycle") => definition
+            .source_task_id
+            .as_deref()
+            .and_then(|task_id| redclaw_store::long_cycle_task_by_id(store, task_id))
             .and_then(|task| {
                 if task.completed_rounds >= task.total_rounds {
                     None
                 } else {
-                    next_long_cycle_timestamp(task, after_ms)
+                    next_long_cycle_timestamp(&task, after_ms)
                 }
             }),
         _ => None,
@@ -264,31 +262,13 @@ fn update_source_task_after_enqueue(
     next_due_at: Option<String>,
     now: &str,
 ) {
-    match definition.source_kind.as_deref() {
-        Some("scheduled") => {
-            if let Some(task) = store
-                .redclaw_state
-                .scheduled_tasks
-                .iter_mut()
-                .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
-            {
-                task.next_run_at = next_due_at;
-                task.updated_at = now.to_string();
-            }
-        }
-        Some("long_cycle") => {
-            if let Some(task) = store
-                .redclaw_state
-                .long_cycle_tasks
-                .iter_mut()
-                .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
-            {
-                task.next_run_at = next_due_at;
-                task.updated_at = now.to_string();
-            }
-        }
-        _ => {}
-    }
+    redclaw_store::update_source_task_next_run(
+        store,
+        definition.source_kind.as_deref(),
+        definition.source_task_id.as_deref(),
+        next_due_at,
+        now,
+    );
 }
 
 fn create_execution_record(
