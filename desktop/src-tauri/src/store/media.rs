@@ -16,6 +16,10 @@ pub(crate) fn get_asset(store: &AppStore, asset_id: &str) -> Option<MediaAssetRe
         .cloned()
 }
 
+pub(crate) fn replace_assets(store: &mut AppStore, assets: Vec<MediaAssetRecord>) {
+    store.media_assets = assets;
+}
+
 pub(crate) fn push_asset(store: &mut AppStore, asset: MediaAssetRecord) {
     store.media_assets.push(asset);
 }

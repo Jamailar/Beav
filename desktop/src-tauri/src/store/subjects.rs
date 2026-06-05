@@ -9,6 +9,10 @@ pub(crate) fn count_subjects(store: &AppStore) -> usize {
     store.subjects.len()
 }
 
+pub(crate) fn catalog_is_empty(store: &AppStore) -> bool {
+    store.subjects.is_empty() && store.categories.is_empty()
+}
+
 pub(crate) fn get_subject(store: &AppStore, id: &str) -> Option<SubjectRecord> {
     store.subjects.iter().find(|item| item.id == id).cloned()
 }
