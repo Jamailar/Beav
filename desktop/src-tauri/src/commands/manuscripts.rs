@@ -24,6 +24,7 @@ mod assets;
 mod auto_naming;
 mod content_blocks;
 mod content_persistence;
+mod editor_ai_commands;
 mod editor_commands;
 mod editor_project;
 mod editor_project_model;
@@ -73,6 +74,7 @@ use content_persistence::{
 pub(crate) use content_persistence::{
     save_manuscript_content, sync_manuscript_package_html_assets,
 };
+use editor_ai_commands::*;
 use editor_commands::*;
 use editor_project_model::{
     default_motion_item_from_media, editor_default_subtitle_style,
