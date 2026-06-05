@@ -253,6 +253,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed remaining media follow-up, RedClaw orchestration, session bridge and App CLI MCP task/tool access through store helpers.
 - Tightened the domain-store boundary guard for settings, spaces, media assets, work items, runtime tasks, assistant state and MCP/tool state.
 - Centralized root renderer event subscriptions in `bridge/appEvents.ts` and extended the renderer IPC boundary guard to keep page/component code off root `window.ipcRenderer.on*/off*` compatibility methods.
+- Extracted App Shell update-notice lifecycle, release-note event handling and release-page opening into `features/app-shell/useAppUpdateNotice`.
 
 ### 1. Bridge Contract Layer
 
