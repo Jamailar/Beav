@@ -99,6 +99,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Moved RedClaw and Advisors context-session guarded calls to domain bridge methods instead of page-level raw channel construction.
 - Routed Wander brainstorm dispatch through the Wander bridge domain, leaving no page-level raw `window.ipcRenderer.send/invoke` calls in `desktop/src`.
 - Routed Wander progress/result event subscriptions through the Wander bridge domain, reducing page-level raw event channel coupling.
+- Routed Automation RedClaw runner status subscriptions through the RedClaw runner bridge facade.
 
 ### 1. Bridge Contract Layer
 
