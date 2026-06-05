@@ -43,6 +43,7 @@ mod subtitles;
 mod timeline;
 mod timeline_model;
 mod tree;
+mod write_proposals;
 
 #[path = "manuscripts/theme/mod.rs"]
 mod theme;
@@ -84,6 +85,10 @@ use timeline_model::{
     build_timeline_clip_from_asset, build_timeline_subtitle_clip, build_timeline_text_clip,
     default_track_name_for_asset, min_clip_duration_ms_for_asset_kind, split_timeline_clip_value,
     timeline_clip_asset_kind, timeline_track_kind, DEFAULT_TIMELINE_CLIP_MS,
+};
+pub(crate) use write_proposals::{
+    accept_manuscript_write_proposal, get_manuscript_write_proposal,
+    reject_manuscript_write_proposal, upsert_manuscript_write_proposal,
 };
 
 fn richpost_theme_spec_storage_value(theme: &RichpostThemeSpec) -> Value {
@@ -629,92 +634,6 @@ fn generate_richpost_page_plan(
 ) -> Result<Value, String> {
     let _ = (state, package_path, file_name, title, body, model_config);
     Err("图文分页方案功能已下线".to_string())
-}
-
-fn manuscript_write_proposal_by_file_path(
-    store: &AppStore,
-    file_path: &str,
-) -> Option<ManuscriptWriteProposalRecord> {
-    let normalized = normalize_relative_path(file_path);
-    store
-        .manuscript_write_proposals
-        .iter()
-        .find(|item| normalize_relative_path(&item.file_path) == normalized)
-        .cloned()
-}
-
-pub(crate) fn get_manuscript_write_proposal(
-    state: &State<'_, AppState>,
-    file_path: &str,
-) -> Result<Option<ManuscriptWriteProposalRecord>, String> {
-    with_store(state, |store| {
-        Ok(manuscript_write_proposal_by_file_path(&store, file_path))
-    })
-}
-
-pub(crate) fn upsert_manuscript_write_proposal(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    proposal: ManuscriptWriteProposalRecord,
-) -> Result<ManuscriptWriteProposalRecord, String> {
-    let saved = with_store_mut(state, |store| {
-        let normalized = normalize_relative_path(&proposal.file_path);
-        store
-            .manuscript_write_proposals
-            .retain(|item| normalize_relative_path(&item.file_path) != normalized);
-        store.manuscript_write_proposals.push(proposal.clone());
-        Ok(proposal.clone())
-    })?;
-    crate::events::emit_manuscript_write_proposal_changed(
-        app,
-        &saved.file_path,
-        Some(json!(saved.clone())),
-    );
-    Ok(saved)
-}
-
-pub(crate) fn reject_manuscript_write_proposal(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    file_path: &str,
-) -> Result<bool, String> {
-    let normalized = normalize_relative_path(file_path);
-    let removed = with_store_mut(state, |store| {
-        let before = store.manuscript_write_proposals.len();
-        store
-            .manuscript_write_proposals
-            .retain(|item| normalize_relative_path(&item.file_path) != normalized);
-        Ok(before != store.manuscript_write_proposals.len())
-    })?;
-    if removed {
-        crate::events::emit_manuscript_write_proposal_changed(app, file_path, None);
-    }
-    Ok(removed)
-}
-
-pub(crate) fn accept_manuscript_write_proposal(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    file_path: &str,
-    proposed_content_override: Option<String>,
-) -> Result<Value, String> {
-    let proposal = get_manuscript_write_proposal(state, file_path)?
-        .ok_or_else(|| "未找到待审改稿提案".to_string())?;
-    let accepted_content =
-        proposed_content_override.unwrap_or_else(|| proposal.proposed_content.clone());
-    let saved = save_manuscript_content(
-        state,
-        &proposal.file_path,
-        &accepted_content,
-        proposal.metadata.as_ref().and_then(Value::as_object),
-        "ai-proposal-accepted",
-    )?;
-    let _ = reject_manuscript_write_proposal(app, state, &proposal.file_path)?;
-    let mut object = saved.as_object().cloned().unwrap_or_default();
-    object.insert("proposalId".to_string(), json!(proposal.id));
-    object.insert("filePath".to_string(), json!(proposal.file_path));
-    object.insert("content".to_string(), json!(accepted_content));
-    Ok(Value::Object(object))
 }
 
 fn resolve_project_media_source_path(
