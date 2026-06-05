@@ -20,7 +20,7 @@ use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
     RuntimeCheckpointRecord, RuntimeTaskRecord,
 };
-use crate::store::runtime_tasks as runtime_task_store;
+use crate::store::{redclaw as redclaw_store, runtime_tasks as runtime_task_store};
 use crate::{format_timestamp_rfc3339_from_ms, AppState, AppStore};
 use task_policy::{
     fingerprint_for_definition_payload, next_daily_timestamp_in_timezone,
@@ -267,14 +267,15 @@ fn build_long_cycle_job_definition(
 }
 
 pub fn sync_redclaw_job_definitions(store: &mut AppStore) {
-    let existing = store.redclaw_job_definitions.clone();
+    let (existing, scheduled_tasks, long_cycle_tasks) =
+        redclaw_store::job_definition_sync_snapshot(store);
     let mut next = existing
         .iter()
         .filter(|item| item.source_task_id.is_none())
         .cloned()
         .collect::<Vec<_>>();
 
-    for task in &store.redclaw_state.scheduled_tasks {
+    for task in &scheduled_tasks {
         let existing = existing.iter().find(|item| {
             item.source_kind.as_deref() == Some("scheduled")
                 && item.source_task_id.as_deref() == Some(task.id.as_str())
@@ -282,7 +283,7 @@ pub fn sync_redclaw_job_definitions(store: &mut AppStore) {
         next.push(build_scheduled_job_definition(task, existing));
     }
 
-    for task in &store.redclaw_state.long_cycle_tasks {
+    for task in &long_cycle_tasks {
         let existing = existing.iter().find(|item| {
             item.source_kind.as_deref() == Some("long_cycle")
                 && item.source_task_id.as_deref() == Some(task.id.as_str())
@@ -291,7 +292,7 @@ pub fn sync_redclaw_job_definitions(store: &mut AppStore) {
     }
 
     next.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    store.redclaw_job_definitions = next;
+    redclaw_store::replace_job_definitions(store, next);
 }
 
 pub fn clear_definition_cooldown(definition: &mut RedclawJobDefinitionRecord) {
