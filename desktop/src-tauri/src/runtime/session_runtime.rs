@@ -1,9 +1,6 @@
 use crate::persistence::with_store;
 use crate::process_utils::background_command;
-use crate::runtime::{
-    append_session_checkpoint, SessionCheckpointRecord, SessionToolResultRecord,
-    SessionTranscriptRecord,
-};
+use crate::runtime::{append_session_checkpoint, SessionCheckpointRecord};
 #[cfg(test)]
 use crate::ChatSessionRecord;
 use crate::{
@@ -24,6 +21,15 @@ pub const MIN_SESSION_COMPACT_TARGET_TOKENS: i64 = 16_000;
 const SESSION_CONTEXT_SUMMARY_MAX_CHARS: usize = 1200;
 const SESSION_BUNDLE_MAX_SESSIONS: usize = 200;
 const SESSION_RESOURCE_MAX_DEPTH: usize = 8;
+
+#[path = "session_runtime/query.rs"]
+mod query;
+
+use query::session_ids_for_query;
+pub use query::{
+    checkpoints_for_session, checkpoints_value_for_session, tool_results_for_session,
+    tool_results_value_for_session, trace_for_session, trace_value_for_session,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -116,153 +122,6 @@ pub enum SessionTranscriptFileEntry {
         preserved_message_count: i64,
         created_at: String,
     },
-}
-
-pub fn trace_for_session(store: &AppStore, session_id: &str) -> Vec<SessionTranscriptRecord> {
-    let mut items: Vec<SessionTranscriptRecord> = store
-        .session_transcript_records
-        .iter()
-        .filter(|item| item.session_id == session_id)
-        .cloned()
-        .collect();
-    items.sort_by_key(|item| item.created_at);
-    items
-}
-
-fn take_recent_items<T>(mut items: Vec<T>, limit: Option<usize>) -> Vec<T> {
-    let Some(limit) = limit.filter(|value| *value > 0) else {
-        return items;
-    };
-    if items.len() <= limit {
-        return items;
-    }
-    let split_at = items.len().saturating_sub(limit);
-    items.drain(..split_at);
-    items
-}
-
-fn session_ids_for_query(
-    store: &AppStore,
-    session_id: &str,
-    include_child_sessions: bool,
-) -> Vec<String> {
-    let mut session_ids = vec![session_id.to_string()];
-    if include_child_sessions {
-        session_ids.extend(
-            store
-                .chat_sessions
-                .iter()
-                .filter(|item| {
-                    item.metadata
-                        .as_ref()
-                        .and_then(|metadata| metadata.get("parentSessionId"))
-                        .and_then(Value::as_str)
-                        == Some(session_id)
-                })
-                .map(|item| item.id.clone()),
-        );
-    }
-    session_ids
-}
-
-pub fn trace_value_for_session(
-    store: &AppStore,
-    session_id: &str,
-    include_child_sessions: bool,
-    limit: Option<usize>,
-) -> Value {
-    let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
-    let mut items = store
-        .session_transcript_records
-        .iter()
-        .filter(|item| {
-            session_ids
-                .iter()
-                .any(|candidate| candidate == &item.session_id)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    items.sort_by_key(|item| item.created_at);
-    json!(take_recent_items(items, limit))
-}
-
-pub fn checkpoints_for_session(store: &AppStore, session_id: &str) -> Vec<SessionCheckpointRecord> {
-    let mut items: Vec<SessionCheckpointRecord> = store
-        .session_checkpoints
-        .iter()
-        .filter(|item| item.session_id == session_id)
-        .cloned()
-        .collect();
-    items.sort_by_key(|item| item.created_at);
-    items
-}
-
-pub fn checkpoints_value_for_session(
-    store: &AppStore,
-    session_id: &str,
-    include_child_sessions: bool,
-    runtime_id: Option<&str>,
-    limit: Option<usize>,
-) -> Value {
-    let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
-    let mut items = store
-        .session_checkpoints
-        .iter()
-        .filter(|item| {
-            session_ids
-                .iter()
-                .any(|candidate| candidate == &item.session_id)
-        })
-        .filter(|item| {
-            runtime_id
-                .map(|value| item.runtime_id.as_deref() == Some(value))
-                .unwrap_or(true)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    items.sort_by_key(|item| item.created_at);
-    json!(take_recent_items(items, limit))
-}
-
-pub fn tool_results_for_session(
-    store: &AppStore,
-    session_id: &str,
-) -> Vec<SessionToolResultRecord> {
-    let mut items: Vec<SessionToolResultRecord> = store
-        .session_tool_results
-        .iter()
-        .filter(|item| item.session_id == session_id)
-        .cloned()
-        .collect();
-    items.sort_by_key(|item| item.created_at);
-    items
-}
-
-pub fn tool_results_value_for_session(
-    store: &AppStore,
-    session_id: &str,
-    include_child_sessions: bool,
-    runtime_id: Option<&str>,
-    limit: Option<usize>,
-) -> Value {
-    let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
-    let mut items = store
-        .session_tool_results
-        .iter()
-        .filter(|item| {
-            session_ids
-                .iter()
-                .any(|candidate| candidate == &item.session_id)
-        })
-        .filter(|item| {
-            runtime_id
-                .map(|value| item.runtime_id.as_deref() == Some(value))
-                .unwrap_or(true)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    items.sort_by_key(|item| item.created_at);
-    json!(take_recent_items(items, limit))
 }
 
 pub fn session_resources_value_for_session(
@@ -2202,7 +2061,9 @@ pub fn runtime_query_checkpoint_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::SessionCheckpointRecord;
+    use crate::runtime::{
+        SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
+    };
 
     fn test_session(id: &str) -> ChatSessionRecord {
         ChatSessionRecord {
