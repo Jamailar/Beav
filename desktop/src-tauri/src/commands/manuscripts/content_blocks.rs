@@ -1,16 +1,16 @@
+#[path = "content_blocks/parsing.rs"]
+mod parsing;
 #[path = "content_blocks/rendering.rs"]
 mod rendering;
 
+pub(super) use parsing::parse_markdown_heading;
+use parsing::{
+    normalize_package_block_text, package_block_match_key, parse_package_markdown_blocks,
+    ParsedPackageBlock,
+};
 pub(super) use rendering::{render_package_block_fragment, render_package_block_fragment_parts};
 
 use super::*;
-
-#[derive(Debug, Clone)]
-pub(super) struct ParsedPackageBlock {
-    kind: String,
-    level: Option<u8>,
-    text: String,
-}
 
 #[derive(Debug, Clone)]
 pub(super) struct PackageContentBlock {
@@ -29,101 +29,6 @@ pub(super) struct PackageBoundAsset {
     pub(super) title: String,
     pub(super) url: String,
     pub(super) role: String,
-}
-
-fn normalize_package_block_text(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn package_block_match_key(kind: &str, level: Option<u8>, text: &str) -> String {
-    format!(
-        "{kind}|{}|{}",
-        level.unwrap_or(0),
-        normalize_package_block_text(text)
-    )
-}
-
-pub(super) fn parse_markdown_heading(line: &str) -> Option<(u8, String)> {
-    let trimmed = line.trim();
-    if !trimmed.starts_with('#') {
-        return None;
-    }
-    let level = trimmed.chars().take_while(|char| *char == '#').count();
-    if level == 0 || level > 6 {
-        return None;
-    }
-    let body = trimmed[level..].trim();
-    if body.is_empty() {
-        return None;
-    }
-    Some((level as u8, body.to_string()))
-}
-
-fn push_package_paragraph_block(target: &mut Vec<ParsedPackageBlock>, lines: &mut Vec<String>) {
-    if lines.is_empty() {
-        return;
-    }
-    let text = lines
-        .iter()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    lines.clear();
-    if text.trim().is_empty() {
-        return;
-    }
-    target.push(ParsedPackageBlock {
-        kind: "paragraph".to_string(),
-        level: None,
-        text,
-    });
-}
-
-fn parse_package_markdown_blocks(content: &str) -> Vec<ParsedPackageBlock> {
-    let normalized = strip_markdown_frontmatter(content).replace("\r\n", "\n");
-    let mut blocks = Vec::<ParsedPackageBlock>::new();
-    let mut paragraph_lines = Vec::<String>::new();
-    let mut blank_run = 0usize;
-    for line in normalized.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
-            blank_run += 1;
-            if blank_run >= 3
-                && !blocks
-                    .last()
-                    .map(|block| package_block_is_page_break(&block.kind))
-                    .unwrap_or(false)
-            {
-                blocks.push(ParsedPackageBlock {
-                    kind: "page-break".to_string(),
-                    level: None,
-                    text: String::new(),
-                });
-                blank_run = 0;
-            }
-            continue;
-        }
-        if matches!(trimmed, "---" | "***" | "___") {
-            push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
-            blank_run = 0;
-            continue;
-        }
-        blank_run = 0;
-        if let Some((level, text)) = parse_markdown_heading(trimmed) {
-            push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
-            blocks.push(ParsedPackageBlock {
-                kind: "heading".to_string(),
-                level: Some(level),
-                text,
-            });
-            continue;
-        }
-        paragraph_lines.push(line.to_string());
-    }
-    push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
-    blocks
 }
 
 fn read_previous_package_content_blocks(path: &std::path::Path) -> Vec<PackageContentBlock> {
