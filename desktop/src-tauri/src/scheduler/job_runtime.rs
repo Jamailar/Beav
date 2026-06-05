@@ -635,53 +635,49 @@ fn mark_execution_succeeded(
     result: &Value,
 ) -> Result<(), String> {
     let now_iso = now_iso();
-    let execution = store
-        .redclaw_job_executions
-        .iter_mut()
-        .find(|item| item.id == prepared.execution_id)
-        .ok_or_else(|| "执行实例不存在".to_string())?;
-    execution.last_heartbeat_at = Some(now_iso.clone());
-    execution.artifacts = result
-        .get("artifacts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    execution.session_id = result
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .map(|value| value.to_string());
-    execution.output_summary = result
-        .get("response")
-        .and_then(Value::as_str)
-        .map(|value| value.chars().take(280).collect());
-    if execution.status == "cancelled" {
+    redclaw_store::update_job_execution(store, &prepared.execution_id, |execution| {
+        execution.last_heartbeat_at = Some(now_iso.clone());
+        execution.artifacts = result
+            .get("artifacts")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        execution.session_id = result
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string());
+        execution.output_summary = result
+            .get("response")
+            .and_then(Value::as_str)
+            .map(|value| value.chars().take(280).collect());
+        if execution.status == "cancelled" {
+            append_execution_turn(
+                execution,
+                &now_iso,
+                "system",
+                "Execution finished after cancellation request",
+            );
+            return Ok::<(), String>(());
+        }
+        transition_execution_status(execution, "succeeded", &now_iso)?;
         append_execution_turn(
             execution,
             &now_iso,
-            "system",
-            "Execution finished after cancellation request",
+            "response",
+            execution
+                .output_summary
+                .clone()
+                .unwrap_or_else(|| "Execution completed".to_string()),
         );
-        return Ok(());
-    }
-    transition_execution_status(execution, "succeeded", &now_iso)?;
-    append_execution_turn(
-        execution,
-        &now_iso,
-        "response",
-        execution
-            .output_summary
-            .clone()
-            .unwrap_or_else(|| "Execution completed".to_string()),
-    );
-    execution.retry_bucket = Some("succeeded".to_string());
-    if let Some(definition) = store
-        .redclaw_job_definitions
-        .iter_mut()
-        .find(|item| item.id == prepared.definition_id)
-    {
+        execution.retry_bucket = Some("succeeded".to_string());
+        Ok::<(), String>(())
+    })
+    .ok_or_else(|| "执行实例不存在".to_string())??;
+
+    redclaw_store::update_job_definition(store, &prepared.definition_id, |definition| {
         clear_definition_cooldown(definition);
         definition.updated_at = now_iso.clone();
-    }
+    });
 
     redclaw_store::mark_source_task_succeeded(
         store,
@@ -699,32 +695,31 @@ fn mark_execution_failed(
 ) -> Result<(), String> {
     let now = now_i64();
     let now_iso = now_iso();
-    let execution = store
-        .redclaw_job_executions
-        .iter_mut()
-        .find(|item| item.id == prepared.execution_id)
-        .ok_or_else(|| "执行实例不存在".to_string())?;
-    execution.last_heartbeat_at = Some(now_iso.clone());
-    execution.last_error = Some(error.to_string());
-    let _ = transition_execution_status(execution, "failed", &now_iso);
-    append_execution_turn(execution, &now_iso, "system", error.to_string());
-    if should_dead_letter(execution.attempt_count) {
-        mark_dead_lettered(execution, Some(error.to_string()), &now_iso);
-        execution.retry_bucket = Some("dead-letter".to_string());
-        append_execution_turn(
-            execution,
-            &now_iso,
-            "system",
-            "Execution moved to dead-letter",
-        );
-    } else {
-        transition_execution_status(execution, "retrying", &now_iso)?;
-        execution.completed_at = None;
-        execution.retry_not_before_at =
-            Some((now + retry_delay_ms(execution.attempt_count)).to_string());
-        execution.retry_bucket = Some("retry-scheduled".to_string());
-        append_execution_turn(execution, &now_iso, "system", "Retry scheduled");
-    }
+    redclaw_store::update_job_execution(store, &prepared.execution_id, |execution| {
+        execution.last_heartbeat_at = Some(now_iso.clone());
+        execution.last_error = Some(error.to_string());
+        let _ = transition_execution_status(execution, "failed", &now_iso);
+        append_execution_turn(execution, &now_iso, "system", error.to_string());
+        if should_dead_letter(execution.attempt_count) {
+            mark_dead_lettered(execution, Some(error.to_string()), &now_iso);
+            execution.retry_bucket = Some("dead-letter".to_string());
+            append_execution_turn(
+                execution,
+                &now_iso,
+                "system",
+                "Execution moved to dead-letter",
+            );
+        } else {
+            transition_execution_status(execution, "retrying", &now_iso)?;
+            execution.completed_at = None;
+            execution.retry_not_before_at =
+                Some((now + retry_delay_ms(execution.attempt_count)).to_string());
+            execution.retry_bucket = Some("retry-scheduled".to_string());
+            append_execution_turn(execution, &now_iso, "system", "Retry scheduled");
+        }
+        Ok::<(), String>(())
+    })
+    .ok_or_else(|| "执行实例不存在".to_string())??;
 
     redclaw_store::mark_source_task_failed(
         store,
