@@ -33,6 +33,7 @@ mod post;
 mod remotion;
 mod remotion_context;
 mod richpost;
+mod richpost_artifacts;
 mod richpost_model;
 mod richpost_pagination;
 mod richpost_render_model;
@@ -70,6 +71,7 @@ use export_helpers::{
     strip_incidental_remotion_text_layers,
 };
 use remotion_context::{merge_remotion_scene_patch, remotion_context_value};
+use richpost_artifacts::persist_richpost_pages_from_plan;
 use richpost_model::*;
 use richpost_pagination::*;
 use richpost_render_model::*;
@@ -1221,73 +1223,6 @@ fn normalize_richpost_page_plan(
         "pageCount": pages.len(),
         "pages": pages
     })
-}
-
-fn persist_richpost_pages_from_plan(
-    package_path: &std::path::Path,
-    title: &str,
-    blocks: &[PackageContentBlock],
-    cover_asset: Option<&PackageBoundAsset>,
-    image_assets: &[PackageBoundAsset],
-    plan: &Value,
-) -> Result<(), String> {
-    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
-    let tokens = ensure_richpost_layout_scaffold(package_path, &manifest)?;
-    let typography = richpost_typography_settings_from_manifest(&manifest);
-    let theme = richpost_theme_spec_from_manifest(Some(package_path), &manifest);
-    let pages_dir = package_richpost_pages_dir(package_path);
-    fs::create_dir_all(&pages_dir).map_err(|error| error.to_string())?;
-    let blocks_by_id = blocks
-        .iter()
-        .map(|block| (block.id.clone(), block.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let assets_by_id = richpost_asset_records(cover_asset, image_assets)
-        .into_iter()
-        .map(|asset| (asset.id.clone(), asset))
-        .collect::<BTreeMap<_, _>>();
-    let pages = plan
-        .get("pages")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut keep_file_names = BTreeSet::<String>::new();
-    for (index, page) in pages.iter().enumerate() {
-        let Some(page_id) = page.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        let html = render_richpost_page_html(
-            package_path,
-            &theme,
-            title,
-            page,
-            index,
-            pages.len(),
-            &blocks_by_id,
-            &assets_by_id,
-            &tokens,
-            typography,
-        );
-        let path = package_richpost_page_html_path(package_path, page_id);
-        write_text_file(&path, &html)?;
-        keep_file_names.insert(format!("{page_id}.html"));
-    }
-    if let Ok(entries) = fs::read_dir(&pages_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            if !keep_file_names.contains(&file_name) {
-                let _ = fs::remove_file(path);
-            }
-        }
-    }
-    write_text_file(
-        &package_layout_html_path(package_path),
-        &render_richpost_preview_shell(title, plan, &tokens, typography),
-    )?;
-    Ok(())
 }
 
 fn persist_richpost_page_plan(
