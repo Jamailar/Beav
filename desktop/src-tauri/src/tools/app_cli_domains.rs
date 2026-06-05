@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::settings as settings_store;
 
 impl<'a> AppCliExecutor<'a> {
     pub(super) fn handle_session_resources(
@@ -849,7 +850,9 @@ impl<'a> AppCliExecutor<'a> {
     }
 
     fn video_analysis_model_config(&self) -> Result<Value, String> {
-        let settings = with_store(self.state, |store| Ok(store.settings.clone()))?;
+        let settings = with_store(self.state, |store| {
+            Ok(settings_store::settings_snapshot(&store))
+        })?;
         let resolved = crate::ai_model_manager::AiModelManager::resolve(
             &settings,
             crate::ai_model_manager::AiModelScope::VideoAnalysis,
