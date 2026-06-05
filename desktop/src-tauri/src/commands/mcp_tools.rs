@@ -1,14 +1,16 @@
+#[path = "mcp_tools/diagnostics.rs"]
+mod diagnostics;
 #[path = "mcp_tools/server_payload.rs"]
 mod server_payload;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::session_lineage_fields;
 use crate::store::mcp_tools as mcp_tools_store;
-use crate::tools::registry::diagnostics_tool_items;
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
+use diagnostics::{handle_tools_diagnostics_channel, is_tools_diagnostics_channel};
 use server_payload::{mcp_server_from_add_payload, mcp_target_name, validate_mcp_server_name};
 
 pub fn mcp_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
@@ -343,17 +345,18 @@ pub fn handle_mcp_tools_channel(
             | "mcp:discover-local"
             | "mcp:import-local"
             | "mcp:oauth-status"
-            | "tools:diagnostics:list"
-            | "tools:diagnostics:run-direct"
-            | "tools:diagnostics:run-ai"
             | "tools:hooks:list"
             | "tools:hooks:register"
             | "tools:hooks:remove"
-    ) {
+    ) && !is_tools_diagnostics_channel(channel)
+    {
         return None;
     }
 
     Some((|| -> Result<Value, String> {
+        if let Some(result) = handle_tools_diagnostics_channel(state, channel, payload) {
+            return result;
+        }
         match channel {
             "mcp:list" => mcp_list_value(state),
             "mcp:add" => mcp_add_value(state, payload),
@@ -391,90 +394,6 @@ pub fn handle_mcp_tools_channel(
             "mcp:oauth-status" => {
                 let server_id = payload_string(payload, "serverId").unwrap_or_default();
                 mcp_oauth_status_value(state, &server_id)
-            }
-            "tools:diagnostics:list" => with_store(state, |store| {
-                let mut items = vec![
-                    json!({
-                        "name": "desktop_host",
-                        "displayName": format!("{} Host", app_brand_display_name()),
-                        "description": "Check local Rust host availability.",
-                        "kind": "host",
-                        "visibility": "developer",
-                        "contexts": ["desktop"],
-                        "availabilityStatus": "available",
-                        "availabilityReason": "Rust host is compiled locally."
-                    }),
-                    json!({
-                        "name": "tauri_runtime",
-                        "displayName": "Tauri Runtime",
-                        "description": "Check Tauri desktop runtime build pipeline.",
-                        "kind": "host",
-                        "visibility": "developer",
-                        "contexts": ["desktop"],
-                        "availabilityStatus": "available",
-                        "availabilityReason": "Tauri debug build succeeds locally."
-                    }),
-                ];
-                items.extend(diagnostics_tool_items());
-                for server in mcp_tools_store::list_servers(&store) {
-                    items.push(json!({
-                        "name": format!("mcp_server:{}", server.id),
-                        "displayName": format!("MCP · {}", server.name),
-                        "description": "Run a real MCP tools/list probe against this configured server.",
-                        "kind": "mcp",
-                        "visibility": "developer",
-                        "contexts": ["desktop"],
-                        "availabilityStatus": if server.enabled { "available" } else { "missing_context" },
-                        "availabilityReason": if server.enabled { format!("server configured in {}", app_brand_display_name()) } else { "server disabled".to_string() },
-                    }));
-                }
-                Ok(json!(items))
-            }),
-            "tools:diagnostics:run-direct" | "tools:diagnostics:run-ai" => {
-                let tool_name =
-                    payload_string(payload, "toolName").unwrap_or_else(|| "unknown".to_string());
-                if let Some(server_id) = tool_name.strip_prefix("mcp_server:") {
-                    let server = with_store(state, |store| {
-                        Ok(mcp_tools_store::find_server(&store, server_id))
-                    })?;
-                    if let Some(server) = server {
-                        let mode = if channel.ends_with("run-ai") {
-                            "ai"
-                        } else {
-                            "direct"
-                        };
-                        return match state.mcp_manager.list_tools(&server) {
-                            Ok(result) => Ok(json!({
-                                "success": true,
-                                "mode": mode,
-                                "toolName": tool_name,
-                                "request": { "server": server, "method": "tools/list" },
-                                "response": result.response,
-                                "session": result.session,
-                                "capabilities": result.capabilities,
-                                "effectiveEnvironment": crate::mcp::transport::mcp_stdio_effective_environment_metadata(&server),
-                                "executionSucceeded": true
-                            })),
-                            Err(error) => Ok(json!({
-                                "success": false,
-                                "mode": mode,
-                                "toolName": tool_name,
-                                "request": { "server": server, "method": "tools/list" },
-                                "error": error,
-                                "effectiveEnvironment": crate::mcp::transport::mcp_stdio_effective_environment_metadata(&server),
-                                "executionSucceeded": false
-                            })),
-                        };
-                    }
-                }
-                Ok(json!({
-                    "success": true,
-                    "mode": if channel.ends_with("run-ai") { "ai" } else { "direct" },
-                    "toolName": tool_name,
-                    "request": payload,
-                    "response": { "status": "ok", "source": "local-host" },
-                    "executionSucceeded": true
-                }))
             }
             "tools:hooks:list" => with_store(state, |store| {
                 Ok(json!(mcp_tools_store::list_runtime_hooks(&store)))
