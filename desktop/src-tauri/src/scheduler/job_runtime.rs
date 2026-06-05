@@ -1160,11 +1160,7 @@ pub fn retry_job_execution(
     if active_execution_exists(store, &definition_id) {
         return Err("任务已有执行实例".to_string());
     }
-    let definition = store
-        .redclaw_job_definitions
-        .iter()
-        .find(|item| item.id == definition_id)
-        .cloned()
+    let definition = redclaw_store::job_definition_by_id(store, &definition_id)
         .ok_or_else(|| "任务定义不存在".to_string())?;
     let now_iso = now_iso();
     let execution = create_execution_record(
@@ -1184,15 +1180,11 @@ pub fn retry_job_execution(
     let mut execution = execution;
     ensure_unique_execution_id(store, &mut execution);
     let execution_id = execution.id.clone();
-    store.redclaw_job_executions.push(execution);
-    if let Some(current_definition) = store
-        .redclaw_job_definitions
-        .iter_mut()
-        .find(|item| item.id == definition.id)
-    {
+    redclaw_store::push_job_execution(store, execution);
+    redclaw_store::update_job_definition(store, &definition.id, |current_definition| {
         current_definition.last_enqueued_at = Some(now_iso.clone());
         current_definition.updated_at = now_iso;
-    }
+    });
     Ok((execution_id, definition.id))
 }
 
