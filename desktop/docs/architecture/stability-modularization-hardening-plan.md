@@ -250,6 +250,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed knowledge active-space, settings and media asset access through store helpers.
 - Routed remaining CLI runtime, debug logging, diagnostics consent and legacy-import test settings access through `store::settings`.
 - Routed remaining library and manuscript timeline media asset lookup/update paths through `store::media`.
+- Routed remaining media follow-up, RedClaw orchestration, session bridge and App CLI MCP task/tool access through store helpers.
 
 ### 1. Bridge Contract Layer
 
