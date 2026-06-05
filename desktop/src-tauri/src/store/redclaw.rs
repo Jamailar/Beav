@@ -604,3 +604,12 @@ pub(crate) fn update_job_execution<R>(
         .find(|item| item.id == execution_id)
         .map(update)
 }
+
+pub(crate) fn for_each_job_execution_mut(
+    store: &mut AppStore,
+    mut update: impl FnMut(&mut RedclawJobExecutionRecord),
+) {
+    for execution in store.redclaw_job_executions.iter_mut() {
+        update(execution);
+    }
+}
