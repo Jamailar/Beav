@@ -3,6 +3,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::settings as settings_store;
 use crate::{
     app_brand_display_name, now_iso, parse_json_value_from_text, payload_string,
     run_model_structured_task_with_settings, session_title_from_message, AppState,
@@ -54,7 +55,7 @@ fn run_chat_session_auto_title(
             .filter(|item| item.session_id == session_id && item.role == "user")
             .count();
         Ok((
-            store.settings.clone(),
+            settings_store::settings_snapshot(&store),
             is_placeholder_session_title(&session.title) && user_message_count == 1,
         ))
     })?;

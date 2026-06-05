@@ -6,6 +6,7 @@ use tauri::State;
 use super::index::rebuild_memory_index_from_store;
 use super::store::{memory_root, memory_workspace_snapshot, persist_memory_workspace_state};
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::settings as settings_store;
 use crate::{
     app_brand_display_name, load_redbox_prompt, make_id, now_i64, now_iso,
     parse_json_value_from_text, payload_string, render_redbox_prompt,
@@ -231,7 +232,7 @@ pub(crate) fn run_memory_maintenance_with_reason(
 ) -> Result<Value, String> {
     let (settings_snapshot, prompt_snapshot) = with_store(state, |store| {
         Ok((
-            store.settings.clone(),
+            settings_store::settings_snapshot(&store),
             memory_maintenance_prompt_snapshot(&store),
         ))
     })?;

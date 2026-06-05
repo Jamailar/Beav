@@ -1,3 +1,4 @@
+use crate::store::settings as settings_store;
 use crate::{
     app_brand_display_name, persistence::with_store, slug_from_relative_path, AppState, AppStore,
 };
@@ -129,7 +130,10 @@ pub(crate) fn workspace_root(state: &State<'_, AppState>) -> Result<PathBuf, Str
     }
 
     let (settings_snapshot, active_space_id) = with_store(state, |store| {
-        Ok((store.settings.clone(), store.active_space_id.clone()))
+        Ok((
+            settings_store::settings_snapshot(&store),
+            store.active_space_id.clone(),
+        ))
     })?;
     let root = update_workspace_root_cache(state, &settings_snapshot, &active_space_id)?;
     Ok(root)
