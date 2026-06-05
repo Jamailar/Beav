@@ -262,6 +262,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted App Shell update notice rendering into `features/app-shell/AppUpdateNoticeModal`, leaving update lifecycle state in `useAppUpdateNotice`.
 - Extracted App Shell global search overlay rendering into `features/app-shell/AppGlobalSearchOverlay`, leaving query, debounce and navigation state in `useGlobalKnowledgeSearch`.
 - Extracted App Shell space rename dialog rendering into `features/app-shell/AppSpaceRenameDialog`, leaving space mutation state in `useLayoutSpaces`.
+- Extracted App Shell subjects modal shell rendering into `features/app-shell/AppSubjectsModal`, leaving modal open/close state in `useSubjectsModal`.
 
 ### 1. Bridge Contract Layer
 
