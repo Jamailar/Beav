@@ -281,6 +281,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted AI model manager snapshot and resolve command handling into `commands/system/ai_model_ops`.
 - Extracted logging status, recent log reads, log directory opening, diagnostics bundle export and pending report actions into `commands/system/logging_ops`.
 - Extracted clipboard text read/write command handling into `commands/system/clipboard_ops`.
+- Extracted generation image-plan parsing, prompt compilation, title derivation and related tests into `commands/generation/image_plan`.
 
 ### 1. Bridge Contract Layer
 
