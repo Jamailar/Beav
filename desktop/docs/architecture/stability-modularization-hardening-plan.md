@@ -225,6 +225,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed Thrive plugin MCP server replacement through `store::mcp_tools`.
 - Routed system AI model debug/get/save settings access through `store::settings` and active-space reads through `store::spaces`.
 - Routed official model-default repair settings writeback through `store::settings`.
+- Routed memory maintenance fallback settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
