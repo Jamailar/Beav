@@ -669,16 +669,16 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             void Promise.all([refreshIndexStatus(), loadAllKnowledge()]);
         };
 
-        window.ipcRenderer.on('knowledge:youtube-video-updated', handleVideoUpdated);
-        window.ipcRenderer.on('knowledge:new-youtube-video', handleNewVideo);
-        window.ipcRenderer.on('knowledge:changed', handleKnowledgeChanged);
-        window.ipcRenderer.on('knowledge:catalog-updated', handleKnowledgeChanged);
+        window.ipcRenderer.knowledge.onYoutubeVideoUpdated(handleVideoUpdated);
+        window.ipcRenderer.knowledge.onNewYoutubeVideo(handleNewVideo);
+        window.ipcRenderer.knowledge.onChanged(handleKnowledgeChanged);
+        window.ipcRenderer.knowledge.onCatalogUpdated(handleKnowledgeChanged);
 
         return () => {
-            window.ipcRenderer.off('knowledge:youtube-video-updated', handleVideoUpdated);
-            window.ipcRenderer.off('knowledge:new-youtube-video', handleNewVideo);
-            window.ipcRenderer.off('knowledge:changed', handleKnowledgeChanged);
-            window.ipcRenderer.off('knowledge:catalog-updated', handleKnowledgeChanged);
+            window.ipcRenderer.knowledge.offYoutubeVideoUpdated(handleVideoUpdated);
+            window.ipcRenderer.knowledge.offNewYoutubeVideo(handleNewVideo);
+            window.ipcRenderer.knowledge.offChanged(handleKnowledgeChanged);
+            window.ipcRenderer.knowledge.offCatalogUpdated(handleKnowledgeChanged);
         };
     }, [loadAllKnowledge, loadYoutubeVideos, refreshIndexStatus]);
 
@@ -686,9 +686,9 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         const handleDocsUpdated = () => {
             void Promise.all([refreshIndexStatus(), loadDocumentSources()]);
         };
-        window.ipcRenderer.on('knowledge:docs-updated', handleDocsUpdated);
+        window.ipcRenderer.knowledge.onDocsUpdated(handleDocsUpdated);
         return () => {
-            window.ipcRenderer.off('knowledge:docs-updated', handleDocsUpdated);
+            window.ipcRenderer.knowledge.offDocsUpdated(handleDocsUpdated);
         };
     }, [loadDocumentSources, refreshIndexStatus]);
 
@@ -1040,9 +1040,9 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         const handleNoteUpdated = (_event: unknown, data: { noteId: string; hasTranscript?: boolean; transcriptionStatus?: 'processing' | 'completed' | 'failed' }) => {
             void Promise.all([refreshIndexStatus(), loadNotes()]);
         };
-        window.ipcRenderer.on('knowledge:note-updated', handleNoteUpdated);
+        window.ipcRenderer.knowledge.onNoteUpdated(handleNoteUpdated);
         return () => {
-            window.ipcRenderer.off('knowledge:note-updated', handleNoteUpdated);
+            window.ipcRenderer.knowledge.offNoteUpdated(handleNoteUpdated);
         };
     }, [loadNotes, refreshIndexStatus]);
 

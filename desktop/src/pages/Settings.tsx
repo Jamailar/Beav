@@ -1905,11 +1905,11 @@ export function Settings({
         assistantDaemonLogFlushTimerRef.current = window.setTimeout(flushAssistantDaemonLogs, 300);
       }
     };
-    window.ipcRenderer.on('assistant:daemon-status', handleDaemonStatus);
-    window.ipcRenderer.on('assistant:daemon-log', handleDaemonLog);
+    window.ipcRenderer.assistantDaemon.onStatus(handleDaemonStatus);
+    window.ipcRenderer.assistantDaemon.onLog(handleDaemonLog);
     return () => {
-      window.ipcRenderer.off('assistant:daemon-status', handleDaemonStatus);
-      window.ipcRenderer.off('assistant:daemon-log', handleDaemonLog);
+      window.ipcRenderer.assistantDaemon.offStatus(handleDaemonStatus);
+      window.ipcRenderer.assistantDaemon.offLog(handleDaemonLog);
       if (assistantDaemonLogFlushTimerRef.current != null) {
         window.clearTimeout(assistantDaemonLogFlushTimerRef.current);
         assistantDaemonLogFlushTimerRef.current = null;
@@ -1936,9 +1936,9 @@ export function Settings({
       setSelectedBackgroundTaskId((prev) => prev || task.id);
       setSelectedBackgroundTaskDetail((prev) => (prev?.id === task.id ? { ...prev, ...task } : prev));
     };
-    window.ipcRenderer.on('background:task-updated', onBackgroundTaskUpdated);
+    window.ipcRenderer.backgroundTasks.onUpdated(onBackgroundTaskUpdated);
     return () => {
-      window.ipcRenderer.off('background:task-updated', onBackgroundTaskUpdated);
+      window.ipcRenderer.backgroundTasks.offUpdated(onBackgroundTaskUpdated);
     };
   }, [activeTab, formData.developer_mode_enabled, isActive]);
 
@@ -2910,11 +2910,11 @@ export function Settings({
     };
     const onRuntimeEvent = () => scheduleRefresh();
     const onWanderProgress = () => scheduleRefresh();
-    window.ipcRenderer.on('runtime:event', onRuntimeEvent as (...args: unknown[]) => void);
-    window.ipcRenderer.on('wander:progress', onWanderProgress as (...args: unknown[]) => void);
+    window.ipcRenderer.runtime.onEvent(onRuntimeEvent as (...args: unknown[]) => void);
+    window.ipcRenderer.wander.onProgress(onWanderProgress as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('runtime:event', onRuntimeEvent as (...args: unknown[]) => void);
-      window.ipcRenderer.off('wander:progress', onWanderProgress as (...args: unknown[]) => void);
+      window.ipcRenderer.runtime.offEvent(onRuntimeEvent as (...args: unknown[]) => void);
+      window.ipcRenderer.wander.offProgress(onWanderProgress as (...args: unknown[]) => void);
       if (runtimeObservabilityRefreshTimerRef.current != null) {
         window.clearTimeout(runtimeObservabilityRefreshTimerRef.current);
         runtimeObservabilityRefreshTimerRef.current = null;
@@ -3054,9 +3054,9 @@ export function Settings({
       }));
     };
 
-    window.ipcRenderer.on('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+    window.ipcRenderer.runtime.onEvent(onRuntimePerfEvent as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+      window.ipcRenderer.runtime.offEvent(onRuntimePerfEvent as (...args: unknown[]) => void);
     };
   }, [
     activeTab,
@@ -4436,9 +4436,9 @@ export function Settings({
         scheduleRefresh();
       }
     };
-    window.ipcRenderer.on('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
+    window.ipcRenderer.runtime.onEvent(handleRuntimeEvent as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
+      window.ipcRenderer.runtime.offEvent(handleRuntimeEvent as (...args: unknown[]) => void);
       if (refreshTimer != null) {
         window.clearTimeout(refreshTimer);
       }
@@ -5187,9 +5187,9 @@ export function Settings({
         void ensureTabResourcesLoaded(activeTab, true);
       }
     };
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
     return () => {
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
     };
   }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive, scheduleRemoteTabWarmup]);
 
@@ -5216,9 +5216,9 @@ export function Settings({
         void loadFileIndexDashboard({ force: true });
       }
     };
-    window.ipcRenderer.on('space:changed', handleSpaceChanged);
+    window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
     return () => {
-      window.ipcRenderer.off('space:changed', handleSpaceChanged);
+      window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
     };
   }, [activeTab, isActive, loadFileIndexDashboard, loadRedclawProfileBundle, loadSpaceContext, resetRedclawProfileState, setCurrentSpaceState]);
 
@@ -5238,11 +5238,11 @@ export function Settings({
         void loadFileIndexDashboard({ force: true, background: true });
       }, 750);
     };
-    window.ipcRenderer.on('knowledge:file-index-updated', scheduleFileIndexRefresh);
-    window.ipcRenderer.on('knowledge:catalog-updated', scheduleFileIndexRefresh);
+    window.ipcRenderer.knowledge.onFileIndexUpdated(scheduleFileIndexRefresh);
+    window.ipcRenderer.knowledge.onCatalogUpdated(scheduleFileIndexRefresh);
     return () => {
-      window.ipcRenderer.off('knowledge:file-index-updated', scheduleFileIndexRefresh);
-      window.ipcRenderer.off('knowledge:catalog-updated', scheduleFileIndexRefresh);
+      window.ipcRenderer.knowledge.offFileIndexUpdated(scheduleFileIndexRefresh);
+      window.ipcRenderer.knowledge.offCatalogUpdated(scheduleFileIndexRefresh);
       if (fileIndexDashboardRefreshTimerRef.current != null) {
         window.clearTimeout(fileIndexDashboardRefreshTimerRef.current);
         fileIndexDashboardRefreshTimerRef.current = null;
@@ -5263,10 +5263,10 @@ export function Settings({
         loadPendingDiagnosticReports(),
       ]);
     };
-    window.ipcRenderer.on('diagnostics:report-pending', handleDiagnosticsReportPending);
+    window.ipcRenderer.logs.onReportPending(handleDiagnosticsReportPending);
     window.addEventListener('redbox:feedback-report-submitted', handleFeedbackReportSubmitted);
     return () => {
-      window.ipcRenderer.off('diagnostics:report-pending', handleDiagnosticsReportPending);
+      window.ipcRenderer.logs.offReportPending(handleDiagnosticsReportPending);
       window.removeEventListener('redbox:feedback-report-submitted', handleFeedbackReportSubmitted);
     };
   }, [loadLoggingStatus, loadPendingDiagnosticReports]);
@@ -6044,9 +6044,9 @@ export function Settings({
     const handleSettingsUpdated = () => {
       void loadAiPricingCatalog();
     };
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
     return () => {
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
     };
   }, [loadAiPricingCatalog, settingsSubView]);
 
