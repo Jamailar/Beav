@@ -13,6 +13,10 @@ pub(crate) fn list_subject_categories(store: &AppStore) -> Vec<SubjectCategory> 
     store.categories.clone()
 }
 
+pub(crate) fn catalog_snapshot(store: &AppStore) -> (Vec<SubjectCategory>, Vec<SubjectRecord>) {
+    (list_subject_categories(store), list_subjects(store))
+}
+
 pub(crate) fn search_subjects(
     store: &AppStore,
     query: &str,
