@@ -182,6 +182,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted manuscript SRT subtitle parsing, fallback segment creation and serialization into `commands/manuscripts/subtitles.rs`, keeping package subtitle transcription behavior unchanged and adding focused subtitle helper tests.
 - Moved post-package bindings, platform normalization and target upsert helpers into `commands/manuscripts/post.rs`, so the manuscript root command module owns less post-specific state logic.
 - Extracted manuscript FFmpeg edit recipe execution, source asset projection and duration/source-id helpers into `commands/manuscripts/ffmpeg_edit.rs`, keeping video edit channel payloads and CLI verification unchanged.
+- Extracted manuscript package content-block parsing, stable block-id reuse, content-map projection and block HTML fragment rendering into `commands/manuscripts/content_blocks.rs`, keeping package/richpost callers on the same data contract.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
