@@ -1,6 +1,20 @@
 use super::*;
 use crate::store::settings as settings_store;
 
+fn update_wechat_login_snapshot(settings: &mut Value, session_id: &str, status: &str, raw: &Value) {
+    let mut snapshot = official_settings_wechat_login(settings).unwrap_or_else(|| json!({}));
+    if let Some(object) = snapshot.as_object_mut() {
+        object.insert("sessionId".to_string(), json!(session_id));
+        object.insert("status".to_string(), json!(status));
+        object.insert("updatedAt".to_string(), json!(now_ms()));
+        object.insert("raw".to_string(), raw.clone());
+        if status == "CONFIRMED" {
+            object.insert("confirmedAt".to_string(), json!(now_ms()));
+        }
+    }
+    write_settings_json_value(settings, "redbox_auth_wechat_login_json", &snapshot);
+}
+
 pub(super) fn handle_auth_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,

@@ -151,20 +151,6 @@ pub(crate) fn refresh_official_auth_for_ai_request(
     }
 }
 
-fn update_wechat_login_snapshot(settings: &mut Value, session_id: &str, status: &str, raw: &Value) {
-    let mut snapshot = official_settings_wechat_login(settings).unwrap_or_else(|| json!({}));
-    if let Some(object) = snapshot.as_object_mut() {
-        object.insert("sessionId".to_string(), json!(session_id));
-        object.insert("status".to_string(), json!(status));
-        object.insert("updatedAt".to_string(), json!(now_ms()));
-        object.insert("raw".to_string(), raw.clone());
-        if status == "CONFIRMED" {
-            object.insert("confirmedAt".to_string(), json!(now_ms()));
-        }
-    }
-    write_settings_json_value(settings, "redbox_auth_wechat_login_json", &snapshot);
-}
-
 fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Value, String> {
     let refresh_token =
         session_refresh_token(settings).ok_or_else(|| "当前会话缺少 refresh token".to_string())?;
