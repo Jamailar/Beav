@@ -15,6 +15,8 @@ mod session_values;
 mod task_panel;
 #[path = "runtime_collab/task_values.rs"]
 mod task_values;
+#[path = "runtime_collab/team_events.rs"]
+mod team_events;
 #[path = "runtime_collab/team_guide.rs"]
 mod team_guide;
 #[path = "runtime_collab/team_prompt.rs"]
@@ -61,6 +63,7 @@ pub use task_values::{
     create_task_value, list_tasks_value, pin_task_session_value, retry_task_value,
     transition_task_value, update_task_value,
 };
+use team_events::emit_team_action_result_events;
 pub use team_guide::guide_create_value;
 #[cfg(test)]
 use team_prompt::team_member_session_metadata;
@@ -70,7 +73,7 @@ pub use team_tools::{
 };
 #[cfg(test)]
 use team_wake::non_coordinator_members_settled;
-use team_wake::{emit_team_action_result_events, schedule_message_target_wake};
+use team_wake::schedule_message_target_wake;
 
 fn payload_limit(payload: &Value, key: &str) -> Option<usize> {
     payload
