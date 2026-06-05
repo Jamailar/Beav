@@ -20,6 +20,7 @@ use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
     RuntimeCheckpointRecord, RuntimeTaskRecord,
 };
+use crate::store::runtime_tasks as runtime_task_store;
 use crate::{format_timestamp_rfc3339_from_ms, AppState, AppStore};
 use task_policy::{
     fingerprint_for_definition_payload, next_daily_timestamp_in_timezone,
@@ -481,11 +482,11 @@ fn derived_background_tasks_internal(store: &AppStore, include_turns: bool) -> V
             }
         }));
     }
-    for task in &store.runtime_tasks {
+    for task in runtime_task_store::list_tasks(store) {
         if task.task_type == "media-followup" {
             continue;
         }
-        tasks.push(runtime_task_background_projection(task, include_turns));
+        tasks.push(runtime_task_background_projection(&task, include_turns));
     }
     tasks.sort_by(|a, b| {
         b.get("updatedAt")
