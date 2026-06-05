@@ -222,6 +222,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed tool executor MCP server snapshots through `store::mcp_tools`, reducing direct AppStore coupling in tool dispatch paths.
 - Routed runtime tool-plan MCP server snapshots through `store::mcp_tools`.
 - Routed official settings merge/normalization writeback through `store::settings`.
+- Routed Thrive plugin MCP server replacement through `store::mcp_tools`.
 
 ### 1. Bridge Contract Layer
 
