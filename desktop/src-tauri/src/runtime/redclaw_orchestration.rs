@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::runtime::RedclawProjectRecord;
-use crate::store::redclaw as redclaw_store;
+use crate::store::{redclaw as redclaw_store, runtime_tasks as runtime_tasks_store};
 use crate::{make_id, now_iso, payload_string, AppStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1434,12 +1434,7 @@ pub fn sync_redclaw_project_from_runtime_task(
     store: &mut AppStore,
     task_id: &str,
 ) -> Result<Option<RedclawProjectRecord>, String> {
-    let Some(task) = store
-        .runtime_tasks
-        .iter()
-        .find(|item| item.id == task_id)
-        .cloned()
-    else {
+    let Some(task) = runtime_tasks_store::get_task(store, task_id) else {
         return Ok(None);
     };
     let metadata = task.metadata.as_ref();

@@ -15,6 +15,7 @@ use crate::runtime::{
     trace_for_session, transcript_count_for_session, SessionCheckpointRecord,
     SessionTranscriptFileMeta, SESSION_CONTEXT_TAIL_MESSAGES,
 };
+use crate::store::runtime_tasks as runtime_tasks_store;
 use crate::{make_id, now_iso, AppStore, ChatSessionContextRecord, ChatSessionRecord};
 
 pub(crate) const SESSION_RETENTION_MAX_SESSIONS: usize = 10_000;
@@ -506,9 +507,8 @@ pub(crate) fn session_bridge_summary_value(
     let summary = build_session_summary(store, session, transcript_meta);
     let updated_at = summary.chat_session.updated_at.parse::<i64>().unwrap_or(0);
     let created_at = summary.chat_session.created_at.parse::<i64>().unwrap_or(0);
-    let owner_task_count = store
-        .runtime_tasks
-        .iter()
+    let owner_task_count = runtime_tasks_store::list_tasks(store)
+        .into_iter()
         .filter(|task| task.owner_session_id.as_deref() == Some(summary.chat_session.id.as_str()))
         .count() as i64;
     json!({
@@ -539,11 +539,10 @@ pub(crate) fn session_bridge_detail_value(
     let Some(snapshot) = build_session_snapshot(store, session_id, transcript_meta, None) else {
         return Value::Null;
     };
-    let tasks: Vec<Value> = store
-        .runtime_tasks
-        .iter()
+    let tasks: Vec<Value> = runtime_tasks_store::list_tasks(store)
+        .into_iter()
         .filter(|task| task.owner_session_id.as_deref() == Some(session_id))
-        .map(crate::runtime::runtime_task_value)
+        .map(|task| crate::runtime::runtime_task_value(&task))
         .collect();
     json!({
         "session": {
