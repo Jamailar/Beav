@@ -2,7 +2,6 @@ use base64::Engine;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SampleRate, StreamConfig};
 use serde_json::{json, Value};
-use std::io::Cursor;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -12,8 +11,11 @@ use tauri::{AppHandle, State};
 use crate::{now_ms, AppState};
 
 mod capability;
+#[path = "audio/samples.rs"]
+mod samples_io;
 
 use capability::{audio_error_reason, capture_capability_value};
+use samples_io::{encode_wav_bytes, push_f32_samples, push_i16_samples, push_u16_samples};
 
 const PREFERRED_INPUT_SAMPLE_RATE: u32 = 48_000;
 const MIN_REASONABLE_INPUT_SAMPLE_RATE: u32 = 8_000;
@@ -48,29 +50,6 @@ fn recording_active() -> bool {
         .lock()
         .map(|guard| guard.is_some())
         .unwrap_or(false)
-}
-
-fn push_f32_samples(buffer: &Arc<Mutex<Vec<i16>>>, data: &[f32]) {
-    if let Ok(mut guard) = buffer.lock() {
-        guard.extend(data.iter().map(|sample| {
-            sample
-                .clamp(-1.0, 1.0)
-                .mul_add(i16::MAX as f32, 0.0)
-                .round() as i16
-        }));
-    }
-}
-
-fn push_i16_samples(buffer: &Arc<Mutex<Vec<i16>>>, data: &[i16]) {
-    if let Ok(mut guard) = buffer.lock() {
-        guard.extend_from_slice(data);
-    }
-}
-
-fn push_u16_samples(buffer: &Arc<Mutex<Vec<i16>>>, data: &[u16]) {
-    if let Ok(mut guard) = buffer.lock() {
-        guard.extend(data.iter().map(|sample| (*sample as i32 - 32_768) as i16));
-    }
 }
 
 fn build_input_stream(
@@ -172,27 +151,6 @@ fn choose_recording_input_config(
     }
 
     Ok(fallback.unwrap_or_else(|| (default_config.config(), default_config.sample_format())))
-}
-
-fn encode_wav_bytes(samples: &[i16], sample_rate: u32, channels: u16) -> Result<Vec<u8>, String> {
-    let spec = hound::WavSpec {
-        channels,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut cursor = Cursor::new(Vec::<u8>::new());
-    {
-        let mut writer =
-            hound::WavWriter::new(&mut cursor, spec).map_err(|error| error.to_string())?;
-        for sample in samples {
-            writer
-                .write_sample(*sample)
-                .map_err(|error| error.to_string())?;
-        }
-        writer.finalize().map_err(|error| error.to_string())?;
-    }
-    Ok(cursor.into_inner())
 }
 
 fn spawn_recording_thread(
