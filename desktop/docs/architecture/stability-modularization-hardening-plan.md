@@ -149,6 +149,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added `store::runtime_tasks` helpers and routed runtime task create/list/get/cancel/trace commands through them.
 - Added `store::media` read helpers and routed plugin media count/recent data-source reads through them.
 - Routed plugin subject count/list data-source reads through `store::subjects`.
+- Routed RedClaw runner status value projections through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
