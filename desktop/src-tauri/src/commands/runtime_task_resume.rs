@@ -9,6 +9,7 @@ use crate::runtime::{
     build_repair_goal, reviewer_rejected, route_for_task_snapshot, PreparedTaskResumeExecution,
     RuntimeArtifact, RuntimeCheckpointEvent, RuntimeNodeEvent, RuntimeTaskRecord,
 };
+use crate::store::settings as settings_store;
 use crate::{payload_string, AppState};
 
 pub fn prepare_task_resume_execution(
@@ -111,8 +112,9 @@ pub fn handle_runtime_task_resume(
         return Ok(json!({ "success": false, "error": "任务不存在" }));
     };
 
-    let settings_snapshot =
-        crate::persistence::with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot = crate::persistence::with_store(state, |store| {
+        Ok(settings_store::settings_snapshot(&store))
+    })?;
     let prepared = prepare_task_resume_execution(app, state, &settings_snapshot, &task_snapshot)?;
     let saved_artifact = maybe_save_task_resume_artifact(state, &task_snapshot, &prepared)?;
 

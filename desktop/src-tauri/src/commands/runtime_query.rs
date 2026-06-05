@@ -15,6 +15,7 @@ use crate::runtime::{
     RuntimeApprovalDetails, RuntimeApprovalRecord, RuntimeApprovalRequestPayload,
 };
 use crate::skills::active_skill_activation_items;
+use crate::store::settings as settings_store;
 use crate::{
     log_timing_event, make_id, now_i64, now_ms, payload_field, payload_string,
     record_runtime_query_metric, resolve_runtime_mode_for_session, AppState, RuntimeQueryMetric,
@@ -42,12 +43,12 @@ pub fn handle_runtime_query(
         started_at,
         Some(format!("chars={}", message.chars().count())),
     );
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let runtime_mode = with_store(state, |store| {
-        Ok(session_id
+    let (settings_snapshot, runtime_mode) = with_store(state, |store| {
+        let runtime_mode = session_id
             .as_deref()
             .map(|value| resolve_runtime_mode_for_session(&store, value))
-            .unwrap_or_else(|| "redclaw".to_string()))
+            .unwrap_or_else(|| "redclaw".to_string());
+        Ok((settings_store::settings_snapshot(&store), runtime_mode))
     })?;
     let route = route_runtime_intent_with_settings(
         &settings_snapshot,

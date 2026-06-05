@@ -9,6 +9,7 @@ use crate::runtime::{
     list_runtime_task_traces_value as runtime_task_traces_lookup_value, list_runtime_tasks,
     store_runtime_task,
 };
+use crate::store::settings as settings_store;
 use crate::{log_timing_event, now_ms, payload_field, payload_string, AppState};
 
 pub fn create_runtime_task_from_payload(
@@ -21,7 +22,8 @@ pub fn create_runtime_task_from_payload(
     let user_input =
         payload_string(payload, "userInput").unwrap_or_else(|| "开发者手动创建任务".to_string());
     let metadata = payload_field(payload, "metadata").cloned();
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let route = route_runtime_intent_with_settings(
         &settings_snapshot,
         &runtime_mode,
