@@ -309,6 +309,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted Thrive plugin enabled-manifest enumeration, skill discovery, MCP config parsing and runtime capability sync into `commands/plugin/runtime_sync`.
 - Extracted RedClaw publish/review/XHS package builders, markdown renderers, output artifact parsing and deterministic XHS compliance checks into `commands/redclaw/export_content`.
 - Extracted RedClaw media-plan export assembly, ffconcat generation, ffconcat input validation and rough-cut ffmpeg rendering into `commands/redclaw/media_export`.
+- Extracted collaboration task-panel status mapping, review counts, RedClaw job projection and sorted panel item assembly into `commands/runtime_collab/task_panel`.
 
 ### 1. Bridge Contract Layer
 
