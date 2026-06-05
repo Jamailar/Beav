@@ -5,6 +5,7 @@ use crate::persistence::{
     apply_knowledge_hydration_snapshot, ensure_store_hydrated_for_media,
     load_knowledge_hydration_snapshot, with_store, with_store_mut,
 };
+use crate::store::{media as media_store, settings as settings_store, spaces as spaces_store};
 use crate::workspace_loaders::read_json_file;
 use crate::*;
 use serde::Deserialize;
@@ -741,7 +742,7 @@ pub(crate) fn ensure_supported_space(
     state: &State<'_, AppState>,
     requested_space_id: Option<&str>,
 ) -> Result<String, String> {
-    let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
+    let active_space_id = with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?;
     if let Some(space_id) = requested_space_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1091,7 +1092,8 @@ fn write_document_sources_index(
 
 fn refresh_knowledge_projection(state: &State<'_, AppState>) -> Result<(), String> {
     let root = with_store(state, |store| {
-        active_space_workspace_root_from_store(&store, &store.active_space_id, &state.store_path)
+        let active_space_id = spaces_store::active_space_id(&store);
+        active_space_workspace_root_from_store(&store, &active_space_id, &state.store_path)
     })?;
     let snapshot = load_knowledge_hydration_snapshot(&root);
     with_store_mut(state, |store| {
@@ -1340,7 +1342,8 @@ pub(crate) fn transcribe_note_media_source(
     note_id: &str,
     media_source: &str,
 ) -> Result<String, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let (endpoint, api_key, model_name) = resolve_transcription_settings(&settings_snapshot)
         .ok_or_else(|| {
             "未配置音频转写接口，请先在设置中填写 transcription endpoint/model".to_string()
@@ -2268,7 +2271,7 @@ pub(crate) fn import_chat_attachment_image(
         create_media_asset_record(&media_root, &materialized, "chat-upload", &source, &item)?;
 
     with_store_mut(state, |store| {
-        store.media_assets.push(asset.clone());
+        media_store::push_asset(store, asset.clone());
         Ok(())
     })?;
     crate::commands::library::persist_media_workspace_catalog(state)?;
@@ -2342,7 +2345,7 @@ pub(crate) fn ingest_media_assets(
     if !new_assets.is_empty() {
         with_store_mut(state, |store| {
             for asset in &new_assets {
-                store.media_assets.push(asset.clone());
+                media_store::push_asset(store, asset.clone());
             }
             Ok(())
         })?;
@@ -2455,13 +2458,7 @@ pub(crate) fn knowledge_http_health(
     let _ = ensure_store_hydrated_for_media(state);
     let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None, false)?;
     let snapshot = with_store(state, |store| {
-        let active_space_id = store.active_space_id.clone();
-        let active_space_name = store
-            .spaces
-            .iter()
-            .find(|space| space.id == active_space_id)
-            .map(|space| space.name.clone())
-            .unwrap_or_else(|| active_space_id.clone());
+        let (active_space_id, active_space_name) = spaces_store::active_workspace_snapshot(&store);
         let account_catalog_accounts = crate::accounts::platform_accounts_for_active_space(state);
         let platform_accounts = merge_platform_accounts(
             account_catalog_accounts,
@@ -2491,7 +2488,7 @@ pub(crate) fn knowledge_http_health(
                 "entries": page.kind_counts.get("redbook-note").and_then(|value| value.as_i64()).unwrap_or(0),
                 "youtubeVideos": page.kind_counts.get("youtube-video").and_then(|value| value.as_i64()).unwrap_or(0),
                 "documentSources": page.kind_counts.get("document-source").and_then(|value| value.as_i64()).unwrap_or(0),
-                "mediaAssets": store.media_assets.len(),
+                "mediaAssets": media_store::count_assets(&store),
             },
             "limits": {
                 "bodyBytes": body_limit_bytes,
@@ -2545,7 +2542,7 @@ pub(crate) fn knowledge_http_health(
                 ],
                 "mediaAssetKinds": ["image"],
             },
-            "spaceId": store.active_space_id,
+            "spaceId": active_space_id,
         }))
     })?;
     Ok(snapshot)
