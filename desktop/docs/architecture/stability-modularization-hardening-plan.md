@@ -318,6 +318,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted collaboration member listing, creation, coordinator assignment, rename and shutdown event handling into `commands/runtime_collab/member_values`.
 - Extracted collaboration task listing, creation, update, transition, pin-session and retry event handling into `commands/runtime_collab/task_values`.
 - Extracted collaboration message listing, mailbox reads, message delivery, report requests and report submission event handling into `commands/runtime_collab/message_report_values`.
+- Extracted review docket listing, detail lookup, stats, creation, decision and archive value wrappers into `commands/runtime_collab/review_values`.
 
 ### 1. Bridge Contract Layer
 
