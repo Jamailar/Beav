@@ -1,5 +1,6 @@
 use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
 use crate::commands::library::persist_media_workspace_catalog;
+use crate::store::media as media_store;
 use crate::{
     ensure_video_thumbnail_for_path, ffmpeg_program, file_content_hash, file_url_for_path,
     guess_mime_and_kind, make_id, media_root, now_ms, now_rfc3339, workspace_root, AppState,
@@ -246,7 +247,7 @@ fn register_media_edit_assets(
                 thumbnail_url,
                 exists: path.is_file(),
             };
-            store.media_assets.push(asset.clone());
+            media_store::push_asset(store, asset.clone());
             assets.push(asset);
         }
         Ok(assets)
