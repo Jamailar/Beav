@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export type RedClawTaskListPayload = {
   ownerScope?: string;
@@ -53,6 +53,8 @@ export function createRedClawBridge(core: BridgeCore) {
       taskCancel: (payload: RedClawTaskCancelPayload) => core.invokeChannel('redclaw:task-cancel', payload),
       taskList: (payload?: RedClawTaskListPayload) => core.invokeChannel('redclaw:task-list', payload || {}),
       taskStats: () => core.invokeChannel('redclaw:task-stats'),
+      onStatus: (listener: Listener) => core.on('redclaw:runner-status', listener),
+      offStatus: (listener: Listener) => core.off('redclaw:runner-status', listener),
     },
     redclawOrchestration: {
       createRun: (payload: { goal: string; sessionId?: string; projectId?: string; platform?: string; format?: string }) =>

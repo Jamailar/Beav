@@ -199,8 +199,8 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
     const listener = () => {
       void load();
     };
-    window.ipcRenderer.on('redclaw:runner-status', listener);
-    return () => window.ipcRenderer.off('redclaw:runner-status', listener);
+    window.ipcRenderer.redclawRunner.onStatus(listener);
+    return () => window.ipcRenderer.redclawRunner.offStatus(listener);
   }, [isActive, load]);
 
   const openDialog = useCallback(() => {
