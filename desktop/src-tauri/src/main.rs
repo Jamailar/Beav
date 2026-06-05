@@ -76,7 +76,6 @@ pub(crate) use runtime::{
     RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig, RuntimeHookRecord,
     RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
 };
-pub(crate) use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 pub(crate) use std::path::Path;
 use std::sync::{
