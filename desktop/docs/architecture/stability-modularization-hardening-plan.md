@@ -267,6 +267,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted App Shell generation pending intent and free-creation navigation state into `features/app-shell/useGenerationShellNavigation`.
 - Extracted App Shell settings navigation target state into `features/app-shell/useSettingsShellNavigation`.
 - Extracted LLM readiness source parsing, local endpoint detection, default model fallback and settings merge helpers into `commands/llm_readiness/config`.
+- Extracted audio capture capability probing and audio error classification into `commands/audio/capability`, leaving recording lifecycle in `commands/audio`.
 
 ### 1. Bridge Contract Layer
 
