@@ -15,6 +15,7 @@ use crate::runtime::{
     InteractiveToolOutcomeDigest, McpServerRecord, RedclawStateRecord, ResolvedChatConfig,
     RuntimeWarmEntry, SessionToolResultRecord, SessionTranscriptRecord,
 };
+use crate::store::settings as settings_store;
 use crate::*;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -175,7 +176,8 @@ pub(crate) fn refresh_runtime_warm_state(
     state: &State<'_, AppState>,
     modes: &[&str],
 ) -> Result<(), String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let workspace_root_value = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
     let fingerprint = runtime_warm_settings_fingerprint(&settings_snapshot, &workspace_root_value);
     let mut warmed_entries = Vec::new();
@@ -212,7 +214,8 @@ pub(crate) fn ensure_runtime_warm_entry(
     state: &State<'_, AppState>,
     mode: &str,
 ) -> Result<RuntimeWarmEntry, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let workspace_root_value = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
     let fingerprint = runtime_warm_settings_fingerprint(&settings_snapshot, &workspace_root_value);
     let cached = {

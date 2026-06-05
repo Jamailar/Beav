@@ -23,6 +23,7 @@ use self::upload_queue::{
     delete_report, ensure_report_dirs, list_reports, load_report, move_report, persist_report,
     upload_response_value,
 };
+use crate::store::settings as settings_store;
 use crate::{with_store, AppState};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -192,7 +193,7 @@ pub fn log_renderer_event(
 }
 
 pub fn status_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let Some(runtime) = LoggingRuntime::global() else {
         return Ok(json!({
             "enabled": false,
@@ -232,7 +233,7 @@ pub fn create_report_from_trigger(
     include_advanced_context: bool,
     metadata: Value,
 ) -> Result<DiagnosticReportRecord, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let runtime =
         LoggingRuntime::global().ok_or_else(|| "Logging runtime unavailable".to_string())?;
     let config = logging_config_from_settings(&settings);
@@ -255,7 +256,7 @@ pub fn create_startup_recovery_report_if_needed(
     if !runtime.previous_unclean_shutdown() {
         return Ok(None);
     }
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let config = logging_config_from_settings(&settings);
     create_startup_recovery_report(runtime.root(), state, &config).map(Some)
 }
@@ -266,7 +267,7 @@ pub fn export_bundle_for_report(
 ) -> Result<PathBuf, String> {
     let runtime =
         LoggingRuntime::global().ok_or_else(|| "Logging runtime unavailable".to_string())?;
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let config = logging_config_from_settings(&settings);
     let report = load_report(runtime.root(), "pending", report_id)?;
     let bundle = build_report_bundle(runtime.root(), state, &config, &report)?;
@@ -327,7 +328,7 @@ pub fn upload_pending_report(
 ) -> Result<Value, String> {
     let runtime =
         LoggingRuntime::global().ok_or_else(|| "Logging runtime unavailable".to_string())?;
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let config = logging_config_from_settings(&settings);
     let endpoint = config
         .upload_endpoint
@@ -409,7 +410,7 @@ pub fn create_feedback_report(
     include_advanced_context: bool,
     metadata: Value,
 ) -> Result<(DiagnosticReportRecord, String), String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let runtime =
         LoggingRuntime::global().ok_or_else(|| "Logging runtime unavailable".to_string())?;
     let config = logging_config_from_settings(&settings);

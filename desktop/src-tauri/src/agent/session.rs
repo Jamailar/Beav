@@ -5,6 +5,7 @@ use crate::commands::chat_state::{
     is_first_assistant_turn_for_session, resolve_runtime_mode_for_session,
 };
 use crate::persistence::with_store;
+use crate::store::settings as settings_store;
 use crate::{make_id, AppState};
 
 pub fn resolve_chat_exchange_context(
@@ -12,7 +13,8 @@ pub fn resolve_chat_exchange_context(
     session_id: Option<String>,
     turn_kind: SessionAgentTurnKind,
 ) -> Result<ChatExchangeContext, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let working_session_id = session_id.unwrap_or_else(|| make_id("session"));
     let (runtime_mode, is_first_assistant_turn) = with_store(state, |store| {
         Ok((
