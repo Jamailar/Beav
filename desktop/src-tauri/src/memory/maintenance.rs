@@ -189,8 +189,9 @@ pub(crate) fn memory_maintenance_mutation_status(
     store: &mut AppStore,
     reason: &str,
 ) -> Value {
+    let settings = settings_store::settings_snapshot(store);
     let current = current
-        .or_else(|| memory_maintenance_status_from_settings(&store.settings))
+        .or_else(|| memory_maintenance_status_from_settings(&settings))
         .unwrap_or_else(default_memory_maintenance_status);
     let pending = current
         .get("pendingMutations")
@@ -220,9 +221,11 @@ pub(crate) fn memory_maintenance_mutation_status(
 }
 
 fn apply_memory_maintenance_status_to_store(store: &mut AppStore, status: &Value) {
-    if let Some(object) = store.settings.as_object_mut() {
-        object.remove("redbox_memory_maintenance_status_json");
-    }
+    settings_store::update_settings(store, |settings| {
+        if let Some(object) = settings.as_object_mut() {
+            object.remove("redbox_memory_maintenance_status_json");
+        }
+    });
     redclaw_store::set_next_maintenance_at(
         store,
         value_to_i64_string(status.get("nextScheduledAt")),
