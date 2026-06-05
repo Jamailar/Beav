@@ -4,8 +4,8 @@ use tauri::{AppHandle, State};
 use crate::events::{emit_runtime_event, emit_runtime_task_checkpoint_saved};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    create_review_docket, RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord,
-    RedclawScheduledTaskRecord,
+    create_review_docket, RedclawJobDefinitionRecord, RedclawJobExecutionRecord,
+    RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
 };
 use crate::scheduler::task_policy::{
     preview_task_intent, task_contract_version, TaskIntentSchema, TaskPolicyDecisionKind,
@@ -15,6 +15,7 @@ use crate::scheduler::{
     cancel_job_execution, clear_definition_cooldown, emit_scheduler_snapshot,
     sync_redclaw_job_definitions,
 };
+use crate::store::redclaw as redclaw_store;
 use crate::{
     make_id, normalize_optional_string, now_i64, now_iso, payload_field, payload_string, AppState,
 };
@@ -449,8 +450,8 @@ pub fn handle_task_list(state: &State<'_, AppState>, payload: &Value) -> Result<
         .and_then(Value::as_bool)
         .unwrap_or(true);
     with_store(state, |store| {
-        let items = store
-            .redclaw_job_definitions
+        let executions = redclaw_store::list_job_executions(&store);
+        let items = redclaw_store::list_job_definitions(&store)
             .iter()
             .filter(|item| include_drafts || !item.requires_confirmation)
             .filter(|item| {
@@ -459,7 +460,7 @@ pub fn handle_task_list(state: &State<'_, AppState>, payload: &Value) -> Result<
                     .map(|scope| item.owner_scope.as_deref() == Some(scope))
                     .unwrap_or(true)
             })
-            .map(|definition| task_list_item(&store, definition))
+            .map(|definition| task_list_item(&executions, definition))
             .collect::<Vec<_>>();
         Ok(json!({
             "success": true,
@@ -471,8 +472,8 @@ pub fn handle_task_list(state: &State<'_, AppState>, payload: &Value) -> Result<
 
 pub fn handle_task_stats(state: &State<'_, AppState>) -> Result<Value, String> {
     with_store(state, |store| {
-        let definitions = &store.redclaw_job_definitions;
-        let executions = &store.redclaw_job_executions;
+        let definitions = redclaw_store::list_job_definitions(&store);
+        let executions = redclaw_store::list_job_executions(&store);
         let draft_count = definitions
             .iter()
             .filter(|item| item.requires_confirmation)
@@ -1256,9 +1257,11 @@ fn apply_intent_update(
     Ok(())
 }
 
-fn task_list_item(store: &crate::AppStore, definition: &RedclawJobDefinitionRecord) -> Value {
-    let latest_execution = store
-        .redclaw_job_executions
+fn task_list_item(
+    executions: &[RedclawJobExecutionRecord],
+    definition: &RedclawJobDefinitionRecord,
+) -> Value {
+    let latest_execution = executions
         .iter()
         .filter(|item| item.definition_id == definition.id)
         .max_by(|left, right| left.updated_at.cmp(&right.updated_at));
