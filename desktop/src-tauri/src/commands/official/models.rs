@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::settings as settings_store;
 
 pub(super) fn handle_models_channel(
     app: &AppHandle,
@@ -9,7 +10,8 @@ pub(super) fn handle_models_channel(
 ) -> Option<Result<Value, String>> {
     match channel {
         "official:models:list" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let mut models = official_settings_models(&settings);
             if models.is_empty() {
