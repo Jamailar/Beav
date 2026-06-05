@@ -16,6 +16,7 @@ import { createPluginsBridge } from './domains/pluginsBridge';
 import { createRedClawBridge } from './domains/redclawBridge';
 import { createRuntimeBridge } from './domains/runtimeBridge';
 import { createSkillsBridge } from './domains/skillsBridge';
+import { createSpacesBridge } from './domains/spacesBridge';
 import { createSubjectsBridge } from './domains/subjectsBridge';
 import { createSystemBridge } from './domains/systemBridge';
 import { createTeamRuntimeBridge } from './domains/teamRuntimeBridge';
@@ -49,31 +50,7 @@ function createIpcRenderer() {
     commandGuarded: <T = unknown>(command: string, args?: unknown, options?: InvokeGuardOptions<T> & { fallbackChannel?: string }) =>
       invokeCommandGuarded<T>(command, args, options),
 
-    spaces: {
-      list: () => invokeCommandGuarded<{ activeSpaceId?: string; spaces?: Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }> }>(
-        'spaces_list',
-        undefined,
-        {
-          timeoutMs: 2200,
-          fallbackChannel: 'spaces:list',
-          normalize: (value) => {
-            const raw = (value && typeof value === 'object') ? value as {
-              activeSpaceId?: unknown;
-              spaces?: unknown;
-            } : {};
-            return {
-              activeSpaceId: typeof raw.activeSpaceId === 'string' ? raw.activeSpaceId : undefined,
-              spaces: Array.isArray(raw.spaces) ? raw.spaces as Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }> : undefined,
-            };
-          },
-        },
-      ),
-      switch: (spaceId: string) => invokeChannel('spaces:switch', spaceId),
-      create: () => Promise.resolve({ success: false, error: '创建新空间功能已关闭' }),
-      rename: (payload: { id: string; name: string }) => invokeChannel('spaces:rename', payload),
-      delete: (spaceId: string) => invokeChannel('spaces:delete', spaceId),
-    },
-
+    ...createSpacesBridge(core),
     ...createAdvisorsBridge(core),
 
     ...createKnowledgeBridge(core),
