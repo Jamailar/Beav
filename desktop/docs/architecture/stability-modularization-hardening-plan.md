@@ -341,6 +341,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted RedClaw media-plan export assembly, ffconcat generation, ffconcat input validation and rough-cut ffmpeg rendering into `commands/redclaw/media_export`.
 - Extracted RedClaw profile bundle, profile document update, onboarding and style-definition channels into `commands/redclaw/profile_channels`.
 - Extracted RedClaw legacy runner scheduled/long-cycle task channels, manual job enqueueing and runner-status emission into `commands/redclaw/runner_tasks`, leaving `commands/redclaw.rs` as a thinner dispatcher for these channels.
+- Extracted RedClaw task-control list/stat read projections into `commands/redclaw_task_control/listing`, keeping draft/create/update/cancel write paths in the root task-control module.
 - Extracted collaboration task-panel status mapping, review counts, RedClaw job projection and sorted panel item assembly into `commands/runtime_collab/task_panel`.
 - Extracted collaboration team-member wake scheduling, mailbox consumption, member session metadata, agent-turn execution and team action event fanout into `commands/runtime_collab/team_wake`.
 - Extracted review-docket runtime approval construction, proposed action routing, CLI escalation decisions and RedClaw draft confirmations into `commands/runtime_collab/review_approval`.
