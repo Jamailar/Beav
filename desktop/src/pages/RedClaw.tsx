@@ -893,15 +893,12 @@ export function RedClaw({
             const sessionTitle = defaultSessionTitleFromPendingMessage(pendingMessage) || buildRedClawSessionTitle(nextSpaceName);
             try {
                 const session = await uiMeasure('redclaw', 'sessions:create_for_pending_message', async () => (
-                    window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                    window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                         contextId,
                         contextType: REDCLAW_CONTEXT_TYPE,
                         title: sessionTitle,
                         initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
                         metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
-                    }, {
-                        timeoutMs: 3200,
-                        fallback: null,
                     })
                 ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
 
@@ -965,13 +962,9 @@ export function RedClaw({
         try {
             const contextId = buildRedClawContextId(nextActiveSpaceId);
             const listResult = await uiMeasure('redclaw', 'sessions:list_context', async () => (
-                window.ipcRenderer.invokeGuarded<ContextChatSessionListItem[] | null>('chat:list-context-sessions', {
+                window.ipcRenderer.chat.listContextSessionsGuarded<ContextChatSessionListItem>({
                     contextId,
                     contextType: REDCLAW_CONTEXT_TYPE,
-                }, {
-                    timeoutMs: 3200,
-                    fallback: null,
-                    normalize: (value) => Array.isArray(value) ? value as ContextChatSessionListItem[] : [],
                 })
             ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName }) as ContextChatSessionListItem[];
 
@@ -1006,15 +999,12 @@ export function RedClaw({
 
             if (items.length === 0 && shouldCreateIfEmpty) {
                 const created = await uiMeasure('redclaw', 'sessions:create_context', async () => (
-                    window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                    window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                         contextId,
                         contextType: REDCLAW_CONTEXT_TYPE,
                         title: buildRedClawSessionTitle(nextSpaceName),
                         initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
                         metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
-                    }, {
-                        timeoutMs: 3200,
-                        fallback: null,
                     })
                 ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
                 if (!created) {
@@ -1099,10 +1089,7 @@ export function RedClaw({
         }
         try {
             const status = await uiMeasure('redclaw', 'load_runner_status', async () => (
-                window.ipcRenderer.invokeGuarded<RunnerStatus | null>('redclaw:runner-status', undefined, {
-                    timeoutMs: 2800,
-                    fallback: null,
-                })
+                window.ipcRenderer.redclawRunner.getStatus()
             ), { syncForm }) as RunnerStatus | null;
             if (requestId !== runnerStatusRequestIdRef.current) return;
             if (!status) {
@@ -1133,11 +1120,7 @@ export function RedClaw({
         }
         try {
             const list = await uiMeasure('redclaw', 'load_skills', async () => (
-                window.ipcRenderer.invokeGuarded<SkillDefinition[] | null>('skills:list', undefined, {
-                    timeoutMs: 2800,
-                    fallback: null,
-                    normalize: (value) => Array.isArray(value) ? value as SkillDefinition[] : [],
-                })
+                window.ipcRenderer.listSkillsGuarded<SkillDefinition>()
             ));
             if (requestId !== skillsRequestIdRef.current) return;
             if (list == null) {
@@ -1319,15 +1302,12 @@ export function RedClaw({
         setHistoryLoading(true);
         try {
             const session = await uiMeasure('redclaw', 'sessions:create_manual', async () => (
-                window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                     contextId,
                     contextType: REDCLAW_CONTEXT_TYPE,
                     title: sessionTitle,
                     initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
                     metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
-                }, {
-                    timeoutMs: 3200,
-                    fallback: null,
                 })
             ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
             if (!session) {
@@ -1651,15 +1631,12 @@ export function RedClaw({
             }
 
             const created = await uiMeasure('redclaw', 'sessions:create_after_delete', async () => (
-                window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                     contextId: buildRedClawContextId(nextActiveSpaceId),
                     contextType: REDCLAW_CONTEXT_TYPE,
                     title: buildRedClawSessionTitle(nextSpaceName),
                     initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
                     metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
-                }, {
-                    timeoutMs: 3200,
-                    fallback: null,
                 })
             ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
             if (!created) {
