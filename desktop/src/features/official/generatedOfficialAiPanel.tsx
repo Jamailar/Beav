@@ -68,10 +68,6 @@ interface AuthenticatedDataIssue {
   message: string;
 }
 
-const invoke = async <T,>(channel: string, payload?: unknown): Promise<T> => {
-  return window.ipcRenderer.invoke(channel, payload) as Promise<T>;
-};
-
 const OFFICIAL_PANEL_REQUEST_TIMEOUT_MS = 15_000;
 const WECHAT_POLL_INITIAL_DELAY_MS = 0;
 const WECHAT_POLL_PENDING_INTERVAL_MS = 900;
@@ -99,20 +95,20 @@ const summarizeSessionForTrace = (sessionData: RedboxAuthSession | null) => {
   };
 };
 
-const timedInvoke = async <T,>(
-  channel: string,
-  payload?: unknown,
+const timedRequest = async <T,>(
+  operation: string,
+  request: Promise<unknown>,
   options?: { trace?: boolean },
 ): Promise<T> => {
   const startedAt = performance.now();
   const trace = Boolean(options?.trace);
   if (trace) {
-    traceAuthUi(`invoke:start:${channel}`, payload ?? null);
+    traceAuthUi(`request:start:${operation}`);
   }
   try {
-    const result = await invoke<T>(channel, payload);
+    const result = await request as T;
     if (trace) {
-      traceAuthUi(`invoke:done:${channel}`, {
+      traceAuthUi(`request:done:${operation}`, {
         elapsedMs: Math.round(performance.now() - startedAt),
         ok: true,
       });
@@ -120,7 +116,7 @@ const timedInvoke = async <T,>(
     return result;
   } catch (error) {
     if (trace) {
-      traceAuthUi(`invoke:done:${channel}`, {
+      traceAuthUi(`request:done:${operation}`, {
         elapsedMs: Math.round(performance.now() - startedAt),
         ok: false,
         error: error instanceof Error ? error.message : String(error),
@@ -288,7 +284,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, [onReloadSettings]);
 
   const refreshRealmConfig = useCallback(async () => {
-    const result = await timedInvoke<OfficialAuthConfig>('redbox-auth:get-config');
+    const result = await timedRequest<OfficialAuthConfig>('officialAuth.getConfig', window.ipcRenderer.officialAuth.getConfig());
     if (!result?.success) return;
     const nextActiveRealm = result.activeRealm === 'global' ? 'global' : 'cn';
     setActiveRealm(nextActiveRealm);
@@ -302,7 +298,10 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     setAuthBusy(true);
     setPanelNotice('idle', '');
     try {
-      const result = await timedInvoke<OfficialAuthConfig & { error?: string }>('redbox-auth:set-realm', { realm });
+      const result = await timedRequest<OfficialAuthConfig & { error?: string }>(
+        'officialAuth.setRealm',
+        window.ipcRenderer.officialAuth.setRealm({ realm }),
+      );
       if (!result?.success) {
         throw new Error(result?.error || '切换账号区失败');
       }
@@ -394,7 +393,10 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, [callRecords, points, user]);
 
   const fetchUser = useCallback(async () => {
-    const result = await timedInvoke<{ success: boolean; user?: Record<string, unknown>; error?: string }>('redbox-auth:me');
+    const result = await timedRequest<{ success: boolean; user?: Record<string, unknown>; error?: string }>(
+      'officialAuth.getMe',
+      window.ipcRenderer.officialAuth.getMe(),
+    );
     if (!result?.success) {
       throw new Error(result?.error || '拉取用户信息失败');
     }
@@ -402,7 +404,10 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, []);
 
   const fetchPoints = useCallback(async () => {
-    const result = await timedInvoke<{ success: boolean; points?: Record<string, unknown>; error?: string }>('redbox-auth:points');
+    const result = await timedRequest<{ success: boolean; points?: Record<string, unknown>; error?: string }>(
+      'officialAuth.getPoints',
+      window.ipcRenderer.officialAuth.getPoints(),
+    );
     if (!result?.success) {
       throw new Error(result?.error || '查询余额失败');
     }
@@ -410,7 +415,10 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, []);
 
   const fetchCallRecords = useCallback(async () => {
-    const result = await timedInvoke<{ success: boolean; records?: RedboxCallRecordItem[]; error?: string }>('redbox-auth:call-records');
+    const result = await timedRequest<{ success: boolean; records?: RedboxCallRecordItem[]; error?: string }>(
+      'officialAuth.getCallRecords',
+      window.ipcRenderer.officialAuth.getCallRecords(),
+    );
     if (!result?.success) {
       throw new Error(result?.error || '拉取调用记录失败');
     }
@@ -444,7 +452,11 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   }, [fetchCallRecords, fetchPoints, fetchUser]);
 
   const requestBackgroundRefresh = useCallback(async () => {
-    const result = await timedInvoke<{ success: boolean; queued?: boolean; error?: string }>('auth:refresh-now', undefined, { trace: true });
+    const result = await timedRequest<{ success: boolean; queued?: boolean; error?: string }>(
+      'auth.refreshNow',
+      window.ipcRenderer.auth.refreshNow(),
+      { trace: true },
+    );
     if (!result?.success) {
       throw new Error(result?.error || '后台刷新请求失败');
     }
@@ -514,10 +526,10 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
       }
       pollRequestInFlightRef.current = true;
       try {
-        const result = await timedInvoke<{
+        const result = await timedRequest<{
           success: boolean;
           data?: { status?: string; session?: RedboxAuthSession | null };
-        }>('redbox-auth:wechat-status', { sessionId: normalizedSessionId });
+        }>('officialAuth.getWechatStatus', window.ipcRenderer.officialAuth.getWechatStatus({ sessionId: normalizedSessionId }));
         if (pollRunTokenRef.current !== runToken || pollSessionIdRef.current !== normalizedSessionId) {
           return;
         }
@@ -555,9 +567,9 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     try {
       confirmedWechatSessionRef.current = '';
       stopWechatPolling();
-      const result = await timedInvoke<{ success: boolean; data?: RedboxWechatInfo; error?: string }>(
-        'redbox-auth:wechat-url',
-        { state: 'redconvert-desktop' },
+      const result = await timedRequest<{ success: boolean; data?: RedboxWechatInfo; error?: string }>(
+        'officialAuth.getWechatUrl',
+        window.ipcRenderer.officialAuth.getWechatUrl({ state: 'redconvert-desktop' }),
         { trace: true },
       );
       if (!result?.success || !result.data) {
@@ -592,9 +604,9 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     }
     setAuthBusy(true);
     try {
-      const result = await timedInvoke<{ success: boolean; error?: string }>(
-        'redbox-auth:send-sms-code',
-        { phone },
+      const result = await timedRequest<{ success: boolean; error?: string }>(
+        'officialAuth.sendSmsCode',
+        window.ipcRenderer.officialAuth.sendSmsCode({ phone }),
         { trace: true },
       );
       if (!result?.success) {
@@ -617,9 +629,12 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     }
     setAuthBusy(true);
     try {
-      const result = await timedInvoke<{ success: boolean; session?: RedboxAuthSession; error?: string }>(
-        mode === 'login' ? 'redbox-auth:login-sms' : 'redbox-auth:register-sms',
-        { phone, code, inviteCode: smsForm.inviteCode.trim() || undefined },
+      const smsPayload = { phone, code, inviteCode: smsForm.inviteCode.trim() || undefined };
+      const result = await timedRequest<{ success: boolean; session?: RedboxAuthSession; error?: string }>(
+        mode === 'login' ? 'officialAuth.loginSms' : 'officialAuth.registerSms',
+        mode === 'login'
+          ? window.ipcRenderer.officialAuth.loginSms(smsPayload)
+          : window.ipcRenderer.officialAuth.registerSms(smsPayload),
         { trace: true },
       );
       if (!result?.success || !result.session) {
@@ -638,9 +653,9 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   const logout = useCallback(async () => {
     setLogoutBusy(true);
     try {
-      const result = await timedInvoke<{ success: boolean; error?: string }>(
-        'redbox-auth:logout',
-        undefined,
+      const result = await timedRequest<{ success: boolean; error?: string }>(
+        'officialAuth.logout',
+        window.ipcRenderer.officialAuth.logout(),
         { trace: true },
       );
       if (!result?.success) {
@@ -671,11 +686,14 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     }
     setPaymentBusy(true);
     try {
-      const orderResult = await invoke<{ success: boolean; order?: Record<string, unknown>; error?: string }>('redbox-auth:create-page-pay-order', {
-        amount: amount || undefined,
-        subject: `积分充值 ¥${amount}`,
-        pointsToDeduct: 0,
-      });
+      const orderResult = await timedRequest<{ success: boolean; order?: Record<string, unknown>; error?: string }>(
+        'officialAuth.createPagePayOrder',
+        window.ipcRenderer.officialAuth.createPagePayOrder({
+          amount: amount || undefined,
+          subject: `积分充值 ¥${amount}`,
+          pointsToDeduct: 0,
+        }),
+      );
       if (!orderResult?.success || !orderResult.order) {
         throw new Error(orderResult?.error || '创建订单失败');
       }
@@ -691,7 +709,10 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
       if (!outTradeNo || !paymentForm) {
         throw new Error('订单返回缺少支付信息');
       }
-      const openResult = await invoke<{ success: boolean; error?: string }>('redbox-auth:open-payment-form', { paymentForm });
+      const openResult = await timedRequest<{ success: boolean; error?: string }>(
+        'officialAuth.openPaymentForm',
+        window.ipcRenderer.officialAuth.openPaymentForm({ paymentForm }),
+      );
       console.log('[OfficialAiPanel] open-payment-form result', openResult);
       if (!openResult?.success) {
         throw new Error(openResult?.error || '打开支付页面失败');

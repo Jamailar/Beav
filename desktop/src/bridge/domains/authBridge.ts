@@ -6,6 +6,10 @@ export function createAuthBridge(core: BridgeCore) {
       bootstrap: (payload?: { reason?: string }) => core.invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => core.invokeChannel('redbox-auth:refresh'),
       getConfig: () => core.invokeChannel('redbox-auth:get-config'),
+      setRealm: (payload: { realm: 'cn' | 'global' }) => core.invokeChannel('redbox-auth:set-realm', payload),
+      getMe: () => core.invokeChannel('redbox-auth:me'),
+      getPoints: () => core.invokeChannel('redbox-auth:points'),
+      getCallRecords: () => core.invokeChannel('redbox-auth:call-records'),
       getWechatStatus: (payload: { sessionId: string }) =>
         core.invokeChannel('redbox-auth:wechat-status', payload),
       getWechatUrl: (payload?: { state?: string }) =>
@@ -15,6 +19,11 @@ export function createAuthBridge(core: BridgeCore) {
         core.invokeChannel('redbox-auth:login-sms', payload),
       registerSms: (payload: { phone: string; code: string; inviteCode?: string }) =>
         core.invokeChannel('redbox-auth:register-sms', payload),
+      logout: () => core.invokeChannel('redbox-auth:logout'),
+      createPagePayOrder: (payload: Record<string, unknown>) =>
+        core.invokeChannel('redbox-auth:create-page-pay-order', payload),
+      openPaymentForm: (payload: { paymentForm: string }) =>
+        core.invokeChannel('redbox-auth:open-payment-form', payload),
       getPricing: () => core.invokeChannel('redbox-auth:pricing'),
       refreshPricing: () => core.invokeChannel('redbox-auth:pricing-refresh'),
     },
