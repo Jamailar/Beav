@@ -1,11 +1,12 @@
 import { ReactNode, useCallback } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, AlertCircle, Bell, Search, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { ImmersiveMode, ViewType } from '../features/app-shell/types';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
 import { APP_BRAND } from '../config/brand';
 import { useI18n, type I18nKey } from '../i18n';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
+import { AppGlobalSearchOverlay } from '../features/app-shell/AppGlobalSearchOverlay';
 import { AppTitleBar, getAppTitleBarPlatform } from '../features/app-shell/AppTitleBar';
 import { AppUpdateNoticeModal } from '../features/app-shell/AppUpdateNoticeModal';
 import { dispatchAppIntent } from '../features/app-shell/appIntent';
@@ -471,84 +472,17 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       )}
 
       {isGlobalSearchVisible && (
-        <div
-          className={clsx(
-            'app-global-search-backdrop fixed inset-0 z-[125] flex items-center justify-center px-4',
-            isGlobalSearchClosing ? 'app-global-search-backdrop--closing' : 'app-global-search-backdrop--open'
-          )}
-          onMouseDown={closeGlobalSearch}
-        >
-          <div
-            className={clsx(
-              'app-global-search-panel w-full max-w-xl space-y-2',
-              isGlobalSearchClosing ? 'app-global-search-panel--closing' : 'app-global-search-panel--open'
-            )}
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="app-global-search-box flex h-14 items-center gap-3 rounded-2xl bg-surface-primary px-4">
-              <Search className="app-global-search-icon h-4 w-4 shrink-0" strokeWidth={1.8} />
-              <input
-                ref={globalSearchInputRef}
-                value={globalSearchQuery}
-                onChange={(event) => setGlobalSearchQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    submitGlobalSearch();
-                  } else if (event.key === 'Escape') {
-                    event.preventDefault();
-                    closeGlobalSearch();
-                  }
-                }}
-                className="app-global-search-input h-full min-w-0 flex-1 bg-transparent text-[15px] text-text-primary outline-none placeholder:text-text-tertiary"
-                placeholder="搜索知识库"
-              />
-            </div>
-
-            {globalSearchQuery.trim() && (
-              <div className="app-global-search-results overflow-hidden rounded-2xl border border-border/80 bg-surface-primary/92 shadow-[0_22px_70px_-34px_rgba(0,0,0,0.58)] backdrop-blur-md">
-                {isGlobalSearchLoading && globalSearchResults.length === 0 ? (
-                  <div className="h-12 px-4 text-[13px] text-text-tertiary flex items-center">搜索中...</div>
-                ) : globalSearchResults.length === 0 ? (
-                  <div className="h-12 px-4 text-[13px] text-text-tertiary flex items-center">没有结果</div>
-                ) : (
-                  <div className="max-h-[360px] overflow-y-auto py-1">
-                    {globalSearchResults.map((item, index) => {
-                      const title = String(item.title || '').trim() || '未命名';
-                      const preview = String(item.previewText || item.author || item.siteName || '').trim();
-                      const kindLabel = item.kind === 'youtube-video'
-                        ? '视频'
-                        : item.kind === 'document-source' ? '文档' : '笔记';
-                      return (
-                        <button
-                          key={`${item.kind || 'item'}-${item.itemId || index}`}
-                          type="button"
-                          onClick={() => navigateToGlobalSearch(globalSearchQuery)}
-                          className="app-global-search-result-item group flex w-full items-start gap-3 px-4 py-3 text-left"
-                        >
-                          <span className="app-global-search-result-icon mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-surface-secondary">
-                            <BookOpenText className="h-3.5 w-3.5" strokeWidth={1.8} />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="flex items-center gap-2">
-                              <span className="truncate text-[14px] font-medium text-text-primary">{title}</span>
-                              <span className="shrink-0 rounded-md bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-tertiary">
-                                {kindLabel}
-                              </span>
-                            </span>
-                            {preview && (
-                              <span className="mt-1 block truncate text-[12px] text-text-tertiary">{preview}</span>
-                            )}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        <AppGlobalSearchOverlay
+          inputRef={globalSearchInputRef}
+          query={globalSearchQuery}
+          setQuery={setGlobalSearchQuery}
+          results={globalSearchResults}
+          isLoading={isGlobalSearchLoading}
+          isClosing={isGlobalSearchClosing}
+          closeSearch={closeGlobalSearch}
+          submitSearch={submitGlobalSearch}
+          navigateToSearch={navigateToGlobalSearch}
+        />
       )}
 
       {updateNotice && (
