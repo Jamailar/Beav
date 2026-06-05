@@ -101,7 +101,8 @@ pub(crate) fn active_space_workspace_root_from_store(
     active_space_id: &str,
     store_path: &Path,
 ) -> Result<PathBuf, String> {
-    workspace_root_from_snapshot(&store.settings, active_space_id, store_path)
+    let settings = settings_store::settings_snapshot(store);
+    workspace_root_from_snapshot(&settings, active_space_id, store_path)
 }
 
 pub(crate) fn update_workspace_root_cache(
