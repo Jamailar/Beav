@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 
 type LlmReadinessSnapshot = Awaited<ReturnType<typeof window.ipcRenderer.llmReadiness.getState>>;
 
@@ -55,11 +56,11 @@ export function useLlmReadinessState(): LlmReadinessStateResult {
     };
 
     window.ipcRenderer.llmReadiness.onStateChanged(handleStateChanged);
-    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
+    const unsubscribeSettingsUpdated = subscribeSettingsUpdated(handleSettingsUpdated);
     return () => {
       mounted = false;
       window.ipcRenderer.llmReadiness.offStateChanged(handleStateChanged);
-      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
+      unsubscribeSettingsUpdated();
     };
   }, []);
 

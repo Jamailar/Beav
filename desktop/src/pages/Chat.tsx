@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { Sparkles, Trash2, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { supportsAttachmentKindDirectInput } from '../../shared/modelCapabilities';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 import {
   CliEscalationDialog,
   type CliEscalationRequestModel,
@@ -2430,10 +2431,10 @@ export function Chat({
     const refreshChatModels = () => {
       void loadChatModelOptions();
     };
-    window.ipcRenderer.onSettingsUpdated(refreshChatModels);
+    const unsubscribeSettingsUpdated = subscribeSettingsUpdated(refreshChatModels);
     window.ipcRenderer.auth.onDataChanged(refreshChatModels);
     return () => {
-      window.ipcRenderer.offSettingsUpdated(refreshChatModels);
+      unsubscribeSettingsUpdated();
       window.ipcRenderer.auth.offDataChanged(refreshChatModels);
     };
   }, [isActive, loadChatModelOptions]);

@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(__dirname, '..', 'src');
 const rawIpcPattern = /window\s*\.\s*ipcRenderer\s*\.\s*(on|off|send|invoke|invokeGuarded|command|commandGuarded)\s*\(/g;
+const rootEventPattern = /window\s*\.\s*ipcRenderer\s*\.\s*(onSettingsUpdated|offSettingsUpdated|onDataChanged|offDataChanged|onAppUpdateAvailable|offAppUpdateAvailable|onFetchYoutubeInfoProgress|offFetchYoutubeInfoProgress)\s*\(/g;
 const scannedExtensions = new Set(['.js', '.jsx', '.ts', '.tsx']);
+const rootEventAllowedFiles = new Set([
+  path.join(srcRoot, 'bridge', 'appEvents.ts'),
+]);
 
 function listSourceFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -40,14 +44,28 @@ for (const filePath of listSourceFiles(srcRoot)) {
       line,
       column,
       method: match[1],
+      type: 'raw',
     });
+  }
+  if (!rootEventAllowedFiles.has(filePath)) {
+    for (const match of source.matchAll(rootEventPattern)) {
+      const { line, column } = getLineAndColumn(source, match.index ?? 0);
+      violations.push({
+        filePath: path.relative(path.resolve(__dirname, '..'), filePath),
+        line,
+        column,
+        method: match[1],
+        type: 'root-event',
+      });
+    }
   }
 }
 
 if (violations.length > 0) {
   console.error('Renderer IPC boundary check failed. Use bridge domain facade methods instead of raw channel calls:');
   for (const violation of violations) {
-    console.error(`- ${violation.filePath}:${violation.line}:${violation.column} raw window.ipcRenderer.${violation.method}(...)`);
+    const prefix = violation.type === 'root-event' ? 'root event' : 'raw';
+    console.error(`- ${violation.filePath}:${violation.line}:${violation.column} ${prefix} window.ipcRenderer.${violation.method}(...)`);
   }
   process.exit(1);
 }

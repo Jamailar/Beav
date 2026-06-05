@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
+import {
+    subscribeDataChanged,
+    subscribeSettingsUpdated,
+    type DataChangedPayload,
+} from '../bridge/appEvents';
 
 const EMPTY_DATA_SCOPES: string[] = [];
 const FOREGROUND_REFRESH_DELAY_MS = 120;
-
-type DataChangedPayload = {
-    scope?: string;
-    action?: string;
-    entityId?: string;
-};
 
 interface UsePageRefreshOptions {
     isActive?: boolean;
@@ -158,6 +157,8 @@ export function usePageRefresh({
                 scheduleRefresh(false, FOREGROUND_REFRESH_DELAY_MS);
             }
         };
+        let unsubscribeSettingsUpdated: (() => void) | undefined;
+        let unsubscribeDataChanged: (() => void) | undefined;
 
         if (triggerOnWindowFocus) {
             window.addEventListener('focus', handleWindowFocus);
@@ -169,10 +170,10 @@ export function usePageRefresh({
             window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
         }
         if (triggerOnSettingsChange) {
-            window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
+            unsubscribeSettingsUpdated = subscribeSettingsUpdated(handleSettingsUpdated);
         }
         if (dataScopesRef.current.length > 0) {
-            window.ipcRenderer.onDataChanged(handleDataChanged);
+            unsubscribeDataChanged = subscribeDataChanged(handleDataChanged);
         }
 
         return () => {
@@ -185,12 +186,8 @@ export function usePageRefresh({
             if (triggerOnSpaceChange) {
                 window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
             }
-            if (triggerOnSettingsChange) {
-                window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
-            }
-            if (dataScopesRef.current.length > 0) {
-                window.ipcRenderer.offDataChanged(handleDataChanged);
-            }
+            unsubscribeSettingsUpdated?.();
+            unsubscribeDataChanged?.();
         };
     }, [
         dataScopesKey,

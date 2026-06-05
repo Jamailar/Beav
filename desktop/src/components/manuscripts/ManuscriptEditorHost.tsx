@@ -18,6 +18,7 @@ import {
 import clsx from 'clsx';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { EditorLayoutToggleButton } from './EditorLayoutToggleButton';
+import { subscribeDataChanged } from '../../bridge/appEvents';
 import { appAlert, appConfirm } from '../../utils/appDialogs';
 import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from '../../features/app-shell/types';
 import { useMediaJobSubscription } from '../../features/media-jobs/useMediaJobSubscription';
@@ -540,10 +541,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
             }
         };
-        window.ipcRenderer.onDataChanged(handleDataChanged);
-        return () => {
-            window.ipcRenderer.offDataChanged(handleDataChanged);
-        };
+        return subscribeDataChanged(handleDataChanged);
     }, [isActive, loadAssets, loadTree]);
 
     useEffect(() => {

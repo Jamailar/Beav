@@ -12,6 +12,7 @@ import {
 } from '../config/aiSources';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { AdvisorModal, AdvisorSettingsPanel, type Advisor } from './Advisors';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import {
   type AgentTaskSnapshot,
@@ -5187,10 +5188,7 @@ export function Settings({
         void ensureTabResourcesLoaded(activeTab, true);
       }
     };
-    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
-    return () => {
-      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
-    };
+    return subscribeSettingsUpdated(handleSettingsUpdated);
   }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive, scheduleRemoteTabWarmup]);
 
   useEffect(() => {
@@ -6044,10 +6042,7 @@ export function Settings({
     const handleSettingsUpdated = () => {
       void loadAiPricingCatalog();
     };
-    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
-    return () => {
-      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
-    };
+    return subscribeSettingsUpdated(handleSettingsUpdated);
   }, [loadAiPricingCatalog, settingsSubView]);
 
   const activePricingGroup = useMemo(() => (

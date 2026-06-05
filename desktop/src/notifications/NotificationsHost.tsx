@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { playNotificationSound, RUNTIME_SUCCESS_SOUND_ASSET_URL } from './audio';
 import {
@@ -71,10 +72,10 @@ export function NotificationsHost({ currentView, children = null }: Notification
     const handleSettingsUpdated = () => {
       void loadSettings();
     };
-    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
+    const unsubscribeSettingsUpdated = subscribeSettingsUpdated(handleSettingsUpdated);
     return () => {
       cancelled = true;
-      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
+      unsubscribeSettingsUpdated();
     };
   }, []);
 
