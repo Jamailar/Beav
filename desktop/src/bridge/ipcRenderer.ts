@@ -13,6 +13,7 @@ import { createRuntimeBridge } from './domains/runtimeBridge';
 import { createSkillsBridge } from './domains/skillsBridge';
 import { createSystemBridge } from './domains/systemBridge';
 import { createTeamRuntimeBridge } from './domains/teamRuntimeBridge';
+import { createToolsBridge } from './domains/toolsBridge';
 import { createWanderBridge } from './domains/wanderBridge';
 import type { InvokeGuardOptions, Listener } from './types';
 import { preflightInlineAttachmentPayload } from '../utils/mediaReferencePreflight';
@@ -118,6 +119,7 @@ function createIpcRenderer() {
     ...createCliRuntimeBridge(core),
     ...createAudioVoiceBridge(core),
     ...createPluginsBridge(core),
+    ...createToolsBridge(core),
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh'),
@@ -165,11 +167,6 @@ function createIpcRenderer() {
       createSession: (payload?: Record<string, unknown>) => invokeChannel('session-bridge:create-session', payload || {}),
       sendMessage: (payload: { sessionId: string; message: string }) => invokeChannel('session-bridge:send-message', payload),
       resolvePermission: (payload: { requestId: string; outcome: 'proceed_once' | 'proceed_always' | 'cancel' }) => invokeChannel('session-bridge:resolve-permission', payload)
-    },
-    toolHooks: {
-      list: () => invokeChannel('tools:hooks:list'),
-      register: (hook: unknown) => invokeChannel('tools:hooks:register', hook),
-      remove: (hookId: string) => invokeChannel('tools:hooks:remove', { hookId })
     },
     subjects: {
       list: (payload?: Record<string, unknown>) => invokeChannel('subjects:list', payload || {}),
@@ -277,11 +274,6 @@ function createIpcRenderer() {
       createDraft: (payload: Record<string, unknown>) => invokeChannel('wechat-official:create-draft', payload)
     },
     listSkills: () => invokeChannel('skills:list'),
-    toolDiagnostics: {
-      list: () => invokeChannel('tools:diagnostics:list'),
-      runDirect: (toolName: string) => invokeChannel('tools:diagnostics:run-direct', { toolName }),
-      runAi: (toolName: string) => invokeChannel('tools:diagnostics:run-ai', { toolName })
-    },
     mcp: {
       list: () => invokeChannel('mcp:list'),
       add: (payload: {
