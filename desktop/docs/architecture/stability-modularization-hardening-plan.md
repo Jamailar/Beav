@@ -183,6 +183,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
 - Routed scheduler orphan-execution projections through RedClaw store snapshots.
 - Routed job runtime enqueue definition/execution access through `store::redclaw`.
+- Routed manual job enqueue and prepare definition reads through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
