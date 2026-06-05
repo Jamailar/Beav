@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
-import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { APP_BRAND } from '../config/brand';
 
 export type ProcessItemType =
@@ -433,9 +433,11 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default', failu
   }, [expanded, hiddenCount]);
 
   const openSettingsLogin = () => {
-    window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, {
-      detail: { view: 'settings', settingsTab: 'ai', aiModelSubTab: 'login' },
-    }));
+    dispatchAppIntent({
+      type: 'settings.open',
+      tab: 'ai',
+      aiModelSubTab: 'login',
+    });
   };
 
   if (statusLines.length === 0) return null;

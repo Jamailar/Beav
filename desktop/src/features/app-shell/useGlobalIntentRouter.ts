@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { REDBOX_NAVIGATE_EVENT } from '../../notifications/types';
-import type { AppIntent, LegacyNavigateEventDetail, RedClawNavigationAction, SettingsNavigationTarget, ViewType } from './types';
+import type { AppIntent, AppNavigateEventDetail, GenerationIntent, RedClawNavigationAction, SettingsNavigationTarget, ViewType } from './types';
 
 function recordFromUnknown(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -24,7 +24,13 @@ function shouldAutoOpenTeamSession(session: Record<string, unknown>): boolean {
     || Boolean(metadata.sourceTaskId || metadata.intent || metadata.recommendedRole);
 }
 
-function normalizeNavigateIntent(detail: LegacyNavigateEventDetail | null | undefined): AppIntent | null {
+function isAppIntent(detail: AppNavigateEventDetail | null | undefined): detail is AppIntent {
+  return Boolean(detail && typeof detail === 'object' && 'type' in detail);
+}
+
+function normalizeNavigateIntent(detail: AppNavigateEventDetail | null | undefined): AppIntent | null {
+  if (isAppIntent(detail)) return detail;
+
   const view = detail?.view;
   if (!view) return null;
 
@@ -64,6 +70,7 @@ type UseGlobalIntentRouterParams = {
   setSettingsNavigationTarget: (value: SettingsNavigationTarget | null) => void;
   setRedClawNavigationAction: (value: RedClawNavigationAction | null) => void;
   setApprovalTargetDocketId: (value: string) => void;
+  setPendingGenerationIntent: (value: GenerationIntent | null) => void;
 };
 
 export function useGlobalIntentRouter({
@@ -73,10 +80,11 @@ export function useGlobalIntentRouter({
   setSettingsNavigationTarget,
   setRedClawNavigationAction,
   setApprovalTargetDocketId,
+  setPendingGenerationIntent,
 }: UseGlobalIntentRouterParams) {
   useEffect(() => {
     const handleNavigate = (event: Event) => {
-      const intent = normalizeNavigateIntent((event as CustomEvent<LegacyNavigateEventDetail>).detail);
+      const intent = normalizeNavigateIntent((event as CustomEvent<AppNavigateEventDetail>).detail);
       if (!intent) return;
 
       if (intent.type === 'settings.open') {
@@ -132,6 +140,20 @@ export function useGlobalIntentRouter({
         return;
       }
 
+      if (intent.type === 'generation.open') {
+        setPendingGenerationIntent(intent.intent);
+        navigateToView('generation-studio');
+        return;
+      }
+
+      if (intent.type === 'manuscript.open') {
+        const manuscriptPath = String(intent.manuscriptPath || '').trim();
+        if (!manuscriptPath) return;
+        setActiveManuscriptEditorFile(manuscriptPath);
+        navigateToView('redclaw');
+        return;
+      }
+
       if (intent.type === 'view.open') {
         navigateToView(intent.view);
       }
@@ -145,6 +167,7 @@ export function useGlobalIntentRouter({
     navigateToView,
     setActiveManuscriptEditorFile,
     setApprovalTargetDocketId,
+    setPendingGenerationIntent,
     setRedClawNavigationAction,
     setSettingsNavigationTarget,
   ]);

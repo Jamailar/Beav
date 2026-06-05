@@ -184,6 +184,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setSettingsNavigationTarget,
     setRedClawNavigationAction,
     setApprovalTargetDocketId,
+    setPendingGenerationIntent,
   });
 
   useEffect(() => {

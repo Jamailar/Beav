@@ -11,7 +11,7 @@ import { applyAppTheme, CUSTOM_THEME_CHANGED_EVENT, readThemePreference, resolve
 import { useI18n, type I18nKey } from '../i18n';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
-import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { uiMeasure } from '../utils/uiDebug';
 import { SHOW_CURRENT_RELEASE_NOTES_EVENT, currentReleaseNotesMarkdown } from '../utils/currentReleaseNotes';
 
@@ -864,13 +864,17 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
   const handleSidebarNavigate = useCallback((item: SidebarNavItem) => {
     if (item.settingsTab || item.redclawAction) {
-      window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, {
-        detail: {
-          view: item.view,
-          settingsTab: item.settingsTab,
-          redclawAction: item.redclawAction,
-        },
-      }));
+      if (item.settingsTab) {
+        dispatchAppIntent({
+          type: 'settings.open',
+          tab: item.settingsTab,
+        });
+        return;
+      }
+      dispatchAppIntent({
+        type: 'redclaw.open',
+        action: item.redclawAction,
+      });
       return;
     }
     onNavigate(item.view);

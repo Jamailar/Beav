@@ -37,7 +37,7 @@ import { type AudioRecordingClip } from '../features/audio-input/audioInput';
 import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
-import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
 import { ChatDropOverlay } from './chat/ChatDropOverlay';
@@ -1742,9 +1742,11 @@ export function Chat({
   }, [isActive, loadChatModelOptions]);
 
   const handleOpenSettingsLogin = useCallback(() => {
-    window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, {
-      detail: { view: 'settings', settingsTab: 'ai', aiModelSubTab: 'login' },
-    }));
+    dispatchAppIntent({
+      type: 'settings.open',
+      tab: 'ai',
+      aiModelSubTab: 'login',
+    });
   }, []);
 
   useEffect(() => {
