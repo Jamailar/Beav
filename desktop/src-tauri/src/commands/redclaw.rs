@@ -1869,36 +1869,23 @@ fn export_redclaw_media_plan(
         &build_media_plan_readme(&project_snapshot.id, &concat_items),
     )?;
 
+    let now = now_iso();
+    let export_record = json!({
+        "path": path.display().to_string(),
+        "packagePath": package_dir.display().to_string(),
+        "concatPath": concat_path.display().to_string(),
+        "readmePath": readme_path.display().to_string(),
+        "schema": "redclaw.mediaPlan.v1",
+        "createdAt": now,
+    });
     let updated_project = with_store_mut(state, |store| {
-        let project = store
-            .redclaw_state
-            .projects
-            .iter_mut()
-            .find(|item| item.id == project_id)
-            .ok_or_else(|| "RedClaw project not found".to_string())?;
-        let now = now_iso();
-        let mut metadata = project
-            .metadata
-            .clone()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let mut exports = metadata
-            .get("mediaPlanExports")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        exports.push(json!({
-            "path": path.display().to_string(),
-            "packagePath": package_dir.display().to_string(),
-            "concatPath": concat_path.display().to_string(),
-            "readmePath": readme_path.display().to_string(),
-            "schema": "redclaw.mediaPlan.v1",
-            "createdAt": now,
-        }));
-        metadata.insert("mediaPlanExports".to_string(), Value::Array(exports));
-        project.metadata = Some(Value::Object(metadata));
-        project.updated_at = now;
-        Ok(project.clone())
+        redclaw_store::append_project_metadata_array_record(
+            store,
+            &project_id,
+            "mediaPlanExports",
+            export_record,
+            &now,
+        )
     })?;
 
     Ok(json!({
