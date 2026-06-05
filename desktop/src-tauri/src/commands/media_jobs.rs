@@ -2,6 +2,7 @@ mod video_retalk;
 
 use crate::media_runtime;
 use crate::persistence::with_store;
+use crate::store::settings as settings_store;
 use crate::*;
 use reqwest::blocking::{multipart, Client};
 use serde_json::{json, Value};
@@ -120,7 +121,7 @@ fn upload_official_temp_file(
         ));
     }
 
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let access_token = official_access_token_from_settings(&settings)
         .ok_or_else(|| "official account login is required before uploading media".to_string())?;
     let base_url = official_base_url_from_settings(&settings);
