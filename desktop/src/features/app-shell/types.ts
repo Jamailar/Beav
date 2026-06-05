@@ -16,6 +16,44 @@ export type RedClawNavigationAction = {
   nonce: number;
 };
 
+export type AppIntent =
+  | {
+      type: 'settings.open';
+      tab?: SettingsNavigationTarget['tab'];
+      aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
+    }
+  | {
+      type: 'redclaw.open';
+      action?: RedClawNavigationAction['action'];
+      sessionId?: string;
+    }
+  | {
+      type: 'approval.open';
+      docketId?: string;
+    }
+  | {
+      type: 'view.open';
+      view: ViewType;
+    }
+  | {
+      type: 'generation.open';
+      intent: GenerationIntent;
+    }
+  | {
+      type: 'manuscript.open';
+      manuscriptPath: string;
+    };
+
+export type LegacyNavigateEventDetail = {
+  view?: ViewType;
+  settingsTab?: SettingsNavigationTarget['tab'];
+  aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
+  redclawAction?: RedClawNavigationAction['action'];
+  teamSessionId?: string;
+  sessionId?: string;
+  docketId?: string;
+};
+
 export interface PendingChatMessage {
   content: string;
   displayContent?: string;
