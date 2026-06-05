@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Map;
 
 fn redclaw_definition_status(
     definition: &crate::runtime::RedclawJobDefinitionRecord,
