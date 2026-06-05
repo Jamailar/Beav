@@ -345,6 +345,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted collaboration member role profile defaults, agent-card overlay merging and member metadata construction into `runtime/collab_runtime/member_profile`.
 - Extracted collaboration member matching, executor capacity checks, member task-plan upsert/removal and speech queue updates into `runtime/collab_runtime/member_workload`.
 - Extracted collaboration task listing, creation, update, transition, session pinning and retry lifecycle handling into `runtime/collab_runtime/task_lifecycle`.
+- Extracted review docket listing, lookup, stats, creation, decision mapping and archive handling into `runtime/collab_runtime/review_docket`.
 
 ### 1. Bridge Contract Layer
 
