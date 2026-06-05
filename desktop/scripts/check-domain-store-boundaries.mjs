@@ -39,6 +39,23 @@ const restrictedPatterns = [
       path.join(srcRoot, 'memory', 'mod.rs'),
     ]),
   },
+  {
+    domain: 'runtime tasks',
+    pattern: /store\s*\.\s*runtime_tasks\b/g,
+    allowedFiles: new Set([
+      path.join(srcRoot, 'store', 'runtime_tasks.rs'),
+      path.join(srcRoot, 'runtime', 'task_runtime.rs'),
+      path.join(srcRoot, 'runtime', 'redclaw_orchestration.rs'),
+      path.join(srcRoot, 'runtime', 'session_runtime.rs'),
+      path.join(srcRoot, 'media_runtime', 'followup.rs'),
+      path.join(srcRoot, 'session_manager.rs'),
+      path.join(srcRoot, 'subagents', 'aggregation.rs'),
+      path.join(srcRoot, 'subagents', 'spawner.rs'),
+      path.join(srcRoot, 'commands', 'bridge.rs'),
+      path.join(srcRoot, 'commands', 'runtime_task_resume.rs'),
+      path.join(srcRoot, 'persistence', 'mod.rs'),
+    ]),
+  },
 ];
 
 function listRustFiles(dir) {
