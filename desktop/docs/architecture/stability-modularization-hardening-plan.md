@@ -246,6 +246,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed library YouTube summary and cover-generation settings reads through `store::settings`.
 - Routed library document-import active-space reads through `store::spaces`.
 - Routed library media catalog/list/delete/import asset access through `store::media`.
+- Routed library cover-generation work item append through `store::work_items`.
 
 ### 1. Bridge Contract Layer
 
