@@ -121,6 +121,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Added `store::subjects` owned snapshot helpers and routed subject list/get/search/category reads through them as the first store domain helper slice.
 - Moved RedClaw media plan export file writes outside the `with_store_mut` lock; the lock now only snapshots and applies metadata updates.
 - Added `pnpm --dir desktop check:store-locks` to prevent obvious slow file/process/network work inside `with_store` / `with_store_mut` closures.
+- Added `pnpm --dir desktop check:architecture` as the combined renderer IPC and store lock boundary guard.
 
 ### 1. Bridge Contract Layer
 
