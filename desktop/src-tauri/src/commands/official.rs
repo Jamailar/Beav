@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::settings as settings_store;
 use crate::{
     app_brand_display_name, app_brand_slug, append_debug_trace_state, auth,
     create_official_payment_form, emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
@@ -934,8 +935,8 @@ fn force_official_reauth(
     expected_generation: Option<u64>,
     source: &str,
 ) {
-    let mut settings =
-        with_store(state, |store| Ok(store.settings.clone())).unwrap_or_else(|_| json!({}));
+    let mut settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))
+        .unwrap_or_else(|_| json!({}));
     clear_official_auth_state(&mut settings);
     let _ =
         apply_official_settings_update(app, state, &settings, source, None, expected_generation);
@@ -950,7 +951,7 @@ pub(crate) fn refresh_official_auth_for_ai_request(
     reason: &str,
 ) -> Result<Option<String>, String> {
     let generation = auth::auth_generation(state)?;
-    let mut settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let mut settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     if !is_official_ai_request(&settings, request_url, api_key) {
         return Ok(None);
     }
@@ -970,7 +971,8 @@ pub(crate) fn refresh_official_auth_for_ai_request(
         Some(generation),
     ) {
         Ok(_) => {
-            let latest_settings = with_store(state, |store| Ok(store.settings.clone()))?;
+            let latest_settings =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let refreshed_token = if request_url.contains("/ai/video-retalk/") {
                 official_access_token_from_settings(&latest_settings)
                     .or_else(|| official_ai_api_key_from_settings(&latest_settings))
@@ -1289,7 +1291,7 @@ fn apply_official_settings_update(
         crate::ai_model_manager::legacy_projection::normalize_settings_projection(
             &mut store.settings,
         );
-        Ok(store.settings.clone())
+        Ok(settings_store::settings_snapshot(&store))
     })?;
     if should_sync_model_config {
         if let Err(error) = crate::ai_model_manager::store::sync_model_config_file(
@@ -1347,7 +1349,7 @@ fn refresh_official_auth_session_with_lock(
         .lock()
         .map_err(|_| "官方登录态刷新锁已损坏".to_string())?;
     let _ = auth::mark_auth_refreshing(app, state);
-    let latest_settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let latest_settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     merge_official_settings(settings, &latest_settings);
 
     if official_settings_session(settings).is_none() {
@@ -1683,7 +1685,8 @@ pub(crate) fn refresh_official_pricing_cache(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<Value, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let mut settings = settings_snapshot.clone();
     let response = run_official_public_json_request(&settings, "GET", "/models/pricing", None)?;
     let pricing = normalize_official_pricing_value(&response)
@@ -1790,7 +1793,8 @@ pub(crate) fn refresh_official_cached_data(
         "refresh_official_cached_data invoked",
     );
     let generation = auth::auth_generation(state)?;
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     if !official_session_logged_in(&settings_snapshot) {
         return Err("官方账号未登录".to_string());
     }
@@ -1820,7 +1824,8 @@ pub(crate) fn bootstrap_official_auth_session(
 ) -> Result<Value, String> {
     log_official_auth(state, "bootstrap", format!("reason={reason}"));
     let generation = auth::auth_generation(state)?;
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings_snapshot =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     if !official_session_logged_in(&settings_snapshot) {
         let mut cleaned_settings = settings_snapshot.clone();
         clear_official_auth_state(&mut cleaned_settings);
@@ -1841,7 +1846,8 @@ pub(crate) fn bootstrap_official_auth_session(
     }
 
     let session = with_store(state, |store| {
-        Ok(official_settings_session(&store.settings))
+        let settings = settings_store::settings_snapshot(&store);
+        Ok(official_settings_session(&settings))
     })?;
     let snapshot = auth::auth_state_snapshot(state).unwrap_or_default();
     let refreshed = match refresh_official_cached_data(app, state) {
