@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::scheduler::sync_redclaw_job_definitions;
+use crate::store::{settings as settings_store, spaces as spaces_store};
 use crate::{
     auth, compatible_workspace_base_dir, create_manuscript_package, detect_best_legacy_db,
     emit_space_changed, is_legacy_workspace_base, is_manuscript_package_path, join_relative,
@@ -90,10 +91,11 @@ fn legacy_db_fingerprint(path: &Path) -> Option<String> {
 }
 
 fn counts_payload(store: &AppStore) -> Value {
+    let (spaces, _) = spaces_store::list_spaces_snapshot(store);
     json!({
         "chatSessions": store.chat_sessions.len(),
         "chatMessages": store.chat_messages.len(),
-        "spaces": store.spaces.len(),
+        "spaces": spaces.len(),
         "transcriptRecords": store.session_transcript_records.len(),
         "checkpoints": store.session_checkpoints.len(),
         "toolResults": store.session_tool_results.len(),
@@ -269,7 +271,8 @@ fn startup_completed_message(
 }
 
 pub(crate) fn normalize_workspace_dir_setting(store: &mut AppStore) -> Result<(), String> {
-    let mut chosen = compatible_workspace_base_dir(&store.settings);
+    let settings = settings_store::settings_snapshot(store);
+    let mut chosen = compatible_workspace_base_dir(&settings);
     if is_legacy_workspace_base(&chosen) && !chosen.exists() {
         chosen = preferred_workspace_dir();
     }
@@ -281,17 +284,17 @@ pub(crate) fn normalize_workspace_dir_setting(store: &mut AppStore) -> Result<()
         fs::create_dir_all(&chosen).map_err(|error| error.to_string())?;
     }
 
-    if !store.settings.is_object() {
-        store.settings = json!({});
-    }
-    let settings = store
-        .settings
-        .as_object_mut()
-        .ok_or_else(|| "settings should be a JSON object".to_string())?;
-    settings.insert(
-        "workspace_dir".to_string(),
-        json!(chosen.display().to_string()),
-    );
+    settings_store::update_settings(store, |settings| {
+        if !settings.is_object() {
+            *settings = json!({});
+        }
+        if let Some(settings) = settings.as_object_mut() {
+            settings.insert(
+                "workspace_dir".to_string(),
+                json!(chosen.display().to_string()),
+            );
+        }
+    });
     Ok(())
 }
 
@@ -303,14 +306,15 @@ pub(crate) fn probe_startup_migration(
     let legacy_workspace_path = legacy_workspace_dir()
         .filter(|path| path.join("spaces").join("default").exists())
         .map(|path| path.display().to_string());
+    let settings = settings_store::settings_snapshot(store);
+    let active_space_id = spaces_store::active_space_id(store);
     let workspace_path = Some(
-        compatible_workspace_base_dir(&store.settings)
+        compatible_workspace_base_dir(&settings)
             .display()
             .to_string(),
     );
     let workspace_root =
-        crate::workspace_root_from_snapshot(&store.settings, &store.active_space_id, store_path)
-            .ok();
+        crate::workspace_root_from_snapshot(&settings, &active_space_id, store_path).ok();
     let legacy_markdown_count = workspace_root
         .as_ref()
         .map(|path| count_legacy_markdown_manuscripts(path))
@@ -571,11 +575,10 @@ fn execute_startup_migration(app: AppHandle) -> Result<AppStore, String> {
     normalize_workspace_dir_setting(&mut imported_store)?;
     sync_redclaw_job_definitions(&mut imported_store);
 
-    let workspace_root = crate::workspace_root_from_snapshot(
-        &imported_store.settings,
-        &imported_store.active_space_id,
-        &state.store_path,
-    )?;
+    let settings = settings_store::settings_snapshot(&imported_store);
+    let active_space_id = spaces_store::active_space_id(&imported_store);
+    let workspace_root =
+        crate::workspace_root_from_snapshot(&settings, &active_space_id, &state.store_path)?;
 
     let project_upgrade_counts = if needs_project_upgrade {
         let _ = set_status(&app, &state, |status| {
@@ -643,7 +646,7 @@ fn execute_startup_migration(app: AppHandle) -> Result<AppStore, String> {
         status.imported_counts = started_receipt.imported_counts.clone();
         status.project_upgrade_counts = started_receipt.project_upgrade_counts.clone();
     })?;
-    emit_space_changed(&app, &imported_store.active_space_id);
+    emit_space_changed(&app, &spaces_store::active_space_id(&imported_store));
     let _ = app.emit("settings:updated", json!({ "updatedAt": now_iso() }));
 
     Ok(imported_store)
