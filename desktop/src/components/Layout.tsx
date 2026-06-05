@@ -1,4 +1,4 @@
-import { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction, useCallback } from 'react';
 import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
@@ -8,14 +8,13 @@ import { NotificationCenterDrawer } from './NotificationCenterDrawer';
 import { APP_BRAND } from '../config/brand';
 import type { ThemeMode } from '../config/theme';
 import { useI18n, type I18nKey } from '../i18n';
-import { appAlert, appConfirm } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { useAppUpdateNotice } from '../features/app-shell/useAppUpdateNotice';
 import { useGlobalKnowledgeSearch } from '../features/app-shell/useGlobalKnowledgeSearch';
 import { useLayoutSidebar } from '../features/app-shell/useLayoutSidebar';
+import { useLayoutSpaces } from '../features/app-shell/useLayoutSpaces';
 import { useLayoutTheme } from '../features/app-shell/useLayoutTheme';
-import { uiMeasure } from '../utils/uiDebug';
 
 interface LayoutProps {
   children: ReactNode;
@@ -50,11 +49,6 @@ const NAV_ITEMS: SidebarNavItem[] = [
   // { id: 'archives', label: '档案', icon: Archive },
   // { id: 'skills', label: '技能库', icon: Lightbulb },
 ];
-
-interface WorkspaceSpace {
-  id: string;
-  name: string;
-}
 
 type AppTitleBarPlatform = 'mac' | 'windows' | null;
 
@@ -232,20 +226,9 @@ function AppTitleBar({
 
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const { t } = useI18n();
-  const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
-  const [activeSpaceId, setActiveSpaceId] = useState<string>('');
-  const [isSwitchingSpace, setIsSwitchingSpace] = useState(false);
-  const [isSpaceMenuOpen, setIsSpaceMenuOpen] = useState(false);
-  const [hoveredSpaceId, setHoveredSpaceId] = useState<string | null>(null);
-  const [isSpaceDialogOpen, setIsSpaceDialogOpen] = useState(false);
-  const [spaceDialogName, setSpaceDialogName] = useState('');
-  const [spaceDialogTargetId, setSpaceDialogTargetId] = useState<string | null>(null);
-  const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
-  const [deletingSpaceId, setDeletingSpaceId] = useState<string | null>(null);
   const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
   const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
-  const spaceMenuRef = useRef<HTMLDivElement | null>(null);
   const isFixedViewportView = false;
   const titleBarPlatform = getAppTitleBarPlatform();
   const usesAppTitleBar = titleBarPlatform !== null;
@@ -260,7 +243,28 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     sidebarVisualCollapsed,
     toggleSidebarCollapsed,
     startSidebarResize,
-  } = useLayoutSidebar(() => setIsSpaceMenuOpen(false));
+  } = useLayoutSidebar();
+  const {
+    spaces,
+    activeSpaceId,
+    activeSpaceName,
+    isSwitchingSpace,
+    isSpaceMenuOpen,
+    setIsSpaceMenuOpen,
+    hoveredSpaceId,
+    setHoveredSpaceId,
+    isSpaceDialogOpen,
+    spaceDialogName,
+    setSpaceDialogName,
+    isSpaceDialogSubmitting,
+    deletingSpaceId,
+    spaceMenuRef,
+    handleSwitchSpace,
+    openRenameSpaceDialog,
+    handleDeleteSpace,
+    closeSpaceDialog,
+    submitSpaceDialog,
+  } = useLayoutSpaces(sidebarVisualCollapsed);
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const {
     updateNotice,
@@ -282,165 +286,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     submitGlobalSearch,
     navigateToGlobalSearch,
   } = useGlobalKnowledgeSearch(onNavigate);
-  const activeSpaceName = useMemo(
-    () => spaces.find((space) => space.id === activeSpaceId)?.name || t('layout.defaultSpaceName'),
-    [activeSpaceId, spaces, t]
-  );
-
-  const loadSpaces = useCallback(async () => {
-    try {
-      const result = await uiMeasure('layout', 'load_spaces', async () => (
-        window.ipcRenderer.spaces.list() as Promise<{ spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null>
-      )) as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
-      if (Array.isArray(result?.spaces)) {
-        setSpaces(result.spaces);
-      }
-      if (typeof result?.activeSpaceId === 'string' && result.activeSpaceId.trim()) {
-        setActiveSpaceId(result.activeSpaceId);
-      }
-    } catch (error) {
-      console.error('Failed to load spaces:', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadSpaces();
-
-    const handleSpaceChanged = () => {
-      void loadSpaces();
-    };
-    window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
-    return () => {
-      window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
-    };
-  }, [loadSpaces]);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (!spaceMenuRef.current) return;
-      if (!spaceMenuRef.current.contains(event.target as Node)) {
-        setIsSpaceMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isSpaceMenuOpen) {
-      setHoveredSpaceId(null);
-    }
-  }, [isSpaceMenuOpen]);
-
-  useEffect(() => {
-    if (sidebarVisualCollapsed) {
-      setIsSpaceMenuOpen(false);
-    }
-  }, [sidebarVisualCollapsed]);
-
-  const handleSwitchSpace = useCallback(async (nextSpaceId: string) => {
-    if (!nextSpaceId) return;
-    setIsSwitchingSpace(true);
-    try {
-      const result = await window.ipcRenderer.spaces.switch(nextSpaceId) as { success?: boolean; activeSpaceId?: string; error?: string } | null;
-      if (!result?.success) {
-        void appAlert(result?.error || t('layout.switchSpaceFailed'));
-        return;
-      }
-      setActiveSpaceId(result.activeSpaceId || nextSpaceId);
-      setIsSpaceMenuOpen(false);
-      window.location.reload();
-    } catch (error) {
-      console.error('Failed to switch space:', error);
-      void appAlert(t('layout.switchSpaceFailedRetry'));
-    } finally {
-      setIsSwitchingSpace(false);
-    }
-  }, [t]);
-
-  const openRenameSpaceDialog = useCallback((space: WorkspaceSpace) => {
-    setIsSpaceMenuOpen(false);
-    setSpaceDialogTargetId(space.id);
-    setSpaceDialogName(space.name);
-    setIsSpaceDialogOpen(true);
-  }, []);
-
-  const handleDeleteSpace = useCallback(async (space: WorkspaceSpace) => {
-    if (!space.id || space.id === 'default' || deletingSpaceId) return;
-    const confirmed = await appConfirm(t('layout.deleteSpaceConfirm', { name: space.name || space.id }), {
-      title: t('layout.deleteSpace'),
-      confirmLabel: t('layout.deleteSpace'),
-      tone: 'danger',
-    });
-    if (!confirmed) return;
-
-    setDeletingSpaceId(space.id);
-    try {
-      const result = await window.ipcRenderer.spaces.delete(space.id) as {
-        success?: boolean;
-        activeSpaceId?: string;
-        deletedActiveSpace?: boolean;
-        error?: string;
-      } | null;
-      if (!result?.success) {
-        void appAlert(result?.error || t('layout.deleteSpaceFailed'));
-        return;
-      }
-      setIsSpaceMenuOpen(false);
-      await loadSpaces();
-      if (result.deletedActiveSpace) {
-        window.location.reload();
-      }
-    } catch (error) {
-      console.error('Failed to delete space:', error);
-      void appAlert(t('layout.deleteSpaceFailedRetry'));
-    } finally {
-      setDeletingSpaceId(null);
-    }
-  }, [deletingSpaceId, loadSpaces, t]);
-
-  const closeSpaceDialog = useCallback(() => {
-    if (isSpaceDialogSubmitting) return;
-    setIsSpaceDialogOpen(false);
-    setSpaceDialogName('');
-    setSpaceDialogTargetId(null);
-  }, [isSpaceDialogSubmitting]);
-
-  const submitSpaceDialog = useCallback(async () => {
-    const trimmedName = spaceDialogName.trim();
-    if (!trimmedName) {
-      void appAlert(t('layout.spaceNameRequired'));
-      return;
-    }
-
-    setIsSpaceDialogSubmitting(true);
-    try {
-      if (!spaceDialogTargetId) {
-        void appAlert(t('layout.renameSpaceMissing'));
-        return;
-      }
-
-      const result = await window.ipcRenderer.spaces.rename({ id: spaceDialogTargetId, name: trimmedName }) as { success?: boolean; error?: string } | null;
-      if (!result?.success) {
-        void appAlert(result?.error || t('layout.renameSpaceFailed'));
-        return;
-      }
-
-      setIsSpaceDialogOpen(false);
-      setSpaceDialogName('');
-      setSpaceDialogTargetId(null);
-      await loadSpaces();
-    } catch (error) {
-      console.error('Failed to submit space dialog:', error);
-      void appAlert(t('layout.renameSpaceFailedRetry'));
-    } finally {
-      setIsSpaceDialogSubmitting(false);
-    }
-  }, [loadSpaces, spaceDialogName, spaceDialogTargetId, t]);
-
   const handleSidebarNavigate = useCallback((item: SidebarNavItem) => {
     if (item.settingsTab || item.redclawAction) {
       if (item.settingsTab) {
