@@ -398,19 +398,19 @@ pub fn enqueue_due_job_executions(store: &mut AppStore, now: i64) -> Vec<String>
 
 pub fn requeue_retrying_job_executions(store: &mut AppStore, now: i64) {
     let now_iso = now_iso();
-    for execution in store.redclaw_job_executions.iter_mut() {
+    redclaw_store::for_each_job_execution_mut(store, |execution| {
         if execution.status != "retrying" {
-            continue;
+            return;
         }
         if parse_millis_string(execution.retry_not_before_at.as_deref()).unwrap_or(i64::MAX) > now {
-            continue;
+            return;
         }
         if transition_execution_status(execution, "queued", &now_iso).is_ok() {
             execution.retry_not_before_at = None;
             execution.retry_bucket = Some("retry-ready".to_string());
             append_execution_turn(&mut *execution, &now_iso, "system", "Retry re-queued");
         }
-    }
+    });
 }
 
 pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
