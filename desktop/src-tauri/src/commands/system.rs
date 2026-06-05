@@ -1,3 +1,4 @@
+mod ai_model_ops;
 mod app_actions;
 mod app_update;
 mod feedback;
@@ -14,8 +15,6 @@ use crate::logging::{
     list_pending_reports_value, recent_value, status_value as logging_status_value,
     update_upload_consent, upload_pending_report,
 };
-use crate::persistence::with_store;
-use crate::store::settings as settings_store;
 use crate::{payload_field, payload_string, store_root, AppState};
 
 pub fn handle_system_channel(
@@ -67,58 +66,8 @@ pub fn handle_system_channel(
                 "app:open-knowledge-api-guide" => app_actions::open_knowledge_api_guide(app),
                 "app:open-path" => app_actions::open_path(state, payload),
                 "settings:pick-workspace-dir" => app_actions::pick_workspace_dir(),
-                "ai-model-manager:snapshot" => with_store(state, |store| {
-                    let runtime = state
-                        .auth_runtime
-                        .lock()
-                        .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
-                    let settings = settings_store::settings_snapshot(&store);
-                    let projected = crate::auth::project_settings_for_runtime(&settings, &runtime);
-                    serde_json::to_value(crate::ai_model_manager::AiModelManager::snapshot(
-                        &projected,
-                    ))
-                    .map_err(|error| error.to_string())
-                }),
-                "ai-model-manager:resolve" => {
-                    let runtime_mode = payload_string(payload, "runtimeMode")
-                        .or_else(|| payload_string(payload, "runtime_mode"));
-                    let scope = payload_string(payload, "scope");
-                    let action = payload_string(payload, "action");
-                    with_store(state, |store| {
-                        let runtime = state
-                            .auth_runtime
-                            .lock()
-                            .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
-                        let settings = settings_store::settings_snapshot(&store);
-                        let projected =
-                            crate::auth::project_settings_for_runtime(&settings, &runtime);
-                        let resolved = if let Some(action) = action.as_deref() {
-                            crate::ai_model_manager::AiModelManager::resolve_for_tool(
-                                &projected,
-                                action,
-                                Some(payload),
-                            )
-                        } else {
-                            let scope = scope
-                                .as_deref()
-                                .map(crate::ai_model_manager::AiModelScope::from_route_scope)
-                                .unwrap_or_else(|| {
-                                    crate::ai_model_manager::scope_for_runtime_mode(
-                                        runtime_mode.as_deref(),
-                                    )
-                                });
-                            crate::ai_model_manager::AiModelManager::resolve(
-                                &projected,
-                                scope,
-                                Some(payload),
-                            )
-                        };
-                        Ok(resolved
-                            .as_ref()
-                            .map(crate::ai_model_manager::resolved_value_for_debug)
-                            .unwrap_or_else(|| json!({ "success": false, "error": "unresolved" })))
-                    })
-                }
+                "ai-model-manager:snapshot" => ai_model_ops::snapshot(state),
+                "ai-model-manager:resolve" => ai_model_ops::resolve(state, payload),
                 "db:get-settings" => settings_ops::get_settings(state),
                 "db:save-settings" => settings_ops::save_settings(app, state, payload),
                 "debug:get-status" | "logs:get-status" => logging_status_value(state),
