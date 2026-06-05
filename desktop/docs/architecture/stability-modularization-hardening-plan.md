@@ -154,6 +154,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed voice-service subject read snapshots through `store::subjects`, while leaving voice workspace persistence writeback unchanged.
 - Routed diagnostics RedClaw job definition/execution reads through `store::redclaw`.
 - Added runtime-task get/push helpers and routed subagent production task read/write paths through `store::runtime_tasks`.
+- Routed scheduler background-task runtime-task reads through `store::runtime_tasks`.
 
 ### 1. Bridge Contract Layer
 
