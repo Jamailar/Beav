@@ -65,6 +65,28 @@ pub(crate) fn mark_runner_tick(store: &mut AppStore, now: String) -> Value {
     state_value(store)
 }
 
+pub(crate) fn runner_is_ticking(store: &AppStore) -> bool {
+    store.redclaw_state.enabled && store.redclaw_state.is_ticking
+}
+
+pub(crate) fn mark_scheduler_tick(store: &mut AppStore, now: i64) -> Option<Option<String>> {
+    if !runner_is_ticking(store) {
+        return None;
+    }
+    let next_maintenance_at = store.redclaw_state.next_maintenance_at.clone();
+    store.redclaw_state.last_tick_at = Some(now.to_string());
+    store.redclaw_state.next_tick_at =
+        Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
+    Some(next_maintenance_at)
+}
+
+pub(crate) fn scheduler_execution_limit(store: &AppStore) -> usize {
+    if runner_is_ticking(store) {
+        return store.redclaw_state.max_automation_per_tick.max(1) as usize;
+    }
+    0
+}
+
 pub(crate) fn apply_runner_config(store: &mut AppStore, patch: RunnerConfigPatch) -> Value {
     apply_runner_config_patch(store, patch);
     state_value(store)

@@ -620,17 +620,14 @@ pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandl
 
                 if crate::persistence::with_store_mut(&state, |store| {
                     sync_redclaw_job_definitions(store);
-                    if store.redclaw_state.enabled && store.redclaw_state.is_ticking {
+                    if redclaw_store::runner_is_ticking(store) {
                         recover_stale_job_executions(store, now);
                         requeue_retrying_job_executions(store, now);
                         enqueued_execution_ids = enqueue_due_job_executions(store, now);
+                        let next_maintenance_at =
+                            redclaw_store::mark_scheduler_tick(store, now).flatten();
                         should_run_maintenance =
-                            parse_millis_string(store.redclaw_state.next_maintenance_at.as_deref())
-                                .unwrap_or(0)
-                                <= now;
-                        store.redclaw_state.last_tick_at = Some(now.to_string());
-                        store.redclaw_state.next_tick_at =
-                            Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
+                            parse_millis_string(next_maintenance_at.as_deref()).unwrap_or(0) <= now;
                     }
                     Ok(())
                 })
@@ -655,10 +652,8 @@ pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandl
                 if should_run_maintenance {
                     let _ = crate::memory::run_memory_maintenance_with_reason(&state, "periodic");
                     if let Ok(store) = state.store.lock() {
-                        let _ = app_handle.emit(
-                            "redclaw:runner-status",
-                            crate::redclaw_state_value(&store.redclaw_state),
-                        );
+                        let _ = app_handle
+                            .emit("redclaw:runner-status", redclaw_store::state_value(&store));
                     }
                 }
             })
@@ -675,11 +670,8 @@ pub fn run_redclaw_job_runner(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHand
             let app_handle = app.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || {
                 let state = app_handle.state::<AppState>();
-                let execution_limit = crate::persistence::with_store_mut(&state, |store| {
-                    if store.redclaw_state.enabled && store.redclaw_state.is_ticking {
-                        return Ok(store.redclaw_state.max_automation_per_tick.max(1) as usize);
-                    }
-                    Ok(0usize)
+                let execution_limit = crate::persistence::with_store(&state, |store| {
+                    Ok(redclaw_store::scheduler_execution_limit(&store))
                 })
                 .unwrap_or(0);
 
