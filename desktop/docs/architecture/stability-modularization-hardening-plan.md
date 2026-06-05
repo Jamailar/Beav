@@ -296,6 +296,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted official pricing payload validation and startup pricing cache refresh into `commands/official/pricing`, preserving the existing startup-facing API.
 - Moved official remote call-record fetch into `commands/official/call_records` beside its response normalization.
 - Moved official model recovery fetch and cached-model source seeding into `commands/official/models`.
+- Extracted official cached-data refresh, auth bootstrap and background refresh inflight control into `commands/official/cache`, preserving existing startup/auth-flow entrypoints.
 
 ### 1. Bridge Contract Layer
 
