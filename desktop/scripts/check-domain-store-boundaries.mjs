@@ -56,6 +56,15 @@ const restrictedPatterns = [
       path.join(srcRoot, 'persistence', 'mod.rs'),
     ]),
   },
+  {
+    domain: 'assistant daemon',
+    pattern: /store\s*\.\s*assistant_state\b/g,
+    allowedFiles: new Set([
+      path.join(srcRoot, 'store', 'assistant.rs'),
+      path.join(srcRoot, 'assistant_core.rs'),
+      path.join(srcRoot, 'persistence', 'mod.rs'),
+    ]),
+  },
 ];
 
 function listRustFiles(dir) {

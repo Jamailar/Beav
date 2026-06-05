@@ -1,4 +1,5 @@
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::assistant as assistant_store;
 use crate::*;
 use serde_json::{json, Value};
 use std::net::TcpStream;
@@ -14,7 +15,7 @@ pub fn ensure_assistant_daemon_running(
     state: &State<'_, AppState>,
     respect_auto_start: bool,
 ) -> Result<Option<Value>, String> {
-    let assistant_snapshot = with_store(state, |store| Ok(store.assistant_state.clone()))?;
+    let assistant_snapshot = with_store(state, |store| Ok(assistant_store::snapshot(&store)))?;
     if !assistant_snapshot.enabled || (respect_auto_start && !assistant_snapshot.auto_start) {
         return Ok(None);
     }
@@ -26,9 +27,10 @@ pub fn ensure_assistant_daemon_running(
         .unwrap_or("webhook");
     if feishu_receive_mode == "websocket" {
         let snapshot = with_store_mut(state, |store| {
-            store.assistant_state.last_error =
-                Some("Feishu websocket 接入尚未实现，请先切回 webhook 模式。".to_string());
-            Ok(store.assistant_state.clone())
+            Ok(assistant_store::set_last_error(
+                store,
+                "Feishu websocket 接入尚未实现，请先切回 webhook 模式。".to_string(),
+            ))
         })?;
         emit_assistant_status(app, &snapshot);
         return Err("Feishu websocket 接入尚未实现，请先切回 webhook 模式。".to_string());
@@ -77,29 +79,10 @@ pub fn ensure_assistant_daemon_running(
     };
 
     let updated = with_store_mut(state, |store| {
-        store.assistant_state.listening = true;
-        store.assistant_state.last_error =
-            Some("RedClaw assistant daemon local listener is running.".to_string());
-        if let Some(status) = sidecar_status {
-            if let Some(object) = store.assistant_state.weixin.as_object_mut() {
-                match status {
-                    Ok(pid) => {
-                        object.insert("sidecarRunning".to_string(), json!(true));
-                        object.insert("sidecarPid".to_string(), json!(pid));
-                    }
-                    Err(error) => {
-                        object.insert("sidecarRunning".to_string(), json!(false));
-                        object.insert("lastSidecarError".to_string(), json!(error.clone()));
-                        store.assistant_state.last_error = Some(format!(
-                            "RedClaw assistant daemon is running; sidecar failed: {error}"
-                        ));
-                    }
-                }
-            }
-        }
-        Ok(assistant_state_value(&store.assistant_state))
+        let snapshot = assistant_store::mark_listener_running(store, sidecar_status);
+        Ok(assistant_state_value(&snapshot))
     })?;
-    let snapshot = with_store(state, |store| Ok(store.assistant_state.clone()))?;
+    let snapshot = with_store(state, |store| Ok(assistant_store::snapshot(&store)))?;
     emit_assistant_status(app, &snapshot);
     Ok(Some(updated))
 }
@@ -128,7 +111,8 @@ pub fn handle_assistant_daemon_channel(
             "assistant:daemon-status" => with_store(state, |store| {
                 let started_at = now_ms();
                 let request_id = format!("assistant:daemon-status:{}", started_at);
-                let value = assistant_state_value(&store.assistant_state);
+                let snapshot = assistant_store::snapshot(&store);
+                let value = assistant_state_value(&snapshot);
                 log_timing_event(
                     state,
                     "settings",
@@ -142,42 +126,20 @@ pub fn handle_assistant_daemon_channel(
             "assistant:daemon-set-config" | "assistant:daemon-start" => {
                 let enable_listening = channel == "assistant:daemon-start";
                 let status = with_store_mut(state, |store| {
-                    store.assistant_state.enabled = payload_field(payload, "enabled")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(store.assistant_state.enabled);
-                    store.assistant_state.auto_start = payload_field(payload, "autoStart")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(store.assistant_state.auto_start);
-                    store.assistant_state.keep_alive_when_no_window =
-                        payload_field(payload, "keepAliveWhenNoWindow")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(store.assistant_state.keep_alive_when_no_window);
-                    if let Some(host) = payload_string(payload, "host") {
-                        store.assistant_state.host = host;
-                    }
-                    if let Some(port) = payload_field(payload, "port").and_then(|v| v.as_i64()) {
-                        store.assistant_state.port = port;
-                    }
-                    if let Some(feishu) = payload_field(payload, "feishu") {
-                        store.assistant_state.feishu = feishu.clone();
-                    }
-                    if let Some(relay) = payload_field(payload, "relay") {
-                        store.assistant_state.relay = relay.clone();
-                    }
-                    if let Some(weixin) = payload_field(payload, "weixin") {
-                        store.assistant_state.weixin = weixin.clone();
-                    }
-                    if let Some(knowledge_api) = payload_field(payload, "knowledgeApi") {
-                        store.assistant_state.knowledge_api = knowledge_api.clone();
-                    }
-                    if enable_listening {
-                        store.assistant_state.enabled = true;
-                        store.assistant_state.lock_state = "owner".to_string();
-                        store.assistant_state.last_error = Some(
-                            "RedClaw assistant daemon is preparing local listener.".to_string(),
-                        );
-                    }
-                    Ok(assistant_state_value(&store.assistant_state))
+                    let patch = assistant_store::AssistantConfigPatch {
+                        enabled: payload_field(payload, "enabled").and_then(|v| v.as_bool()),
+                        auto_start: payload_field(payload, "autoStart").and_then(|v| v.as_bool()),
+                        keep_alive_when_no_window: payload_field(payload, "keepAliveWhenNoWindow")
+                            .and_then(|v| v.as_bool()),
+                        host: payload_string(payload, "host"),
+                        port: payload_field(payload, "port").and_then(|v| v.as_i64()),
+                        feishu: payload_field(payload, "feishu").cloned(),
+                        relay: payload_field(payload, "relay").cloned(),
+                        weixin: payload_field(payload, "weixin").cloned(),
+                        knowledge_api: payload_field(payload, "knowledgeApi").cloned(),
+                    };
+                    let snapshot = assistant_store::apply_config(store, patch, enable_listening);
+                    Ok(assistant_state_value(&snapshot))
                 })?;
                 if enable_listening {
                     if let Some(updated) = ensure_assistant_daemon_running(app, state, false)? {
@@ -185,7 +147,7 @@ pub fn handle_assistant_daemon_channel(
                     }
                     return Ok(status);
                 }
-                let snapshot = with_store(state, |store| Ok(store.assistant_state.clone()))?;
+                let snapshot = with_store(state, |store| Ok(assistant_store::snapshot(&store)))?;
                 emit_assistant_status(app, &snapshot);
                 Ok(status)
             }
@@ -201,17 +163,10 @@ pub fn handle_assistant_daemon_channel(
                 }
                 let _ = stop_assistant_sidecar(state);
                 let status = with_store_mut(state, |store| {
-                    store.assistant_state.listening = false;
-                    store.assistant_state.enabled = false;
-                    if let Some(object) = store.assistant_state.weixin.as_object_mut() {
-                        object.insert("sidecarRunning".to_string(), json!(false));
-                        object.remove("sidecarPid");
-                    }
-                    store.assistant_state.last_error =
-                        Some("RedClaw assistant daemon stopped.".to_string());
-                    Ok(assistant_state_value(&store.assistant_state))
+                    let snapshot = assistant_store::mark_stopped(store);
+                    Ok(assistant_state_value(&snapshot))
                 })?;
-                let snapshot = with_store(state, |store| Ok(store.assistant_state.clone()))?;
+                let snapshot = with_store(state, |store| Ok(assistant_store::snapshot(&store)))?;
                 emit_assistant_status(app, &snapshot);
                 Ok(status)
             }
@@ -219,10 +174,7 @@ pub fn handle_assistant_daemon_channel(
                 let result = with_store_mut(state, |store| {
                     let session_key = make_id("wx-login");
                     let state_dir = format!("{}/assistant/weixin", store_root(state)?.display());
-                    if let Some(object) = store.assistant_state.weixin.as_object_mut() {
-                        object.insert("connected".to_string(), json!(false));
-                        object.insert("stateDir".to_string(), json!(state_dir.clone()));
-                    }
+                    assistant_store::start_weixin_login(store, &state_dir);
                     Ok(json!({
                         "success": true,
                         "sessionKey": session_key,
@@ -235,39 +187,15 @@ pub fn handle_assistant_daemon_channel(
             }
             "assistant:daemon-weixin-login-wait" => {
                 let state_dir = with_store(state, |store| {
-                    Ok(store
-                        .assistant_state
-                        .weixin
-                        .get("stateDir")
-                        .and_then(|value| value.as_str())
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| {
-                            store_root(state)
-                                .unwrap_or_else(|_| PathBuf::from("."))
-                                .join("assistant")
-                                .join("weixin")
-                        }))
+                    let fallback = store_root(state)
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .join("assistant")
+                        .join("weixin");
+                    Ok(assistant_store::weixin_state_dir(&store, fallback))
                 })?;
                 let sidecar_state = read_weixin_sidecar_state(&state_dir);
                 let result = with_store_mut(state, |store| {
-                    if let Some(object) = store.assistant_state.weixin.as_object_mut() {
-                        if let Some(sidecar_state) = sidecar_state.clone() {
-                            object.insert("connected".to_string(), json!(true));
-                            if let Some(account_id) = sidecar_state.get("accountId").cloned() {
-                                object.insert("accountId".to_string(), account_id.clone());
-                                object
-                                    .insert("availableAccountIds".to_string(), json!([account_id]));
-                            }
-                            if let Some(user_id) = sidecar_state.get("userId").cloned() {
-                                object.insert("userId".to_string(), user_id);
-                            }
-                            if let Some(token) = sidecar_state.get("token").cloned() {
-                                object.insert("token".to_string(), token);
-                            }
-                        } else {
-                            object.insert("connected".to_string(), json!(false));
-                        }
-                    }
+                    assistant_store::apply_weixin_login_state(store, sidecar_state.as_ref());
                     if let Some(sidecar_state) = sidecar_state {
                         Ok(json!({
                             "success": true,
