@@ -171,6 +171,10 @@ pub(crate) fn search_memory_records(store: &AppStore, query: &str) -> Vec<Value>
     results
 }
 
+pub(crate) fn append_memory_record(store: &mut AppStore, record: UserMemoryRecord) {
+    store.memories.push(record);
+}
+
 pub(crate) fn archive_memory_record(store: &mut AppStore, id: &str, reason: &str) -> bool {
     let Some(item) = store.memories.iter_mut().find(|entry| entry.id == id) else {
         return false;

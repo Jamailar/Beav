@@ -15,8 +15,9 @@ pub(crate) use maintenance::{
 };
 pub(crate) use prompt::build_memory_prompt_section;
 pub(crate) use store::{
-    archive_memory_record, list_active_memories, list_archived_memories, list_memory_history,
-    memory_workspace_snapshot, persist_memory_workspace_state, search_memory_records,
+    append_memory_record, archive_memory_record, list_active_memories, list_archived_memories,
+    list_memory_history, memory_workspace_snapshot, persist_memory_workspace_state,
+    search_memory_records,
 };
 
 use crate::persistence::{with_store, with_store_mut};

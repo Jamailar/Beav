@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::commands::redclaw_runtime::{
     append_redclaw_automation_user_message, ensure_redclaw_task_session_record, execute_redclaw_run,
 };
+use crate::memory::append_memory_record;
 use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
 use crate::runtime::{
     add_collab_member, collab_session_snapshot, create_collab_session, create_collab_task,
@@ -34,7 +35,7 @@ use crate::{
     load_redclaw_onboarding_state, load_redclaw_profile_prompt_bundle, load_redclaw_style_profile,
     mark_redclaw_style_definition_started, now_i64, now_iso, parse_json_value_from_text,
     payload_field, payload_string, save_redclaw_mvp_onboarding_progress,
-    update_redclaw_profile_doc, workspace_root, write_text_file, AppState,
+    update_redclaw_profile_doc, workspace_root, write_text_file, AppState, UserMemoryRecord,
 };
 use redclaw_task_control::{
     create_confirmed_task_from_intent, handle_task_cancel, handle_task_confirm, handle_task_create,
@@ -751,76 +752,82 @@ fn update_redclaw_learning_candidate(
     if !matches!(status.as_str(), "accepted" | "rejected" | "pending") {
         return Err("status must be accepted, rejected, or pending".to_string());
     }
+    let now = now_iso();
     with_store_mut(state, |store| {
         let active_space_id = spaces_store::active_space_id(store);
-        let project = store
-            .redclaw_state
-            .projects
-            .iter_mut()
-            .find(|item| item.id == project_id)
-            .ok_or_else(|| "RedClaw project not found".to_string())?;
-        let candidate = project
-            .learning_candidates
-            .iter_mut()
-            .find(|item| {
-                item.get("id").and_then(Value::as_str).map(str::trim) == Some(candidate_id.as_str())
-            })
-            .ok_or_else(|| "learning candidate not found".to_string())?;
-        if let Some(object) = candidate.as_object_mut() {
-            object.insert("status".to_string(), json!(status.clone()));
-            object.insert("updatedAt".to_string(), json!(now_iso()));
-        }
-        let candidate_snapshot = candidate.clone();
+        let (project, candidate_snapshot) = redclaw_store::update_learning_candidate_status(
+            store,
+            &project_id,
+            &candidate_id,
+            &status,
+            &now,
+        )?;
         if status == "accepted" {
-            let statement = candidate_snapshot
-                .get("statement")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .unwrap_or("RedClaw learning candidate accepted")
-                .to_string();
-            store.memories.push(crate::UserMemoryRecord {
-                id: crate::make_id("memory"),
-                content: statement,
-                r#type: "redclaw_learning".to_string(),
-                tags: vec!["redclaw".to_string(), "learning".to_string()],
-                entities: Vec::new(),
-                scope: Some(
-                    candidate_snapshot
-                        .get("scope")
-                        .and_then(Value::as_str)
-                        .unwrap_or("project")
-                        .to_string(),
+            append_memory_record(
+                store,
+                redclaw_learning_memory_record(
+                    &candidate_snapshot,
+                    active_space_id,
+                    &project_id,
+                    &candidate_id,
                 ),
-                space_id: Some(active_space_id),
-                project_id: Some(project_id.clone()),
-                session_id: None,
-                source: Some(json!({
-                    "kind": "redclaw_learning_candidate",
-                    "projectId": project_id,
-                    "candidateId": candidate_id,
-                    "candidate": candidate_snapshot,
-                })),
-                confidence: candidate_snapshot.get("confidence").and_then(Value::as_f64),
-                created_at: now_i64(),
-                updated_at: None,
-                last_accessed: None,
-                status: Some("active".to_string()),
-                archived_at: None,
-                archive_reason: None,
-                origin_id: None,
-                canonical_key: None,
-                revision: Some(1),
-                last_conflict_at: None,
-            });
+            );
         }
-        project.updated_at = now_iso();
         Ok(json!({
             "success": true,
             "project": project,
             "candidate": candidate_snapshot
         }))
     })
+}
+
+fn redclaw_learning_memory_record(
+    candidate_snapshot: &Value,
+    active_space_id: String,
+    project_id: &str,
+    candidate_id: &str,
+) -> UserMemoryRecord {
+    let statement = candidate_snapshot
+        .get("statement")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("RedClaw learning candidate accepted")
+        .to_string();
+    UserMemoryRecord {
+        id: crate::make_id("memory"),
+        content: statement,
+        r#type: "redclaw_learning".to_string(),
+        tags: vec!["redclaw".to_string(), "learning".to_string()],
+        entities: Vec::new(),
+        scope: Some(
+            candidate_snapshot
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("project")
+                .to_string(),
+        ),
+        space_id: Some(active_space_id),
+        project_id: Some(project_id.to_string()),
+        session_id: None,
+        source: Some(json!({
+            "kind": "redclaw_learning_candidate",
+            "projectId": project_id,
+            "candidateId": candidate_id,
+            "candidate": candidate_snapshot,
+        })),
+        confidence: candidate_snapshot.get("confidence").and_then(Value::as_f64),
+        created_at: now_i64(),
+        updated_at: None,
+        last_accessed: None,
+        status: Some("active".to_string()),
+        archived_at: None,
+        archive_reason: None,
+        origin_id: None,
+        canonical_key: None,
+        revision: Some(1),
+        last_conflict_at: None,
+    }
 }
 
 fn update_redclaw_project_section(
