@@ -235,6 +235,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed startup migration workspace settings, active-space and space-count access through `store::settings` and `store::spaces`.
 - Routed workspace hydration subject/media/RedClaw state replacement and active-space root reads through store helpers.
 - Added `store::work_items` and routed workspace work-item list/get/update commands through it.
+- Routed runtime task resume work-item writebacks through `store::work_items`.
 
 ### 1. Bridge Contract Layer
 
