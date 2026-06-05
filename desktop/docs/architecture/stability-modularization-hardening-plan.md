@@ -218,6 +218,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed runtime task creation/resume entrypoints through `store::runtime_tasks` and extended the domain-store boundary guard for runtime tasks.
 - Routed assistant daemon state snapshots/config/listener/Weixin status updates through `store::assistant` and extended the domain-store boundary guard for assistant state.
 - Routed MCP server and runtime hook state access through `store::mcp_tools` and extended the domain-store boundary guard for MCP/tool state.
+- Routed LLM readiness settings writeback through `store::settings` so the command no longer writes `store.settings` directly.
 
 ### 1. Bridge Contract Layer
 
