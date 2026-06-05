@@ -287,6 +287,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted planned image batch execution, provider fallback, parallel worker handling and generated image asset assembly into `commands/generation/image_batch`.
 - Extracted video runtime-bypass submission, polling, download, thumbnail creation, progress emission and media/work-item persistence into `commands/generation/video_bypass`.
 - Extracted single-image generation provider request handling, placeholder fallback, generated asset writes and asset record assembly into `commands/generation/image_single`.
+- Extracted official value parsing, unauthorized response detection, timestamp normalization and call-record normalization into `commands/official/call_records`.
 
 ### 1. Bridge Contract Layer
 
