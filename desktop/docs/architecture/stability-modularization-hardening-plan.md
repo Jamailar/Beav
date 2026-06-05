@@ -316,6 +316,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted team tool descriptor exposure, team tool execution, MCP contract execution and agent backend listing into `commands/runtime_collab/team_tools`.
 - Extracted collaboration session listing, creation, snapshot retrieval, status mutation and report tick event handling into `commands/runtime_collab/session_values`.
 - Extracted collaboration member listing, creation, coordinator assignment, rename and shutdown event handling into `commands/runtime_collab/member_values`.
+- Extracted collaboration task listing, creation, update, transition, pin-session and retry event handling into `commands/runtime_collab/task_values`.
 
 ### 1. Bridge Contract Layer
 
