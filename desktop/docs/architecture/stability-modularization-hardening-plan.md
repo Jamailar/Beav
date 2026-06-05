@@ -275,6 +275,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted generation temporary official media upload validation, multipart retry and response parsing into `commands/media_jobs/temp_upload`.
 - Extracted app update throttling, platform/arch resolution, version comparison and update notice emission into `commands/system/app_update`.
 - Extracted feedback report content normalization, diagnostic report creation and official feedback upload into `commands/system/feedback`.
+- Extracted renderer log level normalization and append-renderer event forwarding into `commands/system/renderer_log`.
 
 ### 1. Bridge Contract Layer
 
