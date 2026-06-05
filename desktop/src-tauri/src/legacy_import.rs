@@ -1719,11 +1719,9 @@ mod tests {
             let _ = fs::remove_dir_all(parent);
         }
 
+        let settings = settings_store::settings_snapshot(&store);
         assert_eq!(
-            store
-                .settings
-                .get("model_name")
-                .and_then(|value| value.as_str()),
+            settings.get("model_name").and_then(|value| value.as_str()),
             Some("legacy-model")
         );
         assert_eq!(store.archive_samples.len(), 1);

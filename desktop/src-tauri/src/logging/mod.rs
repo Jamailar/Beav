@@ -304,19 +304,22 @@ pub fn update_upload_consent(
     auto_send_same_crash: bool,
 ) -> Result<Value, String> {
     crate::with_store_mut(state, |store| {
-        let object = store
-            .settings
-            .as_object_mut()
-            .ok_or_else(|| "settings object unavailable".to_string())?;
-        object.insert("diagnostics_upload_consent".to_string(), json!(consent));
-        object.insert(
-            "diagnostics_auto_send_same_crash".to_string(),
-            json!(auto_send_same_crash),
-        );
-        object.insert(
-            "diagnostics_last_prompted_at".to_string(),
-            json!(crate::now_iso()),
-        );
+        settings_store::update_settings(store, |settings| {
+            let Some(object) = settings.as_object_mut() else {
+                return;
+            };
+            object.insert("diagnostics_upload_consent".to_string(), json!(consent));
+            object.insert(
+                "diagnostics_auto_send_same_crash".to_string(),
+                json!(auto_send_same_crash),
+            );
+            object.insert(
+                "diagnostics_last_prompted_at".to_string(),
+                json!(crate::now_iso()),
+            );
+        })
+        .as_object()
+        .ok_or_else(|| "settings object unavailable".to_string())?;
         Ok(())
     })?;
     Ok(json!({ "success": true }))
