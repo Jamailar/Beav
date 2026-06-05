@@ -55,11 +55,11 @@ export function useLlmReadinessState(): LlmReadinessStateResult {
     };
 
     window.ipcRenderer.llmReadiness.onStateChanged(handleStateChanged);
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
     return () => {
       mounted = false;
       window.ipcRenderer.llmReadiness.offStateChanged(handleStateChanged);
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+      window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
     };
   }, []);
 
