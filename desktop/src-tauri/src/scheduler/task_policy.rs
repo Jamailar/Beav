@@ -1,3 +1,4 @@
+use crate::store::redclaw as redclaw_store;
 use crate::{parse_timestamp_ms, AppStore};
 use chrono::{Datelike, Duration, Local, LocalResult, NaiveTime, TimeZone, Timelike, Weekday};
 use chrono_tz::Tz;
@@ -165,9 +166,8 @@ pub fn preview_task_intent(
     let mut warnings = Vec::new();
     let mut rejection_reasons = Vec::new();
     let mut conflicts = collect_conflicts(store, intent, &definition_fingerprint);
-    let pending_drafts = store
-        .redclaw_job_definitions
-        .iter()
+    let pending_drafts = redclaw_store::list_job_definitions(store)
+        .into_iter()
         .filter(|item| {
             item.owner_scope.as_deref() == Some(intent.owner_scope.as_str())
                 && item.requires_confirmation
@@ -285,9 +285,8 @@ fn collect_conflicts(
     intent: &TaskIntentSchema,
     fingerprint: &str,
 ) -> Vec<TaskConflictSummary> {
-    store
-        .redclaw_job_definitions
-        .iter()
+    redclaw_store::list_job_definitions(store)
+        .into_iter()
         .filter_map(|item| {
             let item_owner_scope = item
                 .owner_scope
@@ -804,15 +803,13 @@ fn active_cooldown_reason(
     owner_scope: &str,
     fingerprint: &str,
 ) -> Option<String> {
-    let cooldown = store
-        .redclaw_job_definitions
-        .iter()
+    let cooldown = redclaw_store::list_job_definitions(store)
+        .into_iter()
         .find(|item| {
             item.owner_scope.as_deref() == Some(owner_scope)
                 && item.definition_fingerprint.as_deref() == Some(fingerprint)
         })
-        .and_then(|definition| definition.payload.get("cooldown"))
-        .cloned()?;
+        .and_then(|definition| definition.payload.get("cooldown").cloned())?;
     if cooldown
         .get("state")
         .and_then(Value::as_str)

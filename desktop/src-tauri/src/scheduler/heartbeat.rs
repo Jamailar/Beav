@@ -7,6 +7,7 @@ use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 
 use crate::persistence::with_store_mut;
+use crate::store::redclaw as redclaw_store;
 use crate::AppState;
 
 pub struct ExecutionHeartbeat {
@@ -40,16 +41,17 @@ pub fn start_execution_heartbeat(
             let state = app_handle.state::<AppState>();
             let now = crate::now_iso();
             let result = with_store_mut(&state, |store| {
-                if let Some(execution) = store
-                    .redclaw_job_executions
-                    .iter_mut()
-                    .find(|item| item.id == execution_id)
+                if let Some(updated) =
+                    redclaw_store::update_job_execution(store, &execution_id, |execution| {
+                        if matches!(execution.status.as_str(), "leased" | "running") {
+                            execution.last_heartbeat_at = Some(now.clone());
+                            execution.updated_at = now.clone();
+                            return true;
+                        }
+                        false
+                    })
                 {
-                    if matches!(execution.status.as_str(), "leased" | "running") {
-                        execution.last_heartbeat_at = Some(now.clone());
-                        execution.updated_at = now.clone();
-                        return Ok(true);
-                    }
+                    return Ok(updated);
                 }
                 Ok(false)
             });

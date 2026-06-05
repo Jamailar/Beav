@@ -319,9 +319,72 @@ pub(crate) fn long_cycle_task_by_id(
         .cloned()
 }
 
-#[cfg(test)]
 pub(crate) fn push_scheduled_task(store: &mut AppStore, task: RedclawScheduledTaskRecord) {
     store.redclaw_state.scheduled_tasks.push(task);
+}
+
+pub(crate) fn push_long_cycle_task(store: &mut AppStore, task: RedclawLongCycleTaskRecord) {
+    store.redclaw_state.long_cycle_tasks.push(task);
+}
+
+pub(crate) fn scheduled_task_for_definition(
+    store: &AppStore,
+    definition: &RedclawJobDefinitionRecord,
+) -> Option<RedclawScheduledTaskRecord> {
+    store
+        .redclaw_state
+        .scheduled_tasks
+        .iter()
+        .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
+        .cloned()
+}
+
+pub(crate) fn long_cycle_task_for_definition(
+    store: &AppStore,
+    definition: &RedclawJobDefinitionRecord,
+) -> Option<RedclawLongCycleTaskRecord> {
+    store
+        .redclaw_state
+        .long_cycle_tasks
+        .iter()
+        .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
+        .cloned()
+}
+
+pub(crate) fn update_scheduled_task_for_definition<F>(
+    store: &mut AppStore,
+    definition: &RedclawJobDefinitionRecord,
+    update: F,
+) -> Result<RedclawScheduledTaskRecord, String>
+where
+    F: FnOnce(&mut RedclawScheduledTaskRecord),
+{
+    let task = store
+        .redclaw_state
+        .scheduled_tasks
+        .iter_mut()
+        .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
+        .ok_or_else(|| "定时任务源记录不存在".to_string())?;
+    update(task);
+    Ok(task.clone())
+}
+
+pub(crate) fn update_long_cycle_task_for_definition<F>(
+    store: &mut AppStore,
+    definition: &RedclawJobDefinitionRecord,
+    update: F,
+) -> Result<RedclawLongCycleTaskRecord, String>
+where
+    F: FnOnce(&mut RedclawLongCycleTaskRecord),
+{
+    let task = store
+        .redclaw_state
+        .long_cycle_tasks
+        .iter_mut()
+        .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
+        .ok_or_else(|| "长周期任务源记录不存在".to_string())?;
+    update(task);
+    Ok(task.clone())
 }
 
 pub(crate) fn remove_scheduled_task(store: &mut AppStore, task_id: &str) {

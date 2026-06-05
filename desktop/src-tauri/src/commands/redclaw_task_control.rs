@@ -837,10 +837,9 @@ fn promote_draft_definition(
 
     let source_key = if preview.normalized.kind == "long_cycle" {
         let task_id = make_id("long-cycle");
-        store
-            .redclaw_state
-            .long_cycle_tasks
-            .push(RedclawLongCycleTaskRecord {
+        redclaw_store::push_long_cycle_task(
+            store,
+            RedclawLongCycleTaskRecord {
                 id: task_id.clone(),
                 name: intent.name.clone(),
                 enabled: true,
@@ -857,14 +856,14 @@ fn promote_draft_definition(
                 last_result: None,
                 last_error: None,
                 next_run_at: Some(preview.normalized.next_due_at.clone()),
-            });
+            },
+        );
         ("long_cycle".to_string(), task_id)
     } else {
         let task_id = make_id("scheduled");
-        store
-            .redclaw_state
-            .scheduled_tasks
-            .push(RedclawScheduledTaskRecord {
+        redclaw_store::push_scheduled_task(
+            store,
+            RedclawScheduledTaskRecord {
                 id: task_id.clone(),
                 name: intent.name.clone(),
                 enabled: true,
@@ -881,7 +880,8 @@ fn promote_draft_definition(
                 last_result: None,
                 last_error: None,
                 next_run_at: Some(preview.normalized.next_due_at.clone()),
-            });
+            },
+        );
         ("scheduled".to_string(), task_id)
     };
 
@@ -952,11 +952,7 @@ fn intent_from_definition(
     }
     match definition.source_kind.as_deref() {
         Some("scheduled") => {
-            let task = store
-                .redclaw_state
-                .scheduled_tasks
-                .iter()
-                .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
+            let task = redclaw_store::scheduled_task_for_definition(store, definition)
                 .ok_or_else(|| "定时任务源记录不存在".to_string())?;
             Ok(TaskIntentSchema {
                 kind: "scheduled".to_string(),
@@ -997,11 +993,7 @@ fn intent_from_definition(
             })
         }
         Some("long_cycle") => {
-            let task = store
-                .redclaw_state
-                .long_cycle_tasks
-                .iter()
-                .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
+            let task = redclaw_store::long_cycle_task_for_definition(store, definition)
                 .ok_or_else(|| "长周期任务源记录不存在".to_string())?;
             Ok(TaskIntentSchema {
                 kind: "long_cycle".to_string(),
@@ -1108,43 +1100,35 @@ fn apply_intent_update(
 ) -> Result<(), String> {
     match definition.source_kind.as_deref() {
         Some("scheduled") => {
-            let task = store
-                .redclaw_state
-                .scheduled_tasks
-                .iter_mut()
-                .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
-                .ok_or_else(|| "定时任务源记录不存在".to_string())?;
-            task.name = intent.name.clone();
-            task.prompt = intent
-                .prompt
-                .clone()
-                .or_else(|| intent.goal.clone())
-                .unwrap_or_default();
-            task.mode = preview.normalized.mode.clone();
-            task.interval_minutes = preview.normalized.interval_minutes;
-            task.time = normalize_optional_string(preview.normalized.time.clone());
-            task.weekdays = preview.normalized.weekdays.clone();
-            task.run_at = normalize_optional_string(preview.normalized.run_at.clone());
-            task.next_run_at = Some(preview.normalized.next_due_at.clone());
-            task.updated_at = now_iso();
+            redclaw_store::update_scheduled_task_for_definition(store, definition, |task| {
+                task.name = intent.name.clone();
+                task.prompt = intent
+                    .prompt
+                    .clone()
+                    .or_else(|| intent.goal.clone())
+                    .unwrap_or_default();
+                task.mode = preview.normalized.mode.clone();
+                task.interval_minutes = preview.normalized.interval_minutes;
+                task.time = normalize_optional_string(preview.normalized.time.clone());
+                task.weekdays = preview.normalized.weekdays.clone();
+                task.run_at = normalize_optional_string(preview.normalized.run_at.clone());
+                task.next_run_at = Some(preview.normalized.next_due_at.clone());
+                task.updated_at = now_iso();
+            })?;
         }
         Some("long_cycle") => {
-            let task = store
-                .redclaw_state
-                .long_cycle_tasks
-                .iter_mut()
-                .find(|item| definition.source_task_id.as_deref() == Some(item.id.as_str()))
-                .ok_or_else(|| "长周期任务源记录不存在".to_string())?;
-            task.name = intent.name.clone();
-            task.objective = intent.objective.clone().unwrap_or_default();
-            task.step_prompt = intent.step_prompt.clone().unwrap_or_default();
-            task.interval_minutes = preview
-                .normalized
-                .interval_minutes
-                .unwrap_or(task.interval_minutes);
-            task.total_rounds = preview.normalized.total_rounds.unwrap_or(task.total_rounds);
-            task.next_run_at = Some(preview.normalized.next_due_at.clone());
-            task.updated_at = now_iso();
+            redclaw_store::update_long_cycle_task_for_definition(store, definition, |task| {
+                task.name = intent.name.clone();
+                task.objective = intent.objective.clone().unwrap_or_default();
+                task.step_prompt = intent.step_prompt.clone().unwrap_or_default();
+                task.interval_minutes = preview
+                    .normalized
+                    .interval_minutes
+                    .unwrap_or(task.interval_minutes);
+                task.total_rounds = preview.normalized.total_rounds.unwrap_or(task.total_rounds);
+                task.next_run_at = Some(preview.normalized.next_due_at.clone());
+                task.updated_at = now_iso();
+            })?;
         }
         _ => return Err("当前任务定义没有可更新的 source".to_string()),
     }
