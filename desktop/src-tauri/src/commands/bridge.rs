@@ -14,7 +14,8 @@ use crate::scheduler::{
 use crate::session_manager::{
     create_session, list_sessions, session_bridge_detail_value, session_bridge_summary_value,
 };
-use crate::{log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState};
+use crate::store::runtime_tasks as runtime_tasks_store;
+use crate::{log_timing_event, now_ms, payload_field, payload_string, AppState};
 
 pub fn handle_bridge_channel(
     app: &AppHandle,
@@ -129,14 +130,7 @@ pub fn handle_bridge_channel(
                     sync_redclaw_job_definitions(store);
                     return Ok(json!({ "success": true, "id": cancelled_id, "kind": kind }));
                 }
-                if let Some(task) = store
-                    .runtime_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.status = "cancelled".to_string();
-                    task.updated_at = now_i64();
-                    task.completed_at = Some(now_i64());
+                if runtime_tasks_store::cancel_task(store, &task_id) {
                     return Ok(json!({ "success": true, "kind": "runtime-task" }));
                 }
                 Ok(json!({ "success": false, "error": "后台任务不存在" }))
