@@ -304,6 +304,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted Thrive plugin manifest primitive validation for names, versions, capabilities, UI slots, home sources and network hosts into `commands/plugin/manifest_primitives`.
 - Extracted Thrive plugin manifest discovery, relative-path validation, file loading, interface prompt limits and home extension validation into `commands/plugin/manifest`.
 - Extracted Thrive plugin secure directory copy, archive extraction, temp cleanup and source-root resolution into `commands/plugin/install_files`.
+- Extracted Thrive plugin marketplace registry loading, GitHub manifest probing, release asset selection, package download and marketplace install flow into `commands/plugin/marketplace`.
 
 ### 1. Bridge Contract Layer
 
