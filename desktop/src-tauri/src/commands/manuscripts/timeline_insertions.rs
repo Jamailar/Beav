@@ -1,6 +1,11 @@
 use super::*;
 use crate::store::media as media_store;
 
+#[path = "timeline_insertions/playhead.rs"]
+mod playhead;
+
+use playhead::{preferred_timeline_track_name, timeline_insertion_order_for_playhead};
+
 pub(super) fn handle_timeline_insertion_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -204,27 +209,8 @@ pub(super) fn handle_timeline_insertion_channel(
                         .unwrap_or("Untitled"),
                 ),
             );
-            let preferred_track_name = payload_string(&payload, "track")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| {
-                    timeline
-                        .pointer("/tracks/children")
-                        .and_then(Value::as_array)
-                        .and_then(|tracks| {
-                            tracks
-                                .iter()
-                                .filter_map(|track| {
-                                    track
-                                        .get("name")
-                                        .and_then(|value| value.as_str())
-                                        .map(ToString::to_string)
-                                })
-                                .filter(|name| name.starts_with('S'))
-                                .last()
-                        })
-                        .unwrap_or_else(|| "S1".to_string())
-                });
+            let preferred_track_name =
+                preferred_timeline_track_name(&timeline, &payload, 'S', "S1");
             let target_track =
                 ensure_timeline_track(&mut timeline, &preferred_track_name, "Subtitle");
             let target_children = target_track
@@ -232,24 +218,12 @@ pub(super) fn handle_timeline_insertion_channel(
                 .and_then(Value::as_array_mut)
                 .ok_or_else(|| "Timeline track children missing".to_string())?;
 
-            let mut desired_order = target_children.len();
-            if let Some(order) = payload_field(&payload, "order").and_then(|value| value.as_i64()) {
-                desired_order = order.clamp(0, target_children.len() as i64) as usize;
-            } else {
-                let mut cursor_ms = 0_i64;
-                for (index, clip) in target_children.iter().enumerate() {
-                    let next_cursor_ms = cursor_ms + timeline_clip_duration_ms(clip);
-                    if playhead_ms <= cursor_ms {
-                        desired_order = index;
-                        break;
-                    }
-                    desired_order = index + 1;
-                    cursor_ms = next_cursor_ms;
-                    if playhead_ms < next_cursor_ms {
-                        break;
-                    }
-                }
-            }
+            let desired_order = payload_field(&payload, "order")
+                .and_then(|value| value.as_i64())
+                .map(|order| order.clamp(0, target_children.len() as i64) as usize)
+                .unwrap_or_else(|| {
+                    timeline_insertion_order_for_playhead(target_children, playhead_ms)
+                });
 
             let clip = build_timeline_subtitle_clip(
                 desired_order,
@@ -311,22 +285,12 @@ pub(super) fn handle_timeline_insertion_channel(
                 'V'
             };
             let preferred_track_name = requested_track.unwrap_or_else(|| {
-                timeline
-                    .pointer("/tracks/children")
-                    .and_then(Value::as_array)
-                    .and_then(|tracks| {
-                        tracks
-                            .iter()
-                            .filter_map(|track| {
-                                track
-                                    .get("name")
-                                    .and_then(|value| value.as_str())
-                                    .map(ToString::to_string)
-                            })
-                            .filter(|name| name.starts_with(track_prefix))
-                            .last()
-                    })
-                    .unwrap_or(default_track_name)
+                preferred_timeline_track_name(
+                    &timeline,
+                    &json!({}),
+                    track_prefix,
+                    &default_track_name,
+                )
             });
             let kind_label = if preferred_track_name.starts_with('A') {
                 "Audio"
@@ -419,27 +383,8 @@ pub(super) fn handle_timeline_insertion_channel(
                         .unwrap_or("Untitled"),
                 ),
             );
-            let preferred_track_name = payload_string(&payload, "track")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| {
-                    timeline
-                        .pointer("/tracks/children")
-                        .and_then(Value::as_array)
-                        .and_then(|tracks| {
-                            tracks
-                                .iter()
-                                .filter_map(|track| {
-                                    track
-                                        .get("name")
-                                        .and_then(|value| value.as_str())
-                                        .map(ToString::to_string)
-                                })
-                                .filter(|name| name.starts_with('T'))
-                                .last()
-                        })
-                        .unwrap_or_else(|| "T1".to_string())
-                });
+            let preferred_track_name =
+                preferred_timeline_track_name(&timeline, &payload, 'T', "T1");
             let target_track =
                 ensure_timeline_track(&mut timeline, &preferred_track_name, "Subtitle");
             let target_children = target_track
@@ -447,20 +392,7 @@ pub(super) fn handle_timeline_insertion_channel(
                 .and_then(Value::as_array_mut)
                 .ok_or_else(|| "Timeline track children missing".to_string())?;
 
-            let mut desired_order = target_children.len();
-            let mut cursor_ms = 0_i64;
-            for (index, clip) in target_children.iter().enumerate() {
-                let next_cursor_ms = cursor_ms + timeline_clip_duration_ms(clip);
-                if playhead_ms <= cursor_ms {
-                    desired_order = index;
-                    break;
-                }
-                desired_order = index + 1;
-                cursor_ms = next_cursor_ms;
-                if playhead_ms < next_cursor_ms {
-                    break;
-                }
-            }
+            let desired_order = timeline_insertion_order_for_playhead(target_children, playhead_ms);
 
             let mut clip = build_timeline_text_clip(
                 desired_order,
