@@ -192,6 +192,7 @@ pub fn emit_task_resume_events(
 mod tests {
     use super::*;
     use crate::runtime::{create_runtime_task, runtime_direct_route_record};
+    use crate::store::runtime_tasks as runtime_task_store;
 
     fn prepared_execution(
         reviewer_blocked: bool,
@@ -224,7 +225,7 @@ mod tests {
             None,
         );
         let task_id = task.id.clone();
-        store.runtime_tasks.push(task);
+        runtime_task_store::push_task(&mut store, task);
         let artifact = RuntimeArtifact::new(
             "saved-artifact",
             "Saved Artifact",
@@ -272,7 +273,7 @@ mod tests {
             None,
         );
         let task_id = task.id.clone();
-        store.runtime_tasks.push(task);
+        runtime_task_store::push_task(&mut store, task);
 
         let applied =
             crate::runtime::apply_task_resume_execution(&mut store, &task_id, &prepared, None)
