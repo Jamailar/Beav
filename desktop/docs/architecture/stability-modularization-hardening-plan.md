@@ -261,6 +261,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted App Shell title-bar platform detection, drag/maximize/window controls, notification toggle and theme/search buttons into `features/app-shell/AppTitleBar`.
 - Extracted App Shell update notice rendering into `features/app-shell/AppUpdateNoticeModal`, leaving update lifecycle state in `useAppUpdateNotice`.
 - Extracted App Shell global search overlay rendering into `features/app-shell/AppGlobalSearchOverlay`, leaving query, debounce and navigation state in `useGlobalKnowledgeSearch`.
+- Extracted App Shell space rename dialog rendering into `features/app-shell/AppSpaceRenameDialog`, leaving space mutation state in `useLayoutSpaces`.
 
 ### 1. Bridge Contract Layer
 
