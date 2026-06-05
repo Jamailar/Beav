@@ -33,6 +33,7 @@ mod export_helpers;
 mod ffmpeg_edit;
 mod layout;
 mod package;
+mod package_video;
 mod post;
 mod remotion;
 mod remotion_context;
