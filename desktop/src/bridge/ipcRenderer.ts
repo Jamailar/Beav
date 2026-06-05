@@ -79,7 +79,6 @@ function createIpcRenderer() {
     ...createGenerationBridge(core),
     ...createRedClawBridge(core),
     ...createAssistantControlBridge(core),
-    listSkills: () => invokeChannel('skills:list'),
     ...createCoverBridge(core),
   };
 }

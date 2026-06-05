@@ -2,6 +2,7 @@ import type { BridgeCore } from '../types';
 
 export function createSkillsBridge(core: BridgeCore) {
   return {
+    listSkills: () => core.invokeChannel('skills:list'),
     skills: {
       save: (payload: Record<string, unknown>) => core.invokeChannel('skills:save', payload),
       create: <T = unknown>(payload: { name: string }) => core.invokeChannel('skills:create', payload) as Promise<T>,
