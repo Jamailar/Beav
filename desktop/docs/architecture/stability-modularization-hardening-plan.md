@@ -158,6 +158,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed RedClaw manual-run definition resolution reads through `store::redclaw`.
 - Routed runtime-collab RedClaw panel definition/execution reads through `store::redclaw`.
 - Routed RedClaw task-control list/stats definition and execution reads through `store::redclaw`.
+- Added `store::media` asset append helper and routed media-edit plus manuscript package/timeline media asset writes through it.
 
 ### 1. Bridge Contract Layer
 
