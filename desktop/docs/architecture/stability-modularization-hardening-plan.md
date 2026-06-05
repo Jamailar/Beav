@@ -249,6 +249,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed library cover-generation work item append through `store::work_items`.
 - Routed knowledge active-space, settings and media asset access through store helpers.
 - Routed remaining CLI runtime, debug logging, diagnostics consent and legacy-import test settings access through `store::settings`.
+- Routed remaining library and manuscript timeline media asset lookup/update paths through `store::media`.
 
 ### 1. Bridge Contract Layer
 
