@@ -1995,57 +1995,49 @@ fn export_redclaw_publish_package(
         .join("publish-packages")
         .join(safe_export_slug(&project_id));
     std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
-    with_store_mut(state, |store| {
-        let project = store
-            .redclaw_state
-            .projects
-            .iter_mut()
-            .find(|item| item.id == project_id)
-            .ok_or_else(|| "RedClaw project not found".to_string())?;
-        let package = publish_package_from_project(project);
-        let package_path = export_dir.join("publish-package.json");
-        let markdown_path = export_dir.join("publish-package.md");
-        let cover_brief_path = export_dir.join("cover-brief.md");
-        write_text_file(
-            &package_path,
-            &serde_json::to_string_pretty(&package).map_err(|error| error.to_string())?,
-        )?;
-        write_text_file(&markdown_path, &build_publish_package_markdown(&package))?;
-        write_text_file(&cover_brief_path, &build_cover_brief_markdown(&package))?;
+    let project_snapshot = with_store(state, |store| {
+        redclaw_store::project_by_id(&store, &project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())
+    })?;
+    let package = publish_package_from_project(&project_snapshot);
+    let package_path = export_dir.join("publish-package.json");
+    let markdown_path = export_dir.join("publish-package.md");
+    let cover_brief_path = export_dir.join("cover-brief.md");
+    write_text_file(
+        &package_path,
+        &serde_json::to_string_pretty(&package).map_err(|error| error.to_string())?,
+    )?;
+    write_text_file(&markdown_path, &build_publish_package_markdown(&package))?;
+    write_text_file(&cover_brief_path, &build_cover_brief_markdown(&package))?;
 
-        let now = now_iso();
-        let export_record = json!({
-            "packagePath": export_dir.display().to_string(),
-            "jsonPath": package_path.display().to_string(),
-            "markdownPath": markdown_path.display().to_string(),
-            "coverBriefPath": cover_brief_path.display().to_string(),
-            "schema": "redclaw.publishPackage.v1",
-            "createdAt": now,
-        });
-        let mut metadata = project
-            .metadata
-            .clone()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let mut exports = metadata
-            .get("publishPackageExports")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        exports.push(export_record);
-        metadata.insert("publishPackageExports".to_string(), Value::Array(exports));
-        project.metadata = Some(Value::Object(metadata));
-        project.updated_at = now;
-        Ok(json!({
-            "success": true,
-            "project": project,
-            "packagePath": export_dir.display().to_string(),
-            "jsonPath": package_path.display().to_string(),
-            "markdownPath": markdown_path.display().to_string(),
-            "coverBriefPath": cover_brief_path.display().to_string(),
-            "package": package,
-        }))
-    })
+    let now = now_iso();
+    let export_record = json!({
+        "packagePath": export_dir.display().to_string(),
+        "jsonPath": package_path.display().to_string(),
+        "markdownPath": markdown_path.display().to_string(),
+        "coverBriefPath": cover_brief_path.display().to_string(),
+        "schema": "redclaw.publishPackage.v1",
+        "createdAt": now,
+    });
+    let updated_project = with_store_mut(state, |store| {
+        redclaw_store::append_project_metadata_array_record(
+            store,
+            &project_id,
+            "publishPackageExports",
+            export_record,
+            &now,
+        )
+    })?;
+
+    Ok(json!({
+        "success": true,
+        "project": updated_project,
+        "packagePath": export_dir.display().to_string(),
+        "jsonPath": package_path.display().to_string(),
+        "markdownPath": markdown_path.display().to_string(),
+        "coverBriefPath": cover_brief_path.display().to_string(),
+        "package": package,
+    }))
 }
 
 fn export_redclaw_review_report(
