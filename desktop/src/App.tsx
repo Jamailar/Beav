@@ -12,6 +12,7 @@ import { NotificationsHost } from './notifications/NotificationsHost';
 import { useI18n } from './i18n';
 import { OfficialLoginGate } from './features/app-shell/OfficialLoginGate';
 import { StartupMigrationGate } from './features/app-shell/StartupMigrationGate';
+import { useExecutionPersistence } from './features/app-shell/useExecutionPersistence';
 import { useFeedbackReportDialog } from './features/app-shell/useFeedbackReportDialog';
 import { useGlobalIntentRouter } from './features/app-shell/useGlobalIntentRouter';
 import { useOfficialAuthNotice } from './features/app-shell/useOfficialAuthNotice';
@@ -183,21 +184,12 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setPendingGenerationIntent(null);
   };
 
-  const handleWanderExecutionStateChange = useCallback((active: boolean) => {
-    setViewPersistent('wander', active);
-  }, [setViewPersistent]);
-
-  const handleRedClawExecutionStateChange = useCallback((active: boolean) => {
-    setViewPersistent('redclaw', active);
-  }, [setViewPersistent]);
-
-  const handleGenerationStudioExecutionStateChange = useCallback((active: boolean) => {
-    setViewPersistent('generation-studio', active);
-  }, [setViewPersistent]);
-
-  const handleCoverStudioExecutionStateChange = useCallback((active: boolean) => {
-    setViewPersistent('cover-studio', active);
-  }, [setViewPersistent]);
+  const {
+    handleWanderExecutionStateChange,
+    handleRedClawExecutionStateChange,
+    handleGenerationStudioExecutionStateChange,
+    handleCoverStudioExecutionStateChange,
+  } = useExecutionPersistence(setViewPersistent);
 
   const returnToFreeCreation = useCallback(() => {
     setCurrentView('generation-studio');
