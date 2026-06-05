@@ -40,6 +40,7 @@ mod richpost_model;
 mod richpost_pagination;
 mod richpost_plan;
 mod richpost_render_model;
+mod richpost_scaffold;
 mod script_state;
 mod subtitles;
 mod timeline;
@@ -83,6 +84,16 @@ use richpost_model::*;
 use richpost_pagination::*;
 use richpost_plan::*;
 use richpost_render_model::*;
+use richpost_scaffold::{
+    default_richpost_master_fragment, ensure_richpost_layout_scaffold,
+    richpost_master_file_needs_upgrade, richpost_theme_root_master_path_for_theme,
+    richpost_theme_spec_from_manifest, richpost_theme_spec_storage_value,
+};
+#[allow(unused_imports)]
+pub(crate) use richpost_scaffold::{
+    richpost_theme_catalog_value, richpost_theme_catalog_value_for_manifest,
+    richpost_theme_state_value,
+};
 use script_state::*;
 pub(crate) use timeline_model::timeline_clip_duration_ms;
 use timeline_model::{
@@ -94,138 +105,6 @@ pub(crate) use write_proposals::{
     accept_manuscript_write_proposal, get_manuscript_write_proposal,
     reject_manuscript_write_proposal, upsert_manuscript_write_proposal,
 };
-
-fn richpost_theme_spec_storage_value(theme: &RichpostThemeSpec) -> Value {
-    theme::store::richpost_theme_spec_storage_value(theme)
-}
-
-fn richpost_theme_root_master_path_for_theme(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-    master_name: &str,
-) -> Option<std::path::PathBuf> {
-    theme::store::richpost_theme_root_master_path_for_theme(package_path, theme, master_name)
-}
-
-fn richpost_theme_spec_from_manifest(
-    package_path: Option<&std::path::Path>,
-    manifest: &Value,
-) -> RichpostThemeSpec {
-    theme::store::richpost_theme_spec_from_manifest(package_path, manifest)
-}
-
-fn default_richpost_master_fragment(master_name: &str) -> &'static str {
-    let _ = master_name;
-    r#"<!--
-RedBox richpost master scaffold.
-- 保留 zone 占位符，不要把正文直接写进母版
-- 背景层使用 rb-zone-background，默认位于文字下方
-- 真实文字区域由 --rb-frame-left / top / width / height 控制
-- 可以自由增加容器、遮罩、装饰，但不要删掉 title/body/media/footer 区
--->
-<style>
-.rb-page-host .rb-stage {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 100%;
-}
-.rb-page-host .rb-zone-background,
-.rb-page-host .rb-zone-overlay,
-.rb-page-host .rb-zone-decoration {
-  position: absolute;
-  inset: 0;
-}
-.rb-page-host .rb-zone-background {
-  background-image: var(--rb-background-image, none);
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: cover;
-}
-.rb-page-host .rb-zone-background .page-asset,
-.rb-page-host .rb-zone-background img {
-  width: 100%;
-  height: 100%;
-}
-.rb-page-host .rb-zone-background img {
-  object-fit: cover;
-}
-.rb-page-host .rb-stage-frame {
-  position: absolute;
-  left: var(--rb-frame-left, 8%);
-  top: var(--rb-frame-top, 10%);
-  width: var(--rb-frame-width, 84%);
-  height: var(--rb-frame-height, 78%);
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  gap: var(--rb-zone-gap);
-  align-items: flex-start;
-  justify-content: flex-start;
-  overflow: hidden;
-}
-.rb-page-host .rb-zone-title,
-.rb-page-host .rb-zone-body,
-.rb-page-host .rb-zone-media,
-.rb-page-host .rb-zone-footer {
-  width: 100%;
-  max-width: 100%;
-}
-.rb-page-host .rb-zone-media .page-asset img {
-  object-fit: cover;
-}
-</style>
-<div class="rb-stage">
-  <div class="rb-zone rb-zone-background">{{zone:background}}</div>
-  <div class="rb-zone rb-zone-overlay">{{zone:overlay}}</div>
-  <div class="rb-zone rb-zone-decoration">{{zone:decoration}}</div>
-  <div class="rb-stage-frame" data-zone-frame="content">
-    <header class="rb-zone rb-zone-title">{{zone:title}}</header>
-    <main class="rb-zone rb-zone-body">{{zone:body}}</main>
-    <div class="rb-zone rb-zone-media">{{zone:media}}</div>
-    <footer class="rb-zone rb-zone-footer">{{zone:footer}}</footer>
-  </div>
-</div>"#
-}
-
-fn richpost_master_file_needs_upgrade(path: &std::path::Path) -> bool {
-    let Ok(content) = fs::read_to_string(path) else {
-        return true;
-    };
-    !content.contains("data-zone-frame=\"content\"")
-        || !content.contains("--rb-frame-left")
-        || content.contains("min-height: var(--rb-frame-height")
-        || !content.contains(
-            ".rb-page-host .rb-stage {\n  position: relative;\n  width: 100%;\n  height: 100%;",
-        )
-        || content.contains("rb-stage-stack")
-}
-
-fn ensure_richpost_layout_scaffold(
-    package_path: &std::path::Path,
-    manifest: &Value,
-) -> Result<Value, String> {
-    theme::scaffold::ensure_richpost_layout_scaffold(package_path, manifest)
-}
-
-#[allow(dead_code)]
-pub(crate) fn richpost_theme_catalog_value(package_path: Option<&std::path::Path>) -> Value {
-    theme::scaffold::richpost_theme_catalog_value(package_path)
-}
-
-pub(crate) fn richpost_theme_catalog_value_for_manifest(
-    package_path: Option<&std::path::Path>,
-    manifest: &Value,
-) -> Value {
-    theme::scaffold::richpost_theme_catalog_value_for_manifest(package_path, manifest)
-}
-
-pub(crate) fn richpost_theme_state_value(
-    package_path: &std::path::Path,
-    manifest: &Value,
-) -> Value {
-    theme::scaffold::richpost_theme_state_value(package_path, manifest)
-}
 
 fn package_block_is_page_break(kind: &str) -> bool {
     kind == "page-break"
