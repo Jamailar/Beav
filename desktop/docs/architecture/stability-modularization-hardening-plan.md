@@ -342,6 +342,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted Thrive plugin data-source capability checks, manuscript tree projection, read-data command handling and home widget/action assembly into `commands/plugin/data_sources`.
 - Extracted Thrive plugin enabled-manifest enumeration, skill discovery, MCP config parsing and runtime capability sync into `commands/plugin/runtime_sync`.
 - Extracted Thrive plugin index persistence, plugin root/data/cache path helpers, plugin id validation, display-name projection and list summary assembly into `commands/plugin/registry`.
+- Extracted skills marketplace registry loading, safe GitHub URL validation, marketplace listing and market-install entry resolution into `commands/skills_ai/marketplace`, leaving `skills_ai.rs` focused on skill CRUD, invocation, install and AI utility channels.
 - Extracted brand workspace AI index markdown assembly and index file regeneration into `commands/brand_workspace/ai_index`, leaving the root command module focused on SQLite setup, CRUD and channel routing.
 - Extracted brand workspace image data-url decoding, media file writes, asset-ref replacement and unique asset id allocation into `commands/brand_workspace/assets`.
 - Extracted brand workspace root path resolution, SQLite connection/schema initialization and lightweight migration helpers into `commands/brand_workspace/storage`.
