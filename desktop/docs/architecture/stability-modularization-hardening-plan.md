@@ -322,6 +322,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted advisor template discovery, JSON loading and template normalization into `commands/advisor_ops/templates`.
 - Extracted advisor knowledge file selection expansion, recursive folder collection, file copy and advisor knowledge-file writeback into `commands/advisor_ops/knowledge_files`.
 - Extracted advisor YouTube channel refresh, yt-dlp fetch handling, channel metadata merge and advisor video upsert logic into `commands/advisor_ops/videos`.
+- Extracted advisor member-skill distillation feature gating, publish fallback handling and member-skill channel actions into `commands/advisor_ops/member_skills`.
 
 ### 1. Bridge Contract Layer
 
