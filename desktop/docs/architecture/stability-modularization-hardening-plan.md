@@ -284,6 +284,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted generation image-plan parsing, prompt compilation, title derivation and related tests into `commands/generation/image_plan`.
 - Extracted generation JSON log summarization, runtime tool progress context and media generation progress emitters into `commands/generation/progress`.
 - Simplified generation runtime-bypass handling so the post-image early-return path is video-only instead of carrying unreachable image generation branches.
+- Extracted planned image batch execution, provider fallback, parallel worker handling and generated image asset assembly into `commands/generation/image_batch`.
 
 ### 1. Bridge Contract Layer
 
