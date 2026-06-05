@@ -19,9 +19,10 @@ import { useGenerationShellNavigation } from './features/app-shell/useGeneration
 import { useGlobalIntentRouter } from './features/app-shell/useGlobalIntentRouter';
 import { useOfficialAuthNotice } from './features/app-shell/useOfficialAuthNotice';
 import { useRedClawShellNavigation } from './features/app-shell/useRedClawShellNavigation';
+import { useSettingsShellNavigation } from './features/app-shell/useSettingsShellNavigation';
 import { useSubjectsModal } from './features/app-shell/useSubjectsModal';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
-import type { GenerationIntent, ImmersiveMode, SettingsNavigationTarget } from './features/app-shell/types';
+import type { GenerationIntent, ImmersiveMode } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
 
 export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
@@ -66,7 +67,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   } = useViewNavigation();
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
   const [redClawTitleBarActions, setRedClawTitleBarActions] = useState<ReactNode>(null);
-  const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
   const [approvalTargetDocketId, setApprovalTargetDocketId] = useState('');
@@ -85,6 +85,11 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     closeFeedbackReport,
     notifyFeedbackReportSubmitted,
   } = useFeedbackReportDialog(currentView);
+
+  const {
+    settingsNavigationTarget,
+    setSettingsNavigationTarget,
+  } = useSettingsShellNavigation();
 
   const {
     redclawOnboardingVersion,
