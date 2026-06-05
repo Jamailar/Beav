@@ -14,7 +14,7 @@ use crate::logging::{
     event::{LogLevel, LogSource},
 };
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
-use crate::store::{settings as settings_store, subjects as subject_store};
+use crate::store::{media as media_store, settings as settings_store, subjects as subject_store};
 use crate::{
     ffmpeg_executable, file_content_hash, guess_mime_and_kind, make_id, media_root,
     normalize_legacy_workspace_path, now_iso, now_rfc3339, official_ai_api_key_from_settings,
@@ -2006,7 +2006,7 @@ fn synthesize_speech_inner(
     };
     if register_asset {
         with_store_mut(state, |store| {
-            store.media_assets.insert(0, asset.clone());
+            media_store::prepend_asset(store, asset.clone());
             Ok(())
         })?;
         persist_media_workspace_catalog(state)?;
