@@ -17,6 +17,8 @@ mod task_panel;
 mod task_values;
 #[path = "runtime_collab/team_guide.rs"]
 mod team_guide;
+#[path = "runtime_collab/team_prompt.rs"]
+mod team_prompt;
 #[path = "runtime_collab/team_tools.rs"]
 mod team_tools;
 #[path = "runtime_collab/team_wake.rs"]
@@ -60,13 +62,15 @@ pub use task_values::{
     transition_task_value, update_task_value,
 };
 pub use team_guide::guide_create_value;
+#[cfg(test)]
+use team_prompt::team_member_session_metadata;
 pub use team_tools::{
     execute_mcp_tool_value, execute_tool_value, list_agent_backends_value, mcp_contract_value,
     tool_descriptors_value,
 };
-use team_wake::{emit_team_action_result_events, schedule_message_target_wake};
 #[cfg(test)]
-use team_wake::{non_coordinator_members_settled, team_member_session_metadata};
+use team_wake::non_coordinator_members_settled;
+use team_wake::{emit_team_action_result_events, schedule_message_target_wake};
 
 fn payload_limit(payload: &Value, key: &str) -> Option<usize> {
     payload
