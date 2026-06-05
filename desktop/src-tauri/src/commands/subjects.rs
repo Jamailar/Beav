@@ -6,6 +6,7 @@ use tauri::{AppHandle, State};
 use crate::commands::generation::generate_image_assets;
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store};
+use crate::store::subjects as subject_store;
 use crate::{
     file_content_hash, handle_subject_category_create, handle_subject_category_delete,
     handle_subject_category_update, handle_subject_create, handle_subject_delete,
@@ -24,9 +25,8 @@ pub fn handle_subjects_channel(
         "subjects:list" => {
             let _ = ensure_store_hydrated_for_subjects(state);
             with_store(state, |store| {
-                Ok(
-                    json!({ "success": true, "assets": store.subjects.clone(), "subjects": store.subjects.clone() }),
-                )
+                let subjects = subject_store::list_subjects(&store);
+                Ok(json!({ "success": true, "assets": subjects.clone(), "subjects": subjects }))
             })
         }
         "subjects:get" => {
@@ -35,7 +35,7 @@ pub fn handle_subjects_channel(
                 return Some(Ok(json!({ "success": false, "error": "缺少主体 id" })));
             };
             with_store(state, |store| {
-                let subject = store.subjects.iter().find(|item| item.id == id).cloned();
+                let subject = subject_store::get_subject(&store, &id);
                 Ok(json!({ "success": true, "asset": subject.clone(), "subject": subject }))
             })
         }
@@ -52,37 +52,17 @@ pub fn handle_subjects_channel(
                 .to_lowercase();
             let category_id = payload_string(payload, "categoryId");
             with_store(state, |store| {
-                let subjects: Vec<SubjectRecord> = store
-                    .subjects
-                    .iter()
-                    .filter(|subject| {
-                        let matches_category = match category_id.as_deref() {
-                            Some(category) => subject.category_id.as_deref() == Some(category),
-                            None => true,
-                        };
-                        let matches_query = if query.is_empty() {
-                            true
-                        } else {
-                            let haystack = format!(
-                                "{}\n{}\n{}",
-                                subject.name,
-                                subject.description.clone().unwrap_or_default(),
-                                subject.tags.join(" ")
-                            )
-                            .to_lowercase();
-                            haystack.contains(&query)
-                        };
-                        matches_category && matches_query
-                    })
-                    .cloned()
-                    .collect();
+                let subjects =
+                    subject_store::search_subjects(&store, &query, category_id.as_deref());
                 Ok(json!({ "success": true, "assets": subjects.clone(), "subjects": subjects }))
             })
         }
         "subjects:categories:list" => {
             let _ = ensure_store_hydrated_for_subjects(state);
             with_store(state, |store| {
-                Ok(json!({ "success": true, "categories": store.categories.clone() }))
+                Ok(
+                    json!({ "success": true, "categories": subject_store::list_subject_categories(&store) }),
+                )
             })
         }
         "subjects:categories:create" => handle_subject_category_create(payload.clone(), state),
