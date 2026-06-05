@@ -4,6 +4,8 @@ mod redclaw_export_content;
 mod redclaw_export_files;
 #[path = "redclaw/media_export.rs"]
 mod redclaw_media_export;
+#[path = "redclaw/profile_channels.rs"]
+mod redclaw_profile_channels;
 #[path = "redclaw/runner_tasks.rs"]
 mod redclaw_runner_tasks;
 #[path = "redclaw_task_control.rs"]
@@ -29,17 +31,14 @@ use crate::store::{
     redclaw as redclaw_store, runtime_tasks as runtime_tasks_store, spaces as spaces_store,
 };
 use crate::{
-    complete_redclaw_mvp_onboarding, complete_redclaw_style_definition_from_interview,
-    ffmpeg_executable, handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded,
-    load_redclaw_onboarding_state, load_redclaw_profile_prompt_bundle, load_redclaw_style_profile,
-    mark_redclaw_style_definition_started, now_i64, now_iso, parse_json_value_from_text,
-    payload_field, payload_string, save_redclaw_mvp_onboarding_progress,
-    update_redclaw_profile_doc, AppState, UserMemoryRecord,
+    ffmpeg_executable, load_redbox_prompt_or_embedded, now_i64, now_iso,
+    parse_json_value_from_text, payload_field, payload_string, AppState, UserMemoryRecord,
 };
 use redclaw_export_files::{
     export_redclaw_publish_package, export_redclaw_review_report, export_redclaw_xhs_package,
 };
 use redclaw_media_export::{export_redclaw_media_plan, render_redclaw_rough_cut};
+use redclaw_profile_channels::handle_redclaw_profile_channel;
 use redclaw_runner_tasks::handle_redclaw_runner_task_channel;
 use redclaw_task_control::{
     handle_task_cancel, handle_task_confirm, handle_task_create, handle_task_list,
@@ -153,110 +152,15 @@ pub fn handle_redclaw_channel(
         "redclaw:publish-package-export" => export_redclaw_publish_package(state, payload),
         "redclaw:review-report-export" => export_redclaw_review_report(state, payload),
         "redclaw:xhs-package-export" => export_redclaw_xhs_package(state, payload),
-        "redclaw:profile:get-bundle" => (|| {
-            let bundle = load_redclaw_profile_prompt_bundle(state)?;
-            let active_space_id =
-                crate::with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?;
-            Ok(json!({
-                "success": true,
-                "activeSpaceId": active_space_id,
-                "profileRoot": bundle.profile_root.display().to_string(),
-                "agent": bundle.agent,
-                "soul": bundle.soul,
-                "identity": bundle.identity,
-                "user": bundle.user,
-                "creatorProfile": bundle.creator_profile,
-                "bootstrap": bundle.bootstrap,
-                "styleProfile": load_redclaw_style_profile(state)?,
-                "files": {
-                    "agent": bundle.agent,
-                    "soul": bundle.soul,
-                    "identity": bundle.identity,
-                    "user": bundle.user,
-                    "creatorProfile": bundle.creator_profile,
-                    "bootstrap": bundle.bootstrap
-                },
-                "onboardingState": bundle.onboarding_state
-            }))
-        })(),
-        "redclaw:profile:update-doc" => (|| {
-            let doc_type = payload_string(payload, "docType")
-                .ok_or_else(|| "docType is required".to_string())?;
-            let markdown = payload_string(payload, "markdown")
-                .ok_or_else(|| "markdown is required".to_string())?;
-            let reason = payload_string(payload, "reason");
-            let mut result = update_redclaw_profile_doc(state, &doc_type, &markdown)?;
-            if let Some(reason_text) = reason {
-                if let Some(object) = result.as_object_mut() {
-                    object.insert("reason".to_string(), json!(reason_text));
-                }
-            }
-            Ok(result)
-        })(),
-        "redclaw:profile:onboarding-status" => (|| {
-            let onboarding_state = load_redclaw_onboarding_state(state)?;
-            let completed = onboarding_state
-                .get("completedAt")
-                .and_then(|value| value.as_str())
-                .map(|value| !value.trim().is_empty())
-                .unwrap_or(false);
-            Ok(json!({
-                "success": true,
-                "completed": completed,
-                "state": onboarding_state
-            }))
-        })(),
-        "redclaw:profile:onboarding-turn" => (|| {
-            let input = payload_string(payload, "input").unwrap_or_default();
-            let result = handle_redclaw_onboarding_turn(state, &input)?;
-            Ok(json!({
-                "success": true,
-                "handled": result.is_some(),
-                "result": result.map(|(response, completed)| json!({
-                    "responseText": response,
-                    "completed": completed
-                }))
-            }))
-        })(),
-        "redclaw:profile:save-initialization-progress" => (|| {
-            let step_index = payload_field(payload, "stepIndex")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            let answers = payload_field(payload, "answers")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            let onboarding_state =
-                save_redclaw_mvp_onboarding_progress(state, step_index, &answers)?;
-            Ok(json!({
-                "success": true,
-                "state": onboarding_state
-            }))
-        })(),
-        "redclaw:profile:complete-initialization" => (|| {
-            let answers = payload_field(payload, "answers")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            complete_redclaw_mvp_onboarding(app, state, &answers)
-        })(),
-        "redclaw:profile:start-style-definition" => (|| {
-            let force_restart = payload_field(payload, "forceRestart")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let source = payload_string(payload, "source").unwrap_or_else(|| "manual".to_string());
-            let session_id = payload_string(payload, "sessionId");
-            let onboarding_state = mark_redclaw_style_definition_started(
-                state,
-                session_id.as_deref(),
-                &source,
-                force_restart,
-            )?;
-            Ok(json!({
-                "success": true,
-                "state": onboarding_state
-            }))
-        })(),
-        "redclaw:profile:complete-style-definition" => {
-            complete_redclaw_style_definition_from_interview(state, payload)
+        "redclaw:profile:get-bundle"
+        | "redclaw:profile:update-doc"
+        | "redclaw:profile:onboarding-status"
+        | "redclaw:profile:onboarding-turn"
+        | "redclaw:profile:save-initialization-progress"
+        | "redclaw:profile:complete-initialization"
+        | "redclaw:profile:start-style-definition"
+        | "redclaw:profile:complete-style-definition" => {
+            handle_redclaw_profile_channel(app, state, channel, payload)?
         }
         "redclaw:runner-start" => (|| {
             let patch = runner_config_patch_from_payload(payload);
