@@ -337,6 +337,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted session transcript JSONL path resolution, entry append/load, transcript index persistence, metadata snapshots and git-branch lookup into `runtime/session_runtime/transcript_store`.
 - Extracted session transcript message-entry projection, post-compaction rebuild and bundle-to-transcript synchronization into `runtime/session_runtime/transcript_sync`.
 - Extracted session runtime history sanitization, explicit asset reference context rendering, summary/snippet helpers and token estimation into `runtime/session_runtime/history`, while keeping compact-target settings access in the parent runtime boundary.
+- Extracted session resource discovery, resource de-duplication, media-kind inference and session-resource prompt rendering into `runtime/session_runtime/resources`.
 
 ### 1. Bridge Contract Layer
 
