@@ -40,6 +40,8 @@ export function createAdvisorsBridge(core: BridgeCore) {
       selectAvatar: () => core.invokeChannel('advisors:select-avatar'),
       onDownloadProgress: (listener: Listener) => core.on('advisors:download-progress', listener),
       offDownloadProgress: (listener: Listener) => core.off('advisors:download-progress', listener),
+      onChanged: (listener: Listener) => core.on('advisors:changed', listener),
+      offChanged: (listener: Listener) => core.off('advisors:changed', listener),
     },
     fetchYoutubeInfo: (channelUrl: string) => core.invokeChannel('advisors:fetch-youtube-info', { channelUrl }),
     onFetchYoutubeInfoProgress: (listener: Listener) => core.on('youtube:fetch-info-progress', listener),

@@ -1780,6 +1780,8 @@ declare global {
         selectAvatar: () => Promise<unknown>;
         onDownloadProgress: (listener: (...args: unknown[]) => void) => void;
         offDownloadProgress: (listener: (...args: unknown[]) => void) => void;
+        onChanged: (listener: (...args: unknown[]) => void) => void;
+        offChanged: (listener: (...args: unknown[]) => void) => void;
       };
       knowledge: {
         listNotes: <T = Record<string, unknown>>() => Promise<Array<T>>;
@@ -1801,6 +1803,10 @@ declare global {
         addDocFolder: () => Promise<unknown>;
         addObsidianVault: () => Promise<unknown>;
         deleteDocSource: (sourceId: string) => Promise<unknown>;
+        onChanged: (listener: (...args: unknown[]) => void) => void;
+        offChanged: (listener: (...args: unknown[]) => void) => void;
+        onCatalogUpdated: (listener: (...args: unknown[]) => void) => void;
+        offCatalogUpdated: (listener: (...args: unknown[]) => void) => void;
       };
       embedding: {
         getManuscriptCache: (manuscriptId: string) => Promise<unknown>;

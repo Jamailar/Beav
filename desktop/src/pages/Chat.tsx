@@ -1610,9 +1610,9 @@ export function Chat({
     const handleAdvisorsChanged = () => {
       void loadMemberMentionOptions();
     };
-    window.ipcRenderer.on('advisors:changed', handleAdvisorsChanged);
+    window.ipcRenderer.advisors.onChanged(handleAdvisorsChanged);
     return () => {
-      window.ipcRenderer.off('advisors:changed', handleAdvisorsChanged);
+      window.ipcRenderer.advisors.offChanged(handleAdvisorsChanged);
     };
   }, [isActive, loadAssetMentionOptions, loadMemberMentionOptions, loadSkillMentionOptions]);
 
@@ -1673,11 +1673,11 @@ export function Chat({
     const handleKnowledgeChanged = () => {
       void loadKnowledgeMentionOptions(knowledgeMentionSearchQueryRef.current);
     };
-    window.ipcRenderer.on('knowledge:changed', handleKnowledgeChanged);
-    window.ipcRenderer.on('knowledge:catalog-updated', handleKnowledgeChanged);
+    window.ipcRenderer.knowledge.onChanged(handleKnowledgeChanged);
+    window.ipcRenderer.knowledge.onCatalogUpdated(handleKnowledgeChanged);
     return () => {
-      window.ipcRenderer.off('knowledge:changed', handleKnowledgeChanged);
-      window.ipcRenderer.off('knowledge:catalog-updated', handleKnowledgeChanged);
+      window.ipcRenderer.knowledge.offChanged(handleKnowledgeChanged);
+      window.ipcRenderer.knowledge.offCatalogUpdated(handleKnowledgeChanged);
       if (knowledgeMentionSearchTimerRef.current) {
         window.clearTimeout(knowledgeMentionSearchTimerRef.current);
         knowledgeMentionSearchTimerRef.current = null;
@@ -2419,9 +2419,9 @@ export function Chat({
     const handleSpaceChanged = () => {
       setSelectionMenu(prev => ({ ...prev, visible: false }));
     };
-    window.ipcRenderer.on('space:changed', handleSpaceChanged);
+    window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
     return () => {
-      window.ipcRenderer.off('space:changed', handleSpaceChanged);
+      window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
     };
   }, [fixedSessionMode, isActive]);
 
@@ -2430,11 +2430,11 @@ export function Chat({
     const refreshChatModels = () => {
       void loadChatModelOptions();
     };
-    window.ipcRenderer.on('settings:updated', refreshChatModels);
-    window.ipcRenderer.on('auth:data-changed', refreshChatModels);
+    window.ipcRenderer.onSettingsUpdated(refreshChatModels);
+    window.ipcRenderer.auth.onDataChanged(refreshChatModels);
     return () => {
-      window.ipcRenderer.off('settings:updated', refreshChatModels);
-      window.ipcRenderer.off('auth:data-changed', refreshChatModels);
+      window.ipcRenderer.offSettingsUpdated(refreshChatModels);
+      window.ipcRenderer.auth.offDataChanged(refreshChatModels);
     };
   }, [isActive, loadChatModelOptions]);
 
