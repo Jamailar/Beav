@@ -2105,69 +2105,61 @@ fn export_redclaw_xhs_package(
         .join("xhs-packages")
         .join(safe_export_slug(&project_id));
     std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
-    with_store_mut(state, |store| {
-        let project = store
-            .redclaw_state
-            .projects
-            .iter_mut()
-            .find(|item| item.id == project_id)
-            .ok_or_else(|| "RedClaw project not found".to_string())?;
-        let package = xhs_package_from_project(project);
-        let package_path = export_dir.join("xhs-package.json");
-        let markdown_path = export_dir.join("xhs-package.md");
-        let layout_path = export_dir.join("carousel-layout.json");
-        let image_manifest_path = export_dir.join("image-manifest.json");
-        write_text_file(
-            &package_path,
-            &serde_json::to_string_pretty(&package).map_err(|error| error.to_string())?,
-        )?;
-        write_text_file(&markdown_path, &build_xhs_package_markdown(&package))?;
-        write_text_file(
-            &layout_path,
-            &serde_json::to_string_pretty(package.get("carouselLayout").unwrap_or(&Value::Null))
-                .map_err(|error| error.to_string())?,
-        )?;
-        write_text_file(
-            &image_manifest_path,
-            &serde_json::to_string_pretty(package.get("imageAssets").unwrap_or(&Value::Null))
-                .map_err(|error| error.to_string())?,
-        )?;
+    let project_snapshot = with_store(state, |store| {
+        redclaw_store::project_by_id(&store, &project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())
+    })?;
+    let package = xhs_package_from_project(&project_snapshot);
+    let package_path = export_dir.join("xhs-package.json");
+    let markdown_path = export_dir.join("xhs-package.md");
+    let layout_path = export_dir.join("carousel-layout.json");
+    let image_manifest_path = export_dir.join("image-manifest.json");
+    write_text_file(
+        &package_path,
+        &serde_json::to_string_pretty(&package).map_err(|error| error.to_string())?,
+    )?;
+    write_text_file(&markdown_path, &build_xhs_package_markdown(&package))?;
+    write_text_file(
+        &layout_path,
+        &serde_json::to_string_pretty(package.get("carouselLayout").unwrap_or(&Value::Null))
+            .map_err(|error| error.to_string())?,
+    )?;
+    write_text_file(
+        &image_manifest_path,
+        &serde_json::to_string_pretty(package.get("imageAssets").unwrap_or(&Value::Null))
+            .map_err(|error| error.to_string())?,
+    )?;
 
-        let now = now_iso();
-        let export_record = json!({
-            "packagePath": export_dir.display().to_string(),
-            "jsonPath": package_path.display().to_string(),
-            "markdownPath": markdown_path.display().to_string(),
-            "layoutPath": layout_path.display().to_string(),
-            "imageManifestPath": image_manifest_path.display().to_string(),
-            "schema": "redclaw.xhsPackage.v1",
-            "createdAt": now,
-        });
-        let mut metadata = project
-            .metadata
-            .clone()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let mut exports = metadata
-            .get("xhsPackageExports")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        exports.push(export_record);
-        metadata.insert("xhsPackageExports".to_string(), Value::Array(exports));
-        project.metadata = Some(Value::Object(metadata));
-        project.updated_at = now;
-        Ok(json!({
-            "success": true,
-            "project": project,
-            "packagePath": export_dir.display().to_string(),
-            "jsonPath": package_path.display().to_string(),
-            "markdownPath": markdown_path.display().to_string(),
-            "layoutPath": layout_path.display().to_string(),
-            "imageManifestPath": image_manifest_path.display().to_string(),
-            "package": package,
-        }))
-    })
+    let now = now_iso();
+    let export_record = json!({
+        "packagePath": export_dir.display().to_string(),
+        "jsonPath": package_path.display().to_string(),
+        "markdownPath": markdown_path.display().to_string(),
+        "layoutPath": layout_path.display().to_string(),
+        "imageManifestPath": image_manifest_path.display().to_string(),
+        "schema": "redclaw.xhsPackage.v1",
+        "createdAt": now,
+    });
+    let updated_project = with_store_mut(state, |store| {
+        redclaw_store::append_project_metadata_array_record(
+            store,
+            &project_id,
+            "xhsPackageExports",
+            export_record,
+            &now,
+        )
+    })?;
+
+    Ok(json!({
+        "success": true,
+        "project": updated_project,
+        "packagePath": export_dir.display().to_string(),
+        "jsonPath": package_path.display().to_string(),
+        "markdownPath": markdown_path.display().to_string(),
+        "layoutPath": layout_path.display().to_string(),
+        "imageManifestPath": image_manifest_path.display().to_string(),
+        "package": package,
+    }))
 }
 
 fn redclaw_agent_role_id(agent_id: &RedclawAgentId) -> &'static str {
