@@ -119,6 +119,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted official auth notice lifecycle and stale auth snapshot cleanup into an App Shell hook.
 - Extracted Subjects asset-library modal state and Escape handling into an App Shell hook.
 - Added `store::subjects` owned snapshot helpers and routed subject list/get/search/category reads through them as the first store domain helper slice.
+- Moved RedClaw media plan export file writes outside the `with_store_mut` lock; the lock now only snapshots and applies metadata updates.
 
 ### 1. Bridge Contract Layer
 
