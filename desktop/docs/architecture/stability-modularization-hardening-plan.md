@@ -241,6 +241,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed background-task bridge runtime-task cancellation through `store::runtime_tasks`.
 - Routed assistant daemon load-time runtime-state repair and default enablement through `store::assistant`.
 - Routed profile-learning AI distillation model settings reads through `store::settings`.
+- Routed assistant HTTP runtime snapshots through `store::assistant`.
 
 ### 1. Bridge Contract Layer
 
