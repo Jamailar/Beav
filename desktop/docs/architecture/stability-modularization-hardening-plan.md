@@ -290,6 +290,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted official value parsing, unauthorized response detection, timestamp normalization and call-record normalization into `commands/official/call_records`.
 - Extracted official session access/refresh projections, refresh-window calculation and session merge helpers into `commands/official/session`.
 - Extracted official points payload normalization, cached points projection, silent-refresh decision and remote points fetch into `commands/official/points`.
+- Moved official API key extraction, record merge, plaintext-key detection and ensure-default key handling into `commands/official/api_keys`.
 
 ### 1. Bridge Contract Layer
 
