@@ -666,24 +666,15 @@ pub fn handle_redclaw_channel(
                 .ok_or_else(|| "任务创建成功但缺少 sourceTaskId".to_string())?;
             let task = with_store_mut(state, |store| {
                 if !enabled {
-                    if let Some(item) = store
-                        .redclaw_state
-                        .long_cycle_tasks
-                        .iter_mut()
-                        .find(|item| item.id == source_task_id)
-                    {
-                        item.enabled = false;
-                        item.status = "paused".to_string();
-                        item.updated_at = now_iso();
-                    }
+                    redclaw_store::set_long_cycle_task_enabled(
+                        store,
+                        source_task_id,
+                        false,
+                        &now_iso(),
+                    );
                     sync_redclaw_job_definitions(store);
                 }
-                store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter()
-                    .find(|item| item.id == source_task_id)
-                    .cloned()
+                redclaw_store::long_cycle_task_by_id(store, source_task_id)
                     .ok_or_else(|| "任务创建成功但源记录不存在".to_string())
             })?;
             let status = with_store(state, |store| Ok(redclaw_store::state_value(&store)))?;
@@ -693,10 +684,7 @@ pub fn handle_redclaw_channel(
         "redclaw:runner-remove-long-cycle" => {
             let task_id = payload_string(payload, "taskId").unwrap_or_default();
             let result = with_store_mut(state, |store| {
-                store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .retain(|item| item.id != task_id);
+                redclaw_store::remove_long_cycle_task(store, &task_id);
                 sync_redclaw_job_definitions(store);
                 Ok(json!({ "success": true }))
             });
@@ -719,23 +707,7 @@ pub fn handle_redclaw_channel(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
             let result = with_store_mut(state, |store| {
-                if let Some(task) = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.enabled = enabled;
-                    task.status = if enabled {
-                        "running".to_string()
-                    } else {
-                        "paused".to_string()
-                    };
-                    if enabled {
-                        task.last_error = None;
-                    }
-                    task.updated_at = now_iso();
-                }
+                redclaw_store::set_long_cycle_task_enabled(store, &task_id, enabled, &now_iso());
                 if enabled {
                     redclaw_store::update_job_definition_by_source(
                         store,

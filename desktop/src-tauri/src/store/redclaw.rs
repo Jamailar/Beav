@@ -195,6 +195,39 @@ pub(crate) fn set_scheduled_task_enabled(
         .is_some()
 }
 
+pub(crate) fn remove_long_cycle_task(store: &mut AppStore, task_id: &str) {
+    store
+        .redclaw_state
+        .long_cycle_tasks
+        .retain(|item| item.id != task_id);
+}
+
+pub(crate) fn set_long_cycle_task_enabled(
+    store: &mut AppStore,
+    task_id: &str,
+    enabled: bool,
+    updated_at: &str,
+) -> bool {
+    store
+        .redclaw_state
+        .long_cycle_tasks
+        .iter_mut()
+        .find(|item| item.id == task_id)
+        .map(|task| {
+            task.enabled = enabled;
+            task.status = if enabled {
+                "running".to_string()
+            } else {
+                "paused".to_string()
+            };
+            if enabled {
+                task.last_error = None;
+            }
+            task.updated_at = updated_at.to_string();
+        })
+        .is_some()
+}
+
 pub(crate) fn update_source_task_next_run(
     store: &mut AppStore,
     source_kind: Option<&str>,
