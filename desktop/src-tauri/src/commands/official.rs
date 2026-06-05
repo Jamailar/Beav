@@ -4,6 +4,7 @@ mod auth_flow;
 mod billing;
 mod call_records;
 mod models;
+mod session;
 
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
@@ -32,11 +33,15 @@ use call_records::value_as_f64;
 use call_records::{
     normalize_official_call_record_items, normalize_official_call_records_value,
     official_response_is_unauthorized, payload_f64, payload_i64, response_error_message,
-    value_as_i64, OFFICIAL_CALL_RECORDS_PAGE_SIZE,
+    OFFICIAL_CALL_RECORDS_PAGE_SIZE,
+};
+#[cfg(test)]
+use session::session_refresh_window_ms;
+use session::{
+    merge_session_with_existing, official_session_logged_in, official_session_needs_refresh,
+    session_access_token, session_refresh_token, session_refresh_token_app_slug,
 };
 
-const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
-const OFFICIAL_SESSION_MAX_REFRESH_WINDOW_MS: i64 = 5 * 60_000;
 const OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS: i64 = 60_000;
 const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 24] = [
     "redbox_official_realm",
@@ -171,47 +176,6 @@ fn official_points_need_silent_refresh(settings: &Value) -> bool {
         },
         None => true,
     }
-}
-
-fn session_access_token(settings: &Value) -> Option<String> {
-    official_settings_session(settings)
-        .and_then(|session| {
-            payload_string(&session, "accessToken")
-                .or_else(|| payload_string(&session, "access_token"))
-        })
-        .filter(|value| !value.trim().is_empty())
-}
-
-fn session_created_at(settings: &Value) -> Option<i64> {
-    official_settings_session(settings).and_then(|session| {
-        session
-            .get("createdAt")
-            .or_else(|| session.get("updatedAt"))
-            .and_then(value_as_i64)
-    })
-}
-
-fn session_refresh_window_ms(settings: &Value) -> i64 {
-    let expires_at = session_expires_at(settings).unwrap_or_default();
-    let created_at = session_created_at(settings).unwrap_or_else(|| (now_ms() as i64) - 900_000);
-    let ttl_ms = expires_at.saturating_sub(created_at);
-    let dynamic_window = ttl_ms / 5;
-    dynamic_window.clamp(
-        OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS,
-        OFFICIAL_SESSION_MAX_REFRESH_WINDOW_MS,
-    )
-}
-
-fn session_refresh_deadline(settings: &Value) -> Option<i64> {
-    session_expires_at(settings).map(|expires_at| expires_at - session_refresh_window_ms(settings))
-}
-
-fn official_session_recoverable(settings: &Value) -> bool {
-    session_refresh_token(settings).is_some()
-}
-
-fn official_session_logged_in(settings: &Value) -> bool {
-    session_access_token(settings).is_some() || official_session_recoverable(settings)
 }
 
 fn upsert_session_api_key(session: &mut Value, api_key: &str) {
@@ -399,87 +363,6 @@ fn is_official_ai_request(settings: &Value, request_url: &str, api_key: Option<&
     provided_token.is_empty()
         || provided_token == official_token
         || provided_token == official_access_token
-}
-
-fn session_refresh_token(settings: &Value) -> Option<String> {
-    official_settings_session(settings)
-        .and_then(|session| {
-            payload_string(&session, "refreshToken")
-                .or_else(|| payload_string(&session, "refresh_token"))
-        })
-        .filter(|value| !value.trim().is_empty())
-}
-
-fn session_refresh_token_app_slug(settings: &Value) -> Option<String> {
-    session_refresh_token(settings).and_then(|token| {
-        auth::jwt_claim_string(&token, "appSlug")
-            .or_else(|| auth::jwt_claim_string(&token, "app_slug"))
-    })
-}
-
-fn session_expires_at(settings: &Value) -> Option<i64> {
-    official_settings_session(settings)
-        .and_then(|session| session.get("expiresAt").and_then(value_as_i64))
-}
-
-fn official_session_needs_refresh(settings: &Value) -> bool {
-    if official_settings_session(settings).is_none() {
-        return false;
-    }
-
-    if session_access_token(settings).is_none() {
-        return official_session_recoverable(settings);
-    }
-
-    if !official_session_recoverable(settings) {
-        return false;
-    }
-
-    match session_refresh_deadline(settings) {
-        Some(refresh_at) => refresh_at <= now_ms() as i64,
-        None => false,
-    }
-}
-
-fn merge_session_with_existing(existing: Option<&Value>, session: &mut Value) {
-    let Some(session_object) = session.as_object_mut() else {
-        return;
-    };
-    let Some(existing_object) = existing.and_then(|value| value.as_object()) else {
-        return;
-    };
-
-    let user_missing = session_object
-        .get("user")
-        .map(|value| value.is_null())
-        .unwrap_or(true);
-    if user_missing {
-        if let Some(user) = existing_object.get("user") {
-            session_object.insert("user".to_string(), user.clone());
-        }
-    }
-
-    for key in [
-        "refreshToken",
-        "apiKey",
-        "tokenType",
-        "expiresAt",
-        "createdAt",
-    ] {
-        let missing = match session_object.get(key) {
-            Some(Value::String(text)) => text.trim().is_empty(),
-            Some(Value::Null) => true,
-            Some(_) => false,
-            None => true,
-        };
-        if missing {
-            if let Some(value) = existing_object.get(key) {
-                session_object.insert(key.to_string(), value.clone());
-            }
-        }
-    }
-
-    session_object.insert("updatedAt".to_string(), json!(now_ms() as i64));
 }
 
 fn sync_official_route_credentials(settings: &mut Value) {
