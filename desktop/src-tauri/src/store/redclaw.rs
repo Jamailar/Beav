@@ -341,6 +341,45 @@ pub(crate) fn mark_source_task_failed(
     }
 }
 
+pub(crate) fn cancel_scheduled_task(
+    store: &mut AppStore,
+    task_id: &str,
+    reason: &str,
+    now_iso: &str,
+) -> Option<String> {
+    store
+        .redclaw_state
+        .scheduled_tasks
+        .iter_mut()
+        .find(|item| item.id == task_id)
+        .map(|task| {
+            task.enabled = false;
+            task.last_error = Some(reason.to_string());
+            task.updated_at = now_iso.to_string();
+            task.id.clone()
+        })
+}
+
+pub(crate) fn cancel_long_cycle_task(
+    store: &mut AppStore,
+    task_id: &str,
+    reason: &str,
+    now_iso: &str,
+) -> Option<String> {
+    store
+        .redclaw_state
+        .long_cycle_tasks
+        .iter_mut()
+        .find(|item| item.id == task_id)
+        .map(|task| {
+            task.enabled = false;
+            task.status = "cancelled".to_string();
+            task.last_error = Some(reason.to_string());
+            task.updated_at = now_iso.to_string();
+            task.id.clone()
+        })
+}
+
 pub(crate) fn job_definition_sync_snapshot(
     store: &AppStore,
 ) -> (
