@@ -38,17 +38,15 @@ pub(crate) fn repair_missing_official_defaults_for_store(
     }
 
     let store_snapshot = with_store_mut(state, |store| {
-        store.settings = next_settings.clone();
-        crate::ai_model_manager::legacy_projection::normalize_settings_projection(
-            &mut store.settings,
-        );
+        settings_store::update_settings(store, |settings| {
+            *settings = next_settings;
+            crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
+        });
         Ok(store.clone())
     })?;
     persist_store(&state.store_path, &store_snapshot)?;
-    crate::ai_model_manager::store::sync_model_config_file(
-        &state.store_path,
-        &store_snapshot.settings,
-    )?;
+    let settings_snapshot = settings_store::settings_snapshot(&store_snapshot);
+    crate::ai_model_manager::store::sync_model_config_file(&state.store_path, &settings_snapshot)?;
     if let Some(app) = app {
         let _ = app.emit(
             "settings:updated",
