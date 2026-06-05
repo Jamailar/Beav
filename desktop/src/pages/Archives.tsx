@@ -265,8 +265,8 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 void loadSamples(selectedProfileIdRef.current);
             }
         };
-        window.ipcRenderer.on('archives:sample-created', handleSampleCreated);
-        return () => window.ipcRenderer.off('archives:sample-created', handleSampleCreated);
+        window.ipcRenderer.archives.onSampleCreated(handleSampleCreated);
+        return () => window.ipcRenderer.archives.offSampleCreated(handleSampleCreated);
     }, [isActive, loadSamples]);
 
     const openCreateProfile = () => {

@@ -1992,6 +1992,8 @@ declare global {
         create: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         update: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         delete: <T = unknown>(profileId: string) => Promise<T>;
+        onSampleCreated: (listener: (...args: unknown[]) => void) => void;
+        offSampleCreated: (listener: (...args: unknown[]) => void) => void;
         samples: {
           list: <T = unknown>(profileId: string) => Promise<T>;
           create: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
