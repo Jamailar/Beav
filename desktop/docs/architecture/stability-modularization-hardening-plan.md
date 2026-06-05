@@ -180,6 +180,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed CLI runtime workspace-root active-space reads through `store::spaces`.
 - Refreshed `desktop/docs/ipc-inventory.md` with `pnpm --dir desktop ipc:inventory`, confirming the bridge/host channel inventory after advisor and bridge domain splits.
 - Extracted manuscript SRT subtitle parsing, fallback segment creation and serialization into `commands/manuscripts/subtitles.rs`, keeping package subtitle transcription behavior unchanged and adding focused subtitle helper tests.
+- Moved post-package bindings, platform normalization and target upsert helpers into `commands/manuscripts/post.rs`, so the manuscript root command module owns less post-specific state logic.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
