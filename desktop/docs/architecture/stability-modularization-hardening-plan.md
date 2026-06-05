@@ -141,6 +141,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed system settings save and feedback-upload settings snapshots through `store::settings`.
 - Extended `check:store-locks` to reject official network request helpers inside store lock closures.
 - Routed manuscript motion/editor AI planning settings reads through `store::settings`.
+- Routed official aggregate auth refresh, pricing refresh, cache refresh and bootstrap settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
