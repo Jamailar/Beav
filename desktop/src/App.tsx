@@ -3,7 +3,7 @@ import { FileText, Loader2, MessageSquareWarning } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { AppOnboarding, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
-import { FeedbackReportDialog, OPEN_FEEDBACK_REPORT_EVENT, type FeedbackReportContext } from './components/FeedbackReportDialog';
+import { FeedbackReportDialog } from './components/FeedbackReportDialog';
 import { useLlmReadinessLifecycle } from './hooks/useLlmReadinessLifecycle';
 import { useLlmReadinessState } from './hooks/useLlmReadinessState';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
@@ -12,6 +12,7 @@ import { NotificationsHost } from './notifications/NotificationsHost';
 import { useI18n } from './i18n';
 import { OfficialLoginGate } from './features/app-shell/OfficialLoginGate';
 import { StartupMigrationGate } from './features/app-shell/StartupMigrationGate';
+import { useFeedbackReportDialog } from './features/app-shell/useFeedbackReportDialog';
 import { useGlobalIntentRouter } from './features/app-shell/useGlobalIntentRouter';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
 import type { GenerationIntent, ImmersiveMode, PendingChatMessage, RedClawNavigationAction, SettingsNavigationTarget } from './features/app-shell/types';
@@ -86,8 +87,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
-  const [feedbackReportOpen, setFeedbackReportOpen] = useState(false);
-  const [feedbackReportContext, setFeedbackReportContext] = useState<FeedbackReportContext | null>(null);
   const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
   const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
@@ -104,22 +103,13 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setSubjectsModalOpen(false);
   }, []);
 
-  const openFeedbackReport = useCallback((context?: FeedbackReportContext | null) => {
-    setFeedbackReportContext({
-      sourcePage: currentView,
-      ...(context || {}),
-    });
-    setFeedbackReportOpen(true);
-  }, [currentView]);
-
-  useEffect(() => {
-    const handleOpenFeedbackReport = (event: Event) => {
-      const detail = event instanceof CustomEvent ? event.detail : null;
-      openFeedbackReport(detail && typeof detail === 'object' ? detail as FeedbackReportContext : null);
-    };
-    window.addEventListener(OPEN_FEEDBACK_REPORT_EVENT, handleOpenFeedbackReport);
-    return () => window.removeEventListener(OPEN_FEEDBACK_REPORT_EVENT, handleOpenFeedbackReport);
-  }, [openFeedbackReport]);
+  const {
+    feedbackReportOpen,
+    feedbackReportContext,
+    openFeedbackReport,
+    closeFeedbackReport,
+    notifyFeedbackReportSubmitted,
+  } = useFeedbackReportDialog(currentView);
 
   useEffect(() => {
     let mounted = true;
@@ -523,8 +513,8 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
       <FeedbackReportDialog
         open={feedbackReportOpen}
         context={feedbackReportContext}
-        onClose={() => setFeedbackReportOpen(false)}
-        onSubmitted={() => window.dispatchEvent(new CustomEvent('redbox:feedback-report-submitted'))}
+        onClose={closeFeedbackReport}
+        onSubmitted={notifyFeedbackReportSubmitted}
       />
       <StartupMigrationGate />
       <NotificationsHost currentView={currentView} />
