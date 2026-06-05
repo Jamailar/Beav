@@ -114,6 +114,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed renderer diagnostics report-pending subscription through the logs bridge facade.
 - Added Knowledge, assistant daemon and background task event facades for remaining dirty-page migrations.
 - Routed the remaining GenerationStudio, Knowledge and Settings page event subscriptions through bridge facades; strict raw page IPC event scan is now clean.
+- Added `pnpm --dir desktop check:ipc-boundaries` to prevent new renderer raw IPC channel calls from bypassing bridge domain facades.
 
 ### 1. Bridge Contract Layer
 
