@@ -330,12 +330,14 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
 
 fn derived_background_tasks_internal(store: &AppStore, include_turns: bool) -> Vec<Value> {
     let mut tasks = Vec::new();
+    let executions = redclaw_store::list_job_executions(store);
+    let definitions = redclaw_store::list_job_definitions(store);
     let latest_execution_by_definition: std::collections::HashMap<
         String,
         &crate::RedclawJobExecutionRecord,
-    > = store.redclaw_job_executions.iter().fold(
-        std::collections::HashMap::new(),
-        |mut acc, execution| {
+    > = executions
+        .iter()
+        .fold(std::collections::HashMap::new(), |mut acc, execution| {
             if execution.archived_at.is_some() {
                 return acc;
             }
@@ -347,10 +349,9 @@ fn derived_background_tasks_internal(store: &AppStore, include_turns: bool) -> V
                 acc.insert(execution.definition_id.clone(), execution);
             }
             acc
-        },
-    );
+        });
 
-    for definition in &store.redclaw_job_definitions {
+    for definition in &definitions {
         let execution = latest_execution_by_definition.get(&definition.id).copied();
         let worker_state = execution
             .map(|item| item.status.clone())
