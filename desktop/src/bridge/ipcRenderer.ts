@@ -14,6 +14,7 @@ import { createPluginsBridge } from './domains/pluginsBridge';
 import { createRedClawBridge } from './domains/redclawBridge';
 import { createRuntimeBridge } from './domains/runtimeBridge';
 import { createSkillsBridge } from './domains/skillsBridge';
+import { createSubjectsBridge } from './domains/subjectsBridge';
 import { createSystemBridge } from './domains/systemBridge';
 import { createTeamRuntimeBridge } from './domains/teamRuntimeBridge';
 import { createToolsBridge } from './domains/toolsBridge';
@@ -125,30 +126,7 @@ function createIpcRenderer() {
     ...createAuthBridge(core),
     ...createMcpBridge(core),
     ...createChatBridge(core),
-    subjects: {
-      list: (payload?: Record<string, unknown>) => invokeChannel('subjects:list', payload || {}),
-      get: (payload: { id: string }) => invokeChannel('subjects:get', payload),
-      create: (payload: unknown) => invokeChannel('subjects:create', payload),
-      update: (payload: unknown) => invokeChannel('subjects:update', payload),
-      generateCharacterCard: (payload: { id: string }) => invokeChannel('subjects:generate-character-card', payload),
-      delete: (payload: { id: string }) => invokeChannel('subjects:delete', payload),
-      search: (payload?: Record<string, unknown>) => invokeChannel('subjects:search', payload || {}),
-      categories: {
-        list: () => invokeChannel('subjects:categories:list'),
-        create: (payload: { name: string }) => invokeChannel('subjects:categories:create', payload),
-        update: (payload: { id: string; name: string }) => invokeChannel('subjects:categories:update', payload),
-        delete: (payload: { id: string }) => invokeChannel('subjects:categories:delete', payload)
-      }
-    },
-    brandWorkspace: {
-      list: () => invokeChannel('brand-workspace:list'),
-      get: (payload: { id: string }) => invokeChannel('brand-workspace:get', payload),
-      upsertBrand: (payload: unknown) => invokeChannel('brand-workspace:brand:upsert', payload),
-      upsertProduct: (payload: unknown) => invokeChannel('brand-workspace:product:upsert', payload),
-      upsertSku: (payload: unknown) => invokeChannel('brand-workspace:sku:upsert', payload),
-      upsertProductDetailPage: (payload: unknown) => invokeChannel('brand-workspace:product-detail-page:upsert', payload),
-      rebuildAiIndex: () => invokeChannel('brand-workspace:rebuild-ai-index')
-    },
+    ...createSubjectsBridge(core),
     videoEditorV2: {
       getOrCreateForManuscript: (payload: { manuscriptPath: string; title?: string }) =>
         invokeChannel('videoEditorV2:get-or-create-for-manuscript', payload),
