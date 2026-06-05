@@ -1118,6 +1118,8 @@ declare global {
           importedCounts?: Record<string, number> | null;
           projectUpgradeCounts?: Record<string, number> | null;
         }>;
+        onStatus: (listener: (...args: unknown[]) => void) => void;
+        offStatus: (listener: (...args: unknown[]) => void) => void;
       };
       officialAuth: {
         bootstrap: (payload?: { reason?: string }) => Promise<{

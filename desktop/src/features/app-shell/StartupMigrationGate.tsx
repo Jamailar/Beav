@@ -24,11 +24,11 @@ export function StartupMigrationGate() {
 
     void window.ipcRenderer.startupMigration.getStatus<StartupMigrationState>().then(applyStatus);
     const handleStatus = (_event: unknown, payload: unknown) => applyStatus(payload);
-    window.ipcRenderer.on('app:startup-migration-status', handleStatus as (...args: unknown[]) => void);
+    window.ipcRenderer.startupMigration.onStatus(handleStatus as (...args: unknown[]) => void);
 
     return () => {
       disposed = true;
-      window.ipcRenderer.off('app:startup-migration-status', handleStatus as (...args: unknown[]) => void);
+      window.ipcRenderer.startupMigration.offStatus(handleStatus as (...args: unknown[]) => void);
     };
   }, []);
 

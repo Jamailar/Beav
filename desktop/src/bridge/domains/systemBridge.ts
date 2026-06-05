@@ -120,6 +120,8 @@ export function createSystemBridge(core: BridgeCore) {
           } as T,
         },
       ),
+      onStatus: (listener: Listener) => core.on('app:startup-migration-status', listener),
+      offStatus: (listener: Listener) => core.off('app:startup-migration-status', listener),
     },
     getAppVersion: () => core.invokeChannel('app:get-version'),
     checkAppUpdate: (force = false) => core.invokeChannel('app:check-update', { force }),
