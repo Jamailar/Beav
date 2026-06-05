@@ -320,6 +320,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted collaboration message listing, mailbox reads, message delivery, report requests and report submission event handling into `commands/runtime_collab/message_report_values`.
 - Extracted review docket listing, detail lookup, stats, creation, decision and archive value wrappers into `commands/runtime_collab/review_values`.
 - Extracted advisor template discovery, JSON loading and template normalization into `commands/advisor_ops/templates`.
+- Extracted advisor knowledge file selection expansion, recursive folder collection, file copy and advisor knowledge-file writeback into `commands/advisor_ops/knowledge_files`.
 
 ### 1. Bridge Contract Layer
 
