@@ -188,6 +188,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed job execution active, duplicate-anchor and failure-count projections through `store::redclaw`.
 - Routed retry job enqueue definition/execution access through `store::redclaw`.
 - Routed job execution cancellation and retry id lookups through `store::redclaw`.
+- Routed scheduler background-task test runtime task insertion through `store::runtime_tasks`.
 
 ### 1. Bridge Contract Layer
 
