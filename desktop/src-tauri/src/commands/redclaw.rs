@@ -96,8 +96,9 @@ pub fn ensure_redclaw_runtime_running(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<bool, String> {
-    let (should_run, should_recover_tick) =
-        with_store(state, |store| Ok(redclaw_store::runtime_start_decision(&store)))?;
+    let (should_run, should_recover_tick) = with_store(state, |store| {
+        Ok(redclaw_store::runtime_start_decision(&store))
+    })?;
 
     if should_recover_tick {
         let _ = with_store_mut(state, |store| {
@@ -295,9 +296,7 @@ pub fn handle_redclaw_channel(
                     stop_redclaw_runtime(&mut runtime);
                 }
             }
-            let status = with_store_mut(state, |store| {
-                Ok(redclaw_store::stop_runner(store))
-            })?;
+            let status = with_store_mut(state, |store| Ok(redclaw_store::stop_runner(store)))?;
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(status)
         })(),
