@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::runtime::resolve_session_file_reference_inputs;
-use crate::store::settings as settings_store;
+use crate::store::{media as media_store, settings as settings_store};
 use crate::*;
 use crate::{commands, with_store, with_store_mut, AppState};
 use config::*;
@@ -2908,7 +2908,7 @@ fn persist_generated_image_artifact(
         })),
     )?;
     with_store_mut(&state, |store| {
-        store.media_assets.push(asset.clone());
+        media_store::push_asset(store, asset.clone());
         Ok(())
     })?;
     persist_media_workspace_catalog(&state)?;
@@ -3384,7 +3384,7 @@ fn register_audio_sequence_asset(
         exists: absolute_path.is_file(),
     };
     with_store_mut(state, |store| {
-        store.media_assets.insert(0, asset.clone());
+        media_store::prepend_asset(store, asset.clone());
         Ok(())
     })?;
     persist_media_workspace_catalog(state)?;
@@ -4163,7 +4163,7 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
         exists: true,
     };
     with_store_mut(&state, |store| {
-        store.media_assets.push(media_asset.clone());
+        media_store::push_asset(store, media_asset.clone());
         store.work_items.push(create_work_item(
             "video-generation",
             media_asset
@@ -4572,7 +4572,7 @@ fn register_video_sequence_asset(
         exists: absolute_path.is_file(),
     };
     with_store_mut(state, |store| {
-        store.media_assets.push(media_asset.clone());
+        media_store::push_asset(store, media_asset.clone());
         store.work_items.push(create_work_item(
             "video-generation",
             media_asset
