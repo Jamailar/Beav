@@ -11,18 +11,18 @@ mod pricing;
 mod request;
 mod session;
 mod settings_sync;
+mod settings_update;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 #[cfg(test)]
 use crate::official_base_url_for_realm;
 use crate::persistence::{with_store, with_store_mut};
-use crate::store::settings as settings_store;
 use crate::{
     app_brand_display_name, app_brand_slug, append_debug_trace_state, auth,
-    create_official_payment_form, emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
-    make_id, normalize_official_auth_session, now_iso, now_ms, official_access_token_from_settings,
+    create_official_payment_form, emit_redbox_auth_session_updated, make_id,
+    normalize_official_auth_session, now_iso, now_ms, official_access_token_from_settings,
     official_account_summary_local, official_ai_api_key_from_settings,
     official_base_url_from_settings, official_fallback_products, official_realm_from_settings,
     official_realms_payload, official_response_items, official_settings_api_keys,
@@ -69,6 +69,7 @@ use settings_sync::{
     clear_official_auth_state, is_official_ai_request, merge_official_settings,
     switch_official_realm, sync_official_route_credentials,
 };
+use settings_update::apply_official_settings_update;
 
 fn log_official_auth(state: &State<'_, AppState>, stage: &str, detail: impl Into<String>) {
     append_debug_trace_state(state, format!("[official-auth] {stage} {}", detail.into()));
@@ -78,96 +79,6 @@ fn cached_official_user(settings: &Value) -> Value {
     official_settings_session(settings)
         .and_then(|session| session.get("user").cloned())
         .unwrap_or_else(|| json!({}))
-}
-
-fn apply_official_settings_update(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: &Value,
-    source: &str,
-    data_payload: Option<Value>,
-    expected_generation: Option<u64>,
-) -> Result<(), String> {
-    if let Some(expected_generation) = expected_generation {
-        let matches = auth::auth_generation_matches(state, expected_generation)?;
-        if !matches {
-            log_official_auth(
-                state,
-                "stale-update-dropped",
-                format!("source={source} expectedGeneration={expected_generation}"),
-            );
-            return Err("auth generation changed; stale update dropped".to_string());
-        }
-    }
-    let mut next_settings = settings.clone();
-    let model_config_exists =
-        crate::ai_model_manager::legacy_config::model_config_path(&state.store_path).exists();
-    let model_defaults_initialized = crate::model_defaults_initialized(&next_settings);
-    let mut should_sync_model_config = model_config_exists || model_defaults_initialized;
-    if !model_config_exists && !model_defaults_initialized {
-        match crate::fetch_official_default_model_slots_for_settings(&next_settings) {
-            Ok(default_slots) => {
-                let catalog_models = official_settings_models(&next_settings);
-                should_sync_model_config = crate::seed_official_default_models_into_settings(
-                    &mut next_settings,
-                    &default_slots,
-                    &catalog_models,
-                );
-            }
-            Err(error) => {
-                log_official_auth(
-                    state,
-                    "default-models-fetch-failed",
-                    format!("source={source} error={error}"),
-                );
-            }
-        }
-    }
-    match crate::ai_model_manager::defaults::repair_missing_official_defaults_in_settings(
-        &mut next_settings,
-    ) {
-        Ok(repaired) => {
-            should_sync_model_config = should_sync_model_config || repaired;
-        }
-        Err(error) => {
-            log_official_auth(
-                state,
-                "default-models-repair-failed",
-                format!("source={source} error={error}"),
-            );
-        }
-    }
-    let merged_settings = with_store_mut(state, |store| {
-        Ok(settings_store::update_settings(store, |settings| {
-            merge_official_settings(settings, &next_settings);
-            crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
-        }))
-    })?;
-    if should_sync_model_config {
-        if let Err(error) = crate::ai_model_manager::store::sync_model_config_file(
-            &state.store_path,
-            &merged_settings,
-        ) {
-            log_official_auth(
-                state,
-                "model-config-sync-failed",
-                format!("source={source} error={error}"),
-            );
-        }
-    }
-    let _ = auth::sync_auth_runtime_from_settings(Some(app), state, &merged_settings);
-    let _ = app.emit(
-        "settings:updated",
-        json!({
-            "updatedAt": now_iso(),
-            "source": source,
-        }),
-    );
-    emit_redbox_auth_session_updated(app, official_settings_session(&merged_settings));
-    if let Some(payload) = data_payload {
-        emit_redbox_auth_data_updated(app, payload);
-    }
-    Ok(())
 }
 
 pub fn handle_official_channel(
