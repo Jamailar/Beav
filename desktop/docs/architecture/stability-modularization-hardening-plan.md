@@ -174,6 +174,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed member skill feature flag store reads through `store::settings`.
 - Added `store::spaces` active-space snapshot helper and routed RedClaw runtime space reads through it.
 - Routed account active-workspace reads through `store::spaces`.
+- Routed workspace-root and knowledge-index active-space reads through `store::spaces`.
 
 ### 1. Bridge Contract Layer
 
