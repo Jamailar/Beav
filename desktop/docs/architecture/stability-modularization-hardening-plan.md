@@ -191,6 +191,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed scheduler background-task test runtime task insertion through `store::runtime_tasks`.
 - Routed runtime resume test task insertion through `store::runtime_tasks`.
 - Routed job source-task due snapshots and next-run writebacks through `store::redclaw`.
+- Routed job definition/source-task cooldown updates through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
