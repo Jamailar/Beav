@@ -27,6 +27,7 @@ use crate::{
     },
     payload_field, payload_string,
     persistence::with_store,
+    store::settings as settings_store,
     AppState,
 };
 
@@ -1113,7 +1114,7 @@ fn apply_external_rerank(state: &State<'_, AppState>, query: &str, hits: &mut [D
 fn resolve_external_rerank_config(
     state: &State<'_, AppState>,
 ) -> Result<ExternalRerankConfig, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let timeout_seconds = payload_field(&settings, "rerank_timeout_seconds")
         .and_then(|value| {
             value.as_u64().or_else(|| {
@@ -1607,7 +1608,7 @@ fn normalize_cached_canonical_parser_info(mut document: CanonicalDocument) -> Ca
 fn resolve_parser_provider_config(
     state: &State<'_, AppState>,
 ) -> Result<ParserProviderConfig, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let timeout_seconds = payload_field(&settings, "parser_timeout_seconds")
         .and_then(|value| {
             value.as_u64().or_else(|| {
@@ -1633,7 +1634,7 @@ fn resolve_parser_provider_config(
 pub(crate) fn resolve_visual_index_config(
     state: &State<'_, AppState>,
 ) -> Result<VisualIndexConfig, String> {
-    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let resolved = crate::ai_model_manager::AiModelManager::resolve(
         &settings,
         crate::ai_model_manager::AiModelScope::VisualIndex,
