@@ -1,7 +1,7 @@
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::events::emit_runtime_tool_partial;
 use crate::persistence::{with_store, with_store_mut};
-use crate::store::settings as settings_store;
+use crate::store::{media as media_store, settings as settings_store};
 use crate::*;
 use serde_json::{json, Value};
 use std::fs;
@@ -853,7 +853,7 @@ pub fn handle_generation_channel(
                 generate_image_assets(state, payload, |_asset, _completed, _total| Ok(()))?;
             with_store_mut(state, |store| {
                 for asset in &execution.assets {
-                    store.media_assets.push(asset.clone());
+                    media_store::push_asset(store, asset.clone());
                 }
                 store.work_items.push(create_work_item(
                     "image-generation",
@@ -997,7 +997,7 @@ pub fn handle_generation_channel(
             )?;
             with_store_mut(state, |store| {
                 for asset in &created {
-                    store.media_assets.push(asset.clone());
+                    media_store::push_asset(store, asset.clone());
                 }
                 store.work_items.push(create_work_item(
                     "image-generation",
@@ -1442,7 +1442,7 @@ pub fn handle_generation_channel(
         }
         with_store_mut(state, |store| {
             for asset in &created {
-                store.media_assets.push(asset.clone());
+                media_store::push_asset(store, asset.clone());
             }
             store.work_items.push(create_work_item(
                 if channel == "video-gen:generate" {
