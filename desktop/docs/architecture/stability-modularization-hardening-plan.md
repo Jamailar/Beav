@@ -143,6 +143,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed manuscript motion/editor AI planning settings reads through `store::settings`.
 - Routed official aggregate auth refresh, pricing refresh, cache refresh and bootstrap settings reads through `store::settings`.
 - Routed logging diagnostics, agent session context and runtime warm-state settings reads through `store::settings`.
+- Routed media runtime provider/model resolution, voice gateway config and official model-default repair settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
