@@ -571,6 +571,14 @@ pub(crate) fn job_execution_definition_id_by_task_or_definition(
         .map(|item| item.definition_id.clone())
 }
 
+pub(crate) fn job_execution_status_by_id(store: &AppStore, execution_id: &str) -> Option<String> {
+    store
+        .redclaw_job_executions
+        .iter()
+        .find(|item| item.id == execution_id)
+        .map(|item| item.status.clone())
+}
+
 pub(crate) fn consecutive_job_failure_count(store: &AppStore, definition_id: &str) -> usize {
     let mut executions = store
         .redclaw_job_executions
@@ -647,4 +655,32 @@ pub(crate) fn claim_job_execution(
 
     claim(&mut store.redclaw_job_executions[index])?;
     Ok(Some(store.redclaw_job_executions[index].clone()))
+}
+
+pub(crate) fn archive_job_execution(
+    store: &mut AppStore,
+    task_id: &str,
+    now_iso: &str,
+    is_active_status: impl Fn(&str) -> bool,
+) -> Result<String, String> {
+    let execution = store
+        .redclaw_job_executions
+        .iter_mut()
+        .find(|item| {
+            item.id == task_id
+                || item.definition_id == task_id
+                || item
+                    .input_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.get("sourceTaskId"))
+                    .and_then(Value::as_str)
+                    == Some(task_id)
+        })
+        .ok_or_else(|| "任务执行实例不存在".to_string())?;
+    if is_active_status(&execution.status) {
+        return Err("运行中的执行实例不能归档".to_string());
+    }
+    execution.archived_at = Some(now_iso.to_string());
+    execution.updated_at = now_iso.to_string();
+    Ok(execution.id.clone())
 }

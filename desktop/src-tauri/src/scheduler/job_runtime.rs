@@ -855,11 +855,10 @@ pub fn run_job_queue_once(
                 mark_execution_failed(store, &prepared, &error)
             })?;
             let final_status = with_store_mut(state, |store| {
-                Ok(store
-                    .redclaw_job_executions
-                    .iter()
-                    .find(|item| item.id == prepared.execution_id)
-                    .map(|item| item.status.clone()))
+                Ok(redclaw_store::job_execution_status_by_id(
+                    store,
+                    &prepared.execution_id,
+                ))
             })?;
             if matches!(
                 final_status.as_deref(),
@@ -1002,26 +1001,7 @@ pub fn retry_job_execution(
 
 pub fn archive_job_execution(store: &mut AppStore, task_id: &str) -> Result<String, String> {
     let now_iso = now_iso();
-    let execution = store
-        .redclaw_job_executions
-        .iter_mut()
-        .find(|item| {
-            item.id == task_id
-                || item.definition_id == task_id
-                || item
-                    .input_snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.get("sourceTaskId"))
-                    .and_then(Value::as_str)
-                    == Some(task_id)
-        })
-        .ok_or_else(|| "任务执行实例不存在".to_string())?;
-    if is_active_execution_status(&execution.status) {
-        return Err("运行中的执行实例不能归档".to_string());
-    }
-    execution.archived_at = Some(now_iso.clone());
-    execution.updated_at = now_iso;
-    Ok(execution.id.clone())
+    redclaw_store::archive_job_execution(store, task_id, &now_iso, is_active_execution_status)
 }
 
 #[cfg(test)]
