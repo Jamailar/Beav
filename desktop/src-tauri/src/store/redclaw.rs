@@ -160,6 +160,38 @@ pub(crate) fn append_project_metadata_array_record(
     Ok(project.clone())
 }
 
+pub(crate) fn append_project_metadata_record_and_artifact(
+    store: &mut AppStore,
+    project_id: &str,
+    metadata_key: &str,
+    metadata_record: Value,
+    artifact: Value,
+    updated_at: &str,
+) -> Result<RedclawProjectRecord, String> {
+    let project = store
+        .redclaw_state
+        .projects
+        .iter_mut()
+        .find(|item| item.id == project_id)
+        .ok_or_else(|| "RedClaw project not found".to_string())?;
+    let mut metadata = project
+        .metadata
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut records = metadata
+        .get(metadata_key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    records.push(metadata_record);
+    metadata.insert(metadata_key.to_string(), Value::Array(records));
+    project.artifacts.push(artifact);
+    project.metadata = Some(Value::Object(metadata));
+    project.updated_at = updated_at.to_string();
+    Ok(project.clone())
+}
+
 pub(crate) fn list_scheduled_tasks(store: &AppStore) -> Vec<RedclawScheduledTaskRecord> {
     store.redclaw_state.scheduled_tasks.clone()
 }
