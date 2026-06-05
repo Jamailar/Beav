@@ -206,6 +206,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Moved RedClaw publish package file writes outside the store lock.
 - Moved RedClaw review report file writes outside the store lock.
 - Moved RedClaw XHS package file writes outside the store lock.
+- Routed RedClaw rough-cut render metadata/artifact writebacks through `store::redclaw`.
 
 ### 1. Bridge Contract Layer
 
