@@ -13,6 +13,7 @@ import { appAlert, appConfirm } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { useAppUpdateNotice } from '../features/app-shell/useAppUpdateNotice';
+import { useGlobalKnowledgeSearch } from '../features/app-shell/useGlobalKnowledgeSearch';
 import { uiMeasure } from '../utils/uiDebug';
 
 interface LayoutProps {
@@ -54,30 +55,12 @@ interface WorkspaceSpace {
   name: string;
 }
 
-type GlobalKnowledgeSearchItem = {
-  itemId?: string;
-  kind?: 'redbook-note' | 'youtube-video' | 'document-source' | string;
-  title?: string;
-  author?: string;
-  siteName?: string;
-  previewText?: string;
-  updatedAt?: string;
-};
-type GlobalKnowledgeSearchResponse = {
-  items?: GlobalKnowledgeSearchItem[];
-  total?: number;
-};
-
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
 const SIDEBAR_WIDTH_STORAGE_KEY = 'redbox:layout-sidebar-width:v1';
 const SIDEBAR_DEFAULT_WIDTH = 320;
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 460;
 const SIDEBAR_CONTENT_ANIMATION_MS = 280;
-const GLOBAL_SEARCH_ANIMATION_MS = 220;
-const GLOBAL_KNOWLEDGE_SEARCH_EVENT = 'redbox:global-knowledge-search';
-const GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY = 'redbox:global-knowledge-search-query';
-
 function readInitialThemePreference(): ThemePreference {
   if (typeof window === 'undefined') return 'light';
   return readThemePreference();
@@ -301,11 +284,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [spaceDialogTargetId, setSpaceDialogTargetId] = useState<string | null>(null);
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
   const [deletingSpaceId, setDeletingSpaceId] = useState<string | null>(null);
-  const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
-  const [isGlobalSearchClosing, setIsGlobalSearchClosing] = useState(false);
-  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
-  const [globalSearchResults, setGlobalSearchResults] = useState<GlobalKnowledgeSearchItem[]>([]);
-  const [isGlobalSearchLoading, setIsGlobalSearchLoading] = useState(false);
   const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
   const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
@@ -315,9 +293,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const sidebarResizeFrameRef = useRef<number | null>(null);
   const pendingSidebarWidthRef = useRef(sidebarWidth);
   const sidebarWidthPersistTimerRef = useRef<number | null>(null);
-  const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const globalSearchRequestRef = useRef(0);
-  const globalSearchAnimationTimerRef = useRef<number | null>(null);
   const isFixedViewportView = false;
   const titleBarPlatform = getAppTitleBarPlatform();
   const usesAppTitleBar = titleBarPlatform !== null;
@@ -334,7 +309,19 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     openReleasePage,
     closeUpdateNotice,
   } = useAppUpdateNotice(t('layout.openDownloadFailed'));
-  const isGlobalSearchVisible = isGlobalSearchOpen || isGlobalSearchClosing;
+  const {
+    globalSearchInputRef,
+    globalSearchQuery,
+    setGlobalSearchQuery,
+    globalSearchResults,
+    isGlobalSearchLoading,
+    isGlobalSearchVisible,
+    isGlobalSearchClosing,
+    openGlobalSearch,
+    closeGlobalSearch,
+    submitGlobalSearch,
+    navigateToGlobalSearch,
+  } = useGlobalKnowledgeSearch(onNavigate);
   const activeSpaceName = useMemo(
     () => spaces.find((space) => space.id === activeSpaceId)?.name || t('layout.defaultSpaceName'),
     [activeSpaceId, spaces, t]
@@ -348,22 +335,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       return resolvedMode;
     });
   }, []);
-
-  const closeGlobalSearch = useCallback(() => {
-    if (!isGlobalSearchOpen || isGlobalSearchClosing) return;
-
-    if (globalSearchAnimationTimerRef.current !== null) {
-      window.clearTimeout(globalSearchAnimationTimerRef.current);
-      globalSearchAnimationTimerRef.current = null;
-    }
-
-    setIsGlobalSearchClosing(true);
-    globalSearchAnimationTimerRef.current = window.setTimeout(() => {
-      setIsGlobalSearchOpen(false);
-      setIsGlobalSearchClosing(false);
-      globalSearchAnimationTimerRef.current = null;
-    }, GLOBAL_SEARCH_ANIMATION_MS);
-  }, [isGlobalSearchClosing, isGlobalSearchOpen]);
 
   const loadSpaces = useCallback(async () => {
     try {
@@ -450,61 +421,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [sidebarWidth]);
 
   useEffect(() => {
-    if (!isGlobalSearchOpen) return;
-    const focusTimer = window.setTimeout(() => globalSearchInputRef.current?.focus(), 80);
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeGlobalSearch();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.clearTimeout(focusTimer);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [closeGlobalSearch, isGlobalSearchOpen]);
-
-  useEffect(() => {
-    if (!isGlobalSearchOpen) {
-      setGlobalSearchResults([]);
-      setIsGlobalSearchLoading(false);
-      return;
-    }
-
-    const query = globalSearchQuery.trim();
-    if (!query) {
-      setGlobalSearchResults([]);
-      setIsGlobalSearchLoading(false);
-      return;
-    }
-
-    const requestId = globalSearchRequestRef.current + 1;
-    globalSearchRequestRef.current = requestId;
-    setIsGlobalSearchLoading(true);
-    const timer = window.setTimeout(() => {
-      void window.ipcRenderer.knowledge.listPage<GlobalKnowledgeSearchResponse>({
-        limit: 6,
-        query,
-        sort: 'updated-desc',
-      }).then((response) => {
-        if (requestId !== globalSearchRequestRef.current) return;
-        setGlobalSearchResults(Array.isArray(response?.items) ? response.items : []);
-      }).catch((error) => {
-        if (requestId !== globalSearchRequestRef.current) return;
-        console.warn(`[${APP_BRAND.displayName}] global knowledge search failed:`, error);
-        setGlobalSearchResults([]);
-      }).finally(() => {
-        if (requestId === globalSearchRequestRef.current) {
-          setIsGlobalSearchLoading(false);
-        }
-      });
-    }, 160);
-
-    return () => window.clearTimeout(timer);
-  }, [globalSearchQuery, isGlobalSearchOpen]);
-
-  useEffect(() => {
     if (sidebarVisualCollapsed) {
       setIsSpaceMenuOpen(false);
     }
@@ -519,9 +435,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     }
     if (sidebarWidthPersistTimerRef.current !== null) {
       window.clearTimeout(sidebarWidthPersistTimerRef.current);
-    }
-    if (globalSearchAnimationTimerRef.current !== null) {
-      window.clearTimeout(globalSearchAnimationTimerRef.current);
     }
   }, []);
 
@@ -623,61 +536,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       sidebarAnimationTimerRef.current = null;
     }, SIDEBAR_CONTENT_ANIMATION_MS);
   }, [isSidebarAnimating, isSidebarCollapsed]);
-
-  const openGlobalSearch = useCallback(() => {
-    if (globalSearchAnimationTimerRef.current !== null) {
-      window.clearTimeout(globalSearchAnimationTimerRef.current);
-      globalSearchAnimationTimerRef.current = null;
-    }
-    setIsGlobalSearchClosing(false);
-    setIsGlobalSearchOpen(true);
-  }, []);
-
-  useEffect(() => {
-    const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || key !== 'f') return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      openGlobalSearch();
-      window.setTimeout(() => {
-        globalSearchInputRef.current?.focus();
-        globalSearchInputRef.current?.select();
-      }, 0);
-    };
-
-    window.addEventListener('keydown', handleGlobalSearchShortcut, true);
-    return () => window.removeEventListener('keydown', handleGlobalSearchShortcut, true);
-  }, [openGlobalSearch]);
-
-  const submitGlobalSearch = useCallback(() => {
-    const query = globalSearchQuery.trim();
-    if (query) {
-      window.sessionStorage.setItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY, query);
-    } else {
-      window.sessionStorage.removeItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY);
-    }
-    onNavigate('knowledge');
-    window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent(GLOBAL_KNOWLEDGE_SEARCH_EVENT, { detail: { query } }));
-    }, 0);
-    closeGlobalSearch();
-  }, [closeGlobalSearch, globalSearchQuery, onNavigate]);
-
-  const navigateToGlobalSearch = useCallback((queryOverride?: string) => {
-    const query = (queryOverride ?? globalSearchQuery).trim();
-    if (query) {
-      window.sessionStorage.setItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY, query);
-    } else {
-      window.sessionStorage.removeItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY);
-    }
-    onNavigate('knowledge');
-    window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent(GLOBAL_KNOWLEDGE_SEARCH_EVENT, { detail: { query } }));
-    }, 0);
-    closeGlobalSearch();
-  }, [closeGlobalSearch, globalSearchQuery, onNavigate]);
 
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (sidebarVisualCollapsed || isSidebarAnimating) return;
