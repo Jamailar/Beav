@@ -1991,6 +1991,10 @@ declare global {
         getGuidedItems: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         getRandom: <T = unknown>() => Promise<T>;
         brainstorm: (payload: Record<string, unknown>) => void;
+        onProgress: (listener: (...args: unknown[]) => void) => void;
+        offProgress: (listener: (...args: unknown[]) => void) => void;
+        onResult: (listener: (...args: unknown[]) => void) => void;
+        offResult: (listener: (...args: unknown[]) => void) => void;
       };
       imageGeneration: {
         generate: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;

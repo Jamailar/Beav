@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createWanderBridge(core: BridgeCore) {
   return {
@@ -8,6 +8,10 @@ export function createWanderBridge(core: BridgeCore) {
       getGuidedItems: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('wander:get-guided-items', payload) as Promise<T>,
       getRandom: <T = unknown>() => core.invokeChannel('wander:get-random') as Promise<T>,
       brainstorm: (payload: Record<string, unknown>) => core.sendChannel('wander:brainstorm', payload),
+      onProgress: (listener: Listener) => core.on('wander:progress', listener),
+      offProgress: (listener: Listener) => core.off('wander:progress', listener),
+      onResult: (listener: Listener) => core.on('wander:result', listener),
+      offResult: (listener: Listener) => core.off('wander:result', listener),
     },
   };
 }
