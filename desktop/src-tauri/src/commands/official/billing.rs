@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::settings as settings_store;
 
 pub(super) fn handle_billing_channel(
     app: &AppHandle,
@@ -9,7 +10,8 @@ pub(super) fn handle_billing_channel(
 ) -> Option<Result<Value, String>> {
     match channel {
         "redbox-auth:products" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let remote = run_authenticated_official_request(
                 app,
@@ -59,7 +61,8 @@ pub(super) fn handle_billing_channel(
             Ok(json!({ "success": true, "products": products }))
         })()),
         "redbox-auth:call-records" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let cached_records = normalize_official_call_record_items(
                 &official_settings_call_records_list(&settings),
@@ -100,7 +103,8 @@ pub(super) fn handle_billing_channel(
             Ok(json!({ "success": true, "records": records }))
         })()),
         "redbox-auth:create-page-pay-order" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let amount = payload_f64(payload, "amount").unwrap_or(9.9);
             let subject = payload_string(payload, "subject")
@@ -153,7 +157,8 @@ pub(super) fn handle_billing_channel(
             Ok(json!({ "success": true, "order": order }))
         })()),
         "redbox-auth:create-wechat-native-order" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let amount = payload_f64(payload, "amount").unwrap_or(9.9);
             let out_trade_no = make_id("wxpay");
@@ -214,7 +219,8 @@ pub(super) fn handle_billing_channel(
         })()),
         "redbox-auth:order-status" => Some((|| -> Result<Value, String> {
             let out_trade_no = payload_string(payload, "outTradeNo").unwrap_or_default();
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let order = query_remote_order_status(
                 app,
@@ -260,7 +266,8 @@ pub(super) fn handle_billing_channel(
             }
         })()),
         "official:billing:products" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let remote = run_authenticated_official_request(
                 app,
@@ -299,7 +306,8 @@ pub(super) fn handle_billing_channel(
             Ok(json!({ "success": true, "products": products }))
         })()),
         "official:billing:list-orders" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let remote = run_authenticated_official_request(
                 app,
@@ -337,7 +345,8 @@ pub(super) fn handle_billing_channel(
             Ok(json!({ "success": true, "orders": orders }))
         })()),
         "official:billing:create-order" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let product_id = payload_string(payload, "productId").unwrap_or_default();
             let amount = payload_f64(payload, "amount");
@@ -389,7 +398,8 @@ pub(super) fn handle_billing_channel(
             Ok(json!({ "success": true, "order": order }))
         })()),
         "official:billing:list-calls" => Some((|| -> Result<Value, String> {
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
             let result = match fetch_remote_official_call_records(
                 app,
