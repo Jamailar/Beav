@@ -243,6 +243,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed profile-learning AI distillation model settings reads through `store::settings`.
 - Routed assistant HTTP runtime snapshots through `store::assistant`.
 - Routed chat audio transcription model settings reads through `store::settings`.
+- Routed library YouTube summary and cover-generation settings reads through `store::settings`.
 
 ### 1. Bridge Contract Layer
 
