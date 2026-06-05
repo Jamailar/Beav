@@ -1287,11 +1287,10 @@ fn apply_official_settings_update(
         }
     }
     let merged_settings = with_store_mut(state, |store| {
-        merge_official_settings(&mut store.settings, &next_settings);
-        crate::ai_model_manager::legacy_projection::normalize_settings_projection(
-            &mut store.settings,
-        );
-        Ok(settings_store::settings_snapshot(&store))
+        Ok(settings_store::update_settings(store, |settings| {
+            merge_official_settings(settings, &next_settings);
+            crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
+        }))
     })?;
     if should_sync_model_config {
         if let Err(error) = crate::ai_model_manager::store::sync_model_config_file(

@@ -8,3 +8,8 @@ pub(crate) fn settings_snapshot(store: &AppStore) -> Value {
 pub(crate) fn replace_settings(store: &mut AppStore, settings: Value) {
     store.settings = settings;
 }
+
+pub(crate) fn update_settings(store: &mut AppStore, updater: impl FnOnce(&mut Value)) -> Value {
+    updater(&mut store.settings);
+    settings_snapshot(store)
+}
