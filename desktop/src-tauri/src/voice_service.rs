@@ -2234,8 +2234,7 @@ fn patch_subject_voice_state(
     subjects[index].updated_at = now_iso();
     persist_subjects_workspace(&root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        store.categories = categories;
-        store.subjects = subjects;
+        subject_store::replace_catalog(store, categories, subjects);
         Ok(())
     })
 }
@@ -2344,8 +2343,7 @@ pub(crate) fn patch_subject_voice_failure(
     subjects[index].updated_at = now_iso();
     persist_subjects_workspace(&root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        store.categories = categories;
-        store.subjects = subjects;
+        subject_store::replace_catalog(store, categories, subjects);
         Ok(())
     })
 }
