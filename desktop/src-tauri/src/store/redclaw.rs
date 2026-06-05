@@ -6,6 +6,7 @@ use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawJobExecutionRecord, RedclawLongCycleTaskRecord,
     RedclawProjectRecord, RedclawScheduledTaskRecord,
 };
+use crate::{RedclawStateRecord, WorkItemRecord};
 
 pub(crate) fn state_value(store: &AppStore) -> Value {
     redclaw_state_value(&store.redclaw_state)
@@ -67,6 +68,25 @@ pub(crate) fn mark_runner_tick(store: &mut AppStore, now: String) -> Value {
 
 pub(crate) fn set_next_maintenance_at(store: &mut AppStore, next_maintenance_at: Option<String>) {
     store.redclaw_state.next_maintenance_at = next_maintenance_at;
+}
+
+pub(crate) fn replace_hydration_state(
+    store: &mut AppStore,
+    state: RedclawStateRecord,
+    work_items: Vec<WorkItemRecord>,
+) {
+    store.redclaw_state = state;
+    store.work_items = work_items;
+}
+
+pub(crate) fn has_work_items(store: &AppStore) -> bool {
+    !store.work_items.is_empty()
+}
+
+pub(crate) fn needs_workspace_hydration(store: &AppStore) -> bool {
+    store.redclaw_state.scheduled_tasks.is_empty()
+        && store.redclaw_state.long_cycle_tasks.is_empty()
+        && store.work_items.is_empty()
 }
 
 pub(crate) fn runner_is_ticking(store: &AppStore) -> bool {

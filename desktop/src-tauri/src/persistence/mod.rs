@@ -12,6 +12,10 @@ use tauri::State;
 use crate::runtime::SkillRecord;
 use crate::scheduler::sync_redclaw_job_definitions;
 use crate::skills::builtin_skill_records;
+use crate::store::{
+    media as media_store, redclaw as redclaw_store, spaces as spaces_store,
+    subjects as subjects_store,
+};
 use crate::workspace_loaders::{
     load_chat_rooms_from_fs, load_chatroom_messages_from_fs, load_memories_from_fs,
     load_memory_history_from_fs,
@@ -184,8 +188,7 @@ pub(crate) fn apply_subjects_hydration_snapshot(
     store: &mut AppStore,
     snapshot: SubjectsHydrationSnapshot,
 ) {
-    store.categories = snapshot.categories;
-    store.subjects = snapshot.subjects;
+    subjects_store::replace_catalog(store, snapshot.categories, snapshot.subjects);
 }
 
 pub(crate) fn load_media_hydration_snapshot(root: &Path) -> MediaHydrationSnapshot {
@@ -198,7 +201,7 @@ pub(crate) fn apply_media_hydration_snapshot(
     store: &mut AppStore,
     snapshot: MediaHydrationSnapshot,
 ) {
-    store.media_assets = snapshot.media_assets;
+    media_store::replace_assets(store, snapshot.media_assets);
 }
 
 pub(crate) fn load_cover_hydration_snapshot(root: &Path) -> CoverHydrationSnapshot {
@@ -239,31 +242,28 @@ pub(crate) fn apply_redclaw_hydration_snapshot(
     store: &mut AppStore,
     snapshot: RedclawHydrationSnapshot,
 ) {
-    store.redclaw_state = snapshot.redclaw_state;
+    redclaw_store::replace_hydration_state(store, snapshot.redclaw_state, snapshot.work_items);
     sync_redclaw_job_definitions(store);
-    store.work_items = snapshot.work_items;
 }
 
 pub(crate) fn apply_workspace_hydration_snapshot(
     store: &mut AppStore,
     snapshot: WorkspaceHydrationSnapshot,
 ) {
-    store.categories = snapshot.categories;
-    store.subjects = snapshot.subjects;
+    subjects_store::replace_catalog(store, snapshot.categories, snapshot.subjects);
     store.advisors = snapshot.advisors;
     store.chat_rooms = snapshot.chat_rooms;
     store.chatroom_messages = snapshot.chatroom_messages;
     store.memories = snapshot.memories;
     store.memory_history = snapshot.memory_history;
-    store.media_assets = snapshot.media_assets;
+    media_store::replace_assets(store, snapshot.media_assets);
     store.cover_assets = snapshot.cover_assets;
     store.knowledge_notes = snapshot.knowledge_notes;
     store.knowledge_authors = snapshot.knowledge_authors;
     store.youtube_videos = snapshot.youtube_videos;
     store.document_sources = snapshot.document_sources;
-    store.redclaw_state = snapshot.redclaw_state;
+    redclaw_store::replace_hydration_state(store, snapshot.redclaw_state, snapshot.work_items);
     sync_redclaw_job_definitions(store);
-    store.work_items = snapshot.work_items;
 }
 
 pub fn build_store_path() -> PathBuf {
@@ -1181,7 +1181,8 @@ pub fn hydrate_store_from_workspace_files(
     store: &mut AppStore,
     store_path: &Path,
 ) -> Result<(), String> {
-    let root = active_space_workspace_root_from_store(store, &store.active_space_id, store_path)?;
+    let active_space_id = spaces_store::active_space_id(store);
+    let root = active_space_workspace_root_from_store(store, &active_space_id, store_path)?;
     let snapshot = load_workspace_hydration_snapshot(&root);
     apply_workspace_hydration_snapshot(store, snapshot);
     Ok(())
@@ -1196,9 +1197,10 @@ pub fn ensure_store_hydrated_for_knowledge(state: &State<'_, AppState>) -> Resul
         if !needs_hydration {
             return Ok(None);
         }
+        let active_space_id = spaces_store::active_space_id(&store);
         Ok(Some(active_space_workspace_root_from_store(
             &store,
-            &store.active_space_id,
+            &active_space_id,
             &state.store_path,
         )?))
     })?;
@@ -1218,9 +1220,10 @@ pub fn ensure_store_hydrated_for_subjects(state: &State<'_, AppState>) -> Result
         if !needs_hydration {
             return Ok(None);
         }
+        let active_space_id = spaces_store::active_space_id(&store);
         Ok(Some(active_space_workspace_root_from_store(
             &store,
-            &store.active_space_id,
+            &active_space_id,
             &state.store_path,
         )?))
     })?;
@@ -1235,17 +1238,18 @@ pub fn ensure_store_hydrated_for_subjects(state: &State<'_, AppState>) -> Result
 }
 
 fn should_hydrate_subjects(store: &AppStore) -> bool {
-    store.subjects.is_empty() && store.categories.is_empty()
+    subjects_store::catalog_is_empty(store)
 }
 
 pub fn ensure_store_hydrated_for_media(state: &State<'_, AppState>) -> Result<(), String> {
     let root = with_store(state, |store| {
-        if !store.media_assets.is_empty() {
+        if media_store::count_assets(&store) > 0 {
             return Ok(None);
         }
+        let active_space_id = spaces_store::active_space_id(&store);
         Ok(Some(active_space_workspace_root_from_store(
             &store,
-            &store.active_space_id,
+            &active_space_id,
             &state.store_path,
         )?))
     })?;
@@ -1264,9 +1268,10 @@ pub fn ensure_store_hydrated_for_cover(state: &State<'_, AppState>) -> Result<()
         if !store.cover_assets.is_empty() {
             return Ok(None);
         }
+        let active_space_id = spaces_store::active_space_id(&store);
         Ok(Some(active_space_workspace_root_from_store(
             &store,
-            &store.active_space_id,
+            &active_space_id,
             &state.store_path,
         )?))
     })?;
@@ -1282,12 +1287,13 @@ pub fn ensure_store_hydrated_for_cover(state: &State<'_, AppState>) -> Result<()
 
 pub fn ensure_store_hydrated_for_work(state: &State<'_, AppState>) -> Result<(), String> {
     let root = with_store(state, |store| {
-        if !store.work_items.is_empty() {
+        if redclaw_store::has_work_items(&store) {
             return Ok(None);
         }
+        let active_space_id = spaces_store::active_space_id(&store);
         Ok(Some(active_space_workspace_root_from_store(
             &store,
-            &store.active_space_id,
+            &active_space_id,
             &state.store_path,
         )?))
     })?;
@@ -1306,9 +1312,10 @@ pub fn ensure_store_hydrated_for_advisors(state: &State<'_, AppState>) -> Result
         if !store.advisors.is_empty() {
             return Ok(None);
         }
+        let active_space_id = spaces_store::active_space_id(&store);
         Ok(Some(active_space_workspace_root_from_store(
             &store,
-            &store.active_space_id,
+            &active_space_id,
             &state.store_path,
         )?))
     })?;
@@ -1324,15 +1331,14 @@ pub fn ensure_store_hydrated_for_advisors(state: &State<'_, AppState>) -> Result
 
 pub fn ensure_store_hydrated_for_redclaw(state: &State<'_, AppState>) -> Result<(), String> {
     let root = with_store(state, |store| {
-        let needs_hydration = store.redclaw_state.scheduled_tasks.is_empty()
-            && store.redclaw_state.long_cycle_tasks.is_empty()
-            && store.work_items.is_empty();
+        let needs_hydration = redclaw_store::needs_workspace_hydration(&store);
         if !needs_hydration {
             return Ok(None);
         }
+        let active_space_id = spaces_store::active_space_id(&store);
         Ok(Some(active_space_workspace_root_from_store(
             &store,
-            &store.active_space_id,
+            &active_space_id,
             &state.store_path,
         )?))
     })?;
