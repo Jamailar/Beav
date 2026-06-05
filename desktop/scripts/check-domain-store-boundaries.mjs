@@ -24,19 +24,37 @@ const restrictedPatterns = [
     ]),
   },
   {
+    domain: 'settings',
+    pattern: /store\s*\.\s*settings\b/g,
+    allowedFiles: new Set([
+      path.join(srcRoot, 'store', 'settings.rs'),
+      path.join(srcRoot, 'memory', 'mod.rs'),
+      path.join(srcRoot, 'runtime', 'session_runtime.rs'),
+    ]),
+  },
+  {
     domain: 'spaces',
     pattern: /store\s*\.\s*(spaces|active_space_id)\b/g,
     allowedFiles: new Set([
       path.join(srcRoot, 'store', 'spaces.rs'),
-      path.join(srcRoot, 'persistence', 'mod.rs'),
       path.join(srcRoot, 'legacy_import.rs'),
-      path.join(srcRoot, 'workspace', 'paths.rs'),
-      path.join(srcRoot, 'startup', 'mod.rs'),
-      path.join(srcRoot, 'startup_migration.rs'),
-      path.join(srcRoot, 'commands', 'library.rs'),
-      path.join(srcRoot, 'commands', 'system.rs'),
-      path.join(srcRoot, 'knowledge.rs'),
       path.join(srcRoot, 'memory', 'mod.rs'),
+    ]),
+  },
+  {
+    domain: 'media assets',
+    pattern: /store\s*\.\s*media_assets\b/g,
+    allowedFiles: new Set([
+      path.join(srcRoot, 'store', 'media.rs'),
+    ]),
+  },
+  {
+    domain: 'work items',
+    pattern: /store\s*\.\s*work_items\b/g,
+    allowedFiles: new Set([
+      path.join(srcRoot, 'store', 'work_items.rs'),
+      path.join(srcRoot, 'store', 'redclaw.rs'),
+      path.join(srcRoot, 'commands', 'runtime_task_resume.rs'),
     ]),
   },
   {
@@ -45,15 +63,9 @@ const restrictedPatterns = [
     allowedFiles: new Set([
       path.join(srcRoot, 'store', 'runtime_tasks.rs'),
       path.join(srcRoot, 'runtime', 'task_runtime.rs'),
-      path.join(srcRoot, 'runtime', 'redclaw_orchestration.rs'),
-      path.join(srcRoot, 'runtime', 'session_runtime.rs'),
-      path.join(srcRoot, 'media_runtime', 'followup.rs'),
-      path.join(srcRoot, 'session_manager.rs'),
       path.join(srcRoot, 'subagents', 'aggregation.rs'),
       path.join(srcRoot, 'subagents', 'spawner.rs'),
-      path.join(srcRoot, 'commands', 'bridge.rs'),
       path.join(srcRoot, 'commands', 'runtime_task_resume.rs'),
-      path.join(srcRoot, 'persistence', 'mod.rs'),
     ]),
   },
   {
@@ -61,8 +73,6 @@ const restrictedPatterns = [
     pattern: /store\s*\.\s*assistant_state\b/g,
     allowedFiles: new Set([
       path.join(srcRoot, 'store', 'assistant.rs'),
-      path.join(srcRoot, 'assistant_core.rs'),
-      path.join(srcRoot, 'persistence', 'mod.rs'),
     ]),
   },
   {
@@ -70,11 +80,6 @@ const restrictedPatterns = [
     pattern: /store\s*\.\s*(mcp_servers|runtime_hooks)\b/g,
     allowedFiles: new Set([
       path.join(srcRoot, 'store', 'mcp_tools.rs'),
-      path.join(srcRoot, 'commands', 'plugin.rs'),
-      path.join(srcRoot, 'interactive_runtime_shared.rs'),
-      path.join(srcRoot, 'tools', 'executor.rs'),
-      path.join(srcRoot, 'tools', 'app_cli_mcp.rs'),
-      path.join(srcRoot, 'persistence', 'mod.rs'),
     ]),
   },
 ];
