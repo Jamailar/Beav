@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::persistence::{with_store, with_store_mut};
+use crate::store::settings as settings_store;
 use crate::{
     compute_embedding_with_settings, cosine_similarity, default_indexing_stats,
     knowledge_source_texts, knowledge_version, now_iso, payload_field, payload_string,
@@ -43,7 +44,8 @@ pub fn handle_embeddings_channel(
                 let text = payload_value_as_string(payload)
                     .or_else(|| payload_string(payload, "text"))
                     .unwrap_or_default();
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
                 let embedding = compute_embedding_with_settings(&settings_snapshot, &text);
                 Ok(json!({ "success": true, "embedding": embedding }))
             }
@@ -112,26 +114,25 @@ pub fn handle_embeddings_channel(
                         })
                     })
                     .unwrap_or_default();
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-                with_store(state, |store| {
-                    let mut sorted = knowledge_source_texts(&store)
-                        .into_iter()
-                        .map(|(source_id, text, meta)| {
-                            let embedding =
-                                compute_embedding_with_settings(&settings_snapshot, &text);
-                            let score = cosine_similarity(&input_embedding, &embedding);
-                            json!({ "sourceId": source_id, "score": score, "meta": meta })
-                        })
-                        .collect::<Vec<_>>();
-                    sorted.sort_by(|a, b| {
-                        let left = a.get("score").and_then(|item| item.as_f64()).unwrap_or(0.0);
-                        let right = b.get("score").and_then(|item| item.as_f64()).unwrap_or(0.0);
-                        right
-                            .partial_cmp(&left)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    Ok(json!({ "success": true, "sorted": sorted }))
-                })
+                let settings_snapshot =
+                    with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
+                let source_texts = with_store(state, |store| Ok(knowledge_source_texts(&store)))?;
+                let mut sorted = source_texts
+                    .into_iter()
+                    .map(|(source_id, text, meta)| {
+                        let embedding = compute_embedding_with_settings(&settings_snapshot, &text);
+                        let score = cosine_similarity(&input_embedding, &embedding);
+                        json!({ "sourceId": source_id, "score": score, "meta": meta })
+                    })
+                    .collect::<Vec<_>>();
+                sorted.sort_by(|a, b| {
+                    let left = a.get("score").and_then(|item| item.as_f64()).unwrap_or(0.0);
+                    let right = b.get("score").and_then(|item| item.as_f64()).unwrap_or(0.0);
+                    right
+                        .partial_cmp(&left)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                Ok(json!({ "success": true, "sorted": sorted }))
             }
             "similarity:get-knowledge-version" => {
                 with_store(state, |store| Ok(json!(knowledge_version(&store))))
