@@ -101,6 +101,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Routed Wander progress/result event subscriptions through the Wander bridge domain, reducing page-level raw event channel coupling.
 - Routed Automation RedClaw runner status subscriptions through the RedClaw runner bridge facade.
 - Routed Layout space change and app update subscriptions through spaces/system bridge facades.
+- Routed shared page refresh and LLM readiness settings/data subscriptions through bridge event facades.
 
 ### 1. Bridge Contract Layer
 
