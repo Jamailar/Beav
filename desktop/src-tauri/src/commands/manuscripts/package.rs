@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::settings as settings_store;
 
 pub(super) fn handle_package_channel(
     app: &AppHandle,
@@ -237,7 +238,8 @@ pub(super) fn handle_package_channel(
                 return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
             }
 
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let Some((endpoint, api_key, model_name)) =
                 resolve_transcription_settings(&settings_snapshot)
             else {
