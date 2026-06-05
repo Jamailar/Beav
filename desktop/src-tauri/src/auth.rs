@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::store::settings as settings_store;
 use crate::{
     app_brand_display_name, append_debug_trace_state, now_iso, now_ms, official_base_url_for_realm,
     payload_field, payload_string, AppState, AppStore,
@@ -584,8 +585,11 @@ fn clear_persisted_auth_fields(settings: &mut Value, session: Option<&Value>) {
 }
 
 pub(crate) fn sanitize_store_for_persist(store: &mut AppStore) {
-    let session = session_from_settings(&store.settings);
-    clear_persisted_auth_fields(&mut store.settings, session.as_ref());
+    let settings = settings_store::settings_snapshot(store);
+    let session = session_from_settings(&settings);
+    settings_store::update_settings(store, |settings| {
+        clear_persisted_auth_fields(settings, session.as_ref());
+    });
 }
 
 pub(crate) fn project_settings_for_runtime(settings: &Value, runtime: &AuthRuntimeState) -> Value {
@@ -817,16 +821,17 @@ pub(crate) fn initialize_auth_runtime(
     let mut cache = load_auth_cache(&state.store_path)?;
 
     if cache.session.is_none() {
-        crate::persistence::with_store_mut(state, |store| {
-            if let Some(store_session) = session_from_settings(&store.settings) {
+        crate::persistence::with_store(state, |store| {
+            let settings = settings_store::settings_snapshot(&store);
+            if let Some(store_session) = session_from_settings(&settings) {
                 cache.session = Some(store_session);
             }
-            cache.points = payload_string(&store.settings, "redbox_auth_points_json")
+            cache.points = payload_string(&settings, "redbox_auth_points_json")
                 .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-            cache.models = payload_string(&store.settings, "redbox_official_models_json")
+            cache.models = payload_string(&settings, "redbox_official_models_json")
                 .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
                 .unwrap_or_default();
-            cache.call_records = payload_string(&store.settings, "redbox_auth_call_records_json")
+            cache.call_records = payload_string(&settings, "redbox_auth_call_records_json")
                 .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
                 .unwrap_or_default();
             Ok(())
@@ -840,8 +845,10 @@ pub(crate) fn initialize_auth_runtime(
     };
     let cache_session = projected_session(cache.session.as_ref(), &secrets, true);
     crate::persistence::with_store_mut(state, |store| {
-        write_cache_data_to_settings(&mut store.settings, &cache);
-        write_session_to_settings(&mut store.settings, cache_session.as_ref());
+        settings_store::update_settings(store, |settings| {
+            write_cache_data_to_settings(settings, &cache);
+            write_session_to_settings(settings, cache_session.as_ref());
+        });
         Ok(())
     })?;
     let snapshot = with_auth_runtime_mut(state, |runtime| {
@@ -893,18 +900,21 @@ pub(crate) fn migrate_legacy_auth_store(
     store_path: &Path,
     store: &mut AppStore,
 ) -> Result<(), String> {
-    let legacy_session = session_from_settings(&store.settings);
+    let settings = settings_store::settings_snapshot(store);
+    let legacy_session = session_from_settings(&settings);
     if legacy_session.is_none() {
         return Ok(());
     }
-    let cache = cache_record_from_settings(&store.settings);
+    let cache = cache_record_from_settings(&settings);
     let secrets = AuthSecretBundle {
         refresh_token: session_refresh_token(legacy_session.as_ref()),
         token_family_id: None,
         device_secret: None,
     };
     persist_auth_cache(store_path, &cache)?;
-    clear_persisted_auth_fields(&mut store.settings, legacy_session.as_ref());
+    settings_store::update_settings(store, |settings| {
+        clear_persisted_auth_fields(settings, legacy_session.as_ref());
+    });
     eprintln!(
         "{} | [auth] migrate legacySession=true persistedToFile=true refreshToken={} cacheModels={} cacheRecords={}",
         now_iso(),
