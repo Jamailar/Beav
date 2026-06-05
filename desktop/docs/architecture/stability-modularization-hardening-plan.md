@@ -283,6 +283,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted clipboard text read/write command handling into `commands/system/clipboard_ops`.
 - Extracted generation image-plan parsing, prompt compilation, title derivation and related tests into `commands/generation/image_plan`.
 - Extracted generation JSON log summarization, runtime tool progress context and media generation progress emitters into `commands/generation/progress`.
+- Simplified generation runtime-bypass handling so the post-image early-return path is video-only instead of carrying unreachable image generation branches.
 
 ### 1. Bridge Contract Layer
 
