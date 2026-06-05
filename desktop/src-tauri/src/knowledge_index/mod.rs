@@ -23,6 +23,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::store::spaces as spaces_store;
 use crate::{now_iso, with_store, workspace_root, AppState};
 
 #[derive(Debug, Clone, Default)]
@@ -58,7 +59,7 @@ pub(crate) struct KnowledgeCatalogStatus {
 }
 
 pub(crate) fn workspace_id(state: &State<'_, AppState>) -> Result<String, String> {
-    with_store(state, |store| Ok(store.active_space_id.clone()))
+    with_store(state, |store| Ok(spaces_store::active_space_id(&store)))
 }
 
 pub(crate) fn catalog_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
