@@ -15,6 +15,7 @@ import { StartupMigrationGate } from './features/app-shell/StartupMigrationGate'
 import { useFeedbackReportDialog } from './features/app-shell/useFeedbackReportDialog';
 import { useGlobalIntentRouter } from './features/app-shell/useGlobalIntentRouter';
 import { useOfficialAuthNotice } from './features/app-shell/useOfficialAuthNotice';
+import { useSubjectsModal } from './features/app-shell/useSubjectsModal';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
 import type { GenerationIntent, ImmersiveMode, PendingChatMessage, RedClawNavigationAction, SettingsNavigationTarget } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
@@ -65,7 +66,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
   const [redClawTitleBarActions, setRedClawTitleBarActions] = useState<ReactNode>(null);
-  const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
   const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
@@ -74,14 +74,11 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   const [approvalTargetDocketId, setApprovalTargetDocketId] = useState('');
 
   const globalAuthNotice = useOfficialAuthNotice();
-
-  const openSubjectsModal = useCallback(() => {
-    setSubjectsModalOpen(true);
-  }, []);
-
-  const closeSubjectsModal = useCallback(() => {
-    setSubjectsModalOpen(false);
-  }, []);
+  const {
+    subjectsModalOpen,
+    openSubjectsModal,
+    closeSubjectsModal,
+  } = useSubjectsModal();
 
   const {
     feedbackReportOpen,
@@ -100,17 +97,6 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setApprovalTargetDocketId,
     setPendingGenerationIntent,
   });
-
-  useEffect(() => {
-    if (!subjectsModalOpen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setSubjectsModalOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [subjectsModalOpen]);
 
   const navigateToRedClaw = (message: PendingChatMessage) => {
     uiTraceInteraction('app', 'nav_to_redclaw', { to: 'redclaw' });
