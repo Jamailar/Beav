@@ -738,27 +738,11 @@ pub fn handle_generation_channel(
             }));
         }
 
-        let planned_image_items = if channel == "image-gen:generate" {
-            extract_planned_image_generation_items(payload)
-        } else {
-            Vec::new()
-        };
-        let count = if channel == "image-gen:generate" && !planned_image_items.is_empty() {
-            planned_image_items.len() as i64
-        } else {
-            payload_field(payload, "count")
-                .and_then(|value| value.as_i64())
-                .unwrap_or(1)
-                .clamp(1, 4)
-        };
-        let prompt = if channel == "image-gen:generate" {
-            normalize_optional_string(
-                payload_string(payload, "compiledPrompt")
-                    .or_else(|| payload_string(payload, "prompt")),
-            )
-        } else {
-            normalize_optional_string(payload_string(payload, "prompt"))
-        };
+        let count = payload_field(payload, "count")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(1)
+            .clamp(1, 4);
+        let prompt = normalize_optional_string(payload_string(payload, "prompt"));
         let project_id = normalize_optional_string(payload_string(payload, "projectId"));
         let title = normalize_optional_string(payload_string(payload, "title"));
         let provider = normalize_optional_string(payload_string(payload, "provider"));
@@ -768,11 +752,7 @@ pub fn handle_generation_channel(
         let aspect_ratio = normalize_optional_string(payload_string(payload, "aspectRatio"));
         let size = normalize_optional_string(payload_string(payload, "size"));
         let quality = normalize_optional_string(payload_string(payload, "quality"));
-        let mime_type = if channel == "video-gen:generate" {
-            Some("video/mp4".to_string())
-        } else {
-            Some("image/png".to_string())
-        };
+        let mime_type = Some("video/mp4".to_string());
         let settings_snapshot =
             with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
         let settings_snapshot = {
@@ -782,114 +762,17 @@ pub fn handle_generation_channel(
                 .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
             crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime)
         };
-        let real_image_config = if channel == "image-gen:generate" {
-            resolve_image_generation_settings_with_override(&settings_snapshot, Some(payload))
-        } else {
-            None
-        };
-        let real_video_config = if channel == "video-gen:generate" {
-            resolve_video_generation_settings_with_override(&settings_snapshot, Some(payload))
-        } else {
-            None
-        };
-        let effective_image_prompt = if channel == "image-gen:generate" {
-            prompt.clone()
-        } else {
-            None
-        };
-
-        let used_configured_endpoint = if channel == "video-gen:generate" {
-            real_video_config.is_some()
-        } else {
-            real_image_config.is_some()
-        };
-        let video_log_context = if channel == "video-gen:generate" {
-            Some(runtime_tool_log_context_from_payload(payload))
-        } else {
-            None
-        };
-        let placeholder_fallback_allowed = allow_placeholder_fallback(payload);
+        let real_video_config =
+            resolve_video_generation_settings_with_override(&settings_snapshot, Some(payload));
+        let used_configured_endpoint = real_video_config.is_some();
+        let video_log_context = runtime_tool_log_context_from_payload(payload);
         let media_root_path = media_root(state)?;
-        if channel == "image-gen:generate" && planned_image_items.len() > 1 {
-            emit_image_generation_log(
-                state,
-                format!(
-                    "[image-gen] batch:start count={} mode={} refs={}",
-                    planned_image_items.len(),
-                    payload_string(payload, "generationMode")
-                        .unwrap_or_else(|| "text-to-image".to_string()),
-                    payload_field(payload, "referenceImages")
-                        .and_then(Value::as_array)
-                        .map(|items| items.len())
-                        .unwrap_or(0),
-                ),
-            );
-            let (created, used_configured_endpoint) = generate_planned_image_batch(
-                payload,
-                media_root_path.as_path(),
-                &planned_image_items,
-                real_image_config.clone(),
-                provider.clone(),
-                provider_template.clone(),
-                model.clone(),
-                title.clone(),
-                project_id.clone(),
-                aspect_ratio.clone(),
-                size.clone(),
-                quality.clone(),
-                placeholder_fallback_allowed,
-                |_asset, _completed, _total| Ok(()),
-            )?;
-            with_store_mut(state, |store| {
-                for asset in &created {
-                    media_store::push_asset(store, asset.clone());
-                }
-                work_items_store::push_item(
-                    store,
-                    create_work_item(
-                        "image-generation",
-                        title.clone().unwrap_or_else(|| "图片生成".to_string()),
-                        normalize_optional_string(Some(if used_configured_endpoint {
-                            format!(
-                                "{} 已通过已配置 endpoint 并发执行多图生成。",
-                                app_brand_display_name()
-                            )
-                        } else {
-                            format!("{} 已保存多图生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。", app_brand_display_name())
-                        })),
-                        prompt.clone(),
-                        project_id.clone().map(|value| {
-                            json!({
-                                "projectId": value,
-                                "generationChannel": channel,
-                                "usedConfiguredEndpoint": used_configured_endpoint,
-                                "batchCount": created.len()
-                            })
-                        }),
-                        2,
-                    ),
-                );
-                Ok(())
-            })?;
-            persist_media_workspace_catalog(state)?;
-            return Ok(json!({
-                "success": true,
-                "kind": "generated-images",
-                "assets": created
-            }));
-        }
         let mut created = Vec::new();
         for index in 0..count {
             let effective_mime_type = mime_type.clone();
-            let file_ext = if channel == "video-gen:generate" {
-                "mp4"
-            } else {
-                "png"
-            };
-            let relative_path = format!("generated/media-{}-{}.{}", now_ms(), index + 1, file_ext);
+            let relative_path = format!("generated/media-{}-{}.mp4", now_ms(), index + 1);
             let absolute_path = media_root_path.join(&relative_path);
-            let mut thumbnail_url = None;
-            let preview_url = if channel == "video-gen:generate" {
+            let (preview_url, thumbnail_url) = {
                 let Some((endpoint, api_key, default_model)) = &real_video_config else {
                     return Err("video generation requires a configured video provider".to_string());
                 };
@@ -898,22 +781,20 @@ pub fn handle_generation_channel(
                     .unwrap_or("text-to-video");
                 let effective_video_model = model.clone().unwrap_or_else(|| default_model.clone());
                 let asset_label = video_generation_asset_label(index, count);
-                if let Some(context) = video_log_context.as_ref() {
-                    let duration_seconds = payload_field(payload, "durationSeconds")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(5);
-                    let reference_count = payload_field(payload, "referenceImages")
-                        .and_then(Value::as_array)
-                        .map(|items| items.len())
-                        .unwrap_or(0);
-                    emit_video_generation_progress(
-                        app,
-                        context,
-                        &format!(
-                            "{asset_label}：开始请求 provider，mode={generation_mode}，model={effective_video_model}，duration={duration_seconds}s，referenceImages={reference_count}。"
-                        ),
-                    );
-                }
+                let duration_seconds = payload_field(payload, "durationSeconds")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(5);
+                let reference_count = payload_field(payload, "referenceImages")
+                    .and_then(Value::as_array)
+                    .map(|items| items.len())
+                    .unwrap_or(0);
+                emit_video_generation_progress(
+                    app,
+                    &video_log_context,
+                    &format!(
+                        "{asset_label}：开始请求 provider，mode={generation_mode}，model={effective_video_model}，duration={duration_seconds}s，referenceImages={reference_count}。"
+                    ),
+                );
                 let response = match run_video_generation_request(
                     endpoint,
                     api_key.as_deref(),
@@ -922,70 +803,60 @@ pub fn handle_generation_channel(
                 ) {
                     Ok(response) => response,
                     Err(error) => {
-                        if let Some(context) = video_log_context.as_ref() {
-                            emit_video_generation_progress(
-                                app,
-                                context,
-                                &format!("{asset_label}：提交 provider 请求失败：{error}"),
-                            );
-                        }
+                        emit_video_generation_progress(
+                            app,
+                            &video_log_context,
+                            &format!("{asset_label}：提交 provider 请求失败：{error}"),
+                        );
                         return Err(error);
                     }
                 };
-                if let Some(context) = video_log_context.as_ref() {
-                    if let Some((task_id, source)) = extract_task_id_details(&response) {
-                        emit_video_generation_progress(
-                            app,
-                            context,
-                            &format!("{asset_label}：create_response task_id[{source}]={task_id}"),
-                        );
-                    } else {
-                        emit_video_generation_progress(
-                            app,
-                            context,
-                            &format!("{asset_label}：create_response task_id=<missing>"),
-                        );
-                        emit_video_generation_progress(
-                            app,
-                            context,
-                            &format!(
-                                "{asset_label}：create_response body={}",
-                                summarize_json_for_log(&response)
-                            ),
-                        );
-                    }
-                    if let Some((status, source)) =
-                        extract_video_generation_status_details(&response)
-                    {
-                        emit_video_generation_progress(
-                            app,
-                            context,
-                            &format!(
-                                "{asset_label}：create_response api_status[{source}]={status}"
-                            ),
-                        );
-                    }
-                    if let Some(status_url) =
-                        extract_status_url(&response).filter(|item| !item.trim().is_empty())
-                    {
-                        emit_video_generation_progress(
-                            app,
-                            context,
-                            &format!("{asset_label}：create_response status_url={status_url}"),
-                        );
-                    }
+                if let Some((task_id, source)) = extract_task_id_details(&response) {
+                    emit_video_generation_progress(
+                        app,
+                        &video_log_context,
+                        &format!("{asset_label}：create_response task_id[{source}]={task_id}"),
+                    );
+                } else {
+                    emit_video_generation_progress(
+                        app,
+                        &video_log_context,
+                        &format!("{asset_label}：create_response task_id=<missing>"),
+                    );
+                    emit_video_generation_progress(
+                        app,
+                        &video_log_context,
+                        &format!(
+                            "{asset_label}：create_response body={}",
+                            summarize_json_for_log(&response)
+                        ),
+                    );
+                }
+                if let Some((status, source)) = extract_video_generation_status_details(&response) {
+                    emit_video_generation_progress(
+                        app,
+                        &video_log_context,
+                        &format!("{asset_label}：create_response api_status[{source}]={status}"),
+                    );
+                }
+                if let Some(status_url) =
+                    extract_status_url(&response).filter(|item| !item.trim().is_empty())
+                {
+                    emit_video_generation_progress(
+                        app,
+                        &video_log_context,
+                        &format!("{asset_label}：create_response status_url={status_url}"),
+                    );
                 }
                 if let Some(item) = extract_first_media_result(&response) {
                     if let Some(b64) = item.get("b64_json").and_then(|value| value.as_str()) {
-                        if let Some(context) = video_log_context.as_ref() {
-                            emit_video_generation_progress(
-                                app,
-                                context,
-                                &format!(
-                                    "{asset_label}：provider 已直接返回视频数据，正在写入媒体库。"
-                                ),
-                            );
-                        }
+                        emit_video_generation_progress(
+                            app,
+                            &video_log_context,
+                            &format!(
+                                "{asset_label}：provider 已直接返回视频数据，正在写入媒体库。"
+                            ),
+                        );
                         let bytes = decode_base64_bytes(b64)?;
                         if let Some(parent) = absolute_path.parent() {
                             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -998,31 +869,25 @@ pub fn handle_generation_channel(
                             effective_video_model.as_str(),
                             &response,
                             |message| {
-                                if let Some(context) = video_log_context.as_ref() {
-                                    emit_video_generation_progress(
-                                        app,
-                                        context,
-                                        &format!("{asset_label}：{message}"),
-                                    );
-                                }
+                                emit_video_generation_progress(
+                                    app,
+                                    &video_log_context,
+                                    &format!("{asset_label}：{message}"),
+                                );
                             },
                         )?;
-                        if let Some(context) = video_log_context.as_ref() {
-                            emit_video_generation_progress(
-                                app,
-                                context,
-                                &format!("{asset_label}：任务已完成，开始下载视频结果。"),
-                            );
-                        }
+                        emit_video_generation_progress(
+                            app,
+                            &video_log_context,
+                            &format!("{asset_label}：任务已完成，开始下载视频结果。"),
+                        );
                         let bytes =
                             run_curl_bytes("GET", &url, None, &[], None).map_err(|error| {
-                                if let Some(context) = video_log_context.as_ref() {
-                                    emit_video_generation_progress(
-                                        app,
-                                        context,
-                                        &format!("{asset_label}：下载生成结果失败：{error}"),
-                                    );
-                                }
+                                emit_video_generation_progress(
+                                    app,
+                                    &video_log_context,
+                                    &format!("{asset_label}：下载生成结果失败：{error}"),
+                                );
                                 error
                             })?;
                         if let Some(parent) = absolute_path.parent() {
@@ -1036,216 +901,14 @@ pub fn handle_generation_channel(
                             .to_string(),
                     );
                 }
-                thumbnail_url =
+                let thumbnail_url =
                     crate::ensure_video_thumbnail_for_path(Some(app), state, &absolute_path);
-                if let Some(context) = video_log_context.as_ref() {
-                    emit_video_generation_progress(
-                        app,
-                        context,
-                        &format!("{asset_label}：已写入媒体库 {}。", absolute_path.display()),
-                    );
-                }
-                Some(file_url_for_path(&absolute_path))
-            } else if let Some((
-                endpoint,
-                api_key,
-                default_model,
-                default_provider,
-                default_template,
-            )) = &real_image_config
-            {
-                let effective_model = model.clone().unwrap_or_else(|| default_model.clone());
-                let effective_provider = provider
-                    .as_deref()
-                    .unwrap_or(default_provider.as_str())
-                    .to_string();
-                let effective_template = provider_template
-                    .as_deref()
-                    .unwrap_or(default_template.as_str())
-                    .to_string();
-                emit_image_generation_log(
-                    state,
-                    format!(
-                        "[image-gen] request:start endpoint={} provider={} template={} model={} mode={} refs={}",
-                        endpoint,
-                        effective_provider,
-                        effective_template,
-                        effective_model,
-                        payload_string(payload, "generationMode")
-                            .unwrap_or_else(|| "text-to-image".to_string()),
-                        payload_field(payload, "referenceImages")
-                            .and_then(Value::as_array)
-                            .map(|items| items.len())
-                            .unwrap_or(0),
-                    ),
+                emit_video_generation_progress(
+                    app,
+                    &video_log_context,
+                    &format!("{asset_label}：已写入媒体库 {}。", absolute_path.display()),
                 );
-                let mut effective_payload = payload.clone();
-                if let Some(object) = effective_payload.as_object_mut() {
-                    object.insert(
-                        "prompt".to_string(),
-                        json!(effective_image_prompt.clone().unwrap_or_default()),
-                    );
-                }
-                let response = match run_image_generation_request(
-                    endpoint,
-                    api_key.as_deref(),
-                    effective_model.as_str(),
-                    effective_provider.as_str(),
-                    effective_template.as_str(),
-                    &effective_payload,
-                ) {
-                    Ok(response) => Some(response),
-                    Err(error) => {
-                        emit_image_generation_log(
-                            state,
-                            format!(
-                                "[image-gen] request:error endpoint={} provider={} template={} model={} error={error}",
-                                endpoint, effective_provider, effective_template, effective_model
-                            ),
-                        );
-                        if placeholder_fallback_allowed {
-                            write_placeholder_svg(
-                                &absolute_path,
-                                &title
-                                    .clone()
-                                    .unwrap_or_else(|| "Generated Image".to_string()),
-                                &effective_image_prompt
-                                    .clone()
-                                    .unwrap_or_default()
-                                    .chars()
-                                    .take(48)
-                                    .collect::<String>(),
-                                "#E76F51",
-                            )?;
-                            None
-                        } else {
-                            return Err(format!("图片生成请求失败：{error}"));
-                        }
-                    }
-                };
-                if let Some(response) = response {
-                    if let Some(item) = extract_first_media_result(&response) {
-                        if let Err(error) = write_generated_image_asset(&absolute_path, item) {
-                            emit_image_generation_log(
-                                state,
-                                format!(
-                                    "[image-gen] asset:write-error path={} error={error}",
-                                    absolute_path.display()
-                                ),
-                            );
-                            emit_image_generation_log(
-                                state,
-                                format!(
-                                    "[image-gen] asset:write-error response={}",
-                                    summarize_json_for_log(&response)
-                                ),
-                            );
-                            emit_image_generation_log(
-                                state,
-                                format!(
-                                    "[image-gen] asset:write-error first-item={}",
-                                    summarize_json_for_log(item)
-                                ),
-                            );
-                            if placeholder_fallback_allowed {
-                                write_placeholder_svg(
-                                    &absolute_path,
-                                    &title
-                                        .clone()
-                                        .unwrap_or_else(|| "Generated Image".to_string()),
-                                    &effective_image_prompt
-                                        .clone()
-                                        .unwrap_or_default()
-                                        .chars()
-                                        .take(48)
-                                        .collect::<String>(),
-                                    "#E76F51",
-                                )?;
-                            } else {
-                                return Err(format!("图片生成结果写入失败：{error}"));
-                            }
-                        } else {
-                            emit_image_generation_log(
-                                state,
-                                format!(
-                                    "[image-gen] request:ok path={} provider={} template={} model={}",
-                                    absolute_path.display(),
-                                    effective_provider,
-                                    effective_template,
-                                    effective_model
-                                ),
-                            );
-                        }
-                    } else if placeholder_fallback_allowed {
-                        emit_image_generation_log(
-                            state,
-                            format!(
-                                "[image-gen] response:empty fallback response={}",
-                                summarize_json_for_log(&response)
-                            ),
-                        );
-                        write_placeholder_svg(
-                            &absolute_path,
-                            &title
-                                .clone()
-                                .unwrap_or_else(|| "Generated Image".to_string()),
-                            &effective_image_prompt
-                                .clone()
-                                .unwrap_or_default()
-                                .chars()
-                                .take(48)
-                                .collect::<String>(),
-                            "#E76F51",
-                        )?;
-                    } else {
-                        emit_image_generation_log(
-                            state,
-                            format!(
-                                "[image-gen] response:empty endpoint={} provider={} template={} model={}",
-                                endpoint, effective_provider, effective_template, effective_model
-                            ),
-                        );
-                        emit_image_generation_log(
-                            state,
-                            format!(
-                                "[image-gen] response:empty body={}",
-                                summarize_json_for_log(&response)
-                            ),
-                        );
-                        return Err(
-                            "图片生成请求已发出，但 provider 返回里没有可用图片结果。".to_string()
-                        );
-                    }
-                }
-                Some(file_url_for_path(&absolute_path))
-            } else if placeholder_fallback_allowed {
-                write_placeholder_svg(
-                    &absolute_path,
-                    &title
-                        .clone()
-                        .unwrap_or_else(|| "Generated Image".to_string()),
-                    &effective_image_prompt
-                        .clone()
-                        .unwrap_or_default()
-                        .chars()
-                        .take(48)
-                        .collect::<String>(),
-                    "#E76F51",
-                )?;
-                Some(file_url_for_path(&absolute_path))
-            } else {
-                emit_image_generation_log(
-                    state,
-                    format!(
-                        "[image-gen] missing provider config channel={channel} mode={} title={}",
-                        payload_string(payload, "generationMode")
-                            .unwrap_or_else(|| "text-to-image".to_string()),
-                        title.clone().unwrap_or_default(),
-                    ),
-                );
-                return Err(
-                    "图片生成未执行：请先在设置中配置生图 Endpoint、API Key 和模型。".to_string(),
-                );
+                (Some(file_url_for_path(&absolute_path)), thumbnail_url)
             };
             let asset = MediaAssetRecord {
                 id: make_id("media"),
@@ -1267,11 +930,7 @@ pub fn handle_generation_channel(
                             item
                         }
                     }),
-                prompt: if channel == "image-gen:generate" {
-                    effective_image_prompt.clone()
-                } else {
-                    prompt.clone()
-                },
+                prompt: prompt.clone(),
                 provider: provider.clone(),
                 provider_template: provider_template.clone(),
                 model: model.clone(),
@@ -1298,19 +957,8 @@ pub fn handle_generation_channel(
             work_items_store::push_item(
                 store,
                 create_work_item(
-                    if channel == "video-gen:generate" {
-                        "video-generation"
-                    } else {
-                        "image-generation"
-                    },
-                    title.clone().unwrap_or_else(|| {
-                        if channel == "video-gen:generate" {
-                            "视频生成"
-                        } else {
-                            "图片生成"
-                        }
-                        .to_string()
-                    }),
+                    "video-generation",
+                    title.clone().unwrap_or_else(|| "视频生成".to_string()),
                     normalize_optional_string(Some(if used_configured_endpoint {
                         format!(
                             "{} 已通过已配置 endpoint 执行真实生成。",
@@ -1322,11 +970,7 @@ pub fn handle_generation_channel(
                             app_brand_display_name()
                         )
                     })),
-                    if channel == "image-gen:generate" {
-                        effective_image_prompt.clone()
-                    } else {
-                        prompt.clone()
-                    },
+                    prompt.clone(),
                     project_id.clone().map(|value| {
                         json!({
                             "projectId": value,
@@ -1342,11 +986,7 @@ pub fn handle_generation_channel(
         persist_media_workspace_catalog(state)?;
         Ok(json!({
             "success": true,
-            "kind": if channel == "video-gen:generate" {
-                "generated-videos"
-            } else {
-                "generated-images"
-            },
+            "kind": "generated-videos",
             "assets": created
         }))
     })())
