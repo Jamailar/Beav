@@ -280,6 +280,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted release-page opening, knowledge API guide resource lookup, generic open-path handling and workspace directory picking into `commands/system/app_actions`.
 - Extracted AI model manager snapshot and resolve command handling into `commands/system/ai_model_ops`.
 - Extracted logging status, recent log reads, log directory opening, diagnostics bundle export and pending report actions into `commands/system/logging_ops`.
+- Extracted clipboard text read/write command handling into `commands/system/clipboard_ops`.
 
 ### 1. Bridge Contract Layer
 
