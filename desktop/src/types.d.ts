@@ -1084,6 +1084,8 @@ declare global {
         dismissReport: (reportId: string) => Promise<{ success: boolean; reportId: string; error?: string }>;
         setUploadConsent: (payload: { consent: 'none' | 'prompt' | 'approved'; autoSendSameCrash?: boolean }) => Promise<{ success: boolean; error?: string }>;
         appendRenderer: (payload: { level?: 'trace' | 'debug' | 'info' | 'warn' | 'error'; category?: string; event?: string; message?: string; fields?: unknown }) => Promise<{ success: boolean; error?: string }>;
+        onReportPending: (listener: (...args: unknown[]) => void) => void;
+        offReportPending: (listener: (...args: unknown[]) => void) => void;
       };
       startupMigration: {
         getStatus: () => Promise<{

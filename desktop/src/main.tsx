@@ -32,7 +32,7 @@ const disableNativeContextMenu = (event: MouseEvent) => {
 
 document.addEventListener('contextmenu', disableNativeContextMenu);
 
-void window.ipcRenderer.on('diagnostics:report-pending', async (payload) => {
+void window.ipcRenderer.logs.onReportPending(async (payload) => {
   const summary = typeof payload?.summary === 'string'
     ? payload.summary
     : '已生成新的诊断报告。';
