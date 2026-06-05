@@ -330,6 +330,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Consolidated advisor knowledge file picking, upload metrics, member-skill publication hooks, file deletion and knowledge-index rebuild scheduling inside `commands/advisor_ops/knowledge_files`.
 - Extracted advisor avatar file picking, avatar asset copy and avatar URL projection into `commands/advisor_ops/avatar`, allowing `advisor_ops` to drop its broad `crate::*` import.
 - Extracted collaboration runtime payload readers and object merge helpers into `runtime/collab_runtime/payload`, keeping store mutation logic separate from JSON field parsing.
+- Extracted collaboration runtime id generation, session/member/task validation, task status transitions and task metadata normalization into `runtime/collab_runtime/state_helpers`.
 
 ### 1. Bridge Contract Layer
 
