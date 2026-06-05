@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { APP_BRAND } from '../../config/brand';
 import type { ViewType } from './types';
 
-type GlobalKnowledgeSearchItem = {
+export type GlobalKnowledgeSearchItem = {
   itemId?: string;
   kind?: 'redbook-note' | 'youtube-video' | 'document-source' | string;
   title?: string;
