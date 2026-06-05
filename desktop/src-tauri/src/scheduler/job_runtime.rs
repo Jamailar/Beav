@@ -112,10 +112,7 @@ fn append_execution_turn(
 }
 
 fn active_execution_exists(store: &AppStore, definition_id: &str) -> bool {
-    store
-        .redclaw_job_executions
-        .iter()
-        .any(|item| item.definition_id == definition_id && is_active_execution_status(&item.status))
+    redclaw_store::active_job_execution_exists(store, definition_id)
 }
 
 fn definition_prompt(definition: &RedclawJobDefinitionRecord) -> String {
@@ -346,15 +343,7 @@ fn duplicate_execution_anchor_exists(
     definition_id: &str,
     scheduled_for_at: &str,
 ) -> Option<String> {
-    store
-        .redclaw_job_executions
-        .iter()
-        .find(|item| {
-            item.archived_at.is_none()
-                && item.definition_id == definition_id
-                && item.scheduled_for_at.as_deref() == Some(scheduled_for_at)
-        })
-        .map(|item| item.id.clone())
+    redclaw_store::duplicate_job_execution_anchor_id(store, definition_id, scheduled_for_at)
 }
 
 fn ensure_unique_execution_id(store: &AppStore, execution: &mut RedclawJobExecutionRecord) {
@@ -654,21 +643,7 @@ fn mark_execution_cancelled(
 }
 
 fn consecutive_failure_count(store: &AppStore, definition_id: &str) -> usize {
-    let mut executions = store
-        .redclaw_job_executions
-        .iter()
-        .filter(|item| item.definition_id == definition_id && item.archived_at.is_none())
-        .collect::<Vec<_>>();
-    executions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-    let mut consecutive = 0;
-    for execution in executions {
-        match execution.status.as_str() {
-            "failed" | "dead_lettered" => consecutive += 1,
-            "succeeded" | "completed" | "cancelled" => break,
-            _ => {}
-        }
-    }
-    consecutive
+    redclaw_store::consecutive_job_failure_count(store, definition_id)
 }
 
 fn activate_definition_cooldown(

@@ -243,6 +243,50 @@ pub(crate) fn job_execution_id_exists(store: &AppStore, execution_id: &str) -> b
         .any(|item| item.id == execution_id)
 }
 
+pub(crate) fn active_job_execution_exists(store: &AppStore, definition_id: &str) -> bool {
+    store.redclaw_job_executions.iter().any(|item| {
+        item.definition_id == definition_id
+            && matches!(
+                item.status.as_str(),
+                "queued" | "leased" | "running" | "retrying"
+            )
+    })
+}
+
+pub(crate) fn duplicate_job_execution_anchor_id(
+    store: &AppStore,
+    definition_id: &str,
+    scheduled_for_at: &str,
+) -> Option<String> {
+    store
+        .redclaw_job_executions
+        .iter()
+        .find(|item| {
+            item.archived_at.is_none()
+                && item.definition_id == definition_id
+                && item.scheduled_for_at.as_deref() == Some(scheduled_for_at)
+        })
+        .map(|item| item.id.clone())
+}
+
+pub(crate) fn consecutive_job_failure_count(store: &AppStore, definition_id: &str) -> usize {
+    let mut executions = store
+        .redclaw_job_executions
+        .iter()
+        .filter(|item| item.definition_id == definition_id && item.archived_at.is_none())
+        .collect::<Vec<_>>();
+    executions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    let mut consecutive = 0;
+    for execution in executions {
+        match execution.status.as_str() {
+            "failed" | "dead_lettered" => consecutive += 1,
+            "succeeded" | "completed" | "cancelled" => break,
+            _ => {}
+        }
+    }
+    consecutive
+}
+
 pub(crate) fn push_job_execution(store: &mut AppStore, execution: RedclawJobExecutionRecord) {
     store.redclaw_job_executions.push(execution);
 }
