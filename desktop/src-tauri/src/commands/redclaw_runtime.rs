@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
 use crate::commands::chat_state::{apply_context_binding_metadata, ensure_chat_session};
 use crate::persistence::{with_store, with_store_mut};
-use crate::store::spaces as spaces_store;
+use crate::store::{spaces as spaces_store, work_items as work_items_store};
 use crate::{
     create_work_item, make_id, now_iso, redclaw_root, resolve_manuscript_path,
     slug_from_relative_path, write_text_file, AppState, ChatMessageRecord,
@@ -297,19 +297,22 @@ fn execute_redclaw_run_in_session(
     )?;
 
     with_store_mut(state, |store| {
-        store.work_items.push(create_work_item(
-            "automation",
-            format!("RedClaw {}", source_label),
-            Some("Rust host executed a RedClaw run.".to_string()),
-            Some(prompt.clone()),
-            Some(json!({
-                "sessionId": execution.session_id(),
-                "source": source_label,
-                "artifactKind": artifact_kind,
-                "artifacts": artifacts,
-            })),
-            2,
-        ));
+        work_items_store::push_item(
+            store,
+            create_work_item(
+                "automation",
+                format!("RedClaw {}", source_label),
+                Some("Rust host executed a RedClaw run.".to_string()),
+                Some(prompt.clone()),
+                Some(json!({
+                    "sessionId": execution.session_id(),
+                    "source": source_label,
+                    "artifactKind": artifact_kind,
+                    "artifacts": artifacts,
+                })),
+                2,
+            ),
+        );
 
         Ok(())
     })?;

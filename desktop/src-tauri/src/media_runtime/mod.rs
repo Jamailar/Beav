@@ -21,7 +21,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::runtime::resolve_session_file_reference_inputs;
-use crate::store::{media as media_store, settings as settings_store};
+use crate::store::{
+    media as media_store, settings as settings_store, work_items as work_items_store,
+};
 use crate::*;
 use crate::{commands, with_store, with_store_mut, AppState};
 use config::*;
@@ -4164,25 +4166,28 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
     };
     with_store_mut(&state, |store| {
         media_store::push_asset(store, media_asset.clone());
-        store.work_items.push(create_work_item(
-            "video-generation",
-            media_asset
-                .title
-                .clone()
-                .unwrap_or_else(|| "视频生成".to_string()),
-            Some(format!(
-                "{} 已通过独立媒体 runtime 完成视频生成。",
-                app_brand_display_name()
-            )),
-            media_asset.prompt.clone(),
-            Some(json!({
-                "jobId": job_id,
-                "generationChannel": "video-gen:generate",
-                "providerKey": loaded.job.provider_key,
-                "relativePath": relative_path,
-            })),
-            2,
-        ));
+        work_items_store::push_item(
+            store,
+            create_work_item(
+                "video-generation",
+                media_asset
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| "视频生成".to_string()),
+                Some(format!(
+                    "{} 已通过独立媒体 runtime 完成视频生成。",
+                    app_brand_display_name()
+                )),
+                media_asset.prompt.clone(),
+                Some(json!({
+                    "jobId": job_id,
+                    "generationChannel": "video-gen:generate",
+                    "providerKey": loaded.job.provider_key,
+                    "relativePath": relative_path,
+                })),
+                2,
+            ),
+        );
         Ok(())
     })?;
     persist_media_workspace_catalog(&state)?;
@@ -4573,25 +4578,28 @@ fn register_video_sequence_asset(
     };
     with_store_mut(state, |store| {
         media_store::push_asset(store, media_asset.clone());
-        store.work_items.push(create_work_item(
-            "video-generation",
-            media_asset
-                .title
-                .clone()
-                .unwrap_or_else(|| "视频生成".to_string()),
-            Some(format!(
-                "{} 已通过独立媒体 runtime 完成长视频拼接。",
-                app_brand_display_name()
-            )),
-            media_asset.prompt.clone(),
-            Some(json!({
-                "jobId": loaded.job.job_id,
-                "generationChannel": "video.sequence",
-                "providerKey": loaded.job.provider_key,
-                "relativePath": relative_path,
-            })),
-            2,
-        ));
+        work_items_store::push_item(
+            store,
+            create_work_item(
+                "video-generation",
+                media_asset
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| "视频生成".to_string()),
+                Some(format!(
+                    "{} 已通过独立媒体 runtime 完成长视频拼接。",
+                    app_brand_display_name()
+                )),
+                media_asset.prompt.clone(),
+                Some(json!({
+                    "jobId": loaded.job.job_id,
+                    "generationChannel": "video.sequence",
+                    "providerKey": loaded.job.provider_key,
+                    "relativePath": relative_path,
+                })),
+                2,
+            ),
+        );
         Ok(())
     })?;
     persist_media_workspace_catalog(state)?;
