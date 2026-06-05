@@ -1,32 +1,29 @@
 use serde_json::{json, Value};
 
+use crate::store::runtime_tasks as runtime_task_store;
 use crate::subagents::SubAgentOutput;
 use crate::{payload_string, AppStore};
 
 fn fallback_summary(store: &AppStore, child_task_id: &str) -> Option<String> {
-    store
-        .runtime_tasks
-        .iter()
-        .find(|item| item.id == child_task_id)
-        .and_then(|task| {
-            task.checkpoints
-                .iter()
-                .rev()
-                .find(|item| item.checkpoint_type == "subagent.output")
-                .map(|item| item.summary.clone())
-                .or_else(|| {
-                    task.artifacts
-                        .iter()
-                        .rev()
-                        .find(|item| item.artifact_type == "subagent-output")
-                        .and_then(|artifact| {
-                            artifact
-                                .payload
-                                .as_ref()
-                                .and_then(|payload| payload_string(payload, "summary"))
-                        })
-                })
-        })
+    runtime_task_store::get_task(store, child_task_id).and_then(|task| {
+        task.checkpoints
+            .iter()
+            .rev()
+            .find(|item| item.checkpoint_type == "subagent.output")
+            .map(|item| item.summary.clone())
+            .or_else(|| {
+                task.artifacts
+                    .iter()
+                    .rev()
+                    .find(|item| item.artifact_type == "subagent-output")
+                    .and_then(|artifact| {
+                        artifact
+                            .payload
+                            .as_ref()
+                            .and_then(|payload| payload_string(payload, "summary"))
+                    })
+            })
+    })
 }
 
 pub fn build_orchestration_value(store: &AppStore, outputs: Vec<SubAgentOutput>) -> Value {

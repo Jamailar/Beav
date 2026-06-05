@@ -18,6 +18,7 @@ use crate::runtime::{
     submit_collab_report, update_collab_task, CollabSessionRecord, RuntimeArtifact,
     RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
+use crate::store::runtime_tasks as runtime_task_store;
 use crate::subagents::{
     build_orchestration_value, build_subagent_configs, SubAgentConfig, SubAgentOutput,
     SubAgentSpawnResult,
@@ -611,7 +612,7 @@ fn create_child_runtime_records_in_store(
     task.root_task_id = Some(parent_task_id.to_string());
     task.aggregation_status = Some("spawned".to_string());
     task.current_node = Some("spawn_agents".to_string());
-    store.runtime_tasks.push(task.clone());
+    runtime_task_store::push_task(store, task.clone());
     append_runtime_task_trace_scoped(
         store,
         &child_task_id,
