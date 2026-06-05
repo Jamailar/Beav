@@ -14,7 +14,7 @@ use crate::logging::{
     event::{LogLevel, LogSource},
 };
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
-use crate::store::settings as settings_store;
+use crate::store::{settings as settings_store, subjects as subject_store};
 use crate::{
     ffmpeg_executable, file_content_hash, guess_mime_and_kind, make_id, media_root,
     normalize_legacy_workspace_path, now_iso, now_rfc3339, official_ai_api_key_from_settings,
@@ -628,48 +628,47 @@ fn subject_voice_list_items(
     selected_tts_model: Option<&str>,
 ) -> Result<Vec<Value>, String> {
     ensure_store_hydrated_for_subjects(state)?;
-    with_store(state, |store| {
-        let selected = selected_tts_model
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let mut items = Vec::new();
-        for subject in &store.subjects {
-            let Some(voice) = subject.voice.as_ref() else {
-                continue;
-            };
-            if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
-                for mapping in mappings.values() {
-                    if selected
-                        .map(|model| !voice_mapping_matches_model(mapping, model))
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    if let Some(item) = subject_voice_list_item(subject, mapping) {
-                        items.push(item);
-                    }
+    let subjects = with_store(state, |store| Ok(subject_store::list_subjects(&store)))?;
+    let selected = selected_tts_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut items = Vec::new();
+    for subject in &subjects {
+        let Some(voice) = subject.voice.as_ref() else {
+            continue;
+        };
+        if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
+            for mapping in mappings.values() {
+                if selected
+                    .map(|model| !voice_mapping_matches_model(mapping, model))
+                    .unwrap_or(false)
+                {
+                    continue;
                 }
-            }
-
-            let include_legacy = selected
-                .map(|model| {
-                    voice_mapping_matches_model(voice, model)
-                        || (voice_target_tts_model(voice).is_none() && is_minimax_tts_model(model))
-                })
-                .unwrap_or(true);
-            if include_legacy {
-                if let Some(item) = subject_voice_list_item(subject, voice) {
-                    if items
-                        .iter()
-                        .all(|existing| voice_list_item_id(existing) != voice_list_item_id(&item))
-                    {
-                        items.push(item);
-                    }
+                if let Some(item) = subject_voice_list_item(subject, mapping) {
+                    items.push(item);
                 }
             }
         }
-        Ok(items)
-    })
+
+        let include_legacy = selected
+            .map(|model| {
+                voice_mapping_matches_model(voice, model)
+                    || (voice_target_tts_model(voice).is_none() && is_minimax_tts_model(model))
+            })
+            .unwrap_or(true);
+        if include_legacy {
+            if let Some(item) = subject_voice_list_item(subject, voice) {
+                if items
+                    .iter()
+                    .all(|existing| voice_list_item_id(existing) != voice_list_item_id(&item))
+                {
+                    items.push(item);
+                }
+            }
+        }
+    }
+    Ok(items)
 }
 
 fn subject_voice_list_item(subject: &SubjectRecord, voice: &Value) -> Option<Value> {
@@ -706,13 +705,12 @@ fn subject_voice_id_for_tts_model_state(
     tts_model: &str,
 ) -> Result<Option<String>, String> {
     ensure_store_hydrated_for_subjects(state)?;
-    with_store(state, |store| {
-        Ok(store
-            .subjects
-            .iter()
-            .find(|subject| subject.id == subject_id)
-            .and_then(|subject| subject_voice_id_for_tts_model(subject, tts_model)))
-    })
+    let subject = with_store(state, |store| {
+        Ok(subject_store::get_subject(&store, subject_id))
+    })?;
+    Ok(subject
+        .as_ref()
+        .and_then(|subject| subject_voice_id_for_tts_model(subject, tts_model)))
 }
 
 fn subject_voice_job_matches_state(
@@ -726,41 +724,38 @@ fn subject_voice_job_matches_state(
         return Ok(true);
     }
     ensure_store_hydrated_for_subjects(state)?;
-    with_store(state, |store| {
-        let Some(subject) = store
-            .subjects
-            .iter()
-            .find(|subject| subject.id == subject_id)
-        else {
-            return Ok(false);
-        };
-        let Some(voice) = subject.voice.as_ref() else {
-            return Ok(false);
-        };
-        if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
-            for mapping in mappings.values() {
-                if !voice_mapping_matches_model(mapping, tts_model) {
-                    continue;
-                }
-                let mapping_job_id = payload_string(mapping, "jobId").unwrap_or_default();
-                if !mapping_job_id.trim().is_empty() {
-                    return Ok(mapping_job_id.trim() == job_id);
-                }
+    let Some(subject) = with_store(state, |store| {
+        Ok(subject_store::get_subject(&store, subject_id))
+    })?
+    else {
+        return Ok(false);
+    };
+    let Some(voice) = subject.voice.as_ref() else {
+        return Ok(false);
+    };
+    if let Some(mappings) = voice.get("voiceMappings").and_then(Value::as_object) {
+        for mapping in mappings.values() {
+            if !voice_mapping_matches_model(mapping, tts_model) {
+                continue;
+            }
+            let mapping_job_id = payload_string(mapping, "jobId").unwrap_or_default();
+            if !mapping_job_id.trim().is_empty() {
+                return Ok(mapping_job_id.trim() == job_id);
             }
         }
-        let current_job_id = payload_string(voice, "jobId").unwrap_or_default();
-        let current_tts_model = voice_target_tts_model(voice).unwrap_or_default();
-        if !current_tts_model.trim().is_empty()
-            && normalized_model_key(&current_tts_model) != normalized_model_key(tts_model)
-        {
-            return Ok(true);
-        }
-        if current_job_id.trim() != job_id {
-            return Ok(false);
-        }
-        Ok(current_tts_model.trim().is_empty()
-            || normalized_model_key(&current_tts_model) == normalized_model_key(tts_model))
-    })
+    }
+    let current_job_id = payload_string(voice, "jobId").unwrap_or_default();
+    let current_tts_model = voice_target_tts_model(voice).unwrap_or_default();
+    if !current_tts_model.trim().is_empty()
+        && normalized_model_key(&current_tts_model) != normalized_model_key(tts_model)
+    {
+        return Ok(true);
+    }
+    if current_job_id.trim() != job_id {
+        return Ok(false);
+    }
+    Ok(current_tts_model.trim().is_empty()
+        || normalized_model_key(&current_tts_model) == normalized_model_key(tts_model))
 }
 
 fn subject_voice_id_for_tts_model(record: &SubjectRecord, tts_model: &str) -> Option<String> {
@@ -825,12 +820,8 @@ fn tts_model_for_voice_id_state(
     voice_id: &str,
 ) -> Result<Option<String>, String> {
     ensure_store_hydrated_for_subjects(state)?;
-    with_store(state, |store| {
-        Ok(tts_model_for_voice_id_from_subjects(
-            &store.subjects,
-            voice_id,
-        ))
-    })
+    let subjects = with_store(state, |store| Ok(subject_store::list_subjects(&store)))?;
+    Ok(tts_model_for_voice_id_from_subjects(&subjects, voice_id))
 }
 
 fn delete_stale_cloned_voice(
@@ -2040,7 +2031,7 @@ fn validate_speech_voice_for_model(
         );
     }
     ensure_store_hydrated_for_subjects(state)?;
-    let subjects = with_store(state, |store| Ok(store.subjects.clone()))?;
+    let subjects = with_store(state, |store| Ok(subject_store::list_subjects(&store)))?;
     for subject in subjects {
         let Some(voice) = subject.voice.as_ref() else {
             continue;
@@ -2233,9 +2224,8 @@ fn patch_subject_voice_state(
 ) -> Result<(), String> {
     ensure_store_hydrated_for_subjects(state)?;
     let root = subjects_root(state)?;
-    let (categories, mut subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (categories, mut subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     let Some(index) = subjects.iter().position(|subject| subject.id == subject_id) else {
         return Ok(());
     };
@@ -2260,10 +2250,7 @@ pub(crate) fn bind_subject_voice(
         .ok_or_else(|| "voice.bindAsset requires voiceId".to_string())?;
     ensure_store_hydrated_for_subjects(state)?;
     let exists = with_store(state, |store| {
-        Ok(store
-            .subjects
-            .iter()
-            .any(|subject| subject.id == subject_id))
+        Ok(subject_store::get_subject(&store, &subject_id).is_some())
     })?;
     if !exists {
         return Ok(json!({ "success": false, "error": "资产不存在" }));
@@ -2337,9 +2324,8 @@ pub(crate) fn patch_subject_voice_failure(
 ) -> Result<(), String> {
     ensure_store_hydrated_for_subjects(state)?;
     let root = subjects_root(state)?;
-    let (categories, mut subjects) = with_store(state, |store| {
-        Ok((store.categories.clone(), store.subjects.clone()))
-    })?;
+    let (categories, mut subjects) =
+        with_store(state, |store| Ok(subject_store::catalog_snapshot(&store)))?;
     let Some(index) = subjects.iter().position(|subject| subject.id == subject_id) else {
         return Ok(());
     };
