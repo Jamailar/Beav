@@ -1,4 +1,4 @@
-import type { BridgeCore } from '../types';
+import type { BridgeCore, Listener } from '../types';
 
 export function createPluginsBridge(core: BridgeCore) {
   return {
@@ -16,6 +16,8 @@ export function createPluginsBridge(core: BridgeCore) {
       readData: (payload: { pluginId: string; source: string; limit?: number; kind?: string; query?: string }) =>
         core.invokeChannel('plugins:read-data', payload),
       home: () => core.invokeChannel('plugins:home'),
+      onChanged: (listener: Listener) => core.on('plugins:changed', listener),
+      offChanged: (listener: Listener) => core.off('plugins:changed', listener),
     },
   };
 }

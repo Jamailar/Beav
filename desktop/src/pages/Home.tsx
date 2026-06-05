@@ -404,12 +404,12 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
         const handleDataChanged = () => void loadStats();
         const handlePluginsChanged = () => void loadPluginHome();
         window.ipcRenderer.teamRuntime.onEvent(handleRuntimeEvent);
-        window.ipcRenderer.on('data:changed', handleDataChanged);
-        window.ipcRenderer.on('plugins:changed', handlePluginsChanged);
+        window.ipcRenderer.onDataChanged(handleDataChanged);
+        window.ipcRenderer.plugins.onChanged(handlePluginsChanged);
         return () => {
             window.ipcRenderer.teamRuntime.offEvent(handleRuntimeEvent);
-            window.ipcRenderer.off('data:changed', handleDataChanged);
-            window.ipcRenderer.off('plugins:changed', handlePluginsChanged);
+            window.ipcRenderer.offDataChanged(handleDataChanged);
+            window.ipcRenderer.plugins.offChanged(handlePluginsChanged);
         };
     }, [isActive, loadPluginHome, loadStats]);
 
