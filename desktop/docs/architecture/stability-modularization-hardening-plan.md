@@ -347,6 +347,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted chat knowledge/asset reference normalization, inline asset mention resolution, media task-intent inference and user-message metadata assembly into `commands/chat/references`.
 - Extracted chat session task-hint metadata lifecycle, temporary turn metadata, active skill projection and first RedClaw style-definition activation into `commands/chat/session_metadata`.
 - Extracted chat runtime-state begin/update/cancel/read lock handling into `commands/chat/runtime_state`, leaving `chat_state.rs` focused on session identity, context binding and runtime-mode projection.
+- Extracted chat task-scoped metadata field policy and stale task-hint cleanup into `commands/chat/task_scope_metadata`, keeping `session_metadata` focused on applying turn/session state transitions.
 - Hardened context-session id slug generation for whitespace-bearing context ids, keeping diagnostics and other context-bound session ids stable across callers.
 - Extracted MCP server target parsing, add-payload validation, stdio/http config construction and OAuth metadata merging into `commands/mcp_tools/server_payload`.
 - Extracted MCP diagnostics tool listing and direct/AI diagnostics execution into `commands/mcp_tools/diagnostics`, leaving `mcp_tools.rs` focused on MCP server lifecycle, calls, typed lists and hook routing.
