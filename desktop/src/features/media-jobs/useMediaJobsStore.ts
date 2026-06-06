@@ -46,6 +46,23 @@ function replaceState(next: MediaJobsState): void {
     emit();
 }
 
+function mediaJobChanged(current: MediaJobProjection | undefined, next: MediaJobProjection): boolean {
+    if (!current) return true;
+    return current.status !== next.status
+        || current.updatedAt !== next.updatedAt
+        || current.completedAt !== next.completedAt
+        || current.archivedAt !== next.archivedAt
+        || current.archiveReason !== next.archiveReason
+        || current.cancelReason !== next.cancelReason
+        || current.artifacts.length !== next.artifacts.length
+        || current.recentEvents.length !== next.recentEvents.length
+        || current.attempt?.attemptId !== next.attempt?.attemptId
+        || current.attempt?.attemptNo !== next.attempt?.attemptNo
+        || current.attempt?.updatedAt !== next.attempt?.updatedAt
+        || current.attempt?.leaseExpiresAt !== next.attempt?.leaseExpiresAt
+        || current.attempt?.nextPollAt !== next.attempt?.nextPollAt;
+}
+
 export const mediaJobsStore: MediaJobsStore = {
     getState: () => state,
     subscribe: (listener) => {
@@ -54,7 +71,7 @@ export const mediaJobsStore: MediaJobsStore = {
     },
     upsertJob: (job) => {
         const current = state.jobsById[job.jobId];
-        if (current && JSON.stringify(current) === JSON.stringify(job)) return;
+        if (!mediaJobChanged(current, job)) return;
         replaceState({
             ...state,
             jobsById: {
@@ -69,7 +86,7 @@ export const mediaJobsStore: MediaJobsStore = {
         const nextJobsById = { ...state.jobsById };
         for (const job of jobs) {
             const current = nextJobsById[job.jobId];
-            if (current && JSON.stringify(current) === JSON.stringify(job)) continue;
+            if (!mediaJobChanged(current, job)) continue;
             nextJobsById[job.jobId] = job;
             changed = true;
         }
