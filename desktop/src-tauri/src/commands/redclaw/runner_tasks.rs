@@ -1,17 +1,20 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[path = "runner_tasks/payloads.rs"]
+mod payloads;
+
 use crate::commands::redclaw_runtime::{
     append_redclaw_automation_user_message, ensure_redclaw_task_session_record,
 };
 use crate::persistence::{with_store, with_store_mut};
-use crate::scheduler::task_policy::TaskIntentSchema;
 use crate::scheduler::{
     clear_definition_cooldown, emit_scheduler_snapshot,
     enqueue_manual_job_execution_for_definition, run_job_queue_once, sync_redclaw_job_definitions,
 };
 use crate::store::redclaw as redclaw_store;
 use crate::{now_iso, payload_field, payload_string, AppState};
+use payloads::{long_cycle_task_intent_from_payload, scheduled_task_intent_from_payload};
 
 pub(super) fn handle_redclaw_runner_task_channel(
     app: &AppHandle,
@@ -111,32 +114,7 @@ fn add_scheduled_task(
     let result = super::redclaw_task_control::create_confirmed_task_from_intent(
         app,
         state,
-        TaskIntentSchema {
-            kind: "scheduled".to_string(),
-            intent: "legacy-ui-direct".to_string(),
-            name: payload_string(payload, "name").unwrap_or_else(|| "定时任务".to_string()),
-            action_type: payload_string(payload, "actionType")
-                .unwrap_or_else(|| "redclaw_prompt".to_string()),
-            owner_scope: payload_string(payload, "ownerScope")
-                .unwrap_or_else(|| "manual:redclaw".to_string()),
-            timezone: Some(
-                payload_string(payload, "timezone").unwrap_or_else(|| "local".to_string()),
-            ),
-            creator_mode: Some("ui-manual".to_string()),
-            created_by: Some("redclaw-panel".to_string()),
-            risk_rationale: payload_string(payload, "riskRationale"),
-            prompt: payload_string(payload, "prompt"),
-            mode: payload_string(payload, "mode"),
-            interval_minutes: payload_field(payload, "intervalMinutes").and_then(Value::as_i64),
-            time: payload_string(payload, "time"),
-            weekdays: payload_field(payload, "weekdays")
-                .and_then(Value::as_array)
-                .map(|items| items.iter().filter_map(Value::as_i64).collect()),
-            run_at: payload_string(payload, "runAt"),
-            missed_run_policy: payload_string(payload, "missedRunPolicy"),
-            metadata: payload_field(payload, "metadata").cloned(),
-            ..TaskIntentSchema::default()
-        },
+        scheduled_task_intent_from_payload(payload),
     )?;
     let source_task_id = source_task_id_from_creation_result(&result)?;
     let task = with_store_mut(state, |store| {
@@ -162,28 +140,7 @@ fn add_long_cycle_task(
     let result = super::redclaw_task_control::create_confirmed_task_from_intent(
         app,
         state,
-        TaskIntentSchema {
-            kind: "long_cycle".to_string(),
-            intent: "legacy-ui-direct".to_string(),
-            name: payload_string(payload, "name").unwrap_or_else(|| "长周期任务".to_string()),
-            action_type: payload_string(payload, "actionType")
-                .unwrap_or_else(|| "long_cycle".to_string()),
-            owner_scope: payload_string(payload, "ownerScope")
-                .unwrap_or_else(|| "manual:redclaw".to_string()),
-            timezone: Some(
-                payload_string(payload, "timezone").unwrap_or_else(|| "local".to_string()),
-            ),
-            creator_mode: Some("ui-manual".to_string()),
-            created_by: Some("redclaw-panel".to_string()),
-            risk_rationale: payload_string(payload, "riskRationale"),
-            objective: payload_string(payload, "objective"),
-            step_prompt: payload_string(payload, "stepPrompt"),
-            interval_minutes: payload_field(payload, "intervalMinutes").and_then(Value::as_i64),
-            total_rounds: payload_field(payload, "totalRounds").and_then(Value::as_i64),
-            missed_run_policy: payload_string(payload, "missedRunPolicy"),
-            metadata: payload_field(payload, "metadata").cloned(),
-            ..TaskIntentSchema::default()
-        },
+        long_cycle_task_intent_from_payload(payload),
     )?;
     let source_task_id = source_task_id_from_creation_result(&result)?;
     let task = with_store_mut(state, |store| {
