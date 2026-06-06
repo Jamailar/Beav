@@ -8,9 +8,38 @@ last_updated: 2026-06-06
 
 ## Goal
 
-在不影响现有业务、不新增解释性 UI、不改变用户路径的前提下，把当前 RedBox desktop 的模块雏形收紧成稳定实现边界。目标不是重写，而是降低耦合、减少状态串线、提升 runtime 和媒体任务的可恢复性，让后续功能迭代可以按 atomic commit 小步推进。
+在不影响现有业务、不新增解释性 UI、不改变用户路径的前提下，提升当前 RedBox desktop 的模块治理水平。目标不是“拆文件”或追求目录形态，而是让每个业务域的职责、协议、状态归属、副作用边界和验证方式都变得清楚、可维护、可防回退。
 
-核心判断：当前系统已经有模块化基础，风险不在“目录不存在”，而在“协议、状态、事件、页面逻辑还没有完全按模块边界隔离”。
+最终要达到的治理效果：
+
+1. 模块职责清晰：Knowledge、Generation、Chat、RedClaw、Settings、Plugin、Media Runtime 等业务域能明确回答“谁负责决策、谁负责执行、谁负责持久化、谁负责展示”。
+2. 协议稳定：Renderer、Host、Runtime、Store、Plugin、AI Tool 之间通过 typed payload、domain bridge、store helper、runtime metadata 和事件 contract 协作，而不是跨层直接访问或隐式约定。
+3. 状态归属稳定：workspace truth、runtime truth、media job truth、RedClaw task truth、chat session truth 有明确 owner，并能恢复、追踪、审计。
+4. 副作用可控：网络、文件 I/O、ffmpeg/provider 调用、索引构建、长任务轮询不进入 UI 组合层和 store lock；失败时保留最后成功状态。
+5. 验证能防回退：关键边界有脚本守卫，关键业务链路有真实路径 smoke，不依赖“看起来拆了很多文件”来判断架构质量。
+
+核心判断：当前系统已经有模块化基础，风险不在“目录不存在”，而在“协议、状态、事件、页面逻辑、副作用还没有完全按模块治理边界隔离”。文件拆分只在它能明确改善这些治理边界时执行；单纯降低行数不是目标。
+
+## Execution Scope
+
+本计划的执行范围按治理边界定义，而不是按文件大小定义。
+
+必须覆盖：
+
+- Renderer governance：页面/组件只负责交互和组合；跨进程调用走 domain bridge；订阅按 surface/id 收敛并能正确 unsubscribe。
+- Host governance：IPC command 只做参数校验、路由、结果投影；业务决策、provider 调用、workspace 写入、runtime 调度进入明确 owner。
+- Store and persistence governance：AppStore 访问通过 domain helper 或 owned snapshot；锁内只做内存级读写；workspace 写入和慢 I/O 在锁外完成。
+- Runtime governance：Chat、Generation Agent、RedClaw、Media Job 等长任务都有 task/session/job id、checkpoint、event metadata、恢复语义和失败投影。
+- AI and tool governance：能力边界由 skills/prompts/tool contracts/runtime mode/typed metadata 定义；宿主层不得用自然语言关键词硬切角色或技能。
+- Plugin and capture governance：插件只提交结构化 capture payload；桌面端负责 ingestion、indexing、workspace persistence 和 AI/runtime 编排。
+- Verification governance：新增或收紧的边界必须有至少一种守卫，优先是脚本检查、focused tests、build/check 或真实业务 smoke。
+
+不以这些作为单独目标：
+
+- 不为了让文件变短而拆分文件。
+- 不为了目录“好看”迁移代码。
+- 不因为某个模块行数大就默认重构；只有当它混合了多个治理 owner、协议或副作用边界时才切分。
+- 不把模块治理等同于 UI 加说明、加中间页或加调试面板。
 
 ## Non Goals
 
@@ -48,8 +77,8 @@ last_updated: 2026-06-06
 ### High Risk Coupling Points
 
 1. `desktop/src/bridge/ipcRenderer.ts` still carries multiple domains directly, including runtime, team/collab, subjects, voice, plugins, chat and settings-adjacent APIs.
-2. Large pages still combine UI composition, local state, IPC calls, event subscriptions and projection logic.
-3. Large host commands still mix channel dispatch, validation, persistence patching and domain logic.
+2. Some renderer surfaces still combine UI composition, local state, IPC calls, event subscriptions and projection logic under one owner.
+3. Some host command paths still mix channel dispatch, validation, persistence patching, provider/runtime side effects and domain logic.
 4. `AppStore` is a single large aggregate; direct field access makes unrelated domains easy to couple.
 5. Runtime truth is split across `chat_runtime_states`, `runtime_tasks`, media runtime DB/state, RedClaw runtime and active request locks.
 6. High-frequency events can still fan out too widely if renderer stores subscribe by whole object instead of id/surface.
@@ -1460,11 +1489,16 @@ Verification:
 
 - `ipcRenderer.ts` becomes assembly-only and stays under 200 lines.
 - No new raw `window.ipcRenderer.invoke(...)` in pages/features.
-- Large pages trend downward by moving pure logic and subscriptions into feature modules.
-- Large host command files become dispatchers or are split by action family.
+- Each major product domain has an explicit owner for UI composition, bridge contract, host command, runtime/service behavior, persistence and event projection.
+- Renderer surfaces do not own provider/runtime/workspace decisions; they consume typed projections and dispatch typed actions.
+- Host command paths do not hold store locks across network, file I/O, ffmpeg/provider calls, indexing or long-running runtime work.
+- Store access for high-risk domains goes through domain helpers or owned snapshots instead of direct cross-domain field access.
+- Plugin capture payloads are structured, idempotent and desktop-owned after ingestion.
+- AI/runtime routing uses typed metadata, runtime mode, skills/tool contracts and context bundles instead of natural-language keyword forcing.
 - Media job updates do not cause unrelated pages to rerender.
 - Runtime events can be traced by `sessionId`, `taskId` or `jobId`.
 - App restart preserves active/recent runtime, media and workspace state.
+- Key business chains have real smoke verification: plugin capture, knowledge catalog/detail, generation job, chat stream/tool call, RedClaw task where touched.
 - New work can be committed as one behavior per atomic commit.
 
 ## Recommended First Slice
