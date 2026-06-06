@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use tauri::{plugin::PermissionState, AppHandle, State};
+use tauri::{plugin::PermissionState, AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
 mod remote;
@@ -83,53 +83,70 @@ fn ensure_notification_auth(state: &State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+async fn run_remote_notification_request(
+    app: AppHandle,
+    method: &'static str,
+    path: String,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        ensure_notification_auth(&state)?;
+        let request_generation = auth::auth_generation(&state).ok();
+        let settings = with_store(&state, |store| {
+            Ok(settings_store::settings_snapshot(&store))
+        })?;
+        notification_response(
+            &app,
+            &state,
+            &settings,
+            method,
+            &path,
+            body,
+            request_generation,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
-pub fn notifications_sync_remote(
-    state: State<'_, AppState>,
+pub async fn notifications_sync_remote(
+    app: AppHandle,
     cursor: Option<String>,
     limit: Option<u64>,
     unread_only: Option<bool>,
 ) -> Result<Value, String> {
-    ensure_notification_auth(&state)?;
     let path = sync_notifications_path(cursor, limit, unread_only);
-    let settings = with_store(&state, |store| {
-        Ok(settings_store::settings_snapshot(&store))
-    })?;
-    notification_response(&settings, "GET", &path, None)
+    run_remote_notification_request(app, "GET", path, None).await
 }
 
 #[tauri::command]
-pub fn notifications_list_remote(
-    state: State<'_, AppState>,
+pub async fn notifications_list_remote(
+    app: AppHandle,
     limit: Option<u64>,
     unread_only: Option<bool>,
 ) -> Result<Value, String> {
-    ensure_notification_auth(&state)?;
     let path = list_notifications_path(limit, unread_only);
-    let settings = with_store(&state, |store| {
-        Ok(settings_store::settings_snapshot(&store))
-    })?;
-    notification_response(&settings, "GET", &path, None)
+    run_remote_notification_request(app, "GET", path, None).await
 }
 
 #[tauri::command]
-pub fn notifications_mark_remote_read(
-    state: State<'_, AppState>,
+pub async fn notifications_mark_remote_read(
+    app: AppHandle,
     notification_id: String,
 ) -> Result<Value, String> {
-    ensure_notification_auth(&state)?;
     let path = mark_notification_read_path(&notification_id)?;
-    let settings = with_store(&state, |store| {
-        Ok(settings_store::settings_snapshot(&store))
-    })?;
-    notification_response(&settings, "POST", &path, None)
+    run_remote_notification_request(app, "POST", path, None).await
 }
 
 #[tauri::command]
-pub fn notifications_mark_all_remote_read(state: State<'_, AppState>) -> Result<Value, String> {
-    ensure_notification_auth(&state)?;
-    let settings = with_store(&state, |store| {
-        Ok(settings_store::settings_snapshot(&store))
-    })?;
-    notification_response(&settings, "POST", "/users/me/notifications/read-all", None)
+pub async fn notifications_mark_all_remote_read(app: AppHandle) -> Result<Value, String> {
+    run_remote_notification_request(
+        app,
+        "POST",
+        "/users/me/notifications/read-all".to_string(),
+        None,
+    )
+    .await
 }

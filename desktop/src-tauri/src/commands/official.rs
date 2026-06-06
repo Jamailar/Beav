@@ -56,6 +56,7 @@ use points::{
     cached_official_points, fetch_remote_official_points, official_points_need_silent_refresh,
 };
 pub(crate) use pricing::refresh_official_pricing_cache;
+pub(crate) use request::run_authenticated_official_request_response;
 use request::{
     run_authenticated_official_request, run_authenticated_official_request_skip_preflight_refresh,
 };
