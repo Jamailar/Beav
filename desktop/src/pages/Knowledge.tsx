@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square, MoreHorizontal, Share2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -23,6 +23,7 @@ import {
     KnowledgeListPageResponse,
     KnowledgeIndexStatus,
     KnowledgeCardItem,
+    XhsCommentItem,
     resolveNoteCardKind,
     KnowledgeAuthorView,
     SHOW_WECHAT_KNOWLEDGE_ACTIONS,
@@ -1505,6 +1506,280 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         );
     };
 
+    const isXiaohongshuNoteDetail = (note: Note) => {
+        const kind = `${note.captureKind || ''} ${note.type || ''} ${note.knowledgeKind || ''}`;
+        if (note.captureKind === 'xhs-blogger' || note.captureKind === 'xhs-comments') return false;
+        return kind.includes('xhs') || (note.siteName || '').includes('xiaohongshu.com');
+    };
+
+    const formatCompactCount = (value?: number | null) => {
+        const number = Number(value || 0);
+        if (!Number.isFinite(number) || number <= 0) return '0';
+        if (number >= 10000) return `${(number / 10000).toFixed(number >= 100000 ? 0 : 1).replace(/\.0$/, '')}万`;
+        return String(number);
+    };
+
+    const getXhsTags = (note: Note) => {
+        const fromTags = Array.isArray(note.tags) ? note.tags : [];
+        const fromText = Array.from((note.content || '').matchAll(/#[^\s#，,。.！!？?\n]+/g)).map((match) => match[0].replace(/^#/, ''));
+        return Array.from(new Set([...fromTags, ...fromText].map((tag) => String(tag || '').trim()).filter(Boolean)))
+            .filter((tag) => tag !== '小红书')
+            .slice(0, 12);
+    };
+
+    const renderXhsCommentContent = (comment: XhsCommentItem) => {
+        const segments = Array.isArray(comment.content?.segments) ? comment.content?.segments || [] : [];
+        if (segments.length > 0) {
+            return (
+                <span>
+                    {segments.map((segment, index) => {
+                        const type = String(segment.type || '');
+                        if (type === 'emoji') {
+                            const url = String(segment.url || '');
+                            if (!url) return null;
+                            return (
+                                <img
+                                    key={`${comment.id || 'comment'}-segment-${index}`}
+                                    src={resolveAssetUrl(url)}
+                                    alt=""
+                                    className="mx-0.5 inline-block h-5 w-5 align-[-4px]"
+                                />
+                            );
+                        }
+                        return <span key={`${comment.id || 'comment'}-segment-${index}`}>{String(segment.text || '')}</span>;
+                    })}
+                </span>
+            );
+        }
+        return <span>{comment.content?.text || ''}</span>;
+    };
+
+    const renderXhsComment = (comment: XhsCommentItem, index: number) => {
+        const authorName = comment.author?.nickname || '小红书用户';
+        const avatarUrl = comment.author?.avatarUrl || '';
+        const level = Number(comment.level || 0);
+        return (
+            <div key={comment.id || comment.platformCommentId || `${authorName}-${index}`} className={clsx('flex gap-3', level > 0 && 'ml-10')}>
+                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-black/[0.04] ring-1 ring-black/[0.04]">
+                    {avatarUrl ? (
+                        <img src={resolveAssetUrl(avatarUrl)} alt={authorName} className="h-full w-full object-cover" />
+                    ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[11px] font-bold text-text-tertiary">
+                            {authorName.slice(0, 1)}
+                        </div>
+                    )}
+                </div>
+                <div className="min-w-0 flex-1 pb-5">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate text-[14px] font-medium text-text-tertiary">{authorName}</span>
+                            {comment.author?.isNoteAuthor && (
+                                <span className="rounded bg-black/[0.04] px-1.5 py-0.5 text-[10px] font-bold text-text-tertiary">作者</span>
+                            )}
+                        </div>
+                        <MoreHorizontal className="h-4 w-4 shrink-0 text-text-tertiary/60" />
+                    </div>
+                    <div className="mt-1 text-[15px] leading-relaxed text-text-primary">
+                        {renderXhsCommentContent(comment)}
+                    </div>
+                    <div className="mt-2 flex items-center gap-3 text-[12px] font-medium text-text-tertiary">
+                        {comment.time?.display && <span>{comment.time.display}</span>}
+                        {comment.location && <span>{comment.location}</span>}
+                    </div>
+                    <div className="mt-2 flex items-center gap-4 text-[12px] font-semibold text-text-secondary">
+                        <span className="inline-flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{comment.metrics?.likes ? formatCompactCount(comment.metrics.likes) : '赞'}</span>
+                        <span className="inline-flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{comment.metrics?.replies ? formatCompactCount(comment.metrics.replies) : '回复'}</span>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const renderXhsNoteDetail = (note: Note) => {
+        const images = orderImages(note.images || []);
+        const currentImage = images[selectedImageIndex] || getNoteCoverImage(note) || note.cover || '';
+        const comments = note.xhsComments?.comments || [];
+        const totalComments = note.xhsComments?.total || note.stats?.comments || comments.length;
+        const tags = getXhsTags(note);
+        const hasMedia = Boolean(note.video || currentImage);
+        return (
+            <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-[4px] animate-in fade-in duration-200"
+                onClick={() => setSelectedNote(null)}
+            >
+                <div
+                    className="relative mx-4 grid h-[92vh] w-full max-w-[1220px] grid-cols-[minmax(0,1fr)_420px] overflow-hidden rounded-[28px] bg-white shadow-[0_42px_120px_-30px_rgba(0,0,0,0.55)] ring-1 ring-black/10 max-[980px]:grid-cols-1"
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <button
+                        onClick={() => setSelectedNote(null)}
+                        className="absolute right-4 top-4 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/5 text-text-secondary backdrop-blur hover:bg-black/10 hover:text-text-primary transition-all active:scale-95"
+                        aria-label="关闭"
+                    >
+                        <X className="h-5 w-5" />
+                    </button>
+
+                    <div className="relative flex min-h-0 items-center justify-center bg-[#f8f8f8] max-[980px]:hidden">
+                        {note.video ? (
+                            <div className="relative flex h-full w-full items-center justify-center">
+                                {isSelectedNoteVideoPlaying || !getNoteCoverImage(note) ? (
+                                    <video
+                                        ref={selectedNoteVideoRef}
+                                        src={resolveAssetUrl(note.video)}
+                                        className="max-h-full max-w-full object-contain"
+                                        controls
+                                        autoPlay
+                                        playsInline
+                                        preload="metadata"
+                                    />
+                                ) : (
+                                    <button type="button" onClick={() => setIsSelectedNoteVideoPlaying(true)} className="group relative h-full w-full">
+                                        <img src={resolveAssetUrl(getNoteCoverImage(note))} alt={note.title} className="h-full w-full object-contain" />
+                                        <div className="absolute inset-0 bg-black/10 group-hover:bg-black/25 transition-colors" />
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-white/25 text-white shadow-2xl ring-1 ring-white/40 backdrop-blur-md">
+                                                <Play className="ml-1 h-8 w-8 fill-current" />
+                                            </div>
+                                        </div>
+                                    </button>
+                                )}
+                            </div>
+                        ) : hasMedia ? (
+                            <img
+                                src={resolveAssetUrl(currentImage)}
+                                alt={note.title}
+                                className="max-h-full max-w-full cursor-zoom-in object-contain"
+                                onClick={() => setIsImagePreviewOpen(true)}
+                            />
+                        ) : (
+                            <div className="text-sm font-semibold text-text-tertiary">No media</div>
+                        )}
+
+                        {images.length > 1 && !note.video && (
+                            <>
+                                <button
+                                    onClick={() => setSelectedImageIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1))}
+                                    className="absolute left-5 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/70 text-text-primary shadow-lg backdrop-blur transition-all hover:bg-white"
+                                    aria-label="上一张"
+                                >
+                                    <ChevronLeft className="h-5 w-5" />
+                                </button>
+                                <button
+                                    onClick={() => setSelectedImageIndex((prev) => (prev === images.length - 1 ? 0 : prev + 1))}
+                                    className="absolute right-5 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/70 text-text-primary shadow-lg backdrop-blur transition-all hover:bg-white"
+                                    aria-label="下一张"
+                                >
+                                    <ChevronRight className="h-5 w-5" />
+                                </button>
+                                <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-1.5">
+                                    {images.map((image, index) => (
+                                        <button
+                                            key={`${image}-${index}`}
+                                            onClick={() => setSelectedImageIndex(index)}
+                                            className={clsx('h-2 rounded-full transition-all', index === selectedImageIndex ? 'w-5 bg-white shadow' : 'w-2 bg-white/45')}
+                                            aria-label={`第 ${index + 1} 张`}
+                                        />
+                                    ))}
+                                </div>
+                            </>
+                        )}
+                    </div>
+
+                    <div className="flex min-h-0 flex-col border-l border-black/[0.06] bg-white max-[980px]:border-l-0">
+                        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-black/[0.06] px-6 py-5">
+                            <button type="button" onClick={() => openAuthorProfile(note)} className="flex min-w-0 items-center gap-3 text-left">
+                                <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full bg-black/[0.04] ring-1 ring-black/[0.05]">
+                                    {note.authorAvatarUrl ? (
+                                        <img src={resolveAssetUrl(note.authorAvatarUrl)} alt={note.author} className="h-full w-full object-cover" />
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center text-sm font-bold text-text-tertiary">{(note.author || '小').slice(0, 1)}</div>
+                                    )}
+                                </div>
+                                <div className="min-w-0">
+                                    <div className="truncate text-[17px] font-semibold text-text-primary">{note.author || '小红书用户'}</div>
+                                    {note.siteName && <div className="mt-0.5 truncate text-[11px] font-medium text-text-tertiary">{note.siteName}</div>}
+                                </div>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => openAuthorProfile(note)}
+                                className="shrink-0 rounded-full bg-[#ff2f55] px-6 py-2.5 text-[15px] font-extrabold text-white shadow-sm transition-all hover:bg-[#f7254d] active:scale-95"
+                            >
+                                关注
+                            </button>
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
+                            <div className="space-y-4 px-6 py-5">
+                                <h1 className="text-[20px] font-extrabold leading-snug tracking-tight text-text-primary">{note.title}</h1>
+                                <div className="whitespace-pre-wrap text-[16px] leading-[1.72] text-text-primary">{note.content}</div>
+                                {tags.length > 0 && (
+                                    <div className="flex flex-wrap gap-2 pt-1">
+                                        {tags.map((tag) => (
+                                            <span key={tag} className="text-[15px] font-semibold text-[#24599a]">#{tag}</span>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="pt-1 text-[12px] font-medium text-text-tertiary">{formatTimestampDateTime(note.createdAt)}</div>
+                            </div>
+
+                            {note.video && note.transcript && (
+                                <div className="mx-6 mb-5 rounded-2xl border border-black/[0.05] bg-black/[0.02]">
+                                    <button
+                                        onClick={() => setShowTranscript(!showTranscript)}
+                                        className="flex w-full items-center justify-between px-4 py-3 text-[13px] font-bold text-text-primary"
+                                    >
+                                        <span className="inline-flex items-center gap-2"><FileText className="h-4 w-4" />转录</span>
+                                        <ChevronRight className={clsx('h-4 w-4 transition-transform', showTranscript && 'rotate-90')} />
+                                    </button>
+                                    {showTranscript && (
+                                        <pre className="max-h-[260px] overflow-auto whitespace-pre-wrap px-4 pb-4 font-sans text-[13px] leading-relaxed text-text-secondary custom-scrollbar">
+                                            {note.transcript}
+                                        </pre>
+                                    )}
+                                </div>
+                            )}
+
+                            <div className="border-t border-black/[0.06] px-6 py-5">
+                                <div className="mb-5 text-[16px] font-semibold text-text-tertiary">共 {formatCompactCount(totalComments)} 条评论</div>
+                                {comments.length > 0 ? (
+                                    <div className="space-y-1">
+                                        {comments.map((comment, index) => renderXhsComment(comment, index))}
+                                    </div>
+                                ) : (
+                                    <div className="rounded-2xl bg-black/[0.02] px-4 py-8 text-center text-[13px] font-medium text-text-tertiary">
+                                        评论尚未采集
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-3 border-t border-black/[0.06] bg-white px-5 py-4">
+                            <div className="min-w-0 flex-1 rounded-full bg-black/[0.04] px-4 py-2.5 text-[14px] font-medium text-text-tertiary">说点什么...</div>
+                            <button title={`${APP_BRAND.aiDisplayName} 聊天`} onClick={() => openNoteInRedClaw(note)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-primary transition-colors hover:bg-black/[0.05]"><MessageCircle className="h-5 w-5" /></button>
+                            <span className="inline-flex shrink-0 items-center gap-1.5 text-[16px] font-semibold text-text-primary"><Heart className="h-6 w-6" />{formatCompactCount(note.stats?.likes)}</span>
+                            <span className="inline-flex shrink-0 items-center gap-1.5 text-[16px] font-semibold text-text-primary"><Star className="h-6 w-6" />{formatCompactCount(note.stats?.collects)}</span>
+                            <span className="inline-flex shrink-0 items-center gap-1.5 text-[16px] font-semibold text-text-primary"><MessageCircle className="h-6 w-6" />{formatCompactCount(totalComments)}</span>
+                            {note.sourceUrl && (
+                                <button title="打开来源" onClick={() => window.open(note.sourceUrl, '_blank')} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-primary transition-colors hover:bg-black/[0.05]"><Share2 className="h-5 w-5" /></button>
+                            )}
+                            <button title="在目录中查看" onClick={() => void handleShowInFolder(note.folderPath)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary"><FolderOpen className="h-5 w-5" /></button>
+                            {hasMedia && (
+                                <button title="存为封面模板" onClick={() => void handleSaveNoteCoverAsTemplate(note)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary"><BookmarkPlus className="h-5 w-5" /></button>
+                            )}
+                            {note.video && !note.transcript && (
+                                <button title="提取文字" onClick={() => handleTranscribeNote(note.id)} disabled={isTranscribing || note.transcriptionStatus === 'processing'} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary disabled:opacity-40">
+                                    {isTranscribing || note.transcriptionStatus === 'processing' ? <Loader2 className="h-5 w-5 animate-spin" /> : <RefreshCw className="h-5 w-5" />}
+                                </button>
+                            )}
+                            <button title="移除记录" onClick={() => handleDeleteNote(note.id)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-rose-50 hover:text-rose-500"><Trash2 className="h-5 w-5" /></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const handleOpenBrowserPluginDownload = useCallback(async () => {
         try {
             const result = await window.ipcRenderer.openAppReleasePage(BROWSER_PLUGIN_DOWNLOAD_URL);
@@ -2633,6 +2908,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
 
             {/* Xiaohongshu Note Detail Modal */}
             {selectedNote && (
+                isXiaohongshuNoteDetail(selectedNote) ? renderXhsNoteDetail(selectedNote) : (
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
                     onClick={() => setSelectedNote(null)}
@@ -2862,6 +3138,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                         })()}
                     </div>
                 </div>
+                )
             )}
 
             {selectedAuthor && (

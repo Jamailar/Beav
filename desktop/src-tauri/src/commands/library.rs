@@ -1,3 +1,4 @@
+use crate::json_util::read_json_value;
 use crate::knowledge;
 use crate::knowledge_index;
 use crate::knowledge_index::catalog::KnowledgeCatalogSummary;
@@ -791,7 +792,20 @@ fn load_note_detail(state: &State<'_, AppState>, item_id: &str) -> Result<Value,
         .into_iter()
         .find(|entry| entry.id == item_id)
         .ok_or_else(|| "未找到知识笔记".to_string())?;
-    serde_json::to_value(item).map_err(|error| error.to_string())
+    let mut value = serde_json::to_value(item).map_err(|error| error.to_string())?;
+    if let Some(object) = value.as_object_mut() {
+        let comments = object
+            .get("folderPath")
+            .and_then(|value| value.as_str())
+            .map(PathBuf::from)
+            .map(|folder| folder.join("comments.json"))
+            .filter(|path| path.exists())
+            .and_then(|path| read_json_value(&path));
+        if let Some(comments) = comments {
+            object.insert("xhsComments".to_string(), comments);
+        }
+    }
+    Ok(value)
 }
 
 fn load_youtube_detail(state: &State<'_, AppState>, item_id: &str) -> Result<Value, String> {

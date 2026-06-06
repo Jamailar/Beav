@@ -1,3 +1,47 @@
+export interface XhsCommentItem {
+    id?: string;
+    platformCommentId?: string;
+    noteId?: string;
+    parentCommentId?: string | null;
+    rootCommentId?: string | null;
+    level?: number;
+    author?: {
+        userId?: string | null;
+        nickname?: string | null;
+        profileUrl?: string | null;
+        avatarUrl?: string | null;
+        isNoteAuthor?: boolean;
+    };
+    content?: {
+        text?: string;
+        segments?: Array<Record<string, unknown>>;
+        emojiUrls?: string[];
+    };
+    metrics?: {
+        likes?: number;
+        replies?: number;
+    };
+    time?: {
+        display?: string | null;
+        normalizedAt?: string | null;
+    };
+    location?: string | null;
+    capturedAt?: string;
+}
+
+export interface XhsCommentsSnapshot {
+    schemaVersion?: number;
+    platform?: string;
+    noteId?: string;
+    entryId?: string;
+    sourceLink?: string;
+    total?: number;
+    visibleCount?: number;
+    hasMore?: boolean;
+    capturedAt?: string;
+    comments?: XhsCommentItem[];
+}
+
 export interface Note { type?: string; sourceUrl?: string;
     id: string;
     knowledgeKind?: string;
@@ -12,6 +56,7 @@ export interface Note { type?: string; sourceUrl?: string;
     siteName?: string;
     captureKind?: string;
     metadata?: Record<string, unknown>;
+    xhsComments?: XhsCommentsSnapshot;
     htmlFile?: string;
     htmlFileUrl?: string;
     images: string[];
@@ -24,6 +69,7 @@ export interface Note { type?: string; sourceUrl?: string;
     stats: {
         likes: number;
         collects?: number;
+        comments?: number;
     };
     createdAt: string;
     updatedAt?: string;

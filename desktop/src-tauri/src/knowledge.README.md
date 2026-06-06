@@ -60,7 +60,7 @@
 - `workspace`: 当前空间 `{ id, name }`
 - `platformAccounts`: 当前空间的小红书、抖音、Bilibili 账号摘要；未绑定的平台返回 `bound: false`
 
-`POST /api/knowledge/xhs/v2/entries` 是小红书导入 V2 的预留入口，用于后续支持“笔记内容 + 评论区内容”同包提交。当前版本只完成 API 壳：解析 `source`、`note`、`comments`、`options`，返回 `stub: true` 和 `persisted: false`，不写入 knowledge store，也不改变旧版 `/entries` 行为。
+`POST /api/knowledge/xhs/v2/entries` 是小红书导入 V2 入口，用于“笔记内容 + 评论区内容”同包提交。入口会先把 `note` 规范成现有 `KnowledgeEntryIngestRequest` 写入 `knowledge/redbook/{entryId}`，再把结构化评论写入同目录的 `comments.json`，并生成面向搜索 / AI 上下文的 `comments.md`。`meta.json.metadata.xhs.comments` 只保存评论总数、已采集数、回复数、`comments.json` / `comments.md` 指针和采集时间，避免知识列表 hydration 读取大数组。旧版 `/entries` 行为保持不变。
 
 `POST /api/knowledge/zhihu/answers` 是知乎回答专用入口，接收 `question` 和 `answer` 两段结构化数据，写入 `knowledge/zhihu/{entryId}` 下的 `zhihu-answer` 知识项。正文继续写入 `content.md` / `content.html`，结构化问题、回答、发布时间和互动数据写入 `meta.json.metadata.zhihu`。
 

@@ -253,6 +253,7 @@ pub(crate) fn zhihu_answer_to_entry_request(
             stats: Some(KnowledgeEntryStatsInput {
                 likes: request.answer.stats.upvotes.or(request.answer.stats.likes),
                 collects: request.answer.stats.collects,
+                comments: request.answer.stats.comments,
             }),
             metadata: Some(metadata),
             ..KnowledgeEntryContentInput::default()
@@ -381,6 +382,7 @@ pub(crate) fn zhihu_article_to_entry_request(
                     .upvotes
                     .or(request.article.stats.likes),
                 collects: request.article.stats.collects,
+                comments: request.article.stats.comments,
             }),
             metadata: Some(metadata),
             ..KnowledgeEntryContentInput::default()
