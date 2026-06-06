@@ -3,8 +3,11 @@ use crate::store::settings as settings_store;
 
 #[path = "billing/orders.rs"]
 mod orders;
+#[path = "billing/products.rs"]
+mod products;
 
 use orders::{query_remote_order_status, sync_remote_orders_into_settings};
+use products::fetch_billing_products_with_fallback;
 
 pub(super) fn handle_billing_channel(
     app: &AppHandle,
@@ -18,43 +21,13 @@ pub(super) fn handle_billing_channel(
             let settings_snapshot =
                 with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
-            let remote = run_authenticated_official_request(
+            let products = fetch_billing_products_with_fallback(
                 app,
                 state,
                 &mut settings,
-                "GET",
-                "/payments/products",
-                None,
+                &["/payments/products", "/billing/products", "/products"],
                 request_generation,
-            )
-            .or_else(|_| {
-                run_authenticated_official_request(
-                    app,
-                    state,
-                    &mut settings,
-                    "GET",
-                    "/billing/products",
-                    None,
-                    request_generation,
-                )
-            })
-            .or_else(|_| {
-                run_authenticated_official_request(
-                    app,
-                    state,
-                    &mut settings,
-                    "GET",
-                    "/products",
-                    None,
-                    request_generation,
-                )
-            })
-            .ok();
-            let products = remote
-                .as_ref()
-                .map(official_response_items)
-                .filter(|items| !items.is_empty())
-                .unwrap_or_else(official_fallback_products);
+            );
             apply_official_settings_update(
                 app,
                 state,
@@ -274,32 +247,13 @@ pub(super) fn handle_billing_channel(
             let settings_snapshot =
                 with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
-            let remote = run_authenticated_official_request(
+            let products = fetch_billing_products_with_fallback(
                 app,
                 state,
                 &mut settings,
-                "GET",
-                "/billing/products",
-                None,
+                &["/billing/products", "/products"],
                 request_generation,
-            )
-            .or_else(|_| {
-                run_authenticated_official_request(
-                    app,
-                    state,
-                    &mut settings,
-                    "GET",
-                    "/products",
-                    None,
-                    request_generation,
-                )
-            })
-            .ok();
-            let products = remote
-                .as_ref()
-                .map(official_response_items)
-                .filter(|items| !items.is_empty())
-                .unwrap_or_else(official_fallback_products);
+            );
             apply_official_settings_update(
                 app,
                 state,
