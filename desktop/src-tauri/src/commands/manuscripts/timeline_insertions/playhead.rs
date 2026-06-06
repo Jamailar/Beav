@@ -49,6 +49,33 @@ pub(super) fn timeline_insertion_order_for_playhead(children: &[Value], playhead
     desired_order
 }
 
+pub(super) fn timeline_clip_insertion_for_playhead(
+    children: &[Value],
+    playhead_ms: i64,
+) -> (usize, Option<(usize, f64)>) {
+    let mut desired_order = children.len();
+    let mut split_target = None;
+    let mut cursor_ms = 0_i64;
+    for (index, clip) in children.iter().enumerate() {
+        let next_cursor_ms = cursor_ms + timeline_clip_duration_ms(clip);
+        if playhead_ms > cursor_ms && playhead_ms < next_cursor_ms {
+            let duration_ms = (next_cursor_ms - cursor_ms).max(1000);
+            let split_ratio =
+                ((playhead_ms - cursor_ms) as f64 / duration_ms as f64).clamp(0.1, 0.9);
+            split_target = Some((index, split_ratio));
+            desired_order = index + 1;
+            break;
+        }
+        if playhead_ms <= cursor_ms {
+            desired_order = index;
+            break;
+        }
+        desired_order = index + 1;
+        cursor_ms = next_cursor_ms;
+    }
+    (desired_order, split_target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,5 +122,27 @@ mod tests {
         assert_eq!(timeline_insertion_order_for_playhead(&children, 1000), 1);
         assert_eq!(timeline_insertion_order_for_playhead(&children, 2500), 2);
         assert_eq!(timeline_insertion_order_for_playhead(&children, 5000), 3);
+    }
+
+    #[test]
+    fn clip_insertion_splits_only_inside_existing_clip() {
+        let children = vec![clip(1000), clip(2000), clip(1000)];
+
+        assert_eq!(
+            timeline_clip_insertion_for_playhead(&children, 0),
+            (0, None)
+        );
+        assert_eq!(
+            timeline_clip_insertion_for_playhead(&children, 1000),
+            (1, None)
+        );
+        assert_eq!(
+            timeline_clip_insertion_for_playhead(&children, 1500),
+            (2, Some((1, 0.25)))
+        );
+        assert_eq!(
+            timeline_clip_insertion_for_playhead(&children, 5000),
+            (3, None)
+        );
     }
 }

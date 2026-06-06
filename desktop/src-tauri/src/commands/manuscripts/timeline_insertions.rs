@@ -4,7 +4,10 @@ use crate::store::media as media_store;
 #[path = "timeline_insertions/playhead.rs"]
 mod playhead;
 
-use playhead::{preferred_timeline_track_name, timeline_insertion_order_for_playhead};
+use playhead::{
+    preferred_timeline_track_name, timeline_clip_insertion_for_playhead,
+    timeline_insertion_order_for_playhead,
+};
 
 pub(super) fn handle_timeline_insertion_channel(
     app: &AppHandle,
@@ -304,31 +307,13 @@ pub(super) fn handle_timeline_insertion_channel(
                 .and_then(Value::as_array_mut)
                 .ok_or_else(|| "Timeline track children missing".to_string())?;
 
-            let mut desired_order = target_children.len();
-            let mut split_target: Option<(usize, f64)> = None;
-            if let Some(order) = payload_field(&payload, "order").and_then(|value| value.as_i64()) {
-                desired_order = order.clamp(0, target_children.len() as i64) as usize;
+            let (desired_order, split_target) = if let Some(order) =
+                payload_field(&payload, "order").and_then(|value| value.as_i64())
+            {
+                (order.clamp(0, target_children.len() as i64) as usize, None)
             } else {
-                let mut cursor_ms = 0_i64;
-                for (index, clip) in target_children.iter().enumerate() {
-                    let next_cursor_ms = cursor_ms + timeline_clip_duration_ms(clip);
-                    if playhead_ms > cursor_ms && playhead_ms < next_cursor_ms {
-                        let duration_ms = (next_cursor_ms - cursor_ms).max(1000);
-                        let split_ratio =
-                            ((playhead_ms - cursor_ms) as f64 / duration_ms as f64).clamp(0.1, 0.9);
-                        split_target = Some((index, split_ratio));
-                        desired_order = index + 1;
-                        break;
-                    }
-                    if playhead_ms <= cursor_ms {
-                        desired_order = index;
-                        break;
-                    }
-                    desired_order = index + 1;
-                    cursor_ms = next_cursor_ms;
-                }
-            }
-
+                timeline_clip_insertion_for_playhead(target_children, playhead_ms)
+            };
             if let Some((split_index, split_ratio)) = split_target {
                 let original_clip = target_children.remove(split_index);
                 let original_clip_id =
