@@ -1,8 +1,9 @@
 use serde_json::{json, Value};
+use tauri::{AppHandle, State};
 
 use crate::{
     app_brand_slug, official_base_url_from_settings, official_realm_from_settings,
-    official_unwrap_response_payload, payload_string, run_official_json_request_response,
+    official_unwrap_response_payload, payload_string, AppState,
 };
 
 pub(crate) fn normalized_limit(limit: Option<u64>, fallback: u64) -> u64 {
@@ -31,19 +32,31 @@ fn official_notification_context(settings: &Value) -> Value {
 }
 
 pub(crate) fn notification_response(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
     settings: &Value,
     method: &str,
     path: &str,
     body: Option<Value>,
+    expected_generation: Option<u64>,
 ) -> Result<Value, String> {
-    let response = run_official_json_request_response(settings, method, path, body)?;
+    let mut settings = settings.clone();
+    let response = crate::commands::official::run_authenticated_official_request_response(
+        app,
+        state,
+        &mut settings,
+        method,
+        path,
+        body,
+        expected_generation,
+    )?;
     let payload = official_unwrap_response_payload(&response.body);
     Ok(json!({
         "success": (200..300).contains(&response.status),
         "status": response.status,
         "data": payload,
         "raw": response.body,
-        "context": official_notification_context(settings),
+        "context": official_notification_context(&settings),
     }))
 }
 
