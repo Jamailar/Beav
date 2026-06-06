@@ -482,6 +482,7 @@ pub(crate) struct MemoryHistoryRecord {
 pub(crate) struct KnowledgeNoteStatsRecord {
     pub(crate) likes: i64,
     pub(crate) collects: Option<i64>,
+    pub(crate) comments: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

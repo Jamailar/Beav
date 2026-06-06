@@ -2291,6 +2291,24 @@ async function postKnowledgeZhihuArticle(payload) {
   return response;
 }
 
+async function postKnowledgeXhsEntryV2(payload) {
+  const endpoint = await resolveKnowledgeApiEndpoint();
+  pluginLog('xhs-entry-v2-submit', {
+    endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/xhs/v2/entries`,
+    noteId: String(payload?.note?.noteId || payload?.source?.externalId || ''),
+    sourceLink: String(payload?.source?.sourceLink || ''),
+    commentCount: Array.isArray(payload?.comments?.items) ? payload.comments.items.length : 0,
+  });
+  const response = await postKnowledgeJson('/xhs/v2/entries', payload, 'xhs-entry-v2-submit');
+  pluginLog('xhs-entry-v2-submit-success', {
+    entryId: response?.entryId || '',
+    duplicate: Boolean(response?.duplicate),
+    updated: Boolean(response?.updated),
+    commentCount: Number(response?.comments?.captured || 0),
+  });
+  return response;
+}
+
 async function postKnowledgeMediaAssets(payload) {
   const endpoint = await resolveKnowledgeApiEndpoint();
   pluginLog('media-submit', {
@@ -2876,6 +2894,70 @@ function buildXhsCommentsEntry(payload) {
       allowUpdate: true,
       summarize: false,
       transcribe: false,
+    },
+  };
+}
+
+function buildXhsEntryV2Request(notePayload = {}, commentsPayload = {}) {
+  const sourceUrl = normalizeText(notePayload?.source || commentsPayload?.source);
+  const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
+  const stableNoteId = normalizeText(notePayload?.noteId || commentsPayload?.noteId)
+    || `xhs-${hashString(sourceUrl)}`;
+  const noteType = normalizeText(notePayload?.noteType) || (notePayload?.videoUrl ? 'video' : 'image');
+  const imageUrls = Array.isArray(notePayload?.images)
+    ? notePayload.images.map(keepInlineAssetWithinLimit).filter(Boolean)
+    : [];
+  const videoAssetUrl = keepInlineAssetWithinLimit(notePayload?.videoDataUrl)
+    || normalizeText(notePayload?.videoUrl);
+  const comments = Array.isArray(commentsPayload?.items)
+    ? commentsPayload.items
+    : Array.isArray(commentsPayload?.comments)
+      ? commentsPayload.comments
+      : [];
+  const text = normalizeText(notePayload?.text) || normalizeText(notePayload?.content);
+  const visibleCount = Number(commentsPayload?.visibleCount || comments.length || 0);
+  const total = Number(commentsPayload?.total || visibleCount || 0);
+
+  return {
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      sourceDomain,
+      externalId: stableNoteId,
+    }),
+    note: {
+      noteId: stableNoteId,
+      noteType,
+      title: normalizeText(notePayload?.title) || '小红书内容',
+      author: {
+        userId: normalizeText(notePayload?.authorId) || undefined,
+        nickname: normalizeText(notePayload?.author) || undefined,
+        profileUrl: normalizeText(notePayload?.authorProfileUrl) || undefined,
+        avatarUrl: normalizeText(notePayload?.authorAvatarUrl) || undefined,
+      },
+      text,
+      stats: {
+        likes: Number(notePayload?.stats?.likes || 0),
+        collects: Number(notePayload?.stats?.collects || 0),
+        comments: total,
+      },
+      assets: {
+        coverUrl: keepInlineAssetWithinLimit(notePayload?.coverUrl) || imageUrls[0] || undefined,
+        imageUrls,
+        videoUrl: videoAssetUrl || undefined,
+      },
+    },
+    comments: {
+      totalText: normalizeText(commentsPayload?.totalText) || undefined,
+      total: total || undefined,
+      visibleCount: visibleCount || undefined,
+      hasMore: typeof commentsPayload?.hasMore === 'boolean' ? commentsPayload.hasMore : undefined,
+      items: comments,
+    },
+    options: {
+      dedupeKey: stableNoteId,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: noteType === 'video',
     },
   };
 }
@@ -3962,12 +4044,20 @@ async function saveXhsNoteFromTab(tabId) {
   if (!payload?.title && !payload?.content && !payload?.images?.length && !payload?.videoUrl) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
-  const response = await postKnowledgeEntry(buildXhsEntry(payload));
+  const commentsPayload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN' })
+    .catch((error) => {
+      pluginWarn('xhs-comments-inline-extract-failed', {
+        error: describeError(error),
+      });
+      return {};
+    });
+  const response = await postKnowledgeXhsEntryV2(buildXhsEntryV2Request(payload, commentsPayload));
   return {
     success: true,
     mode: 'xhs',
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
+    comments: Number(response?.comments?.captured || 0),
   };
 }
 
@@ -6491,6 +6581,24 @@ async function extractXhsNotePayload() {
     return '';
   }
 
+  function getAuthorId(root) {
+    const link =
+      root.querySelector('.author a[href*="/user/"], .author-wrapper a[href*="/user/"], a[href*="/user/profile"]') ||
+      document.querySelector('.author a[href*="/user/"], .author-wrapper a[href*="/user/"], a[href*="/user/profile"]');
+    const explicit = String(link?.getAttribute?.('data-user-id') || '').trim();
+    if (explicit) return explicit;
+    const href = String(link?.getAttribute?.('href') || '').trim();
+    const match = href.match(/\/user\/profile\/([^/?#]+)/i);
+    return match?.[1] || '';
+  }
+
+  function getAuthorAvatarUrl(root) {
+    const img =
+      root.querySelector('.author img, .author-wrapper img, .avatar img, img.avatar-item') ||
+      document.querySelector('.author img, .author-wrapper img, .avatar img, img.avatar-item');
+    return toAbsoluteUrl(img?.getAttribute?.('src') || img?.getAttribute?.('data-src') || '');
+  }
+
   function getCurrentNoteImgEls(root) {
     const swiperSlides = getCurrentNoteSwiperSlides(root)
       .filter((slide) => !isDuplicateSwiperSlide(slide))
@@ -7016,7 +7124,9 @@ async function extractXhsNotePayload() {
     videoDataUrl: localizedVideoDataUrl || '',
     stats: getStats(),
     source: location.href,
+    authorId: getAuthorId(root),
     authorProfileUrl: getAuthorProfileUrl(root),
+    authorAvatarUrl: getAuthorAvatarUrl(root),
   };
 }
 
@@ -7095,6 +7205,16 @@ async function extractXhsCommentsPayload() {
     );
   }
 
+  function toAbsoluteUrl(value) {
+    const raw = normalizeText(value);
+    if (!raw) return '';
+    try {
+      return new URL(raw, location.href).toString();
+    } catch {
+      return raw;
+    }
+  }
+
   function isVisible(el) {
     if (!el || !(el instanceof Element)) return false;
     const style = window.getComputedStyle(el);
@@ -7148,51 +7268,160 @@ async function extractXhsCommentsPayload() {
     return '';
   }
 
+  function pickAuthorInfo(node) {
+    const link = node.querySelector('.author a[href*="/user/profile"], a.name[href*="/user/profile"], a[href*="/user/profile"][data-user-id]');
+    const img = node.querySelector('.avatar img, img.avatar-item, [class*="avatar"] img');
+    return {
+      userId: normalizeText(link?.getAttribute('data-user-id') || img?.getAttribute('data-user-id') || ''),
+      nickname: pickAuthor(node),
+      profileUrl: toAbsoluteUrl(link?.getAttribute('href') || ''),
+      avatarUrl: toAbsoluteUrl(img?.getAttribute('src') || img?.getAttribute('data-src') || ''),
+      isNoteAuthor: Array.from(node.querySelectorAll('.tag, [class*="tag"]'))
+        .some((el) => normalizeText(el.textContent) === '作者'),
+    };
+  }
+
+  function pickCommentContent(node) {
+    const contentNode =
+      node.querySelector('.content .note-text') ||
+      node.querySelector('.comment-content .note-text') ||
+      node.querySelector('.note-text') ||
+      node.querySelector('.content') ||
+      node;
+    const segments = [];
+    const emojiUrls = [];
+    Array.from(contentNode.childNodes || []).forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const text = normalizeText(child.textContent || '');
+        if (text) segments.push({ type: 'text', text });
+        return;
+      }
+      if (!(child instanceof Element)) return;
+      if (child.matches('img')) {
+        const url = toAbsoluteUrl(child.getAttribute('src') || child.getAttribute('data-src') || '');
+        if (url) {
+          emojiUrls.push(url);
+          segments.push({ type: 'emoji', url, alt: normalizeText(child.getAttribute('alt') || '') || undefined });
+        }
+        return;
+      }
+      const text = normalizeText(child.textContent || '');
+      if (text) segments.push({ type: 'text', text });
+      Array.from(child.querySelectorAll?.('img') || []).forEach((img) => {
+        const url = toAbsoluteUrl(img.getAttribute('src') || img.getAttribute('data-src') || '');
+        if (url && !emojiUrls.includes(url)) {
+          emojiUrls.push(url);
+          segments.push({ type: 'emoji', url, alt: normalizeText(img.getAttribute('alt') || '') || undefined });
+        }
+      });
+    });
+    const text = segments
+      .filter((segment) => segment.type === 'text')
+      .map((segment) => normalizeText(segment.text))
+      .filter(Boolean)
+      .join('');
+    return {
+      text: text || pickCommentText(node)
+        .split('\n')
+        .map((line) => normalizeText(line))
+        .filter(Boolean)
+        .filter((line) => !/^(赞|回复|展开|更多|举报)$/.test(line))
+        .join('\n'),
+      segments,
+      emojiUrls,
+    };
+  }
+
   function pickMeta(node) {
     const text = normalizeText(node.innerText || node.textContent || '');
     const createdAt = (text.match(/\d{1,2}-\d{1,2}|\d{4}-\d{1,2}-\d{1,2}|昨天|今天|刚刚|\d+\s*(分钟|小时|天)前/) || [])[0] || '';
-    const location = (text.match(/IP属地[:：]?\s*[\u4e00-\u9fa5A-Za-z]+/) || [])[0] || '';
+    const location = normalizeText(
+      node.querySelector('.date .location, [class*="location"]')?.textContent ||
+      (text.match(/IP属地[:：]?\s*[\u4e00-\u9fa5A-Za-z]+/) || [])[0] ||
+      '',
+    ).replace(/^IP属地[:：]?/, '');
     const likeText = normalizeText(
       node.querySelector('.like-wrapper .count')?.textContent ||
       node.querySelector('[class*="like"] [class*="count"]')?.textContent ||
       '',
     );
-    return { createdAt, location, likes: parseCountText(likeText) };
+    const replyText = normalizeText(
+      node.querySelector('.reply .count')?.textContent ||
+      node.querySelector('[class*="reply"] [class*="count"]')?.textContent ||
+      '',
+    );
+    return { createdAt, location, likes: parseCountText(likeText), replies: parseCountText(replyText) };
   }
 
   await expandVisibleComments();
 
-  const candidateNodes = Array.from(document.querySelectorAll(
-    '.comment-item, .comment-container, .parent-comment, .comments-el .list-item, [class*="comment-item"], [class*="commentItem"]',
+  let candidateNodes = Array.from(document.querySelectorAll(
+    '.comments-container .comment-item, .comments-el .comment-item, .comment-list .comment-item, [class*="comments"] [class*="comment-item"], [class*="comments"] [class*="commentItem"]',
   )).filter((node) => node instanceof Element && isVisible(node));
+  if (candidateNodes.length === 0) {
+    candidateNodes = Array.from(document.querySelectorAll(
+      '.comment-item, .comment-container, .comments-el .list-item, [class*="comment-item"], [class*="commentItem"]',
+    )).filter((node) => node instanceof Element && isVisible(node));
+  }
   const seen = new Set();
   const comments = [];
   for (const node of candidateNodes) {
-    const author = pickAuthor(node);
-    const rawText = pickCommentText(node);
-    const text = rawText
-      .split('\n')
-      .map((line) => normalizeText(line))
-      .filter(Boolean)
-      .filter((line) => !/^(赞|回复|展开|更多|举报)$/.test(line))
-      .join('\n');
+    const content = pickCommentContent(node);
+    const text = normalizeBlockText(content.text);
     if (!text || text.length < 2) continue;
-    const key = `${author}\n${text}`;
+    const author = pickAuthorInfo(node);
+    const rawCommentId = normalizeText(node.getAttribute('id') || '').replace(/^comment-/, '');
+    const parentWrapper = node.closest('.parent-comment');
+    const parentItem = parentWrapper?.querySelector?.(':scope > .comment-item');
+    const parentCommentId = parentItem && parentItem !== node
+      ? normalizeText(parentItem.getAttribute('id') || '').replace(/^comment-/, '')
+      : '';
+    const key = `${rawCommentId || author.nickname}\n${text}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    const meta = pickMeta(node);
     comments.push({
+      id: rawCommentId || undefined,
+      platformCommentId: rawCommentId || undefined,
+      parentCommentId: parentCommentId || undefined,
+      rootCommentId: parentCommentId || rawCommentId || undefined,
+      level: parentCommentId ? 1 : 0,
       author,
+      content,
       text,
-      ...pickMeta(node),
+      metrics: {
+        likes: meta.likes,
+        replies: meta.replies,
+      },
+      likes: meta.likes,
+      replies: meta.replies,
+      time: {
+        display: meta.createdAt,
+      },
+      createdAt: meta.createdAt,
+      location: meta.location,
     });
     if (comments.length >= 200) break;
   }
+  const totalText = normalizeText(
+    document.querySelector('.comments-container .total')?.textContent ||
+    document.querySelector('.comments-el .total')?.textContent ||
+    '',
+  );
+  const total = parseCountText(totalText);
+  const hasMore = Array.from(document.querySelectorAll('.show-more, [class*="show-more"], button, [role="button"]'))
+    .some((el) => /展开|更多|全部回复|查看更多/i.test(normalizeText(el.textContent)));
 
   return {
     noteId: getCurrentNoteId(),
     title: getTitle(),
     coverUrl: getCoverUrl(),
     source: location.href,
+    totalText,
+    total: total || comments.length,
+    visibleCount: comments.length,
+    hasMore,
+    items: comments,
     comments,
   };
 }

@@ -711,7 +711,7 @@ fn handle_knowledge_http_request(
                         return Err(format!("xhs knowledge import v2 request 无法解析: {error}"));
                     }
                 };
-            let response = knowledge::ingest_xhs_entry_v2_stub(&request)?;
+            let response = knowledge::ingest_xhs_entry_v2(Some(app), &state, &request)?;
             Ok((200, "OK", response))
         }
         ("POST", "zhihu/answers") => {

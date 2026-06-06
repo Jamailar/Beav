@@ -1189,6 +1189,7 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                 stats: KnowledgeNoteStatsRecord {
                     likes: extract_note_stat(&meta, "likes").unwrap_or(0),
                     collects: extract_note_stat(&meta, "collects"),
+                    comments: extract_note_stat(&meta, "comments"),
                 },
                 created_at: meta
                     .get("createdAt")

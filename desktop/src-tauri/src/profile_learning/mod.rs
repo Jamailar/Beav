@@ -355,6 +355,7 @@ fn project_posts_to_knowledge(
                 stats: Some(KnowledgeEntryStatsInput {
                     likes: Some(post.stats.likes),
                     collects: Some(post.stats.collects),
+                    comments: Some(post.stats.comments),
                 }),
                 ..Default::default()
             },

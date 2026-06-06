@@ -3836,6 +3836,7 @@ mod tests {
                 stats: KnowledgeNoteStatsRecord {
                     likes: 0,
                     collects: None,
+                    comments: None,
                 },
                 created_at: "2026-04-27T00:00:00Z".to_string(),
                 folder_path: None,
@@ -3869,6 +3870,7 @@ mod tests {
                 stats: KnowledgeNoteStatsRecord {
                     likes: 0,
                     collects: None,
+                    comments: None,
                 },
                 created_at: "2026-04-27T00:00:00Z".to_string(),
                 folder_path: None,
@@ -3902,6 +3904,7 @@ mod tests {
                 stats: KnowledgeNoteStatsRecord {
                     likes: 0,
                     collects: None,
+                    comments: None,
                 },
                 created_at: "2026-04-27T00:00:00Z".to_string(),
                 folder_path: None,
