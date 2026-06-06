@@ -1,17 +1,17 @@
-use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
-use crate::{ffmpeg_program, now_ms, AppState};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
+
+#[path = "execution.rs"]
+mod execution;
+
+use crate::AppState;
+use execution::{ffmpeg_seconds, media_edit_output_path, run_ffmpeg_args};
 
 pub(super) struct MediaEditOperationOutputs {
     pub(super) current_path: Option<PathBuf>,
     pub(super) segment_paths: Vec<PathBuf>,
     pub(super) artifacts: Vec<Value>,
-}
-
-fn ffmpeg_seconds(ms: i64) -> String {
-    format!("{:.3}", (ms.max(0) as f64) / 1000.0)
 }
 
 pub(super) fn normalized_operation_type(operation: &Value) -> Result<&str, String> {
@@ -21,75 +21,6 @@ pub(super) fn normalized_operation_type(operation: &Value) -> Result<&str, Strin
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "media.edit operation requires type".to_string())
-}
-
-fn media_edit_output_path(
-    output_dir: &Path,
-    step_index: usize,
-    op_name: &str,
-    label: Option<&str>,
-) -> PathBuf {
-    let safe_label = label
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            value
-                .chars()
-                .map(|ch| {
-                    if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                        ch
-                    } else {
-                        '-'
-                    }
-                })
-                .collect::<String>()
-                .trim_matches('-')
-                .chars()
-                .take(32)
-                .collect::<String>()
-        })
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| op_name.to_string());
-    output_dir.join(format!(
-        "{:02}-{}-{}.mp4",
-        step_index + 1,
-        safe_label,
-        now_ms()
-    ))
-}
-
-fn run_ffmpeg_args(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    session_id: Option<&str>,
-    cwd: &Path,
-    output_path: &Path,
-    args: &[String],
-) -> Result<(), String> {
-    let argv = std::iter::once(ffmpeg_program(Some(app))?)
-        .chain(args.iter().cloned())
-        .collect::<Vec<_>>();
-    run_managed_cli_command(
-        app,
-        state,
-        CliExecuteRequest {
-            session_id: session_id.map(ToString::to_string),
-            runtime_id: Some("media-edit".to_string()),
-            tool_id: Some("ffmpeg".to_string()),
-            argv,
-            cwd: Some(cwd.to_string_lossy().to_string()),
-            verification_rules: vec![
-                CliVerifyRule::ExitCode { expected: Some(0) },
-                CliVerifyRule::FileExists {
-                    path: output_path.to_string_lossy().to_string(),
-                },
-            ],
-            ..CliExecuteRequest::default()
-        },
-        8_000,
-    )
-    .map_err(|error| format!("ffmpeg failed: {error}"))?;
-    Ok(())
 }
 
 fn operation_input_path(
