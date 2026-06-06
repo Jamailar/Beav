@@ -16,6 +16,8 @@ mod redclaw_runner_lifecycle;
 mod redclaw_runner_tasks;
 #[path = "redclaw_task_control.rs"]
 pub(crate) mod redclaw_task_control;
+#[path = "redclaw/xhs_compliance.rs"]
+mod xhs_compliance;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
