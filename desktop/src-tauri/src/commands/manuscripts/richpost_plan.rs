@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "richpost_zones.rs"]
 mod richpost_zones;
+#[path = "richpost_plan/templates.rs"]
+mod templates;
 
 use richpost_zones::{
     build_default_richpost_zones, normalize_richpost_style_overrides, normalize_richpost_zones,
@@ -9,38 +11,9 @@ use richpost_zones::{
     richpost_zone_assignment_value, richpost_zone_assignment_with_fragments,
     richpost_zone_block_ids,
 };
-
-pub(super) fn normalize_richpost_template(value: &str) -> &'static str {
-    match value.trim() {
-        "cover" => "cover",
-        "text-image" => "text-image",
-        "image-focus" => "image-focus",
-        "quote" => "quote",
-        "ending" => "ending",
-        _ => "text-stack",
-    }
-}
-
-pub(super) fn richpost_master_name_from_template(template: &str) -> String {
-    match normalize_richpost_template(template) {
-        "cover" => RICHPOST_MASTER_COVER.to_string(),
-        "ending" => RICHPOST_MASTER_ENDING.to_string(),
-        _ => RICHPOST_MASTER_BODY.to_string(),
-    }
-}
-
-pub(super) fn richpost_master_role(master_name: &str, template: &str) -> &'static str {
-    match sanitize_richpost_master_name(master_name).as_deref() {
-        Some(RICHPOST_MASTER_COVER) => RICHPOST_MASTER_COVER,
-        Some(RICHPOST_MASTER_ENDING) => RICHPOST_MASTER_ENDING,
-        Some(RICHPOST_MASTER_BODY) => RICHPOST_MASTER_BODY,
-        _ => match normalize_richpost_template(template) {
-            "cover" => RICHPOST_MASTER_COVER,
-            "ending" => RICHPOST_MASTER_ENDING,
-            _ => RICHPOST_MASTER_BODY,
-        },
-    }
-}
+pub(super) use templates::{
+    normalize_richpost_template, richpost_master_name_from_template, richpost_master_role,
+};
 
 fn richpost_block_ids(blocks: &[PackageContentBlock]) -> Vec<String> {
     blocks
@@ -414,15 +387,4 @@ pub(super) fn normalize_richpost_page_plan(
         "pageCount": pages.len(),
         "pages": pages
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn template_normalization_falls_back_to_text_stack() {
-        assert_eq!(normalize_richpost_template("cover"), "cover");
-        assert_eq!(normalize_richpost_template("unknown"), "text-stack");
-    }
 }
