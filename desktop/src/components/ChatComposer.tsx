@@ -30,7 +30,7 @@ import {
   X,
 } from 'lucide-react';
 import { clsx } from 'clsx';
-import { getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
+import { enforceModelCapabilityPolicy, getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
 import { OFFICIAL_AUTO_SOURCE_ID } from '../config/aiSources';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { ChatComposerFrame, getChatComposerPalette, type ChatComposerTheme, type ChatComposerVariant } from './ChatComposerFrame';
@@ -232,7 +232,7 @@ function logComposerThumbnailDebug(event: string, fields: Record<string, unknown
 function modelSupportsChat(model: string | { id?: unknown; capability?: unknown; capabilities?: unknown }): boolean {
   if (typeof model === 'string') {
     const forced = getForcedModelCapabilities(model);
-    const resolved = forced.length ? forced : inferModelCapabilities(model);
+    const resolved = enforceModelCapabilityPolicy(model, forced.length ? forced : inferModelCapabilities(model));
     return resolved.includes('chat');
   }
   const id = String(model?.id || '').trim();
@@ -249,7 +249,7 @@ function modelSupportsChat(model: string | { id?: unknown; capability?: unknown;
   const capabilities = explicitCapabilities.some((value) => String(value || '').trim())
     ? normalizeModelCapabilities(explicitCapabilities)
     : [];
-  const resolved = forced.length ? forced : (capabilities.length ? capabilities : inferModelCapabilities(id));
+  const resolved = enforceModelCapabilityPolicy(id, forced.length ? forced : (capabilities.length ? capabilities : inferModelCapabilities(id)));
   return resolved.includes('chat');
 }
 

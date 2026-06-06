@@ -1342,7 +1342,7 @@ export function Settings({
 
   const filterVideoAnalysisModels = useCallback((models: AiModelDescriptor[]): AiModelDescriptor[] => {
     return models.filter((model) => (
-      model.capabilities.includes('chat') && model.inputCapabilities.includes('video')
+      model.inputCapabilities.includes('video')
     ));
   }, []);
 
