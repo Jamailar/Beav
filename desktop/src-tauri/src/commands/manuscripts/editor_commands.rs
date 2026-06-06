@@ -1,5 +1,13 @@
 use super::*;
 
+#[path = "editor_commands/actions.rs"]
+mod actions;
+
+use actions::{
+    collect_string_array, default_track_ui, delete_item_ids, merge_object_patch, next_track_id,
+    renumber_tracks,
+};
+
 pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), String> {
     ensure_motion_track(project)?;
     for command in commands {
@@ -40,64 +48,22 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                     .get("kind")
                     .and_then(|value| value.as_str())
                     .unwrap_or("video");
-                let prefix = match kind {
-                    "audio" => "A",
-                    "subtitle" => "S",
-                    "text" => "T",
-                    "motion" => "M",
-                    _ => "V",
-                };
                 let track_id = command
                     .get("trackId")
                     .and_then(|value| value.as_str())
                     .map(ToString::to_string)
-                    .unwrap_or_else(|| {
-                        let tracks = project
-                            .get("tracks")
-                            .and_then(Value::as_array)
-                            .cloned()
-                            .unwrap_or_default();
-                        let max_index = tracks
-                            .iter()
-                            .filter_map(|track| {
-                                let id = track
-                                    .get("id")
-                                    .and_then(|value| value.as_str())
-                                    .unwrap_or("");
-                                if !id.starts_with(prefix) {
-                                    return None;
-                                }
-                                id[1..].parse::<i64>().ok()
-                            })
-                            .max()
-                            .unwrap_or(0);
-                        format!("{prefix}{}", max_index + 1)
-                    });
+                    .unwrap_or_else(|| next_track_id(project, kind));
                 let order = editor_project_tracks_mut(project)?.len();
                 editor_project_tracks_mut(project)?.push(json!({
                     "id": track_id,
                     "kind": kind,
                     "name": track_id,
                     "order": order,
-                    "ui": {
-                        "hidden": false,
-                        "locked": false,
-                        "muted": false,
-                        "solo": false,
-                        "collapsed": false,
-                        "volume": 1.0
-                    }
+                    "ui": default_track_ui()
                 }));
             }
             "delete_tracks" => {
-                let track_ids = command
-                    .get("trackIds")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|value| value.as_str().map(ToString::to_string))
-                    .collect::<Vec<_>>();
+                let track_ids = collect_string_array(command, "trackIds");
                 editor_project_tracks_mut(project)?.retain(|track| {
                     let track_id = track
                         .get("id")
@@ -112,11 +78,7 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                         .unwrap_or("");
                     !track_ids.iter().any(|value| value == track_id)
                 });
-                for (order, track) in editor_project_tracks_mut(project)?.iter_mut().enumerate() {
-                    if let Some(object) = track.as_object_mut() {
-                        object.insert("order".to_string(), json!(order));
-                    }
-                }
+                renumber_tracks(editor_project_tracks_mut(project)?);
             }
             "add_item" => {
                 if let Some(item) = command.get("item") {
@@ -133,24 +95,11 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                     .iter_mut()
                     .find(|item| item.get("id").and_then(|value| value.as_str()) == Some(item_id))
                 {
-                    if let (Some(target), Some(source)) = (item.as_object_mut(), patch.as_object())
-                    {
-                        for (key, value) in source {
-                            target.insert(key.to_string(), value.clone());
-                        }
-                    }
+                    merge_object_patch(item, &patch);
                 }
             }
             "delete_item" => {
-                let item_ids = command
-                    .get("itemIds")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_else(|| vec![command.get("itemId").cloned().unwrap_or(Value::Null)]);
-                let normalized = item_ids
-                    .iter()
-                    .filter_map(|value| value.as_str().map(ToString::to_string))
-                    .collect::<Vec<_>>();
+                let normalized = delete_item_ids(command);
                 editor_project_items_mut(project)?.retain(|item| {
                     let item_id = item
                         .get("id")
@@ -160,14 +109,7 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                 });
             }
             "delete_items" => {
-                let item_ids = command
-                    .get("itemIds")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|value| value.as_str().map(ToString::to_string))
-                    .collect::<Vec<_>>();
+                let item_ids = collect_string_array(command, "itemIds");
                 editor_project_items_mut(project)?.retain(|item| {
                     let item_id = item
                         .get("id")
@@ -231,14 +173,7 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                     .get("targetTrackId")
                     .and_then(|value| value.as_str())
                     .map(ToString::to_string);
-                let item_ids = command
-                    .get("itemIds")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|value| value.as_str().map(ToString::to_string))
-                    .collect::<Vec<_>>();
+                let item_ids = collect_string_array(command, "itemIds");
                 for item in editor_project_items_mut(project)?.iter_mut() {
                     let item_id = item
                         .get("id")
@@ -292,13 +227,7 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                 {
                     let current_ui = track.get("ui").cloned().unwrap_or_else(|| json!({}));
                     let mut next_ui = current_ui;
-                    if let (Some(target), Some(source)) =
-                        (next_ui.as_object_mut(), patch.as_object())
-                    {
-                        for (key, value) in source {
-                            target.insert(key.to_string(), value.clone());
-                        }
-                    }
+                    merge_object_patch(&mut next_ui, &patch);
                     if let Some(object) = track.as_object_mut() {
                         object.insert("ui".to_string(), next_ui);
                     }
@@ -326,11 +255,7 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                 };
                 let track = tracks.remove(index);
                 tracks.insert(target_index, track);
-                for (order, track) in tracks.iter_mut().enumerate() {
-                    if let Some(object) = track.as_object_mut() {
-                        object.insert("order".to_string(), json!(order));
-                    }
-                }
+                renumber_tracks(tracks);
             }
             "update_stage_item" => {
                 let item_id = command
@@ -350,13 +275,7 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                         .ok_or_else(|| "Stage itemTransforms missing".to_string())?
                         .entry(item_id.to_string())
                         .or_insert_with(|| json!({}));
-                    if let (Some(target), Some(source)) =
-                        (entry.as_object_mut(), Some(transform_patch))
-                    {
-                        for (key, value) in source {
-                            target.insert(key.to_string(), value.clone());
-                        }
-                    }
+                    merge_object_patch(entry, &Value::Object(transform_patch.clone()));
                 }
                 if let Some(visible) = command.get("visible") {
                     stage
@@ -394,12 +313,7 @@ pub(super) fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> 
                     .iter_mut()
                     .find(|item| item.get("id").and_then(Value::as_str) == Some(layer_id))
                 {
-                    if let (Some(target), Some(source)) = (layer.as_object_mut(), patch.as_object())
-                    {
-                        for (key, value) in source {
-                            target.insert(key.to_string(), value.clone());
-                        }
-                    }
+                    merge_object_patch(layer, &patch);
                 }
             }
             "animation_layer_delete" => {
