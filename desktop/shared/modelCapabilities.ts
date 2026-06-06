@@ -78,6 +78,26 @@ const inferForcedNameCapabilities = (modelId: string): ModelCapability[] => {
     return [];
 };
 
+export const modelNameDisallowsChatList = (modelId: string): boolean => {
+    return String(modelId || '').trim().toLowerCase().includes('omni');
+};
+
+export const enforceModelCapabilityPolicy = (
+    modelId: string,
+    capabilities: Iterable<ModelCapability>,
+): ModelCapability[] => {
+    const normalized = new Set<ModelCapability>();
+    for (const capability of capabilities) {
+        if (MODEL_CAPABILITY_ORDER.includes(capability)) {
+            normalized.add(capability);
+        }
+    }
+    if (modelNameDisallowsChatList(modelId)) {
+        normalized.delete('chat');
+    }
+    return MODEL_CAPABILITY_ORDER.filter((capability) => normalized.has(capability));
+};
+
 const normalizeModelInputCapabilities = (values: unknown): ModelInputCapability[] => {
     const allowed = new Set<ModelInputCapability>(MODEL_INPUT_CAPABILITY_ORDER);
     const normalized = new Set<ModelInputCapability>();
@@ -165,7 +185,7 @@ export const getForcedModelCapabilities = (modelId: string): ModelCapability[] =
     const normalized = String(modelId || '').trim().toLowerCase();
     if (!normalized) return [];
     const forcedByName = inferForcedNameCapabilities(normalized);
-    if (forcedByName.length > 0) return forcedByName;
+    if (forcedByName.length > 0) return enforceModelCapabilityPolicy(normalized, forcedByName);
     const detected = new Set<ModelCapability>();
     for (const rule of MODEL_PROFILE_RULES) {
         if (rule.patterns.some((pattern) => pattern.test(normalized))) {
@@ -174,7 +194,7 @@ export const getForcedModelCapabilities = (modelId: string): ModelCapability[] =
             }
         }
     }
-    return MODEL_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
+    return enforceModelCapabilityPolicy(normalized, detected);
 };
 
 export const inferModelCapabilities = (modelId: string): ModelCapability[] => {
@@ -197,7 +217,7 @@ export const inferModelCapabilities = (modelId: string): ModelCapability[] => {
         detected.add('chat');
     }
 
-    return MODEL_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
+    return enforceModelCapabilityPolicy(normalized, detected);
 };
 
 export const hasModelCapability = (modelId: string, capability: ModelCapability): boolean => {

@@ -273,9 +273,9 @@
             "\\bqwen-omni\\b",
             "\\bqwen.*omni\\b"
         ],
-        "capabilities": ["chat", "audio"],
+        "capabilities": ["audio"],
         "inputCapabilities": ["image", "audio", "video", "file"],
-        "notes": "Omni family is the only chat family mapped to direct video input."
+        "notes": "Omni family is reserved for multimodal audio/video analysis and must not be exposed in chat model lists."
     },
     {
         "id": "glm-5-family",

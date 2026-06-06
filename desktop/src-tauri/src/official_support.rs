@@ -1018,6 +1018,28 @@ pub(crate) fn choose_preferred_official_chat_model(
         .unwrap_or_else(|| preserve_non_empty_model(current, fallback))
 }
 
+fn model_name_disallows_chat_list(model_id: &str) -> bool {
+    model_id.trim().to_ascii_lowercase().contains("omni")
+}
+
+fn official_model_is_chat_list_candidate(item: &Value) -> bool {
+    let Some(id) = item.get("id").and_then(Value::as_str).map(str::trim) else {
+        return false;
+    };
+    if id.is_empty() || model_name_disallows_chat_list(id) {
+        return false;
+    }
+    item.get("capabilities")
+        .and_then(|value| value.as_array())
+        .map(|items| items.iter().any(|cap| cap.as_str() == Some("chat")))
+        .or_else(|| {
+            item.get("capability")
+                .and_then(|value| value.as_str())
+                .map(|value| value == "chat")
+        })
+        .unwrap_or(false)
+}
+
 pub(crate) fn model_defaults_initialized(settings: &Value) -> bool {
     payload_string(settings, AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY)
         .map(|value| !value.trim().is_empty())
@@ -1070,17 +1092,7 @@ pub(crate) fn official_sync_source_into_settings(
     );
     let available_chat_models = models
         .iter()
-        .filter(|item| {
-            item.get("capabilities")
-                .and_then(|value| value.as_array())
-                .map(|items| items.iter().any(|cap| cap.as_str() == Some("chat")))
-                .or_else(|| {
-                    item.get("capability")
-                        .and_then(|value| value.as_str())
-                        .map(|value| value == "chat")
-                })
-                .unwrap_or(false)
-        })
+        .filter(|item| official_model_is_chat_list_candidate(item))
         .filter_map(|item| {
             item.get("id")
                 .and_then(|value| value.as_str())
@@ -1089,17 +1101,7 @@ pub(crate) fn official_sync_source_into_settings(
         .collect::<Vec<_>>();
     let fallback_chat_model = models
         .iter()
-        .find(|item| {
-            item.get("capabilities")
-                .and_then(|value| value.as_array())
-                .map(|items| items.iter().any(|cap| cap.as_str() == Some("chat")))
-                .or_else(|| {
-                    item.get("capability")
-                        .and_then(|value| value.as_str())
-                        .map(|value| value == "chat")
-                })
-                .unwrap_or(false)
-        })
+        .find(|item| official_model_is_chat_list_candidate(item))
         .and_then(|item| item.get("id").and_then(|value| value.as_str()))
         .unwrap_or("gpt-4.1-mini");
     let current_text_model = payload_string(settings, "model_name");
@@ -1532,6 +1534,33 @@ mod tests {
             json!({ "id": "gpt-5.5", "capabilities": ["chat"] }),
             json!({ "id": "embedding-3", "capabilities": ["embedding"] }),
         ]
+    }
+
+    #[test]
+    fn official_chat_candidates_exclude_omni_models() {
+        let models = vec![
+            json!({ "id": "qwen3.5-omni-flash", "capabilities": ["chat", "audio"] }),
+            json!({ "id": "qwen3.5-plus", "capabilities": ["chat"] }),
+        ];
+        let available_chat_models = models
+            .iter()
+            .filter(|item| official_model_is_chat_list_candidate(item))
+            .filter_map(|item| {
+                item.get("id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(available_chat_models, vec!["qwen3.5-plus"]);
+        assert_eq!(
+            choose_preferred_official_chat_model(
+                &available_chat_models,
+                Some("qwen3.5-omni-flash"),
+                "qwen3.5-plus",
+            ),
+            "qwen3.5-plus"
+        );
     }
 
     #[test]

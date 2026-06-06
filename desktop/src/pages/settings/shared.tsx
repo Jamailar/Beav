@@ -11,6 +11,7 @@ import {
   inferPresetIdByEndpoint,
 } from '../../config/aiSources';
 import {
+  enforceModelCapabilityPolicy,
   getForcedModelCapabilities,
   getModelInputCapabilities,
   MODEL_CAPABILITY_META,
@@ -1410,12 +1411,13 @@ export const filterOfficialModelsByCapability = (
 ): OfficialModelInfo[] => {
   const normalizedCapability = capability === 'stt' ? 'transcription' : capability;
   return models.filter((item) => {
-    const capabilities = Array.isArray(item.capabilities) && item.capabilities.length > 0
+    const rawCapabilities = Array.isArray(item.capabilities) && item.capabilities.length > 0
       ? normalizeModelCapabilities(item.capabilities)
       : normalizeModelCapabilities([
         ...(item.capability ? [item.capability] : []),
         ...inferModelCapabilities(item.id),
       ]);
+    const capabilities = enforceModelCapabilityPolicy(item.id, rawCapabilities);
     return capabilities.includes(normalizedCapability as ModelCapability);
   });
 };
@@ -1429,7 +1431,7 @@ export const toAiModelDescriptor = (
     const forcedCapabilities = getForcedModelCapabilities(id);
     return {
       id,
-      capabilities: forcedCapabilities.length > 0 ? forcedCapabilities : inferModelCapabilities(id),
+      capabilities: enforceModelCapabilityPolicy(id, forcedCapabilities.length > 0 ? forcedCapabilities : inferModelCapabilities(id)),
       inputCapabilities: getModelInputCapabilities(id),
     };
   }
@@ -1446,7 +1448,7 @@ export const toAiModelDescriptor = (
     : inferModelCapabilities(id);
   return {
     id,
-    capabilities: forcedCapabilities.length > 0 ? forcedCapabilities : capabilities,
+    capabilities: enforceModelCapabilityPolicy(id, forcedCapabilities.length > 0 ? forcedCapabilities : capabilities),
     inputCapabilities: getModelInputCapabilities(id),
   };
 };
