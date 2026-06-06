@@ -342,6 +342,8 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted official settings update application, model-default repair, auth runtime sync and update event emission into `commands/official/settings_update`.
 - Extracted chat knowledge/asset reference normalization, inline asset mention resolution, media task-intent inference and user-message metadata assembly into `commands/chat/references`.
 - Extracted chat session task-hint metadata lifecycle, temporary turn metadata, active skill projection and first RedClaw style-definition activation into `commands/chat/session_metadata`.
+- Extracted chat runtime-state begin/update/cancel/read lock handling into `commands/chat/runtime_state`, leaving `chat_state.rs` focused on session identity, context binding and runtime-mode projection.
+- Hardened context-session id slug generation for whitespace-bearing context ids, keeping diagnostics and other context-bound session ids stable across callers.
 - Extracted MCP server target parsing, add-payload validation, stdio/http config construction and OAuth metadata merging into `commands/mcp_tools/server_payload`.
 - Extracted MCP diagnostics tool listing and direct/AI diagnostics execution into `commands/mcp_tools/diagnostics`, leaving `mcp_tools.rs` focused on MCP server lifecycle, calls, typed lists and hook routing.
 - Extracted Thrive plugin manifest primitive validation for names, versions, capabilities, UI slots, home sources and network hosts into `commands/plugin/manifest_primitives`.
