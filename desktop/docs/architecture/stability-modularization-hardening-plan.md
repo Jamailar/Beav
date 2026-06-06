@@ -217,6 +217,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted manuscript timeline track and UI channel handling into `commands/manuscripts/timeline_tracks.rs`, leaving `timeline.rs` focused on clip insertion, attachment and clip mutation channels.
 - Extracted manuscript timeline clip insertion, playhead insertion and package file attachment channels into `commands/manuscripts/timeline_insertions.rs`, leaving `timeline.rs` focused on clip update/delete/split mutations.
 - Extracted manuscript timeline playhead insertion order and preferred-track selection helpers into `commands/manuscripts/timeline_insertions/playhead`, keeping channel payload handling in `timeline_insertions.rs`.
+- Extracted manuscript timeline playhead clip insertion and split-target decision logic into `commands/manuscripts/timeline_insertions/playhead`, keeping playhead clip insertion handlers focused on timeline mutation and persistence.
 - Routed scheduler RedClaw job-definition sync snapshots/writeback through `store::redclaw`.
 - Routed scheduler background-task RedClaw projection snapshots through `store::redclaw`.
 - Routed scheduler runner tick/status/execution-limit state through `store::redclaw`.
