@@ -45,6 +45,7 @@ import {
     isFeedEntryDeleted,
     isGenerationFeedEntry,
     isGenerationStudioMediaJob,
+    mergeFeedEntriesById,
     mergeMediaJobsIntoFeedEntries,
     normalizeAspectRatio,
     normalizeDeletedFeedState,
@@ -1398,7 +1399,7 @@ export function GenerationStudio({
     const [studioMode, setStudioMode] = useState<StudioMode>('image');
     const [generationSurface, setGenerationSurface] = useState<GenerationSurface>('manual');
     const [, setBindTarget] = useState('');
-    const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => readPersistedFeedEntries());
+    const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([]);
     const deletedFeedStateRef = useRef<DeletedFeedState>(readDeletedFeedState());
     const [previewAsset, setPreviewAsset] = useState<GeneratedAsset | null>(null);
     const [assetContextMenu, setAssetContextMenu] = useState<AssetContextMenuState | null>(null);
@@ -1483,7 +1484,7 @@ export function GenerationStudio({
     const [isReadingCoverRefs, setIsReadingCoverRefs] = useState(false);
     const [coverError, setCoverError] = useState('');
     const trackedJobs = useMediaJobsStore(
-        useCallback((state) => Object.values(state.jobsById), []),
+        useCallback((state) => Object.values(state.jobsById).filter(isGenerationStudioMediaJob), []),
         shallowArrayEqual,
     );
     const isAgentMode = generationSurface === 'agent';
@@ -1588,9 +1589,30 @@ export function GenerationStudio({
         });
     }, [contextIntent?.source, contextIntent?.sourceTitle, generationAgentContextId, generationAgentTitle, updateFeedEntries]);
 
+    useEffect(() => {
+        let cancelled = false;
+        let timeoutId: number | null = null;
+        const frameId = window.requestAnimationFrame(() => {
+            timeoutId = window.setTimeout(() => {
+                if (cancelled) return;
+                const persistedEntries = readPersistedFeedEntries();
+                if (persistedEntries.length === 0) return;
+                updateFeedEntries((prev) => mergeFeedEntriesById(prev, persistedEntries));
+            }, 0);
+        });
+        return () => {
+            cancelled = true;
+            window.cancelAnimationFrame(frameId);
+            if (timeoutId !== null) {
+                window.clearTimeout(timeoutId);
+            }
+        };
+    }, [updateFeedEntries]);
+
     useMediaJobSubscription(trackedJobIds, {
         enabled: isActive,
         bootstrapFilter: generationJobBootstrapFilter,
+        bootstrapIncludesTrackedJobs: true,
     });
 
     const loadContext = useCallback(async (overwriteDraftDefaults = false) => {
@@ -1728,28 +1750,6 @@ export function GenerationStudio({
             return mergeMediaJobsIntoFeedEntries(prev, trackedJobs, deletedFeedStateRef.current);
         });
     }, [trackedJobs, updateFeedEntries]);
-
-    useEffect(() => {
-        if (!isActive) return;
-        let cancelled = false;
-
-        void (async () => {
-            try {
-                const result = await window.ipcRenderer.generation.listJobs(generationJobBootstrapFilter) as { items?: unknown[] };
-                if (cancelled || !Array.isArray(result?.items)) return;
-                const jobs = result.items
-                    .map(normalizeMediaJobProjection)
-                    .filter((item): item is MediaJobProjection => Boolean(item));
-                updateFeedEntries((prev) => mergeMediaJobsIntoFeedEntries(prev, jobs, deletedFeedStateRef.current));
-            } catch (error) {
-                console.error('Failed to bootstrap generation jobs:', error);
-            }
-        })();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [generationJobBootstrapFilter, isActive, updateFeedEntries]);
 
     useEffect(() => {
         if (!previewAsset) return;

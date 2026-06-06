@@ -197,6 +197,8 @@ export type DigitalHumanGenerationRequestInput = Omit<DigitalHumanGenerationRequ
 
 export const FEED_STORAGE_KEY = 'redbox:generation-studio:feed:v1';
 export const FEED_DELETED_STORAGE_KEY = 'redbox:generation-studio:feed:deleted:v1';
+const FEED_STORAGE_MAX_CHARS = 750_000;
+const FEED_STORAGE_MAX_ENTRIES = 150;
 
 export function normalizeImageQuality(value: unknown): string {
     const quality = String(value || '').trim();
@@ -388,7 +390,7 @@ function emptyDeletedFeedState(): DeletedFeedState {
 
 function serializeFeedEntries(entries: FeedEntry[]): string {
     return JSON.stringify(
-        entries.map((entry) => {
+        entries.slice(-FEED_STORAGE_MAX_ENTRIES).map((entry) => {
             if (!isGenerationFeedEntry(entry)) {
                 return entry;
             }
@@ -727,10 +729,15 @@ export function readPersistedFeedEntries(): FeedEntry[] {
     try {
         const raw = window.localStorage.getItem(FEED_STORAGE_KEY);
         if (!raw) return [];
+        if (raw.length > FEED_STORAGE_MAX_CHARS) {
+            window.localStorage.removeItem(FEED_STORAGE_KEY);
+            return [];
+        }
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
         const deleted = readDeletedFeedState();
         return parsed
+            .slice(-FEED_STORAGE_MAX_ENTRIES)
             .map(normalizeFeedEntryRecord)
             .filter((item): item is FeedEntry => Boolean(item))
             .filter((item) => !isFeedEntryDeleted(item, deleted))
@@ -746,6 +753,21 @@ export function readPersistedFeedEntries(): FeedEntry[] {
     } catch {
         return [];
     }
+}
+
+export function mergeFeedEntriesById(baseEntries: FeedEntry[], incomingEntries: FeedEntry[]): FeedEntry[] {
+    if (incomingEntries.length === 0) return baseEntries;
+    const entriesById = new Map<string, FeedEntry>();
+    for (const entry of baseEntries) {
+        entriesById.set(entry.id, entry);
+    }
+    let changed = false;
+    for (const entry of incomingEntries) {
+        if (entriesById.get(entry.id) === entry) continue;
+        entriesById.set(entry.id, entry);
+        changed = true;
+    }
+    return changed ? sortFeedEntries(Array.from(entriesById.values())) : baseEntries;
 }
 
 export function requestModeLabel(request: GenerationRequest): string {

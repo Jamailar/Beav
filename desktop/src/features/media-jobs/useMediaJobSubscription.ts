@@ -9,6 +9,7 @@ import {
 type Options = {
     enabled?: boolean;
     bootstrapFilter?: MediaJobListFilter | null;
+    bootstrapIncludesTrackedJobs?: boolean;
 };
 
 export function useMediaJobSubscription(
@@ -22,6 +23,7 @@ export function useMediaJobSubscription(
     );
     const jobIdsKey = normalizedJobIds.join('|');
     const bootstrapFilterKey = JSON.stringify(options?.bootstrapFilter || null);
+    const bootstrapIncludesTrackedJobs = Boolean(options?.bootstrapIncludesTrackedJobs);
 
     useEffect(() => {
         if (!enabled) return undefined;
@@ -43,20 +45,24 @@ export function useMediaJobSubscription(
         };
         const refreshSnapshot = async () => {
             try {
+                const bootstrappedJobIds = new Set<string>();
                 if (options?.bootstrapFilter) {
                     const result = await window.ipcRenderer.generation.listJobs(options.bootstrapFilter) as {
                         items?: unknown[];
                     };
                     if (!cancelled && Array.isArray(result?.items)) {
-                        mediaJobsStore.upsertJobs(
-                            result.items
-                                .map(normalizeMediaJobProjection)
-                                .filter((item): item is NonNullable<typeof item> => Boolean(item)),
-                        );
+                        const jobs = result.items
+                            .map(normalizeMediaJobProjection)
+                            .filter((item): item is NonNullable<typeof item> => Boolean(item));
+                        for (const job of jobs) {
+                            bootstrappedJobIds.add(job.jobId);
+                        }
+                        mediaJobsStore.upsertJobs(jobs);
                     }
                 }
 
                 for (const jobId of normalizedJobIds) {
+                    if (bootstrapIncludesTrackedJobs && bootstrappedJobIds.has(jobId)) continue;
                     const projection = normalizeMediaJobProjection(
                         await window.ipcRenderer.generation.getJob(jobId),
                     );
@@ -92,5 +98,5 @@ export function useMediaJobSubscription(
             window.ipcRenderer.generation.offJobUpdated(handleJobUpdated);
             window.ipcRenderer.generation.offJobLog(handleJobLog);
         };
-    }, [bootstrapFilterKey, enabled, jobIdsKey, normalizedJobIds, options?.bootstrapFilter]);
+    }, [bootstrapFilterKey, bootstrapIncludesTrackedJobs, enabled, jobIdsKey, normalizedJobIds, options?.bootstrapFilter]);
 }
