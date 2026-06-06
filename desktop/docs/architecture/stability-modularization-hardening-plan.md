@@ -377,6 +377,7 @@ Reverse dependencies are not allowed. Host modules should emit events or return 
 - Extracted RedClaw publish/review/XHS package builders, markdown renderers, output artifact parsing and deterministic XHS compliance checks into `commands/redclaw/export_content`.
 - Extracted RedClaw publish/review/XHS package filesystem export, export slugging and metadata writebacks into `commands/redclaw/export_files`, keeping `export_content` focused on pure payload/markdown assembly.
 - Extracted RedClaw publish/review/XHS Markdown rendering into `commands/redclaw/export_markdown`, keeping `export_content` focused on payload assembly and deterministic compliance checks.
+- Extracted RedClaw XHS deterministic compliance text-source collection, sensitive-term matching and risk report construction into `commands/redclaw/xhs_compliance`, keeping `export_content` focused on package assembly.
 - Extracted RedClaw media-plan export assembly, ffconcat generation, ffconcat input validation and rough-cut ffmpeg rendering into `commands/redclaw/media_export`.
 - Extracted RedClaw runtime artifact-kind detection and run/copy/retro/image output file persistence into `commands/redclaw_outputs`, leaving `redclaw_runtime.rs` focused on session setup, agent turn execution and work-item fanout.
 - Extracted manuscript editor project marker add/update/delete channel handling into `commands/manuscripts/editor_project_markers`, leaving `editor_project.rs` focused on project lifecycle, clip mutation, AI generation and runtime-state dispatch.
