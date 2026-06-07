@@ -116,6 +116,11 @@ import {
     isRemoteUrl,
     generationAgentRoleForMode,
     generationSubmitSource,
+    combineGenerationCostEstimates,
+    estimateAudioGenerationPoints,
+    estimateCoverGenerationPoints,
+    estimateImageGenerationPoints,
+    estimateVideoGenerationPoints,
     submitAudioGeneration,
     submitCoverGeneration,
     submitDigitalHumanGeneration,
@@ -131,13 +136,66 @@ import {
     type SettingsShape,
     type VoiceListItem,
     type ModelRouteOverride,
+    type GenerationCostEstimate,
 } from '../features/media-generation';
 import { Chat, clearFixedSessionWarmSnapshot } from './Chat';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
+import { parseAiPricingCatalog, type AiPricingCatalog } from '../features/settings/settingsModel';
 
 type GenerationSurface = 'manual' | 'agent';
 
+type GenerationSubmitButtonProps = {
+    onClick: () => void;
+    disabled: boolean;
+    title: string;
+    ariaLabel: string;
+    estimate?: GenerationCostEstimate | null;
+    pending?: boolean;
+    agent?: boolean;
+};
+
+function GenerationSubmitButton({
+    onClick,
+    disabled,
+    title,
+    ariaLabel,
+    estimate = null,
+    pending = false,
+    agent = false,
+}: GenerationSubmitButtonProps) {
+    const showEstimate = Boolean(estimate) && !pending && !agent;
+    const accessibleLabel = showEstimate ? `${ariaLabel}，预计消耗 ${estimate?.label} 积分` : ariaLabel;
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            disabled={disabled}
+            className={clsx(
+                'ml-auto inline-flex h-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] transition-colors hover:bg-brand-red/90 disabled:opacity-45',
+                showEstimate ? 'min-w-[82px] gap-1.5 px-3' : 'w-11',
+            )}
+            title={showEstimate ? estimate?.title : title}
+            aria-label={accessibleLabel}
+        >
+            {pending ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+            ) : agent ? (
+                <ArrowUp className="h-5 w-5" />
+            ) : (
+                <>
+                    <Sparkles className="h-4.5 w-4.5 shrink-0" />
+                    {showEstimate && (
+                        <span className="inline-flex items-baseline gap-0.5 leading-none">
+                            <span className="text-[12px] font-semibold">~{estimate?.label}</span>
+                            <span className="text-[10px] font-medium opacity-85">积分</span>
+                        </span>
+                    )}
+                </>
+            )}
+        </button>
+    );
+}
 
 type SubjectCategoryRecord = {
     id: string;
@@ -1395,6 +1453,7 @@ export function GenerationStudio({
     onOpenAssets,
 }: GenerationStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
+    const [pricingCatalog, setPricingCatalog] = useState<AiPricingCatalog | null>(null);
     const [contextIntent, setContextIntent] = useState<GenerationIntent | null>(null);
     const [studioMode, setStudioMode] = useState<StudioMode>('image');
     const [generationSurface, setGenerationSurface] = useState<GenerationSurface>('manual');
@@ -1648,17 +1707,29 @@ export function GenerationStudio({
         }
     }, []);
 
+    const loadPricingCatalog = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.officialAuth.getPricing();
+            setPricingCatalog(parseAiPricingCatalog(result?.pricing));
+        } catch (error) {
+            console.error('Failed to load generation pricing catalog:', error);
+            setPricingCatalog(null);
+        }
+    }, []);
+
     useEffect(() => {
         void loadContext(false);
-    }, [isActive, loadContext]);
+        if (isActive) void loadPricingCatalog();
+    }, [isActive, loadContext, loadPricingCatalog]);
 
     useEffect(() => {
         if (!isActive) return;
         const handleSettingsUpdated = () => {
             void loadContext(false);
+            void loadPricingCatalog();
         };
         return subscribeSettingsUpdated(handleSettingsUpdated);
-    }, [isActive, loadContext]);
+    }, [isActive, loadContext, loadPricingCatalog]);
 
     useEffect(() => {
         if (!pendingIntent) return;
@@ -1864,6 +1935,37 @@ export function GenerationStudio({
             ? digitalHumanError
             : videoError;
     const visibleError = isAgentMode ? (agentSessionError || activeError) : activeError;
+    const imageCostEstimate = useMemo(() => estimateImageGenerationPoints(pricingCatalog, {
+        model: imageModel,
+        count: imageCount,
+        quality: imageQuality,
+        resolution: imageResolution,
+    }), [imageCount, imageModel, imageQuality, imageResolution, pricingCatalog]);
+    const coverCostEstimate = useMemo(() => estimateCoverGenerationPoints(pricingCatalog, {
+        model: coverModel,
+        count: coverCount,
+        quality: coverQuality,
+    }), [coverCount, coverModel, coverQuality, pricingCatalog]);
+    const audioCostEstimate = useMemo(() => estimateAudioGenerationPoints(pricingCatalog, {
+        model: effectiveAudioModel,
+        text: audioPrompt,
+    }), [audioPrompt, effectiveAudioModel, pricingCatalog]);
+    const videoCostEstimate = useMemo(() => estimateVideoGenerationPoints(pricingCatalog, {
+        model: effectiveVideoModel,
+        durationSeconds: videoDurationSeconds,
+        resolution: videoResolution,
+    }), [effectiveVideoModel, pricingCatalog, videoDurationSeconds, videoResolution]);
+    const digitalHumanCostEstimate = useMemo(() => combineGenerationCostEstimates([
+        estimateAudioGenerationPoints(pricingCatalog, {
+            model: effectiveAudioModel,
+            text: digitalHumanPrompt,
+        }),
+        estimateVideoGenerationPoints(pricingCatalog, {
+            model: 'videoretalk',
+            durationSeconds: 8,
+            resolution: '1080p',
+        }),
+    ]), [digitalHumanPrompt, effectiveAudioModel, pricingCatalog]);
 
     useEffect(() => {
         setImageModel((prev) => {
@@ -3504,22 +3606,15 @@ export function GenerationStudio({
                                                         title="生成数量"
                                                         panelClassName="w-[220px]"
                                                     />
-                                                    <button
-                                                        type="button"
+                                                    <GenerationSubmitButton
                                                         onClick={isAgentMode ? handleSendAgentMessage : handleGenerateImage}
                                                         disabled={isAgentMode ? !canSendAgentMessage : (!hasImageConfig || !imageModel.trim())}
-                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
-                                                    >
-                                                        {isAgentMode ? (
-                                                            agentExecutionActive ? (
-                                                                <Loader2 className="h-5 w-5 animate-spin" />
-                                                            ) : (
-                                                                <ArrowUp className="h-5 w-5" />
-                                                            )
-                                                        ) : (
-                                                            <Sparkles className="h-5 w-5" />
-                                                        )}
-                                                    </button>
+                                                        title={isAgentMode ? '发送给 Agent' : '生成图片'}
+                                                        ariaLabel={isAgentMode ? '发送给 Agent' : '生成图片'}
+                                                        estimate={isAgentMode ? null : imageCostEstimate}
+                                                        pending={isAgentMode && agentExecutionActive}
+                                                        agent={isAgentMode}
+                                                    />
                                                 </>
                                             ) : studioMode === 'cover' ? (
                                                 <>
@@ -3578,24 +3673,15 @@ export function GenerationStudio({
                                                         title="生成数量"
                                                         panelClassName="w-[220px]"
                                                     />
-                                                    <button
-                                                        type="button"
+                                                    <GenerationSubmitButton
                                                         onClick={isAgentMode ? handleSendAgentMessage : handleGenerateCover}
                                                         disabled={isAgentMode ? !canSendAgentMessage : (!hasImageConfig || !coverModel.trim())}
-                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
-                                                        title="生成封面"
-                                                        aria-label="生成封面"
-                                                    >
-                                                        {isAgentMode ? (
-                                                            agentExecutionActive ? (
-                                                                <Loader2 className="h-5 w-5 animate-spin" />
-                                                            ) : (
-                                                                <ArrowUp className="h-5 w-5" />
-                                                            )
-                                                        ) : (
-                                                            <Sparkles className="h-5 w-5" />
-                                                        )}
-                                                    </button>
+                                                        title={isAgentMode ? '发送给 Agent' : '生成封面'}
+                                                        ariaLabel={isAgentMode ? '发送给 Agent' : '生成封面'}
+                                                        estimate={isAgentMode ? null : coverCostEstimate}
+                                                        pending={isAgentMode && agentExecutionActive}
+                                                        agent={isAgentMode}
+                                                    />
                                                 </>
                                             ) : studioMode === 'audio' ? (
                                                 <>
@@ -3686,24 +3772,15 @@ export function GenerationStudio({
                                                             </div>
                                                         )}
                                                     </div>
-                                                    <button
-                                                        type="button"
+                                                    <GenerationSubmitButton
                                                         onClick={isAgentMode ? handleSendAgentMessage : handleGenerateAudio}
                                                         disabled={isAgentMode ? !canSendAgentMessage : (!hasVoiceConfig || !audioVoiceId.trim())}
-                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
-                                                        title="生成音频"
-                                                        aria-label="生成音频"
-                                                    >
-                                                        {isAgentMode ? (
-                                                            agentExecutionActive ? (
-                                                                <Loader2 className="h-5 w-5 animate-spin" />
-                                                            ) : (
-                                                                <ArrowUp className="h-5 w-5" />
-                                                            )
-                                                        ) : (
-                                                            <Sparkles className="h-5 w-5" />
-                                                        )}
-                                                    </button>
+                                                        title={isAgentMode ? '发送给 Agent' : '生成音频'}
+                                                        ariaLabel={isAgentMode ? '发送给 Agent' : '生成音频'}
+                                                        estimate={isAgentMode ? null : audioCostEstimate}
+                                                        pending={isAgentMode && agentExecutionActive}
+                                                        agent={isAgentMode}
+                                                    />
                                                 </>
                                             ) : studioMode === 'digital-human' ? (
                                                 <>
@@ -3737,16 +3814,13 @@ export function GenerationStudio({
                                                         title="视频清晰度"
                                                         panelClassName="w-[180px]"
                                                     />
-                                                    <button
-                                                        type="button"
+                                                    <GenerationSubmitButton
                                                         onClick={handleGenerateDigitalHuman}
                                                         disabled={!digitalHumanPrompt.trim() || !selectedDigitalHumanReadiness.ok}
-                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
                                                         title="生成数字人"
-                                                        aria-label="生成数字人"
-                                                    >
-                                                        <Sparkles className="h-5 w-5" />
-                                                    </button>
+                                                        ariaLabel="生成数字人"
+                                                        estimate={digitalHumanCostEstimate}
+                                                    />
                                                 </>
                                             ) : (
                                                 <>
@@ -3791,22 +3865,15 @@ export function GenerationStudio({
                                                         title="音频"
                                                         panelClassName="w-[220px]"
                                                     />
-                                                    <button
-                                                        type="button"
+                                                    <GenerationSubmitButton
                                                         onClick={isAgentMode ? handleSendAgentMessage : handleGenerateVideo}
                                                         disabled={isAgentMode ? !canSendAgentMessage : !hasVideoConfig}
-                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
-                                                    >
-                                                        {isAgentMode ? (
-                                                            agentExecutionActive ? (
-                                                                <Loader2 className="h-5 w-5 animate-spin" />
-                                                            ) : (
-                                                                <ArrowUp className="h-5 w-5" />
-                                                            )
-                                                        ) : (
-                                                            <Sparkles className="h-5 w-5" />
-                                                        )}
-                                                    </button>
+                                                        title={isAgentMode ? '发送给 Agent' : '生成视频'}
+                                                        ariaLabel={isAgentMode ? '发送给 Agent' : '生成视频'}
+                                                        estimate={isAgentMode ? null : videoCostEstimate}
+                                                        pending={isAgentMode && agentExecutionActive}
+                                                        agent={isAgentMode}
+                                                    />
                                                 </>
                                             )}
                                         </div>
