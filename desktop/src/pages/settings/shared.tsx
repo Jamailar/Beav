@@ -1460,12 +1460,15 @@ export const toAiModelDescriptor = (
     ...(Array.isArray(model?.capabilities) ? model.capabilities : []),
     model?.capability,
   ];
-  const capabilities = explicitCapabilities.some((value) => String(value || '').trim())
+  const hasExplicitCapabilities = explicitCapabilities.some((value) => String(value || '').trim());
+  const capabilities = hasExplicitCapabilities
     ? normalizeModelCapabilities(explicitCapabilities)
     : inferModelCapabilities(id);
   return {
     id,
-    capabilities: forcedCapabilities.length > 0 ? forcedCapabilities : capabilities,
+    capabilities: hasExplicitCapabilities
+      ? capabilities
+      : (forcedCapabilities.length > 0 ? forcedCapabilities : capabilities),
     inputCapabilities: getModelInputCapabilities(id),
   };
 };

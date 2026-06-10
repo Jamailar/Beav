@@ -51,6 +51,7 @@ import {
   normalizeImageModelFetchBaseURL,
   normalizeAiModelDescriptors,
   normalizeSourceModels,
+  isLikelyTranscriptionModel,
   parseAiSources,
   parseEnvText,
   parseMcpServers,
@@ -1107,6 +1108,13 @@ export function Settings({
   const addModelModalCapability = addModelModalSource
     ? (sourceModelCapabilityDrafts[addModelModalSource.id] || 'chat')
     : 'chat';
+
+  const resolveCandidateModelCapability = useCallback((model: AiModelDescriptor): ModelCapability => {
+    if (model.capabilities.includes('transcription') || isLikelyTranscriptionModel(model.id)) {
+      return 'transcription';
+    }
+    return model.capabilities.find((capability) => capability !== 'chat') || model.capabilities[0] || 'chat';
+  }, []);
 
   const groupedAiPresets = useMemo<AiPresetGroup[]>(() => {
     const codingPlan = AI_SOURCE_PRESETS.filter((preset) => preset.group === 'coding-plan');
@@ -5860,7 +5868,7 @@ export function Settings({
                               setSourceModelDrafts((prev) => ({ ...prev, [addModelModalSource.id]: item.id }));
                               setSourceModelCapabilityDrafts((prev) => ({
                                 ...prev,
-                                [addModelModalSource.id]: item.capabilities[0] || 'chat',
+                                [addModelModalSource.id]: resolveCandidateModelCapability(item),
                               }));
                             }}
                             className="px-2 py-1 text-[11px] rounded border border-border hover:bg-surface-secondary transition-colors flex items-center gap-1.5"
