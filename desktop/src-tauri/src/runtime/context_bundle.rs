@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_RUNTIME_CONTEXT_TOKEN_BUDGET: i64 = 32_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RuntimeContextBundleSummary {
@@ -14,6 +16,11 @@ pub struct RuntimeContextBundleSummary {
     pub prompt_prefix_chars: i64,
     pub prompt_suffix_chars: i64,
     pub final_prompt_chars: i64,
+    pub final_prompt_rendered_chars: i64,
+    pub final_prompt_hash: String,
+    pub estimated_final_prompt_tokens: i64,
+    pub token_budget: i64,
+    pub token_budget_exceeded: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,6 +51,14 @@ pub fn build_runtime_context_bundle_summary(
     prompt_suffix: &str,
     final_prompt: &str,
 ) -> RuntimeContextBundleSummary {
+    let token_budget = DEFAULT_RUNTIME_CONTEXT_TOKEN_BUDGET;
+    let final_prompt_fragment = crate::runtime::ContextFragment::developer_from_source(
+        "final_prompt",
+        runtime_mode,
+        final_prompt,
+        token_budget,
+    );
+    let estimated_final_prompt_tokens = final_prompt_fragment.estimated_tokens;
     RuntimeContextBundleSummary {
         runtime_mode: runtime_mode.to_string(),
         tool_count: available_tools
@@ -59,6 +74,11 @@ pub fn build_runtime_context_bundle_summary(
         prompt_prefix_chars: prompt_prefix.chars().count() as i64,
         prompt_suffix_chars: prompt_suffix.chars().count() as i64,
         final_prompt_chars: final_prompt.chars().count() as i64,
+        final_prompt_rendered_chars: final_prompt_fragment.rendered_chars,
+        final_prompt_hash: final_prompt_fragment.body_hash,
+        estimated_final_prompt_tokens,
+        token_budget,
+        token_budget_exceeded: final_prompt_fragment.truncated,
     }
 }
 
@@ -86,6 +106,10 @@ mod tests {
         assert_eq!(summary.tool_count, 2);
         assert_eq!(summary.active_skill_count, 3);
         assert!(summary.final_prompt_chars >= 16);
+        assert!(summary.final_prompt_rendered_chars >= 16);
+        assert_eq!(summary.final_prompt_hash.len(), 16);
+        assert!(summary.estimated_final_prompt_tokens > 0);
+        assert!(!summary.token_budget_exceeded);
         assert!(summary.memory_chars > 0);
     }
 }
