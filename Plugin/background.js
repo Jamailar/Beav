@@ -7140,17 +7140,14 @@ async function extractXhsCommentsPayload() {
   }
 
   function parseCountText(value) {
-    const text = normalizeText(value).replace(/[\s,]/g, '').replace(/[^0-9.\u4e00-\u9fa5.]/g, '');
+    const text = normalizeText(value).replace(/[\s,]/g, '');
     if (!text) return 0;
-    if (text.includes('万')) {
-      const number = parseFloat(text.replace('万', ''));
-      return Number.isNaN(number) ? 0 : Math.round(number * 10000);
-    }
-    if (text.includes('亿')) {
-      const number = parseFloat(text.replace('亿', ''));
-      return Number.isNaN(number) ? 0 : Math.round(number * 100000000);
-    }
-    const number = parseFloat(text);
+    const match = text.match(/(\d+(?:\.\d+)?)(万|亿)?/);
+    if (!match) return 0;
+    const number = parseFloat(match[1]);
+    if (Number.isNaN(number)) return 0;
+    if (match[2] === '万') return Math.round(number * 10000);
+    if (match[2] === '亿') return Math.round(number * 100000000);
     return Number.isNaN(number) ? 0 : Math.round(number);
   }
 
@@ -7222,19 +7219,109 @@ async function extractXhsCommentsPayload() {
     return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 20 && rect.height > 10;
   }
 
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function getCommentsRoot() {
+    return document.querySelector('.comments-container')
+      || document.querySelector('.comments-el')
+      || document.querySelector('.comment-list')
+      || document.querySelector('[class*="comments"]')
+      || null;
+  }
+
+  function collectVisibleCommentNodes() {
+    const root = getCommentsRoot();
+    const scopedRoot = root || document;
+    let nodes = Array.from(scopedRoot.querySelectorAll(
+      '.comment-item, .comment-container, .list-item, [class*="comment-item"], [class*="commentItem"]',
+    )).filter((node) => node instanceof Element && isVisible(node));
+    if (nodes.length === 0 && root) {
+      nodes = Array.from(document.querySelectorAll(
+        '.comments-container .comment-item, .comments-el .comment-item, .comment-list .comment-item, [class*="comments"] [class*="comment-item"], [class*="comments"] [class*="commentItem"]',
+      )).filter((node) => node instanceof Element && isVisible(node));
+    }
+    return nodes;
+  }
+
+  function findScrollableContainer(root) {
+    const candidates = [
+      root,
+      root?.closest?.('.comments-container, .comments-el, .comment-list, .note-scroller, .interaction-container, .note-detail-mask'),
+      document.querySelector('.note-scroller'),
+      document.querySelector('.interaction-container'),
+      document.querySelector('.note-detail-mask'),
+      document.scrollingElement,
+      document.documentElement,
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      if (candidate.scrollHeight > candidate.clientHeight + 80) return candidate;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+
+  function readCommentsTotalText() {
+    const direct = normalizeText(
+      document.querySelector('.comments-container .total')?.textContent ||
+      document.querySelector('.comments-el .total')?.textContent ||
+      '',
+    );
+    if (direct) return direct;
+    const totalNode = Array.from(document.querySelectorAll('.comments-container *, .comments-el *, .comment-list *, [class*="comments"] *'))
+      .filter((el) => el instanceof Element && isVisible(el))
+      .map((el) => normalizeText(el.textContent || ''))
+      .find((text) => /^共[\d.,]+[万亿]?条评论$/.test(text) || /^共\s*[\d.,]+\s*[万亿]?\s*条评论$/.test(text));
+    if (totalNode) return totalNode;
+    const bodyMatch = normalizeText(document.body?.innerText || '').match(/共\s*[\d.,]+\s*[万亿]?\s*条评论/);
+    return bodyMatch?.[0] || '';
+  }
+
   async function expandVisibleComments() {
-    const buttons = Array.from(document.querySelectorAll('button, .show-more, .more, [role="button"], span, div'))
+    const root = getCommentsRoot() || document;
+    const buttons = Array.from(root.querySelectorAll('button, .show-more, .more, [role="button"], span, div'))
       .filter((el) => isVisible(el))
-      .filter((el) => /展开|更多|全部回复|条回复|查看更多/i.test(normalizeText(el.textContent)))
+      .filter((el) => /展开|全部回复|条回复|查看更多|更多回复/i.test(normalizeText(el.textContent)))
       .slice(0, 18);
     for (const button of buttons) {
       try {
         button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        await new Promise((resolve) => setTimeout(resolve, 90));
+        await wait(180);
       } catch {
         // ignore protected synthetic click failures
       }
     }
+  }
+
+  async function loadCommentsUntilLimit() {
+    const root = getCommentsRoot();
+    const scroller = findScrollableContainer(root);
+    const targetTotal = parseCountText(readCommentsTotalText());
+    const targetCount = Math.min(targetTotal || 200, 200);
+    let previousCount = collectVisibleCommentNodes().length;
+    let stalledRounds = 0;
+
+    for (let round = 0; round < 28; round += 1) {
+      await expandVisibleComments();
+      const currentCount = collectVisibleCommentNodes().length;
+      if (currentCount >= targetCount) break;
+      if (currentCount <= previousCount) {
+        stalledRounds += 1;
+      } else {
+        stalledRounds = 0;
+        previousCount = currentCount;
+      }
+      if (stalledRounds >= 5) break;
+
+      if (scroller === document.scrollingElement || scroller === document.documentElement) {
+        window.scrollBy({ top: Math.max(window.innerHeight * 0.75, 420), behavior: 'smooth' });
+      } else {
+        scroller.scrollTop += Math.max(scroller.clientHeight * 0.75, 420);
+      }
+      await wait(520 + Math.min(round, 5) * 80);
+    }
+    await expandVisibleComments();
+    await wait(240);
   }
 
   function pickCommentText(node) {
@@ -7353,16 +7440,9 @@ async function extractXhsCommentsPayload() {
     return { createdAt, location, likes: parseCountText(likeText), replies: parseCountText(replyText) };
   }
 
-  await expandVisibleComments();
+  await loadCommentsUntilLimit();
 
-  let candidateNodes = Array.from(document.querySelectorAll(
-    '.comments-container .comment-item, .comments-el .comment-item, .comment-list .comment-item, [class*="comments"] [class*="comment-item"], [class*="comments"] [class*="commentItem"]',
-  )).filter((node) => node instanceof Element && isVisible(node));
-  if (candidateNodes.length === 0) {
-    candidateNodes = Array.from(document.querySelectorAll(
-      '.comment-item, .comment-container, .comments-el .list-item, [class*="comment-item"], [class*="commentItem"]',
-    )).filter((node) => node instanceof Element && isVisible(node));
-  }
+  const candidateNodes = collectVisibleCommentNodes();
   const seen = new Set();
   const comments = [];
   for (const node of candidateNodes) {
@@ -7403,14 +7483,11 @@ async function extractXhsCommentsPayload() {
     });
     if (comments.length >= 200) break;
   }
-  const totalText = normalizeText(
-    document.querySelector('.comments-container .total')?.textContent ||
-    document.querySelector('.comments-el .total')?.textContent ||
-    '',
-  );
+  const totalText = readCommentsTotalText();
   const total = parseCountText(totalText);
-  const hasMore = Array.from(document.querySelectorAll('.show-more, [class*="show-more"], button, [role="button"]'))
-    .some((el) => /展开|更多|全部回复|查看更多/i.test(normalizeText(el.textContent)));
+  const commentsRoot = getCommentsRoot() || document;
+  const hasMore = comments.length < total || Array.from(commentsRoot.querySelectorAll('.show-more, [class*="show-more"], button, [role="button"]'))
+    .some((el) => /展开|全部回复|查看更多|更多回复/i.test(normalizeText(el.textContent)));
 
   return {
     noteId: getCurrentNoteId(),
