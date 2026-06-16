@@ -70,6 +70,7 @@ interface RedClawHistorySidebarSectionProps {
     onDeleteRoom?: (room: RedClawTeamRoom) => void | Promise<void>;
     onSwitchSession: (session: RedClawHistoryListItem) => void;
     onDeleteSession: (session: RedClawHistoryListItem) => void | Promise<void>;
+    onArchiveSession?: (session: RedClawHistoryListItem) => void | Promise<void>;
     onRenameSession?: (session: RedClawHistoryListItem, title: string) => void | Promise<void>;
     onOpenManuscript?: (filePath: string) => void;
     activeManuscriptPath?: string | null;
@@ -80,7 +81,7 @@ const PINNED_SESSION_IDS_STORAGE_KEY = 'redbox:redclaw:pinned-session-ids:v1';
 
 type HistoryItemMenuTarget =
     | { type: 'room'; id: string }
-    | { type: 'session'; id: string }
+    | { type: 'session'; id: string; x?: number; y?: number }
     | { type: 'manuscript'; path: string };
 
 type ManuscriptDraftKind = 'longform' | 'post';
@@ -201,6 +202,7 @@ export function RedClawHistorySidebarSection({
     onDeleteRoom,
     onSwitchSession,
     onDeleteSession,
+    onArchiveSession,
     onRenameSession,
     onOpenManuscript,
     activeManuscriptPath,
@@ -213,6 +215,7 @@ export function RedClawHistorySidebarSection({
     const [menuTarget, setMenuTarget] = useState<HistoryItemMenuTarget | null>(null);
     const [pinnedRoomIds, setPinnedRoomIds] = useState<string[]>(() => readPinnedIds(PINNED_ROOM_IDS_STORAGE_KEY));
     const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => readPinnedIds(PINNED_SESSION_IDS_STORAGE_KEY));
+    const [unreadSessionIds, setUnreadSessionIds] = useState<string[]>([]);
     const [manuscriptTree, setManuscriptTree] = useState<RedClawManuscriptNode[]>([]);
     const [manuscriptsLoading, setManuscriptsLoading] = useState(false);
     const [manuscriptsError, setManuscriptsError] = useState('');
@@ -233,6 +236,7 @@ export function RedClawHistorySidebarSection({
 
     const pinnedRoomIdSet = useMemo(() => new Set(pinnedRoomIds), [pinnedRoomIds]);
     const pinnedSessionIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
+    const unreadSessionIdSet = useMemo(() => new Set(unreadSessionIds), [unreadSessionIds]);
     const sortedTeamRooms = useMemo(() => {
         return [...teamRooms].sort((left, right) => {
             const leftPinned = pinnedRoomIdSet.has(left.id);
@@ -243,8 +247,8 @@ export function RedClawHistorySidebarSection({
     }, [pinnedRoomIdSet, teamRooms]);
     const sortedSessionList = useMemo(() => {
         return [...sessionList].sort((left, right) => {
-            const leftPinned = pinnedSessionIdSet.has(left.id);
-            const rightPinned = pinnedSessionIdSet.has(right.id);
+            const leftPinned = Boolean(left.starred) || pinnedSessionIdSet.has(left.id);
+            const rightPinned = Boolean(right.starred) || pinnedSessionIdSet.has(right.id);
             if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
             return 0;
         });
@@ -295,6 +299,15 @@ export function RedClawHistorySidebarSection({
             window.removeEventListener('keydown', closeMenu);
         };
     }, [menuTarget]);
+
+    useEffect(() => {
+        const nextUnreadIds = sessionList
+            .filter((session) => session.unread)
+            .map((session) => session.id)
+            .filter(Boolean);
+        if (nextUnreadIds.length === 0) return;
+        setUnreadSessionIds((current) => Array.from(new Set([...current, ...nextUnreadIds])));
+    }, [sessionList]);
 
     useEffect(() => {
         if (!manuscriptContextMenu) return;
@@ -741,20 +754,86 @@ export function RedClawHistorySidebarSection({
         setMenuTarget(null);
     };
 
-    const togglePinnedSession = (sessionId: string) => {
+    const setPinnedSession = (sessionId: string, pinned: boolean) => {
         setPinnedSessionIds((current) => {
-            const next = current.includes(sessionId)
-                ? current.filter((id) => id !== sessionId)
-                : [sessionId, ...current];
+            const next = pinned
+                ? [sessionId, ...current.filter((id) => id !== sessionId)]
+                : current.filter((id) => id !== sessionId);
             writePinnedIds(PINNED_SESSION_IDS_STORAGE_KEY, next);
             return next;
         });
+        void window.ipcRenderer.chat.setSessionStarred({ sessionId, starred: pinned }).catch((error) => {
+            void appAlert(error instanceof Error ? error.message : '置顶失败');
+        });
         setMenuTarget(null);
+    };
+
+    const togglePinnedSession = (sessionId: string, pinned?: boolean) => {
+        const nextPinned = typeof pinned === 'boolean' ? pinned : !pinnedSessionIdSet.has(sessionId);
+        setPinnedSession(sessionId, nextPinned);
+    };
+
+    const setSessionUnread = (sessionId: string, unread: boolean) => {
+        setUnreadSessionIds((current) => (
+            unread
+                ? [sessionId, ...current.filter((id) => id !== sessionId)]
+                : current.filter((id) => id !== sessionId)
+        ));
+        void window.ipcRenderer.chat.setSessionUnread({ sessionId, unread }).catch((error) => {
+            void appAlert(error instanceof Error ? error.message : '更新未读状态失败');
+        });
+        setMenuTarget(null);
+    };
+
+    const copyText = async (text: string, fallbackMessage = '复制失败') => {
+        const value = text.trim();
+        if (!value) return;
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(value);
+                return;
+            }
+        } catch {
+            // Fall through to the Tauri clipboard bridge.
+        }
+        try {
+            await window.ipcRenderer.clipboardWriteText(value);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : fallbackMessage);
+        }
+    };
+
+    const sessionWorkingDirectory = (session: RedClawHistoryListItem): string => {
+        const direct = String(session.workingDirectory || '').trim();
+        if (direct) return direct;
+        const metadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : null;
+        return String(metadata?.workingDirectory || '').trim();
+    };
+
+    const sessionDeepLink = (session: RedClawHistoryListItem): string => (
+        `redbox://session/${encodeURIComponent(session.id)}`
+    );
+
+    const openSessionContextMenu = (
+        event: MouseEvent<HTMLElement>,
+        session: RedClawHistoryListItem,
+        anchor?: HTMLElement | null,
+    ) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = anchor?.getBoundingClientRect();
+        setMenuTarget({
+            type: 'session',
+            id: session.id,
+            x: rect ? rect.right - 8 : event.clientX,
+            y: rect ? rect.bottom + 4 : event.clientY,
+        });
     };
 
     const openRenameDialog = (session: RedClawHistoryListItem) => {
         if (!onRenameSession) return;
         const title = displaySessionTitle(session.chatSession?.title?.trim() || '未命名会话', session.surface);
+        setMenuTarget(null);
         setRenameTarget(session);
         setRenameTitle(title);
         setRenameError('');
@@ -1026,10 +1105,14 @@ export function RedClawHistorySidebarSection({
                         {sortedSessionList.map((session) => {
                             const isActive = session.id === activeSessionId;
                             const title = displaySessionTitle(session.chatSession?.title?.trim() || '未命名会话', session.surface);
-                            const isPinned = pinnedSessionIdSet.has(session.id);
+                            const isPinned = Boolean(session.starred) || pinnedSessionIdSet.has(session.id);
                             const menuOpen = menuTarget?.type === 'session' && menuTarget.id === session.id;
                             const activity = sessionActivityById[session.id];
+                            const isUnread = Boolean(session.unread) || unreadSessionIdSet.has(session.id);
                             const isAutomationSession = isAutomationHistorySession(session);
+                            const workingDirectory = sessionWorkingDirectory(session);
+                            const canUseWorkingDirectory = Boolean(workingDirectory);
+                            const platformLabel = /mac/i.test(navigator.platform || '') ? '在 Finder 中显示' : '在文件资源管理器中显示';
 
                             return (
                                 <div
@@ -1038,8 +1121,12 @@ export function RedClawHistorySidebarSection({
                                     tabIndex={0}
                                     onClick={() => {
                                         setMenuTarget(null);
+                                        if (isUnread) {
+                                            setSessionUnread(session.id, false);
+                                        }
                                         onSwitchSession(session);
                                     }}
+                                    onContextMenu={(event) => openSessionContextMenu(event, session)}
                                     onDoubleClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
@@ -1048,6 +1135,9 @@ export function RedClawHistorySidebarSection({
                                     onKeyDown={(e) => {
                                         if (e.key !== 'Enter' && e.key !== ' ') return;
                                         setMenuTarget(null);
+                                        if (isUnread) {
+                                            setSessionUnread(session.id, false);
+                                        }
                                         onSwitchSession(session);
                                     }}
                                     className={clsx(
@@ -1067,7 +1157,7 @@ export function RedClawHistorySidebarSection({
                                             onClick={(event) => {
                                                 event.preventDefault();
                                                 event.stopPropagation();
-                                                togglePinnedSession(session.id);
+                                                togglePinnedSession(session.id, !isPinned);
                                             }}
                                             className={clsx(
                                                 'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition hover:bg-surface-secondary hover:text-text-primary',
@@ -1104,10 +1194,10 @@ export function RedClawHistorySidebarSection({
                                                 <span className="h-4 w-4 rounded-full border-2 border-text-tertiary/30 border-t-text-tertiary/80 animate-spin" />
                                             </span>
                                         )}
-                                        {activity === 'unread-complete' && (
+                                        {(activity === 'unread-complete' || isUnread) && (
                                             <span
                                                 className="absolute right-4 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.14)] transition-opacity group-hover:opacity-0"
-                                                aria-label="执行完成"
+                                                aria-label={isUnread ? '未读' : '执行完成'}
                                             />
                                         )}
 
@@ -1118,40 +1208,105 @@ export function RedClawHistorySidebarSection({
                                             )}
                                             onClick={(event) => event.stopPropagation()}
                                         >
-                                            {menuOpen ? (
-                                                <>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            setMenuTarget(null);
-                                                            void onDeleteSession(session);
-                                                        }}
-                                                        className="flex h-6 w-6 items-center justify-center rounded-md text-red-500 hover:bg-red-500/10"
-                                                        title="删除"
-                                                        aria-label="删除"
-                                                    >
-                                                        <Trash2 className="h-3.5 w-3.5" />
-                                                    </button>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.preventDefault();
-                                                            e.stopPropagation();
-                                                            setMenuTarget({ type: 'session', id: session.id });
-                                                        }}
-                                                        className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
-                                                        title="更多"
-                                                        aria-label="更多"
-                                                    >
-                                                        <MoreHorizontal className="h-3.5 w-3.5" />
-                                                    </button>
-                                                </>
-                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={(event) => openSessionContextMenu(event, session, event.currentTarget)}
+                                                className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
+                                                title="更多"
+                                                aria-label="更多"
+                                            >
+                                                <MoreHorizontal className="h-3.5 w-3.5" />
+                                            </button>
                                         </div>
                                     </div>
+                                    {menuOpen && typeof menuTarget.x === 'number' && typeof menuTarget.y === 'number' && (
+                                        <div
+                                            className="fixed z-[150] min-w-[196px] rounded-xl border border-border bg-surface-primary p-1.5 shadow-2xl"
+                                            style={{
+                                                left: Math.min(menuTarget.x, window.innerWidth - 212),
+                                                top: Math.min(menuTarget.y, window.innerHeight - 274),
+                                            }}
+                                            onClick={(event) => event.stopPropagation()}
+                                            onContextMenu={(event) => event.preventDefault()}
+                                        >
+                                            <button
+                                                type="button"
+                                                onClick={() => setPinnedSession(session.id, !isPinned)}
+                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                            >
+                                                {isPinned ? '取消置顶' : '置顶对话'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => openRenameDialog(session)}
+                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                            >
+                                                重命名对话
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setMenuTarget(null);
+                                                    void (onArchiveSession || onDeleteSession)(session);
+                                                }}
+                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                            >
+                                                归档对话
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setSessionUnread(session.id, true)}
+                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                            >
+                                                标记为未读
+                                            </button>
+                                            <div className="my-1 h-px bg-border/70" />
+                                            <button
+                                                type="button"
+                                                disabled={!canUseWorkingDirectory}
+                                                onClick={() => {
+                                                    setMenuTarget(null);
+                                                    void window.ipcRenderer.files.showInFolder({ source: workingDirectory }).catch((error) => {
+                                                        void appAlert(error instanceof Error ? error.message : '打开目录失败');
+                                                    });
+                                                }}
+                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-45"
+                                            >
+                                                {platformLabel}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={!canUseWorkingDirectory}
+                                                onClick={() => {
+                                                    setMenuTarget(null);
+                                                    void copyText(workingDirectory, '复制工作目录失败');
+                                                }}
+                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-45"
+                                            >
+                                                复制工作目录
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setMenuTarget(null);
+                                                    void copyText(session.id, '复制会话 ID 失败');
+                                                }}
+                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                            >
+                                                复制会话 ID
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setMenuTarget(null);
+                                                    void copyText(sessionDeepLink(session), '复制深度链接失败');
+                                                }}
+                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                            >
+                                                复制深度链接
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}

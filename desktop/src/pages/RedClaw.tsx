@@ -1664,6 +1664,28 @@ export function RedClaw({
         }
     }, [deleteHistorySession]);
 
+    const archiveUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem) => {
+        const targetSessionId = String(session?.id || '').trim();
+        if (!targetSessionId || session.surface !== 'redclaw') return;
+        try {
+            await window.ipcRenderer.chat.archiveSession(targetSessionId);
+            const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
+            sessionListRef.current = remaining;
+            setSessionList(remaining);
+            if (activeSessionIdRef.current !== targetSessionId) return;
+            const nextSessionId = remaining[0]?.id || null;
+            activeSessionIdRef.current = nextSessionId;
+            setActiveSessionId(nextSessionId);
+            if (!nextSessionId) {
+                manualDraftActiveRef.current = true;
+                setChatRefreshKey((value) => value + 1);
+            }
+        } catch (error) {
+            console.error('Failed to archive RedClaw session:', error);
+            setChatActionMessage(error instanceof Error ? error.message : '归档对话失败');
+        }
+    }, []);
+
     const deleteRoomFromRedClaw = useCallback(async (room: RedClawTeamRoom) => {
         if (!room?.id) return;
         try {
@@ -2141,6 +2163,7 @@ export function RedClaw({
                 onDeleteRoom={(room) => void deleteRoomFromRedClaw(room)}
                 onSwitchSession={switchHistorySession}
                 onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
+                onArchiveSession={(session) => void archiveUnifiedHistorySession(session)}
                 onRenameSession={renameUnifiedHistorySession}
                 onOpenManuscript={handleOpenManuscript}
                 activeManuscriptPath={activeManuscriptPath}
@@ -2149,6 +2172,7 @@ export function RedClaw({
     }, [
         activeAiSurface,
         activeChatSessionId,
+        archiveUnifiedHistorySession,
         createRoomFromRedClaw,
         deleteRoomFromRedClaw,
         deleteUnifiedHistorySession,

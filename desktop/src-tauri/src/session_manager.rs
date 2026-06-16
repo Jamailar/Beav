@@ -205,6 +205,50 @@ pub(crate) fn rename_session(
     Some(session.clone())
 }
 
+pub(crate) fn set_session_starred(
+    store: &mut AppStore,
+    session_id: &str,
+    starred: bool,
+) -> Option<ChatSessionRecord> {
+    let session = store
+        .chat_sessions
+        .iter_mut()
+        .find(|item| item.id == session_id)?;
+    session.starred = starred;
+    session.updated_at = now_iso();
+    Some(session.clone())
+}
+
+pub(crate) fn set_session_unread(
+    store: &mut AppStore,
+    session_id: &str,
+    unread: bool,
+) -> Option<ChatSessionRecord> {
+    let session = store
+        .chat_sessions
+        .iter_mut()
+        .find(|item| item.id == session_id)?;
+    let mut metadata = session
+        .metadata
+        .as_ref()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    if unread {
+        metadata.insert("unread".to_string(), json!(true));
+        metadata.insert("markedUnreadAt".to_string(), json!(now_iso()));
+    } else {
+        metadata.remove("unread");
+        metadata.remove("markedUnreadAt");
+    }
+    session.metadata = if metadata.is_empty() {
+        None
+    } else {
+        Some(Value::Object(metadata))
+    };
+    session.updated_at = now_iso();
+    Some(session.clone())
+}
+
 pub(crate) fn delete_session(store: &mut AppStore, session_id: &str) -> bool {
     let had_session = store.chat_sessions.iter().any(|item| item.id == session_id);
     if !had_session {
@@ -448,6 +492,19 @@ pub(crate) fn session_list_item_value(
         "checkpointCount": summary.checkpoint_count,
         "context": session_context_value_for_session(store, &summary.chat_session.id),
         "chatSession": summary.chat_session,
+        "starred": session.starred,
+        "archived": session.archived,
+        "unread": session.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("unread"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "workingDirectory": session.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("workingDirectory"))
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "metadata": session.metadata,
     })
 }
 
@@ -516,6 +573,17 @@ pub(crate) fn session_bridge_summary_value(
         "title": summary.chat_session.title,
         "updatedAt": updated_at,
         "createdAt": created_at,
+        "starred": session.starred,
+        "unread": session.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("unread"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "workingDirectory": session.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("workingDirectory"))
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
         "contextType": summary
             .context
             .as_ref()
@@ -702,6 +770,9 @@ fn compare_session_updated_at_desc(
     left: &ChatSessionRecord,
     right: &ChatSessionRecord,
 ) -> std::cmp::Ordering {
+    if left.starred != right.starred {
+        return right.starred.cmp(&left.starred);
+    }
     right.updated_at.cmp(&left.updated_at)
 }
 

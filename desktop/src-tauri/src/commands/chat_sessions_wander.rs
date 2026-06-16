@@ -11,7 +11,7 @@ use crate::session_manager::{
     create_context_session, create_session, delete_session, ensure_context_session, fork_session,
     list_context_sessions, list_sessions, remove_session_artifacts, rename_session,
     resolve_resume_target_session_id, session_detail_value, session_list_item_value,
-    session_resume_value, update_metadata,
+    session_resume_value, set_session_starred, set_session_unread, update_metadata,
 };
 use crate::skills::{merge_requested_skills_into_metadata, SkillActivationSource};
 use crate::store::settings as settings_store;
@@ -2765,6 +2765,8 @@ pub fn handle_chat_sessions_wander_channel(
             | "chat:get-messages"
             | "chat:create-session"
             | "chat:rename-session"
+            | "chat:set-session-starred"
+            | "chat:set-session-unread"
             | "chat:delete-session"
             | "chat:clear-messages"
             | "chat:compact-context"
@@ -3429,6 +3431,36 @@ pub fn handle_chat_sessions_wander_channel(
                         "title": session.title,
                     }),
                 );
+                Ok(json!({ "success": true, "session": session }))
+            }
+            "chat:set-session-starred" => {
+                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+                if session_id.trim().is_empty() {
+                    return Err("missing sessionId".to_string());
+                }
+                let starred = payload
+                    .get("starred")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let session = with_store_mut(state, |store| {
+                    set_session_starred(store, &session_id, starred)
+                        .ok_or_else(|| "session not found".to_string())
+                })?;
+                Ok(json!({ "success": true, "session": session }))
+            }
+            "chat:set-session-unread" => {
+                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+                if session_id.trim().is_empty() {
+                    return Err("missing sessionId".to_string());
+                }
+                let unread = payload
+                    .get("unread")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let session = with_store_mut(state, |store| {
+                    set_session_unread(store, &session_id, unread)
+                        .ok_or_else(|| "session not found".to_string())
+                })?;
                 Ok(json!({ "success": true, "session": session }))
             }
             "chat:bind-editor-session" => {

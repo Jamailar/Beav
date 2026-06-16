@@ -870,6 +870,9 @@ export interface SessionBridgeSessionSummary {
   title: string;
   updatedAt: number;
   createdAt: number;
+  starred?: boolean;
+  unread?: boolean;
+  workingDirectory?: string;
   contextType: string;
   runtimeMode: string;
   isBackgroundSession: boolean;
@@ -971,6 +974,9 @@ declare global {
     title: string;
     updatedAt: string;
     createdAt?: string;
+    starred?: boolean;
+    archived?: boolean;
+    metadata?: Record<string, unknown> | null;
   }
 
   interface ContextChatSessionListItem {
@@ -980,6 +986,11 @@ declare global {
     transcriptCount: number;
     checkpointCount: number;
     context?: unknown;
+    starred?: boolean;
+    archived?: boolean;
+    unread?: boolean;
+    workingDirectory?: string;
+    metadata?: Record<string, unknown> | null;
     chatSession?: {
       id: string;
       title?: string;
@@ -1771,6 +1782,7 @@ declare global {
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
       openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
       clipboardReadText: () => Promise<string>;
+      clipboardWriteText: (text: string) => Promise<{ success: boolean; error?: string; text?: string }>;
       capture: {
         saveYoutubeNote: (payload: {
           videoId: string;
@@ -2071,6 +2083,8 @@ declare global {
         createContextSessionGuarded: <T = ChatSession>(payload: { contextId: string; contextType: string; title?: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) => Promise<T | null>;
         getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
         renameSession: (payload: { sessionId: string; title: string }) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
+        setSessionStarred: (payload: { sessionId: string; starred: boolean }) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
+        setSessionUnread: (payload: { sessionId: string; unread: boolean }) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
         deleteSession: (sessionId: string) => Promise<{ success: boolean }>;
         archiveSession: (sessionId: string) => Promise<{ success: boolean }>;
         unarchiveSession: (sessionId: string) => Promise<{ success: boolean }>;
