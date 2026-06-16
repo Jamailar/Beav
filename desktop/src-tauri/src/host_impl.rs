@@ -743,20 +743,21 @@ mod tests {
         append_generated_media_markdown, asset_preview_url_from_result,
         authoring_saved_final_summary, build_interactive_user_turn_messages,
         build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
-        decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
-        interactive_base64_payload_size, interactive_execution_contract_instruction,
-        interactive_execution_progress_observe_success, interactive_history_attachment_note,
-        interactive_model_supports_direct_attachment, interactive_skill_activation_continuation,
-        interactive_skill_activations, interactive_tool_panic_message,
-        is_authoring_project_link_target, json_value_to_path_list,
+        copy_file_into_dir, decode_command_json_stdout, guess_mime_and_kind,
+        interactive_attachment_inline_data_url, interactive_base64_payload_size,
+        interactive_execution_contract_instruction, interactive_execution_progress_observe_success,
+        interactive_history_attachment_note, interactive_model_supports_direct_attachment,
+        interactive_skill_activation_continuation, interactive_skill_activations,
+        interactive_tool_panic_message, is_authoring_project_link_target, json_value_to_path_list,
         looks_like_authoring_status_summary, manuscript_save_result_path,
         message_is_successful_manuscript_write_tool_result, metadata_requires_voice_speech,
-        normalized_structured_payload_arguments, persist_subjects_workspace,
-        redbox_fs_profile_read_completed, resolve_local_path, structured_tool_error_code,
-        validate_runtime_tool_message_sequence, workspace_read_directory_response,
-        GeneratedMediaPreview, InteractiveExecutionContract, InteractiveExecutionProgress,
-        SubjectAttribute, SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord,
-        SubjectSku, SubjectVoiceInput,
+        normalized_structured_payload_arguments, now_ms, persist_subjects_workspace,
+        redbox_fs_profile_read_completed, resolve_local_path, sanitize_copy_file_name,
+        structured_tool_error_code, validate_runtime_tool_message_sequence,
+        workspace_read_directory_response, GeneratedMediaPreview, InteractiveExecutionContract,
+        InteractiveExecutionProgress, SubjectAttribute, SubjectCategory, SubjectMediaInput,
+        SubjectMutationInput, SubjectRecord, SubjectSku, SubjectVoiceInput,
+        COPY_TARGET_FILE_NAME_MAX_CHARS,
     };
     use serde_json::{json, Value};
     use std::fs;
@@ -1500,6 +1501,28 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_copy_file_name_truncates_long_names_and_preserves_extension() {
+        let raw = format!("{}:{}.pdf", "a".repeat(80), "b".repeat(80));
+        let sanitized = sanitize_copy_file_name(&raw);
+        assert!(sanitized.chars().count() <= COPY_TARGET_FILE_NAME_MAX_CHARS);
+        assert!(sanitized.ends_with(".pdf"));
+        assert!(!sanitized.contains(':'));
+    }
+
+    #[test]
+    fn copy_file_into_dir_reports_missing_source_with_path_context() {
+        let unique = now_ms();
+        let source = std::env::temp_dir().join(format!("redbox-missing-source-{unique}.pdf"));
+        let target_dir = std::env::temp_dir().join(format!("redbox-copy-target-{unique}"));
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_dir_all(&target_dir);
+
+        let error = copy_file_into_dir(&source, &target_dir).expect_err("missing source");
+        assert!(error.contains("源文件不存在或当前不可访问"));
+        assert!(error.contains(&source.display().to_string()));
+    }
+
+    #[test]
     fn decode_command_json_stdout_accepts_utf8_json() {
         let decoded = decode_command_json_stdout(br#"["C:\\RedBox\\cover.png"]"#);
         assert_eq!(decoded, r#"["C:\\RedBox\\cover.png"]"#);
@@ -1908,21 +1931,103 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
     }
 }
 
+const COPY_TARGET_FILE_NAME_MAX_CHARS: usize = 96;
+
+fn path_display_len(path: &Path) -> usize {
+    path.display().to_string().chars().count()
+}
+
+fn sanitize_copy_file_name(raw: &str) -> String {
+    let sanitized = raw
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>();
+    let sanitized = sanitized.trim_matches([' ', '.']).trim();
+    if sanitized.is_empty() {
+        return format!("imported-{}", now_ms());
+    }
+    shorten_file_name_component(sanitized, COPY_TARGET_FILE_NAME_MAX_CHARS)
+}
+
+fn take_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn shorten_file_name_component(file_name: &str, max_chars: usize) -> String {
+    if file_name.chars().count() <= max_chars {
+        return file_name.to_string();
+    }
+
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty());
+    let extension_suffix = extension
+        .map(|value| format!(".{}", value.trim_start_matches('.')))
+        .unwrap_or_default();
+    let extension_chars = extension_suffix.chars().count();
+    if extension_chars + 12 >= max_chars {
+        return take_chars(file_name, max_chars);
+    }
+
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(file_name);
+    let stem_budget = max_chars.saturating_sub(extension_chars);
+    format!("{}{}", take_chars(stem, stem_budget), extension_suffix)
+}
+
 pub(crate) fn copy_file_into_dir(
     source: &Path,
     target_dir: &Path,
 ) -> Result<(String, PathBuf), String> {
+    let metadata = fs::metadata(source).map_err(|error| {
+        format!(
+            "导入文件失败：源文件不存在或当前不可访问。\n源文件：{}\n系统错误：{}",
+            source.display(),
+            error
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "导入文件失败：请选择具体文件，当前路径不是文件。\n源路径：{}",
+            source.display()
+        ));
+    }
+
     let file_name = source
         .file_name()
         .and_then(|value| value.to_str())
-        .map(|value| value.to_string())
+        .map(sanitize_copy_file_name)
         .unwrap_or_else(|| format!("imported-{}", now_ms()));
     let relative_name = format!("{}-{}", now_ms(), file_name);
     let target = target_dir.join(&relative_name);
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "导入文件失败：无法创建目标目录。\n目标目录：{}\n目标路径长度：{}\n系统错误：{}",
+                parent.display(),
+                path_display_len(parent),
+                error
+            )
+        })?;
     }
-    fs::copy(source, &target).map_err(|error| error.to_string())?;
+    fs::copy(source, &target).map_err(|error| {
+        format!(
+            "导入文件失败：无法复制文件。\n源文件：{}\n目标文件：{}\n源路径长度：{}\n目标路径长度：{}\n系统错误：{}",
+            source.display(),
+            target.display(),
+            path_display_len(source),
+            path_display_len(&target),
+            error
+        )
+    })?;
     Ok((relative_name, target))
 }
 
