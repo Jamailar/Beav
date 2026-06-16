@@ -88,6 +88,10 @@ export function createChatBridge(core: BridgeCore) {
       }) => core.invokeChannel('chat:getOrCreateContextSession', params),
       renameSession: (payload: { sessionId: string; title: string }) =>
         core.invokeChannel('chat:rename-session', payload),
+      setSessionStarred: (payload: { sessionId: string; starred: boolean }) =>
+        core.invokeChannel('chat:set-session-starred', payload),
+      setSessionUnread: (payload: { sessionId: string; unread: boolean }) =>
+        core.invokeChannel('chat:set-session-unread', payload),
       deleteSession: (sessionId: string) => core.invokeChannel('chat:delete-session', sessionId),
       archiveSession: (sessionId: string) => core.invokeChannel('chat:archive-session', sessionId),
       unarchiveSession: (sessionId: string) => core.invokeChannel('chat:unarchive-session', sessionId),

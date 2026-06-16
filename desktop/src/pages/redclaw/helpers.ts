@@ -112,6 +112,11 @@ export function createContextSessionListItem(session: ChatSession): ContextChatS
         transcriptCount: 0,
         checkpointCount: 0,
         context: null,
+        starred: Boolean(session.starred),
+        archived: Boolean(session.archived),
+        unread: Boolean(session.metadata?.unread),
+        workingDirectory: String(session.metadata?.workingDirectory || '').trim(),
+        metadata: session.metadata || null,
         chatSession: {
             id: session.id,
             title: session.title,

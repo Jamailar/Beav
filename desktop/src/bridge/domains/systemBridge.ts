@@ -136,6 +136,7 @@ export function createSystemBridge(core: BridgeCore) {
     openAppReleasePage: (url?: string) => core.invokeChannel('app:open-release-page', { url }),
     openPath: (path: string) => core.invokeChannel('app:open-path', { path }),
     clipboardReadText: () => core.invokeChannel('clipboard:read-text'),
+    clipboardWriteText: (text: string) => core.invokeChannel('clipboard:write-html', { text }),
     capture: {
       saveYoutubeNote: (payload: {
         videoId: string;
