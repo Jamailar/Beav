@@ -42,7 +42,7 @@ fn refresh_official_cached_data_into_settings(
         )?;
     }
 
-    if let Ok(response) = run_authenticated_official_request(
+    match run_authenticated_official_request(
         app,
         state,
         settings,
@@ -51,28 +51,51 @@ fn refresh_official_cached_data_into_settings(
         None,
         expected_generation,
     ) {
-        let user = official_unwrap_response_payload(&response);
-        update_official_session_user(settings, &user);
-        refreshed = true;
+        Ok(response) => {
+            let user = official_unwrap_response_payload(&response);
+            update_official_session_user(settings, &user);
+            refreshed = true;
+        }
+        Err(error) => {
+            if auth::classify_auth_error(&error) == auth::AuthErrorKind::ReauthRequired {
+                return Err(error);
+            }
+            ensure_bootstrap_not_reauth_required(state)?;
+        }
     }
 
-    if let Ok(points) = fetch_remote_official_points(app, state, settings, expected_generation) {
-        write_settings_json_value(settings, "redbox_auth_points_json", &points);
-        refreshed = true;
+    match fetch_remote_official_points(app, state, settings, expected_generation) {
+        Ok(points) => {
+            write_settings_json_value(settings, "redbox_auth_points_json", &points);
+            refreshed = true;
+        }
+        Err(error) => {
+            if auth::classify_auth_error(&error) == auth::AuthErrorKind::ReauthRequired {
+                return Err(error);
+            }
+            ensure_bootstrap_not_reauth_required(state)?;
+        }
     }
 
     let models = fetch_official_models_with_recovery(app, state, settings, expected_generation);
+    ensure_bootstrap_not_reauth_required(state)?;
     if !models.is_empty() {
         write_settings_json_array(settings, "redbox_official_models_json", &models);
         official_sync_source_into_settings(settings, &models, false);
         refreshed = true;
     }
 
-    if let Ok(records) =
-        fetch_remote_official_call_records(app, state, settings, expected_generation)
-    {
-        write_settings_json_array(settings, "redbox_auth_call_records_json", &records);
-        refreshed = true;
+    match fetch_remote_official_call_records(app, state, settings, expected_generation) {
+        Ok(records) => {
+            write_settings_json_array(settings, "redbox_auth_call_records_json", &records);
+            refreshed = true;
+        }
+        Err(error) => {
+            if auth::classify_auth_error(&error) == auth::AuthErrorKind::ReauthRequired {
+                return Err(error);
+            }
+            ensure_bootstrap_not_reauth_required(state)?;
+        }
     }
 
     Ok(json!({
@@ -83,6 +106,16 @@ fn refresh_official_cached_data_into_settings(
         "refreshedAt": now_iso(),
         "stale": !refreshed,
     }))
+}
+
+fn ensure_bootstrap_not_reauth_required(state: &State<'_, AppState>) -> Result<(), String> {
+    let snapshot = auth::auth_state_snapshot(state).unwrap_or_default();
+    if snapshot.status == auth::AuthStatus::ReauthRequired {
+        return Err(snapshot
+            .last_error
+            .unwrap_or_else(|| "登录失效，请重新登录".to_string()));
+    }
+    Ok(())
 }
 
 pub(crate) fn refresh_official_cached_data(

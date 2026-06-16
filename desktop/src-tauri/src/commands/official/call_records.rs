@@ -56,6 +56,18 @@ pub(super) fn response_error_message(response: &Value) -> String {
         }
     }
 
+    for nested_key in ["errors", "error"] {
+        if let Some(nested) = response.get(nested_key).filter(|value| value.is_object()) {
+            for key in ["reason", "message", "error", "msg", "detail", "code"] {
+                if let Some(value) =
+                    payload_string(nested, key).filter(|item| !item.trim().is_empty())
+                {
+                    return value;
+                }
+            }
+        }
+    }
+
     "登录态已失效".to_string()
 }
 
@@ -99,6 +111,8 @@ pub(super) fn official_response_is_unauthorized(status: u16, response: &Value) -
     let message = response_error_message(response).to_lowercase();
     message.contains("invalid_grant")
         || message.contains("token expired")
+        || message.contains("token_expired")
+        || message.contains("invalid refresh token")
         || message.contains("refresh token revoked")
         || message.contains("登录过期")
 }
@@ -299,4 +313,20 @@ pub(super) fn fetch_remote_official_call_records(
         return Err("官方调用记录接口返回了无法识别的数据结构".to_string());
     }
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_error_message_reads_nested_errors_reason() {
+        let response = json!({
+            "code": 401,
+            "errors": {
+                "reason": "token_expired"
+            }
+        });
+        assert_eq!(response_error_message(&response), "token_expired");
+    }
 }

@@ -7,7 +7,7 @@ mod orders;
 mod products;
 
 use orders::{query_remote_order_status, sync_remote_orders_into_settings};
-use products::fetch_billing_products_with_fallback;
+use products::{fetch_billing_product, fetch_billing_products_with_fallback};
 
 pub(super) fn handle_billing_channel(
     app: &AppHandle,
@@ -37,6 +37,32 @@ pub(super) fn handle_billing_channel(
                 request_generation,
             )?;
             Ok(json!({ "success": true, "products": products }))
+        })()),
+        "redbox-auth:product" => Some((|| -> Result<Value, String> {
+            let product_id = payload_string(payload, "productId")
+                .or_else(|| payload_string(payload, "product_id"))
+                .unwrap_or_default();
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
+            let mut settings = settings_snapshot.clone();
+            let product = fetch_billing_product(
+                app,
+                state,
+                &mut settings,
+                &product_id,
+                &["/payments/products", "/billing/products", "/products"],
+                &["/payments/products", "/billing/products", "/products"],
+                request_generation,
+            )?;
+            apply_official_settings_update(
+                app,
+                state,
+                &settings,
+                "official-product",
+                None,
+                request_generation,
+            )?;
+            Ok(json!({ "success": true, "product": product }))
         })()),
         "redbox-auth:call-records" => Some((|| -> Result<Value, String> {
             let settings_snapshot =
@@ -87,40 +113,53 @@ pub(super) fn handle_billing_channel(
             let amount = payload_f64(payload, "amount").unwrap_or(9.9);
             let subject = payload_string(payload, "subject")
                 .unwrap_or_else(|| format!("积分充值 ¥{amount:.2}"));
-            let order = run_authenticated_official_request_skip_preflight_refresh(
-                        app,
-                        state,
-                        &mut settings,
-                        "POST",
-                        "/payments/orders/page-pay",
-                        Some(json!({
-                            "product_id": payload_string(payload, "productId").filter(|value| !value.trim().is_empty()),
-                            "productId": payload_string(payload, "productId").filter(|value| !value.trim().is_empty()),
-                            "amount": amount,
-                            "amount_yuan": amount,
-                            "subject": subject,
-                            "title": subject,
-                            "points_to_deduct": payload_i64(payload, "pointsToDeduct").unwrap_or(0),
-                            "pointsToDeduct": payload_i64(payload, "pointsToDeduct").unwrap_or(0),
-                        })),
-                        request_generation,
-                    )
-                    .map(|response| official_unwrap_response_payload(&response))
-                    .unwrap_or_else(|_| {
-                        let out_trade_no = make_id("order");
-                        let payment_form = create_official_payment_form(&out_trade_no, amount, &subject);
-                        json!({
-                            "id": out_trade_no,
-                            "out_trade_no": out_trade_no,
-                            "outTradeNo": out_trade_no,
-                            "status": "PENDING",
-                            "trade_status": "PENDING",
-                            "amount": amount,
-                            "subject": subject,
-                            "payment_form": payment_form,
-                            "created_at": now_iso(),
-                        })
-                    });
+            let product_id = payload_string(payload, "productId")
+                .or_else(|| payload_string(payload, "product_id"))
+                .filter(|value| !value.trim().is_empty());
+            let points_to_deduct = payload_i64(payload, "pointsToDeduct")
+                .or_else(|| payload_i64(payload, "points_to_deduct"))
+                .unwrap_or(0);
+            let remote_order = run_authenticated_official_request_skip_preflight_refresh(
+                app,
+                state,
+                &mut settings,
+                "POST",
+                "/payments/orders/page-pay",
+                Some(json!({
+                    "product_id": product_id.clone(),
+                    "productId": product_id.clone(),
+                    "amount": amount,
+                    "amount_yuan": amount,
+                    "subject": subject,
+                    "title": subject,
+                    "points_to_deduct": points_to_deduct,
+                    "pointsToDeduct": points_to_deduct,
+                })),
+                request_generation,
+            )
+            .map(|response| official_unwrap_response_payload(&response));
+            let order = match remote_order {
+                Ok(order) => order,
+                Err(error) if product_id.is_some() => {
+                    return Ok(json!({ "success": false, "error": error }));
+                }
+                Err(_) => {
+                    let out_trade_no = make_id("order");
+                    let payment_form =
+                        create_official_payment_form(&out_trade_no, amount, &subject);
+                    json!({
+                        "id": out_trade_no,
+                        "out_trade_no": out_trade_no,
+                        "outTradeNo": out_trade_no,
+                        "status": "PENDING",
+                        "trade_status": "PENDING",
+                        "amount": amount,
+                        "subject": subject,
+                        "payment_form": payment_form,
+                        "created_at": now_iso(),
+                    })
+                }
+            };
             let mut orders = official_settings_orders(&settings);
             orders.insert(0, order.clone());
             write_settings_json_array(&mut settings, "redbox_auth_orders_json", &orders);
