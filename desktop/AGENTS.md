@@ -37,6 +37,7 @@
 最低验证要求：
 
 - 改页面：验证切换时首屏可立即渲染、旧数据保留、刷新失败不清空。
+- 普通页面改动不要默认启动浏览器 / Playwright / 模拟 Web 环境做检查；除非用户明确要求，优先用类型检查、静态检查和真实 Tauri 桌面端路径验证，避免把缺少宿主 IPC 的模拟环境当成产品问题。
 - 改 bridge / IPC / host command：至少从真实页面走一遍调用。
 - 改 runtime / streaming / tool / prompt：至少跑一轮真实任务并检查事件流。
 - 改 workspace / manuscripts / media / knowledge：验证当前工作区行为和持久化重载行为。

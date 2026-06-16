@@ -51,6 +51,7 @@
 - agent 流程复盘、任务执行链路排查、会话异常分析时，默认先检查 `~/Library/Application Support/RedBox/`，重点看 `session-transcripts/`、`session-bundles/` 和状态库；不要只凭 UI 现象或零散控制台输出下结论。
 - 最低验证矩阵：
   - 改 renderer 页面：验证页面切换、已有数据保留、刷新态。
+  - 普通 renderer 页面改动不要默认启动浏览器 / Playwright / 模拟 Web 环境做检查；除非用户明确要求，优先用类型检查、静态检查和真实桌面端路径验证，避免把 Tauri 宿主环境缺失误判成页面问题。
   - 改 bridge / IPC / Tauri command：至少走一次真实 renderer 调用。
   - 改 AI runtime / tool / prompt：至少跑一轮真实任务，检查事件流、工具调用、权限确认、最终摘要。
   - 改 `Plugin/`：验证 popup、background、注入页或右键入口。
