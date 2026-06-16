@@ -30,10 +30,12 @@ const XHS_TASK_HISTORY_KEY = 'xhsCollectorTaskHistory';
 const XHS_TASK_QUEUE_STATE_KEY = 'xhsCollectorTaskQueueState';
 const XHS_TASK_LOG_KEY = 'xhsCollectorTaskLogs';
 const XHS_BLOGGER_PROGRESS_KEY = 'xhsBloggerCollectedNotes';
+const CAPTURE_CHECKPOINT_KEY = 'redboxCaptureCheckpoints';
 const XHS_TASK_HISTORY_LIMIT = 80;
 const XHS_TASK_LOG_LIMIT = 80;
 const XHS_BLOGGER_PROGRESS_LIMIT = 200;
 const XHS_BLOGGER_PROGRESS_NOTE_LIMIT = 5000;
+const CAPTURE_CHECKPOINT_LIMIT = 120;
 const XHS_COLLECT_INTERVAL_DEFAULT_MIN_MS = 1500;
 const XHS_COLLECT_INTERVAL_DEFAULT_MAX_MS = 3500;
 const XHS_COLLECT_INTERVAL_MIN_MS = 500;
@@ -392,6 +394,11 @@ async function handleMessage(message, sender) {
       return await getXhsTaskHistory();
     case 'xhs:clear-history':
       return await clearXhsTaskHistory();
+    case 'capture:get-checkpoints':
+      return { success: true, checkpoints: await readCaptureCheckpoints() };
+    case 'capture:clear-checkpoints':
+      await writeCaptureCheckpoints([]);
+      return { success: true, checkpoints: [] };
     case 'xhs:export-current-note-json':
       return await exportCurrentXhsNoteJson(tabId);
     case 'save-douyin':
@@ -1884,6 +1891,97 @@ async function runNextXhsTask() {
     publishXhsTaskQueueState();
     void runNextXhsTask();
   }
+}
+
+function sanitizeCaptureCheckpoint(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const platform = normalizeText(entry.platform) || 'web';
+  const kind = normalizeText(entry.kind) || 'capture';
+  const source = normalizeText(entry.source || entry.sourceUrl);
+  const sourceId = normalizeText(entry.sourceId || entry.noteId || entry.id) || (source ? hashString(source) : '');
+  const id = normalizeText(entry.id) || `${platform}:${kind}:${sourceId || hashString(`${platform}:${kind}`)}`;
+  const diagnostics = Array.isArray(entry.diagnostics)
+    ? entry.diagnostics.slice(-12)
+    : [];
+  return {
+    id,
+    platform,
+    kind,
+    sourceId,
+    source,
+    status: normalizeText(entry.status) || 'started',
+    taskId: normalizeText(entry.taskId || xhsActiveTask?.id),
+    total: Number(entry.total || 0),
+    captured: Number(entry.captured || 0),
+    hasMore: entry.hasMore === true,
+    diagnostics,
+    error: normalizeText(entry.error),
+    createdAt: normalizeText(entry.createdAt) || new Date().toISOString(),
+    updatedAt: normalizeText(entry.updatedAt) || new Date().toISOString(),
+  };
+}
+
+async function readCaptureCheckpoints() {
+  const stored = await getStorageLocal([CAPTURE_CHECKPOINT_KEY]).catch(() => ({}));
+  return Array.isArray(stored?.[CAPTURE_CHECKPOINT_KEY])
+    ? stored[CAPTURE_CHECKPOINT_KEY].map(sanitizeCaptureCheckpoint).filter(Boolean)
+    : [];
+}
+
+async function writeCaptureCheckpoints(checkpoints) {
+  const normalized = (Array.isArray(checkpoints) ? checkpoints : [])
+    .map(sanitizeCaptureCheckpoint)
+    .filter(Boolean)
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    .slice(0, CAPTURE_CHECKPOINT_LIMIT);
+  await setStorageLocal({ [CAPTURE_CHECKPOINT_KEY]: normalized });
+  return normalized;
+}
+
+async function upsertCaptureCheckpoint(entry) {
+  const normalized = sanitizeCaptureCheckpoint(entry);
+  if (!normalized) return null;
+  const current = await readCaptureCheckpoints();
+  const existing = current.find((item) => item.id === normalized.id);
+  const merged = sanitizeCaptureCheckpoint({
+    ...(existing || {}),
+    ...normalized,
+    createdAt: normalizeText(existing?.createdAt) || normalized.createdAt,
+    updatedAt: new Date().toISOString(),
+  });
+  await writeCaptureCheckpoints([
+    merged,
+    ...current.filter((item) => item.id !== merged.id),
+  ]);
+  pluginDebug('capture-checkpoint-upsert', {
+    id: merged.id,
+    status: merged.status,
+    captured: merged.captured,
+    total: merged.total,
+  });
+  return merged;
+}
+
+function buildXhsCommentsCheckpoint(payload = {}, patch = {}) {
+  const source = normalizeText(payload?.source || patch.source);
+  const noteId = normalizeText(payload?.noteId || patch.sourceId || patch.noteId);
+  return {
+    platform: 'xiaohongshu',
+    kind: 'comments',
+    sourceId: noteId || (source ? hashString(source) : ''),
+    source,
+    total: Number(payload?.total || patch.total || 0),
+    captured: Array.isArray(payload?.comments)
+      ? payload.comments.length
+      : Number(patch.captured || 0),
+    hasMore: payload?.hasMore === true || patch.hasMore === true,
+    diagnostics: Array.isArray(payload?.captureDiagnostics)
+      ? payload.captureDiagnostics
+      : Array.isArray(patch.diagnostics)
+        ? patch.diagnostics
+        : [],
+    ...patch,
+  };
 }
 
 async function getXhsTaskHistory() {
@@ -4051,11 +4149,28 @@ async function saveXhsNoteFromTab(tabId) {
   if (!payload?.title && !payload?.content && !payload?.images?.length && !payload?.videoUrl) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
+  await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
+    source: payload?.source,
+    noteId: payload?.noteId,
+    total: Number(payload?.stats?.comments || 0),
+  }, {
+    status: 'started',
+  })).catch((error) => {
+    pluginWarn('xhs-comments-checkpoint-start-failed', { error: describeError(error) });
+  });
   const commentsPayload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN', captureRuntime: true })
     .catch((error) => {
       pluginWarn('xhs-comments-inline-extract-failed', {
         error: describeError(error),
       });
+      void upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
+        source: payload?.source,
+        noteId: payload?.noteId,
+        total: Number(payload?.stats?.comments || 0),
+      }, {
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      })).catch(() => {});
       return {};
     });
   if (Array.isArray(commentsPayload?.captureDiagnostics)) {
@@ -4064,8 +4179,37 @@ async function saveXhsNoteFromTab(tabId) {
       total: Number(commentsPayload?.total || 0),
       events: commentsPayload.captureDiagnostics.slice(-6),
     });
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+      source: commentsPayload?.source || payload?.source,
+      sourceId: commentsPayload?.noteId || payload?.noteId,
+      status: 'loaded',
+    })).catch((error) => {
+      pluginWarn('xhs-comments-checkpoint-loaded-failed', { error: describeError(error) });
+    });
   }
-  const response = await postKnowledgeXhsEntryV2(buildXhsEntryV2Request(payload, commentsPayload));
+  let response;
+  try {
+    response = await postKnowledgeXhsEntryV2(buildXhsEntryV2Request(payload, commentsPayload));
+    if (Array.isArray(commentsPayload?.comments) && commentsPayload.comments.length > 0) {
+      await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+        source: commentsPayload?.source || payload?.source,
+        sourceId: commentsPayload?.noteId || payload?.noteId,
+        status: 'persisted',
+      })).catch((error) => {
+        pluginWarn('xhs-comments-checkpoint-persisted-failed', { error: describeError(error) });
+      });
+    }
+  } catch (error) {
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+      source: commentsPayload?.source || payload?.source,
+      sourceId: commentsPayload?.noteId || payload?.noteId,
+      total: Number(commentsPayload?.total || payload?.stats?.comments || 0),
+      captured: Array.isArray(commentsPayload?.comments) ? commentsPayload.comments.length : 0,
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+    })).catch(() => {});
+    throw error;
+  }
   return {
     success: true,
     mode: 'xhs',
@@ -4491,10 +4635,29 @@ async function downloadXhsMediaZipFromTab(tabId) {
 async function collectXhsCommentsFromTab(tabId) {
   const payload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN', captureRuntime: true });
   const comments = Array.isArray(payload?.comments) ? payload.comments : [];
+  await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(payload, {
+    status: 'loaded',
+  })).catch((error) => {
+    pluginWarn('xhs-comments-checkpoint-loaded-failed', { error: describeError(error) });
+  });
   if (comments.length === 0) {
     throw new Error('当前页面未采集到评论，请先打开笔记详情并滚动到评论区');
   }
-  const response = await postKnowledgeEntry(buildXhsCommentsEntry(payload));
+  let response;
+  try {
+    response = await postKnowledgeEntry(buildXhsCommentsEntry(payload));
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(payload, {
+      status: 'persisted',
+    })).catch((error) => {
+      pluginWarn('xhs-comments-checkpoint-persisted-failed', { error: describeError(error) });
+    });
+  } catch (error) {
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(payload, {
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+    })).catch(() => {});
+    throw error;
+  }
   const historyItem = await appendXhsTaskHistory({
     id: `xhs-comments-${hashString(`${payload?.source || ''}-${Date.now()}`)}`,
     type: 'comments',
