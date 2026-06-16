@@ -21,6 +21,8 @@ pub fn handle_runtime_session_channel(
         "runtime:query" => runtime_query::handle_runtime_query(app, state, payload),
         "runtime:resume" => Ok(runtime_session_ops::runtime_resume_value(payload)),
         "runtime:fork-session" => runtime_session_ops::fork_runtime_session(app, state, payload),
+        "runtime:export-session" => runtime_session_ops::export_runtime_session(state, payload),
+        "runtime:import-session" => runtime_session_ops::import_runtime_session(state, payload),
         "runtime:get-trace" => runtime_session_ops::runtime_trace_value(state, payload),
         "runtime:get-checkpoints" => runtime_session_ops::runtime_checkpoints_value(state, payload),
         "runtime:get-tool-results" => {
