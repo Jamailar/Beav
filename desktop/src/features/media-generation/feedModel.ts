@@ -607,7 +607,7 @@ export function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
             sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
             sessionId,
             contextId,
-            title: typeof record.title === 'string' ? record.title : 'Agent 模式',
+            title: typeof record.title === 'string' ? record.title : '自由创作',
         } satisfies AgentSessionFeedEntry;
     }
 

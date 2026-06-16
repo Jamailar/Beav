@@ -874,6 +874,7 @@ pub(crate) fn run_form_json(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn extract_reference_images(payload: &Value, max_count: usize) -> Vec<String> {
     for key in [
         "referenceImages",
@@ -900,6 +901,49 @@ pub(crate) fn extract_reference_images(payload: &Value, max_count: usize) -> Vec
         }
     }
     Vec::new()
+}
+
+pub(crate) fn extract_reference_image_values(
+    payload: &Value,
+    max_count: usize,
+) -> Result<Vec<String>, String> {
+    let budget = crate::runtime::MediaRefBudget::reference_images(max_count);
+    let refs = crate::runtime::collect_media_refs_from_payload(
+        payload,
+        &[
+            "referenceImages",
+            "images",
+            "reference_images",
+            "imageUrls",
+            "image_urls",
+        ],
+        crate::runtime::MediaRefKind::Image,
+        budget,
+    )
+    .map_err(|error| {
+        let message = format!("参考媒体超出当前请求限制：{error}");
+        let line = format!(
+            "[media-ref][budget] kind=image max_items={} max_inline_bytes={} max_total_inline_bytes={} error={}",
+            budget.max_items, budget.max_inline_bytes, budget.max_total_inline_bytes, error
+        );
+        crate::logging::emit_legacy_line(
+            crate::logging::event::LogSource::Host,
+            crate::logging::event::LogLevel::Warn,
+            "media-ref",
+            "budget_exceeded",
+            line,
+            json!({
+                "kind": "image",
+                "maxItems": budget.max_items,
+                "maxInlineBytes": budget.max_inline_bytes,
+                "maxTotalInlineBytes": budget.max_total_inline_bytes,
+                "error": error,
+            }),
+            None,
+        );
+        message
+    })?;
+    Ok(refs.into_iter().map(|item| item.raw).collect())
 }
 
 pub(crate) fn payload_has_nonempty_string_array(payload: &Value, key: &str) -> bool {
@@ -987,7 +1031,7 @@ pub(crate) fn run_openai_image_request(
     let quality = required_image_quality(payload);
     let generation_mode =
         payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string());
-    let refs = extract_reference_images(payload, 4);
+    let refs = extract_reference_image_values(payload, 4)?;
     if is_redbox_official_image_endpoint(endpoint) {
         return run_openai_json_image_request(
             &normalize_image_generation_url(endpoint),
@@ -1194,7 +1238,7 @@ pub(crate) fn run_gemini_generate_content_request(
     let refs = if generation_mode == "text-to-image" {
         Vec::new()
     } else {
-        extract_reference_images(payload, 4)
+        extract_reference_image_values(payload, 4)?
     };
     let parts = build_gemini_content_parts(&prompt, &refs)?;
     let aspect_ratio = map_aspect_ratio_to_gemini(
@@ -1325,7 +1369,7 @@ pub(crate) fn run_dashscope_image_request(
 ) -> Result<Value, String> {
     let generation_mode =
         payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string());
-    let refs = extract_reference_images(payload, 4);
+    let refs = extract_reference_image_values(payload, 4)?;
     let refs_for_transport = refs
         .iter()
         .map(|item| normalize_media_value_for_remote(item))
@@ -1519,7 +1563,7 @@ pub(crate) fn run_image_generation_request(
             payload,
             json!({
                 "images": if payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string()) != "text-to-image" {
-                    extract_reference_images(payload, 4)
+                    extract_reference_image_values(payload, 4)?
                         .into_iter()
                         .map(|item| normalize_media_value_for_remote(&item))
                         .collect::<Result<Vec<_>, _>>()?
@@ -1535,7 +1579,7 @@ pub(crate) fn run_image_generation_request(
             payload,
             json!({
                 "images": if payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string()) != "text-to-image" {
-                    extract_reference_images(payload, 4)
+                    extract_reference_image_values(payload, 4)?
                         .into_iter()
                         .map(|item| normalize_media_value_for_remote(&item))
                         .collect::<Result<Vec<_>, _>>()?

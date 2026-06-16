@@ -1,4 +1,6 @@
 use super::progress::{emit_image_generation_log, summarize_json_for_log};
+use crate::persistence::with_store_mut;
+use crate::runtime::append_runtime_event_for_session;
 use crate::{
     extract_first_media_result, file_content_hash, file_url_for_path, make_id, now_ms, now_rfc3339,
     payload_field, payload_string, run_image_generation_request, write_generated_image_asset,
@@ -23,6 +25,59 @@ pub(super) struct SingleImageGenerationInput {
     pub prompt: Option<String>,
     pub effective_image_prompt: Option<String>,
     pub placeholder_fallback_allowed: bool,
+}
+
+fn optional_payload_string(payload: &Value, key: &str) -> Option<String> {
+    payload_string(payload, key).and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn reference_image_count(payload: &Value) -> usize {
+    payload_field(payload, "referenceImages")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn truncate_event_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn append_image_generation_event(
+    state: &State<'_, AppState>,
+    payload: &Value,
+    project_id: Option<String>,
+    event_type: &str,
+    event_payload: Value,
+) {
+    let result = with_store_mut(state, |store| {
+        append_runtime_event_for_session(
+            store,
+            "media_generation",
+            event_type,
+            optional_payload_string(payload, "sessionId")
+                .or_else(|| optional_payload_string(payload, "session_id")),
+            optional_payload_string(payload, "taskId")
+                .or_else(|| optional_payload_string(payload, "sourceTaskId")),
+            optional_payload_string(payload, "toolCallId")
+                .or_else(|| optional_payload_string(payload, "tool_call_id")),
+            project_id,
+            Some(event_payload),
+        );
+        Ok(())
+    });
+    if let Err(error) = result {
+        emit_image_generation_log(
+            state,
+            format!("[image-gen] runtime-event:write-error error={error}"),
+        );
+    }
 }
 
 pub(super) fn generate_single_image_assets(
@@ -67,6 +122,24 @@ pub(super) fn generate_single_image_assets(
                 .as_deref()
                 .unwrap_or(default_template.as_str())
                 .to_string();
+            append_image_generation_event(
+                state,
+                payload,
+                project_id.clone(),
+                "request.started",
+                json!({
+                    "mediaKind": "image",
+                    "provider": effective_provider,
+                    "providerTemplate": effective_template,
+                    "model": effective_model,
+                    "generationMode": payload_string(payload, "generationMode")
+                        .unwrap_or_else(|| "text-to-image".to_string()),
+                    "referenceCount": reference_image_count(payload),
+                    "assetIndex": index,
+                    "assetCount": count,
+                    "placeholderFallbackAllowed": placeholder_fallback_allowed
+                }),
+            );
             emit_image_generation_log(
                 state,
                 format!(
@@ -100,6 +173,25 @@ pub(super) fn generate_single_image_assets(
             ) {
                 Ok(response) => Some(response),
                 Err(error) => {
+                    append_image_generation_event(
+                        state,
+                        payload,
+                        project_id.clone(),
+                        "request.failed",
+                        json!({
+                            "mediaKind": "image",
+                            "provider": effective_provider,
+                            "providerTemplate": effective_template,
+                            "model": effective_model,
+                            "generationMode": payload_string(payload, "generationMode")
+                                .unwrap_or_else(|| "text-to-image".to_string()),
+                            "referenceCount": reference_image_count(payload),
+                            "assetIndex": index,
+                            "assetCount": count,
+                            "error": truncate_event_text(&error, 600),
+                            "placeholderFallbackAllowed": placeholder_fallback_allowed
+                        }),
+                    );
                     emit_image_generation_log(
                         state,
                         format!(
@@ -130,6 +222,26 @@ pub(super) fn generate_single_image_assets(
             if let Some(response) = response {
                 if let Some(item) = extract_first_media_result(&response) {
                     if let Err(error) = write_generated_image_asset(&absolute_path, item) {
+                        append_image_generation_event(
+                            state,
+                            payload,
+                            project_id.clone(),
+                            "asset.write_failed",
+                            json!({
+                                "mediaKind": "image",
+                                "provider": effective_provider,
+                                "providerTemplate": effective_template,
+                                "model": effective_model,
+                                "generationMode": payload_string(payload, "generationMode")
+                                    .unwrap_or_else(|| "text-to-image".to_string()),
+                                "referenceCount": reference_image_count(payload),
+                                "assetIndex": index,
+                                "assetCount": count,
+                                "relativePath": relative_path,
+                                "error": truncate_event_text(&error, 600),
+                                "placeholderFallbackAllowed": placeholder_fallback_allowed
+                            }),
+                        );
                         emit_image_generation_log(
                             state,
                             format!(
@@ -179,8 +291,44 @@ pub(super) fn generate_single_image_assets(
                                 effective_model
                             ),
                         );
+                        append_image_generation_event(
+                            state,
+                            payload,
+                            project_id.clone(),
+                            "request.completed",
+                            json!({
+                                "mediaKind": "image",
+                                "provider": effective_provider,
+                                "providerTemplate": effective_template,
+                                "model": effective_model,
+                                "generationMode": payload_string(payload, "generationMode")
+                                    .unwrap_or_else(|| "text-to-image".to_string()),
+                                "referenceCount": reference_image_count(payload),
+                                "assetIndex": index,
+                                "assetCount": count,
+                                "relativePath": relative_path,
+                            }),
+                        );
                     }
                 } else if placeholder_fallback_allowed {
+                    append_image_generation_event(
+                        state,
+                        payload,
+                        project_id.clone(),
+                        "response.empty",
+                        json!({
+                            "mediaKind": "image",
+                            "provider": effective_provider,
+                            "providerTemplate": effective_template,
+                            "model": effective_model,
+                            "generationMode": payload_string(payload, "generationMode")
+                                .unwrap_or_else(|| "text-to-image".to_string()),
+                            "referenceCount": reference_image_count(payload),
+                            "assetIndex": index,
+                            "assetCount": count,
+                            "placeholderFallbackAllowed": placeholder_fallback_allowed
+                        }),
+                    );
                     emit_image_generation_log(
                         state,
                         format!(
@@ -202,6 +350,24 @@ pub(super) fn generate_single_image_assets(
                         "#E76F51",
                     )?;
                 } else {
+                    append_image_generation_event(
+                        state,
+                        payload,
+                        project_id.clone(),
+                        "response.empty",
+                        json!({
+                            "mediaKind": "image",
+                            "provider": effective_provider,
+                            "providerTemplate": effective_template,
+                            "model": effective_model,
+                            "generationMode": payload_string(payload, "generationMode")
+                                .unwrap_or_else(|| "text-to-image".to_string()),
+                            "referenceCount": reference_image_count(payload),
+                            "assetIndex": index,
+                            "assetCount": count,
+                            "placeholderFallbackAllowed": placeholder_fallback_allowed
+                        }),
+                    );
                     emit_image_generation_log(
                         state,
                         format!(
