@@ -1,5 +1,28 @@
 use super::types::{AppStore, SpaceRecord};
 
+pub(crate) fn create_space(
+    store: &mut AppStore,
+    id: String,
+    name: String,
+    timestamp: &str,
+) -> Result<SpaceRecord, String> {
+    if name.trim().is_empty() {
+        return Err("空间名称不能为空".to_string());
+    }
+    if space_exists(store, &id) {
+        return Err("空间已存在".to_string());
+    }
+    let space = SpaceRecord {
+        id,
+        name,
+        created_at: timestamp.to_string(),
+        updated_at: timestamp.to_string(),
+    };
+    store.spaces.push(space.clone());
+    store.active_space_id = space.id.clone();
+    Ok(space)
+}
+
 pub(crate) fn list_spaces_snapshot(store: &AppStore) -> (Vec<SpaceRecord>, String) {
     (store.spaces.clone(), active_space_id(store))
 }

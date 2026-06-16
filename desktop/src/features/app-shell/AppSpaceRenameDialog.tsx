@@ -4,6 +4,7 @@ interface AppSpaceRenameDialogProps {
   name: string;
   setName: (name: string) => void;
   isSubmitting: boolean;
+  title: string;
   submit: () => Promise<void> | void;
   close: () => void;
 }
@@ -12,6 +13,7 @@ export function AppSpaceRenameDialog({
   name,
   setName,
   isSubmitting,
+  title,
   submit,
   close,
 }: AppSpaceRenameDialogProps) {
@@ -27,7 +29,7 @@ export function AppSpaceRenameDialog({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="text-sm font-medium text-text-primary">
-          {t('layout.renameSpace')}
+          {title}
         </div>
         <input
           autoFocus

@@ -27,7 +27,7 @@ export function createSpacesBridge(core: BridgeCore) {
         },
       ),
       switch: (spaceId: string) => core.invokeChannel('spaces:switch', spaceId),
-      create: () => Promise.resolve({ success: false, error: '创建新空间功能已关闭' }),
+      create: (payload: { name: string }) => core.invokeChannel('spaces:create', payload),
       rename: (payload: { id: string; name: string }) => core.invokeChannel('spaces:rename', payload),
       delete: (spaceId: string) => core.invokeChannel('spaces:delete', spaceId),
       onChanged: (listener: Listener) => core.on('space:changed', listener),

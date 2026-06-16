@@ -189,10 +189,15 @@ impl<'a> AppCliExecutor<'a> {
                     .cloned();
                 Ok(json!({ "success": space.is_some(), "space": space }))
             }
-            "create" => Ok(json!({
-                "success": false,
-                "error": commands::spaces::SPACE_CREATION_DISABLED_ERROR,
-            })),
+            "create" => self.call_channel(
+                "spaces:create",
+                json!({
+                    "name": args
+                        .string(&["name"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "spaces create requires --name".to_string())?
+                }),
+            ),
             "rename" => self.call_channel(
                 "spaces:rename",
                 json!({
