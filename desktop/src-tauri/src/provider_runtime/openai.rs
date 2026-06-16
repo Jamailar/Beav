@@ -465,9 +465,8 @@ fn is_stream_degrade_error(error: &LlmTransportError) -> bool {
 mod tests {
     use super::{
         extract_openai_json_assistant_response, extract_openai_responses_response,
-        openai_tool_arguments_value,
-        record_openai_stream_failure, record_openai_stream_success, should_attempt_json_fallback,
-        should_prefer_non_streaming_openai_turn,
+        openai_tool_arguments_value, record_openai_stream_failure, record_openai_stream_success,
+        should_attempt_json_fallback, should_prefer_non_streaming_openai_turn,
     };
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
     use crate::runtime::ResolvedChatConfig;

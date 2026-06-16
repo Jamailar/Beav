@@ -108,3 +108,18 @@ pub(crate) fn push_runtime_hook(store: &mut AppStore, hook: RuntimeHookRecord) {
 pub(crate) fn remove_runtime_hook(store: &mut AppStore, hook_id: &str) {
     store.runtime_hooks.retain(|item| item.id != hook_id);
 }
+
+pub(crate) fn replace_thrive_plugin_hooks(
+    store: &mut AppStore,
+    hooks: Vec<RuntimeHookRecord>,
+) -> Vec<RuntimeHookRecord> {
+    store.runtime_hooks.retain(|hook| {
+        !hook
+            .source_scope
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("thrive-plugin:")
+    });
+    store.runtime_hooks.extend(hooks);
+    list_runtime_hooks(store)
+}

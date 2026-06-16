@@ -237,11 +237,16 @@ impl StatelessMcpTransport {
                     .filter(|value| !value.trim().is_empty())
                     .ok_or_else(|| "缺少 MCP URL".to_string())?;
                 let api_key = mcp_bearer_token_from_env(&self.server);
+                let owned_headers = mcp_http_headers(&self.server);
+                let headers = owned_headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.clone()))
+                    .collect::<Vec<_>>();
                 run_curl_json(
                     "POST",
                     url,
                     api_key.as_deref(),
-                    &[],
+                    &headers,
                     Some(json!({
                         "jsonrpc": "2.0",
                         "id": 1,
@@ -263,6 +268,42 @@ impl StatelessMcpTransport {
             other => Err(format!("不支持的 transport: {}", other)),
         }
     }
+}
+
+fn mcp_http_headers(server: &McpServerRecord) -> Vec<(String, String)> {
+    let Some(redbox) = server.oauth.as_ref().and_then(|value| value.get("redbox")) else {
+        return Vec::new();
+    };
+    let mut headers = Vec::new();
+    if let Some(object) = redbox.get("httpHeaders").and_then(Value::as_object) {
+        for (name, value) in object {
+            if let Some(value) = value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                headers.push((name.clone(), value.to_string()));
+            }
+        }
+    }
+    if let Some(object) = redbox.get("envHttpHeaders").and_then(Value::as_object) {
+        for (name, env_var) in object {
+            let Some(env_var) = env_var
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if let Ok(value) = std::env::var(env_var) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    headers.push((name.clone(), value.to_string()));
+                }
+            }
+        }
+    }
+    headers
 }
 
 fn mcp_bearer_token_from_env(server: &McpServerRecord) -> Option<String> {

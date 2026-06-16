@@ -715,6 +715,16 @@ impl<'a> AppCliExecutor<'a> {
             "websearch" => self.handle_web(&["search".to_string()], payload),
             "sessionresourceslist" => self.handle_session_resources_list(payload),
             "sessionresourcesget" => self.handle_session_resources_get(payload),
+            "pluginslist" => self.call_channel("plugins:list", json!({})),
+            "pluginsconnectors" => self.call_channel("plugins:connectors", json!({})),
+            "pluginsmarketplace" => self.call_channel("plugins:marketplace", payload.clone()),
+            "pluginscodexmarketplace" => {
+                self.call_channel("plugins:codex-marketplace", payload.clone())
+            }
+            "pluginsdiscoverlocal" => self.call_channel("plugins:discover-local", payload.clone()),
+            "pluginsinstall" => self.call_channel("plugins:install", payload.clone()),
+            "pluginsinstallcodex" => self.call_channel("plugins:install-codex", payload.clone()),
+            "pluginsrequestinstall" => self.handle_plugins_request_install(payload),
             "videoanalyze" => self.handle_video_analyze(payload),
             "memorysearch" => {
                 let tokens = vec!["search".to_string()];
@@ -919,6 +929,10 @@ impl<'a> AppCliExecutor<'a> {
             }
             "runtimegettoolresults" => {
                 let tokens = vec!["get-tool-results".to_string()];
+                app_cli_runtime::handle(self, &tokens, payload)
+            }
+            "runtimegetevents" => {
+                let tokens = vec!["get-events".to_string()];
                 app_cli_runtime::handle(self, &tokens, payload)
             }
             "runtimetaskscreate" => {
@@ -1282,6 +1296,11 @@ impl<'a> AppCliExecutor<'a> {
             return result;
         }
         if let Some(result) =
+            commands::plugin::handle_plugin_channel(self.app, self.state, channel, &payload)
+        {
+            return result;
+        }
+        if let Some(result) =
             commands::runtime::handle_runtime_channel(self.app, self.state, channel, &payload)
         {
             return result;
@@ -1302,6 +1321,145 @@ impl<'a> AppCliExecutor<'a> {
             return result;
         }
         Err(format!("workflow channel not handled: {channel}"))
+    }
+
+    fn handle_plugins_request_install(&self, payload: &Value) -> Result<Value, String> {
+        let tool_type =
+            payload_string_alias(payload, &["toolType", "tool_type"]).unwrap_or_else(|| {
+                if payload_string_alias(payload, &["connectorId", "connector_id"]).is_some() {
+                    "connector".to_string()
+                } else {
+                    "plugin".to_string()
+                }
+            });
+        let normalized_tool_type = tool_type.trim().to_ascii_lowercase();
+        let action_type = payload_string_alias(payload, &["actionType", "action_type"])
+            .unwrap_or_else(|| "install".to_string());
+        let tool_id = payload_string_alias(
+            payload,
+            &[
+                "toolId",
+                "tool_id",
+                "pluginId",
+                "plugin_id",
+                "connectorId",
+                "connector_id",
+                "id",
+            ],
+        )
+        .ok_or_else(|| "plugins.requestInstall requires toolId".to_string())?;
+        let suggest_reason =
+            payload_string_alias(payload, &["suggestReason", "suggest_reason"]).unwrap_or_default();
+
+        match normalized_tool_type.as_str() {
+            "plugin" => {
+                self.handle_plugin_install_suggestion(&tool_id, &action_type, &suggest_reason)
+            }
+            "connector" => {
+                self.handle_connector_install_suggestion(&tool_id, &action_type, &suggest_reason)
+            }
+            other => Err(format!(
+                "plugins.requestInstall unsupported toolType: {other}; expected plugin or connector"
+            )),
+        }
+    }
+
+    fn handle_plugin_install_suggestion(
+        &self,
+        tool_id: &str,
+        action_type: &str,
+        suggest_reason: &str,
+    ) -> Result<Value, String> {
+        let response = self.call_channel("plugins:list", json!({}))?;
+        let plugins = response
+            .get("plugins")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "plugins:list returned no plugins array".to_string())?;
+        let plugin = plugins
+            .iter()
+            .find(|item| {
+                value_matches_identifier(
+                    item,
+                    tool_id,
+                    &["id", "name", "displayName", "display_name"],
+                )
+            })
+            .ok_or_else(|| format!("plugin not found for plugins.requestInstall: {tool_id}"))?;
+        let tool_name = value_string_alias(plugin, &["displayName", "display_name", "name", "id"])
+            .unwrap_or_else(|| tool_id.to_string());
+        let plugin_id =
+            value_string_alias(plugin, &["id", "name"]).unwrap_or_else(|| tool_id.to_string());
+        let app_connector_ids = plugin
+            .get("appConnectorIds")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+
+        Ok(json!({
+            "success": true,
+            "completed": false,
+            "userConfirmed": false,
+            "toolType": "plugin",
+            "actionType": action_type,
+            "toolId": plugin_id,
+            "toolName": tool_name,
+            "suggestReason": suggest_reason,
+            "plugin": plugin,
+            "meta": {
+                "codexApprovalKind": "tool_suggestion",
+                "persist": "always",
+                "toolType": "plugin",
+                "suggestType": action_type,
+                "suggestReason": suggest_reason,
+                "toolId": plugin_id,
+                "toolName": tool_name,
+                "appConnectorIds": app_connector_ids
+            }
+        }))
+    }
+
+    fn handle_connector_install_suggestion(
+        &self,
+        tool_id: &str,
+        action_type: &str,
+        suggest_reason: &str,
+    ) -> Result<Value, String> {
+        let response = self.call_channel("plugins:connectors", json!({}))?;
+        let connectors = response
+            .get("connectors")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "plugins:connectors returned no connectors array".to_string())?;
+        let connector = connectors
+            .iter()
+            .find(|item| value_matches_identifier(item, tool_id, &["id", "name"]))
+            .ok_or_else(|| format!("connector not found for plugins.requestInstall: {tool_id}"))?;
+        let connector_id =
+            value_string_alias(connector, &["id"]).unwrap_or_else(|| tool_id.to_string());
+        let tool_name =
+            value_string_alias(connector, &["name", "id"]).unwrap_or_else(|| tool_id.to_string());
+        let install_url = connector.get("installUrl").cloned().unwrap_or(Value::Null);
+
+        Ok(json!({
+            "success": true,
+            "completed": false,
+            "userConfirmed": false,
+            "toolType": "connector",
+            "actionType": action_type,
+            "toolId": connector_id,
+            "toolName": tool_name,
+            "suggestReason": suggest_reason,
+            "connector": connector,
+            "meta": {
+                "codexApprovalKind": "tool_suggestion",
+                "persist": "always",
+                "toolType": "connector",
+                "suggestType": action_type,
+                "suggestReason": suggest_reason,
+                "toolId": connector_id,
+                "toolName": tool_name,
+                "appConnectorIds": [connector_id],
+                "installUrl": install_url
+            }
+        }))
     }
 
     fn payload_with_runtime_context(&self, channel: &str, payload: Value) -> Value {
@@ -1921,6 +2079,32 @@ fn payload_string_alias(payload: &Value, keys: &[&str]) -> Option<String> {
         .find_map(|key| payload_string(payload, key))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn value_string_alias(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn value_matches_identifier(value: &Value, requested: &str, keys: &[&str]) -> bool {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return false;
+    }
+    let requested_lower = requested.to_ascii_lowercase();
+    keys.iter().any(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|candidate| !candidate.is_empty())
+            .map(|candidate| {
+                candidate == requested || candidate.to_ascii_lowercase() == requested_lower
+            })
+            .unwrap_or(false)
+    })
 }
 
 fn subject_id_from_args_or_payload(args: &CliArgs, payload: &Value) -> Option<String> {
@@ -2585,7 +2769,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "memory list|search|recall|add|update|archive|delete|rebuild-index|diagnostics",
             "web fetch|search",
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
-            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
+            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|get-events|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
             "skills list|invoke|create|save|enable|disable|market-install",
             "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
@@ -2702,6 +2886,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "runtime get-trace --session-id <sessionId> [--limit 50]",
             "runtime get-checkpoints --session-id <sessionId> [--limit 50]",
             "runtime get-tool-results --session-id <sessionId> [--limit 50]",
+            "runtime get-events --session-id <sessionId> [--category media_generation] [--event-type request.failed] [--limit 50]",
             "runtime tasks create [payload or payload.payload]",
             "runtime tasks list",
             "runtime tasks get --task-id <taskId>",

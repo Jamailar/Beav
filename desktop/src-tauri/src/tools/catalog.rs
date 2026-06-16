@@ -241,6 +241,139 @@ fn session_resources_get_input_schema() -> Value {
     )
 }
 
+fn plugins_install_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema(
+                    "Local plugin directory, plugin archive, or Codex marketplace/cache root to install. Use either path or remotePluginId.",
+                ),
+            ),
+            (
+                "remotePluginId",
+                string_schema("Codex remote plugin id from plugins.codexMarketplace for authenticated remote install."),
+            ),
+            (
+                "remoteMarketplaceName",
+                string_schema("Optional Codex remote marketplace name; defaults to openai-curated-remote."),
+            ),
+            (
+                "codexRoot",
+                string_schema("Optional Codex home directory for auth.json/config.toml; defaults to CODEX_HOME or ~/.codex."),
+            ),
+            (
+                "pluginName",
+                string_schema("Optional Codex marketplace plugin name when a local marketplace has multiple plugins, or the expected remote plugin name."),
+            ),
+            (
+                "pluginId",
+                string_schema("Optional Codex marketplace plugin id when the marketplace has multiple local plugins."),
+            ),
+            (
+                "id",
+                string_schema("Optional alias for pluginId when the marketplace has multiple local plugins."),
+            ),
+        ],
+        &[],
+        Some("Install a Codex-compatible plugin from either a local path/marketplace root or a Codex remote plugin id."),
+    )
+}
+
+fn plugins_marketplace_input_schema() -> Value {
+    object_schema(
+        &[(
+            "url",
+            string_schema("Optional GitHub-hosted marketplace registry URL."),
+        )],
+        &[],
+        Some("List plugins from the configured marketplace registry."),
+    )
+}
+
+fn plugins_codex_marketplace_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema("Optional local Codex plugin cache, checkout, marketplace root, or plugin directory to scan."),
+            ),
+            (
+                "codexRoot",
+                string_schema("Optional alias for path when scanning a Codex checkout or cache root."),
+            ),
+        ],
+        &[],
+        Some("List Codex plugins from the local Codex plugin cache."),
+    )
+}
+
+fn plugins_discover_local_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema("Local plugin directory, parent directory, or Codex marketplace root."),
+            ),
+            (
+                "sourceRoot",
+                string_schema("Alias for path."),
+            ),
+        ],
+        &[],
+        Some("Inspect a local Codex-compatible plugin source or marketplace root and return installable plugin candidates."),
+    )
+}
+
+fn plugins_request_install_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "toolType",
+                json!({
+                    "type": "string",
+                    "enum": ["plugin", "connector"],
+                    "description": "Suggested install target type."
+                }),
+            ),
+            (
+                "tool_type",
+                json!({
+                    "type": "string",
+                    "enum": ["plugin", "connector"],
+                    "description": "Snake-case alias for toolType."
+                }),
+            ),
+            (
+                "actionType",
+                string_schema("Suggested action, usually install."),
+            ),
+            (
+                "action_type",
+                string_schema("Snake-case alias for actionType."),
+            ),
+            (
+                "toolId",
+                string_schema("Plugin id/name or connector id/name returned by plugins.list or plugins.connectors."),
+            ),
+            (
+                "tool_id",
+                string_schema("Snake-case alias for toolId."),
+            ),
+            (
+                "suggestReason",
+                string_schema("Short user-facing reason for suggesting this plugin or connector."),
+            ),
+            (
+                "suggest_reason",
+                string_schema("Snake-case alias for suggestReason."),
+            ),
+        ],
+        &[],
+        Some("Return Codex-style plugin or connector install suggestion metadata without installing it."),
+    )
+}
+
 fn ok_output_schema(data_schema: Value) -> Value {
     object_schema(
         &[
@@ -3094,6 +3227,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "editor",
             "skill",
             "mcp",
+            "plugins",
             "runtime",
             "cli_runtime",
         ]
@@ -3132,6 +3266,7 @@ fn redbox_operation_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'
             "cancel",
             "resume",
             "install",
+            "request",
             "verify",
         ]
         .into_iter()
@@ -3167,6 +3302,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "web" => Some("web"),
         "skills" => Some("skill"),
         "mcp" => Some("mcp"),
+        "plugins" => Some("plugins"),
         "runtime" | "team" => Some("runtime"),
         "cli_runtime" => Some("cli_runtime"),
         "redclaw" if action.starts_with("redclaw.profile.") => Some("profile"),
@@ -3178,13 +3314,16 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
 fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
     let verb = action.rsplit('.').next().unwrap_or(action);
     match verb {
-        "list" => Some("list"),
+        "list" | "marketplace" => Some("list"),
         "search" => Some("search"),
         "get" | "read" | "fetch" | "readCurrent" | "bundle" | "stats" | "query"
-        | "getCheckpoints" | "getToolResults" | "sessions" | "oauthStatus" => Some("get"),
+        | "getCheckpoints" | "getToolResults" | "getEvents" | "sessions" | "oauthStatus" => {
+            Some("get")
+        }
         "create" | "createProject" | "preview" | "add" | "spawn" | "send" | "request" => {
             Some("create")
         }
+        "requestInstall" => Some("request"),
         "update" | "writeCurrent" | "submit" => Some("update"),
         "delete" | "disconnect" | "disconnectAll" | "deny" => Some("delete"),
         "cancel" => Some("cancel"),
@@ -3365,6 +3504,94 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "plugins.list",
+        namespace: "plugins",
+        description: "List installed Codex-compatible plugins and their contributed skills, MCP servers, hooks, and app connector declarations.",
+        input_schema: no_payload_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "plugins.connectors",
+        namespace: "plugins",
+        description: "List Codex AppInfo-style connector declarations contributed by enabled plugins.",
+        input_schema: no_payload_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "plugins.marketplace",
+        namespace: "plugins",
+        description: "List marketplace plugins from a GitHub-hosted plugin registry.",
+        input_schema: plugins_marketplace_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "plugins.codexMarketplace",
+        namespace: "plugins",
+        description: "List Codex plugins from the local Codex plugin cache so they can be installed into RedBox.",
+        input_schema: plugins_codex_marketplace_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "plugins.discoverLocal",
+        namespace: "plugins",
+        description: "Inspect a local Codex plugin directory, parent directory, or marketplace root and return installable local plugin candidates.",
+        input_schema: plugins_discover_local_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "plugins.install",
+        namespace: "plugins",
+        description: "Install a Codex-compatible plugin from a local plugin path, archive, or Codex marketplace root.",
+        input_schema: plugins_install_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "plugins.installCodex",
+        namespace: "plugins",
+        description: "Install a Codex plugin from a local Codex marketplace/cache item or a Codex remote marketplace plugin id.",
+        input_schema: plugins_install_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "plugins.requestInstall",
+        namespace: "plugins",
+        description: "Return Codex-style install suggestion metadata for a discovered plugin or connector. Use this before recommending a plugin or connector install.",
+        input_schema: plugins_request_install_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -3856,6 +4083,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         action: "runtime.getToolResults",
         namespace: "runtime",
         description: "Read runtime tool results for a session.",
+        input_schema: runtime_simple_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "runtime.getEvents",
+        namespace: "runtime",
+        description: "Read structured runtime events for a session.",
         input_schema: runtime_simple_input_schema,
         output_schema: runtime_output_schema,
         mutating: false,
@@ -5539,6 +5777,45 @@ mod tests {
         ] {
             assert!(actions.contains(&action), "{action}");
         }
+    }
+
+    #[test]
+    fn team_schema_exposes_codex_plugin_actions() {
+        let schema = schema_for_tool_for_runtime_mode("workflow", Some("team"))
+            .expect("team schema should exist");
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        for action in [
+            "plugins.list",
+            "plugins.connectors",
+            "plugins.marketplace",
+            "plugins.codexMarketplace",
+            "plugins.discoverLocal",
+            "plugins.install",
+            "plugins.installCodex",
+            "plugins.requestInstall",
+        ] {
+            assert!(actions.contains(&action), "{action}");
+        }
+
+        let operate = schema_for_tool_for_runtime_mode("Operate", Some("team"))
+            .expect("Operate schema should exist");
+        let resources = operate
+            .pointer("/function/parameters/properties/resource/enum")
+            .and_then(Value::as_array)
+            .expect("resource enum");
+        assert!(resources.contains(&json!("plugins")));
+        let operations = operate
+            .pointer("/function/parameters/properties/operation/enum")
+            .and_then(Value::as_array)
+            .expect("operation enum");
+        assert!(operations.contains(&json!("install")));
+        assert!(operations.contains(&json!("request")));
     }
 
     #[test]

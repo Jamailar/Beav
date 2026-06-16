@@ -31,6 +31,18 @@ pub struct RuntimeHookRecord {
     pub r#type: String,
     pub matcher: Option<String>,
     pub enabled: Option<bool>,
+    pub source_scope: Option<String>,
+    pub plugin_id: Option<String>,
+    pub plugin_root: Option<String>,
+    pub plugin_data_root: Option<String>,
+    pub source_path: Option<String>,
+    pub source_relative_path: Option<String>,
+    pub command: Option<String>,
+    pub command_windows: Option<String>,
+    pub timeout_sec: Option<u64>,
+    pub r#async: Option<bool>,
+    pub status_message: Option<String>,
+    pub raw: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -469,6 +481,54 @@ impl RuntimeTrace {
 }
 
 pub type RuntimeTaskTraceRecord = RuntimeTrace;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RuntimeEventRecord {
+    pub id: String,
+    pub category: String,
+    pub event_type: String,
+    pub session_id: Option<String>,
+    pub runtime_id: Option<String>,
+    pub parent_runtime_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub task_id: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub project_id: Option<String>,
+    pub payload: Option<Value>,
+    pub created_at: i64,
+}
+
+impl RuntimeEventRecord {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        category: &str,
+        event_type: &str,
+        session_id: Option<String>,
+        runtime_id: Option<String>,
+        parent_runtime_id: Option<String>,
+        source_task_id: Option<String>,
+        task_id: Option<String>,
+        tool_call_id: Option<String>,
+        project_id: Option<String>,
+        payload: Option<Value>,
+    ) -> Self {
+        Self {
+            id: make_id("runtime-event"),
+            category: category.to_string(),
+            event_type: event_type.to_string(),
+            session_id,
+            runtime_id,
+            parent_runtime_id,
+            source_task_id,
+            task_id,
+            tool_call_id,
+            project_id,
+            payload,
+            created_at: now_i64(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]

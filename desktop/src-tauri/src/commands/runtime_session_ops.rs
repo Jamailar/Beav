@@ -3,8 +3,8 @@ use tauri::{AppHandle, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    checkpoints_value_for_session, runtime_approval_snapshot, tool_results_value_for_session,
-    trace_value_for_session,
+    checkpoints_value_for_session, runtime_approval_snapshot, runtime_events_value_for_session,
+    tool_results_value_for_session, trace_value_for_session,
 };
 use crate::session_manager::fork_session;
 use crate::{now_ms, payload_string, payload_value_as_string, AppState};
@@ -110,6 +110,30 @@ pub fn runtime_tool_results_value(
             limit,
         );
         Ok(direct)
+    })
+}
+
+pub fn runtime_events_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    let session_id = payload_string(payload, "sessionId").unwrap_or_default();
+    let include_child_sessions = payload
+        .get("includeChildSessions")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let category = payload_string(payload, "category");
+    let event_type = payload_string(payload, "eventType");
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
+    with_store(state, |store| {
+        Ok(runtime_events_value_for_session(
+            &store,
+            &session_id,
+            include_child_sessions,
+            category.as_deref(),
+            event_type.as_deref(),
+            limit,
+        ))
     })
 }
 

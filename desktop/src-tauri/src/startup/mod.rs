@@ -259,86 +259,102 @@ pub(crate) fn run_setup_restore_sequence(
             );
         }
     }
-    if let Err(error) = ensure_redclaw_profile_files(&state) {
-        logging::emit_legacy_line(
-            logging::event::LogSource::Host,
-            logging::event::LogLevel::Warn,
-            "daemon",
-            "startup.redclaw_profile_init_failed",
-            format!("[{} AI profile init] {error}", app_brand_display_name()),
-            json!({ "error": error }),
-            None,
-        );
-    }
-    if let Err(error) = commands::redclaw::ensure_redclaw_runtime_running(app.handle(), &state) {
-        logging::emit_legacy_line(
-            logging::event::LogSource::Host,
-            logging::event::LogLevel::Warn,
-            "daemon",
-            "startup.redclaw_runtime_restore_failed",
-            format!("[{} AI runtime restore] {error}", app_brand_display_name()),
-            json!({ "error": error }),
-            None,
-        );
-    }
-    if let Err(error) = media_runtime::ensure_media_generation_runtime_running(app.handle(), &state)
-    {
-        logging::emit_legacy_line(
-            logging::event::LogSource::Host,
-            logging::event::LogLevel::Warn,
-            "daemon",
-            "startup.media_generation_runtime_restore_failed",
-            format!(
-                "[{} media generation runtime restore] {error}",
-                app_brand_display_name()
-            ),
-            json!({ "error": error }),
-            None,
-        );
-    }
-    if let Err(error) =
-        commands::assistant_daemon::ensure_assistant_daemon_running(app.handle(), &state, true)
-    {
-        logging::emit_legacy_line(
-            logging::event::LogSource::Host,
-            logging::event::LogLevel::Warn,
-            "daemon",
-            "startup.assistant_daemon_restore_failed",
-            format!(
-                "[{} assistant daemon restore] {error}",
-                app_brand_display_name()
-            ),
-            json!({ "error": error }),
-            None,
-        );
-    }
-    if let Err(error) = skills::refresh_skill_store_catalog(&state) {
-        logging::emit_legacy_line(
-            logging::event::LogSource::Host,
-            logging::event::LogLevel::Warn,
-            "runtime.task",
-            "startup.skill_catalog_refresh_failed",
-            format!(
-                "[{} skill catalog refresh] {error}",
-                app_brand_display_name()
-            ),
-            json!({ "error": error }),
-            None,
-        );
-    }
-    if let Err(error) = refresh_runtime_warm_state(&state, &["wander", "redclaw", "team"]) {
-        logging::emit_legacy_line(
-            logging::event::LogSource::Host,
-            logging::event::LogLevel::Warn,
-            "runtime.task",
-            "startup.runtime_warmup_failed",
-            format!("[{} runtime warmup] {error}", app_brand_display_name()),
-            json!({ "error": error }),
-            None,
-        );
-    }
+    run_startup_runtime_restore(app.handle().clone());
     run_startup_background_housekeeping(app.handle().clone());
     Ok(())
+}
+
+fn log_startup_restore_error(
+    category: &'static str,
+    event: &'static str,
+    message: String,
+    error: String,
+) {
+    logging::emit_legacy_line(
+        logging::event::LogSource::Host,
+        logging::event::LogLevel::Warn,
+        category,
+        event,
+        message,
+        json!({ "error": error }),
+        None,
+    );
+}
+
+fn run_startup_runtime_restore(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let app_handle = app.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let state = app_handle.state::<AppState>();
+            if let Err(error) = ensure_redclaw_profile_files(&state) {
+                log_startup_restore_error(
+                    "daemon",
+                    "startup.redclaw_profile_init_failed",
+                    format!("[{} AI profile init] {error}", app_brand_display_name()),
+                    error,
+                );
+            }
+            if let Err(error) =
+                commands::redclaw::ensure_redclaw_runtime_running(&app_handle, &state)
+            {
+                log_startup_restore_error(
+                    "daemon",
+                    "startup.redclaw_runtime_restore_failed",
+                    format!("[{} AI runtime restore] {error}", app_brand_display_name()),
+                    error,
+                );
+            }
+            if let Err(error) =
+                media_runtime::ensure_media_generation_runtime_running(&app_handle, &state)
+            {
+                log_startup_restore_error(
+                    "daemon",
+                    "startup.media_generation_runtime_restore_failed",
+                    format!(
+                        "[{} media generation runtime restore] {error}",
+                        app_brand_display_name()
+                    ),
+                    error,
+                );
+            }
+            if let Err(error) = commands::assistant_daemon::ensure_assistant_daemon_running(
+                &app_handle,
+                &state,
+                true,
+            ) {
+                log_startup_restore_error(
+                    "daemon",
+                    "startup.assistant_daemon_restore_failed",
+                    format!(
+                        "[{} assistant daemon restore] {error}",
+                        app_brand_display_name()
+                    ),
+                    error,
+                );
+            }
+            if let Err(error) = skills::refresh_skill_store_catalog(&state) {
+                log_startup_restore_error(
+                    "runtime.task",
+                    "startup.skill_catalog_refresh_failed",
+                    format!(
+                        "[{} skill catalog refresh] {error}",
+                        app_brand_display_name()
+                    ),
+                    error,
+                );
+            }
+            if let Err(error) = refresh_runtime_warm_state(&state, &["wander", "redclaw", "team"]) {
+                log_startup_restore_error(
+                    "runtime.task",
+                    "startup.runtime_warmup_failed",
+                    format!("[{} runtime warmup] {error}", app_brand_display_name()),
+                    error,
+                );
+            }
+        })
+        .await;
+    });
 }
 
 const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);

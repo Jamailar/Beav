@@ -1240,6 +1240,8 @@ fn import_legacy_store_from_db(
                     .get("created_at")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0),
+                status: None,
+                abandoned_at: None,
             });
         }
     }

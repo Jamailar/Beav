@@ -149,3 +149,35 @@ pub fn tool_results_value_for_session(
     items.sort_by_key(|item| item.created_at);
     json!(take_recent_items(items, limit))
 }
+
+pub fn runtime_events_value_for_session(
+    store: &AppStore,
+    session_id: &str,
+    include_child_sessions: bool,
+    category: Option<&str>,
+    event_type: Option<&str>,
+    limit: Option<usize>,
+) -> Value {
+    let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
+    let mut items = store
+        .runtime_events
+        .iter()
+        .filter(|item| {
+            session_ids.iter().any(|candidate| {
+                item.session_id
+                    .as_deref()
+                    .map(|value| value == candidate)
+                    .unwrap_or(false)
+            })
+        })
+        .filter(|item| category.map(|value| item.category == value).unwrap_or(true))
+        .filter(|item| {
+            event_type
+                .map(|value| item.event_type == value)
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    items.sort_by_key(|item| item.created_at);
+    json!(take_recent_items(items, limit))
+}
