@@ -92,6 +92,7 @@ fn runtime_probe_cli_run_all_covers_required_surfaces() {
 
     for scenario in [
         "mcp-call-tool",
+        "responses-tool-turn",
         "cli-runtime-execute",
         "tool-call-contract",
         "skill-activation",
@@ -125,4 +126,41 @@ fn runtime_probe_cli_run_all_covers_required_surfaces() {
             Some("passed")
         );
     }
+}
+
+#[test]
+fn runtime_probe_cli_responses_tool_turn_covers_mock_provider() {
+    let output_dir = temp_output_dir("responses-tool-turn");
+    let output = Command::new(probe_bin())
+        .args([
+            "--output-dir",
+            output_dir.to_str().expect("utf-8 temp path"),
+            "run-scenario",
+            "responses-tool-turn",
+            "--provider",
+            "mock",
+        ])
+        .output()
+        .expect("run redbox_runtime_probe responses-tool-turn");
+
+    assert!(
+        output.status.success(),
+        "probe failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("scenario stdout should be a JSON report");
+    assert_eq!(
+        report.get("scenario").and_then(Value::as_str),
+        Some("responses-tool-turn")
+    );
+    assert_eq!(report.get("status").and_then(Value::as_str), Some("passed"));
+    assert!(report
+        .get("events")
+        .and_then(Value::as_array)
+        .is_some_and(|events| events.iter().any(|event| {
+            event.get("eventType").and_then(Value::as_str) == Some("item/function_call")
+        })));
 }

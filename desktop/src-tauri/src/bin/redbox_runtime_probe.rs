@@ -806,6 +806,9 @@ fn run_single_scenario(
         "stream-error-next-turn" => {
             scenario_stream_error_next_turn(context, &run_dir, &session_id, options)?
         }
+        "responses-tool-turn" => {
+            scenario_responses_tool_turn(context, &run_dir, &session_id, options)?
+        }
         "tool-call-contract" => {
             scenario_tool_call_contract(context, &run_dir, &session_id, options)?
         }
@@ -888,6 +891,7 @@ fn scenario_names() -> Vec<&'static str> {
         "agent-basic-turn",
         "stream-retry",
         "stream-error-next-turn",
+        "responses-tool-turn",
         "tool-call-contract",
         "mcp-list-tools",
         "mcp-call-tool",
@@ -1117,6 +1121,77 @@ fn scenario_stream_error_next_turn(
     })
 }
 
+fn scenario_responses_tool_turn(
+    _context: &ProbeContext,
+    _run_dir: &Path,
+    _session_id: &str,
+    _options: &ScenarioOptions,
+) -> ProbeResult<ScenarioRun> {
+    let server = start_responses_fixture_server()?;
+    let mut result = run_responses_tool_turn_probe(&server.url)?;
+    result.requests = server.finish()?;
+    let first_used_responses_path = result
+        .requests
+        .first()
+        .is_some_and(|request| request.path == "/responses");
+    let second_included_tool_output = result
+        .requests
+        .get(1)
+        .is_some_and(|request| request.body.to_string().contains("function_call_output"));
+    Ok(ScenarioRun {
+        events: vec![
+            event(
+                "provider/responses_request",
+                json!({ "turn": 1, "path": result.requests.first().map(|request| request.path.as_str()) }),
+            ),
+            event(
+                "item/function_call",
+                json!({ "callId": result.call_id, "name": result.tool_name }),
+            ),
+            event(
+                "provider/responses_request",
+                json!({ "turn": 2, "path": result.requests.get(1).map(|request| request.path.as_str()) }),
+            ),
+            event("item/assistant_message", json!({ "text": result.final_text })),
+        ],
+        tool_calls: vec![tool_call(
+            &result.tool_name,
+            "success",
+            "path=workspace://probe.md",
+            "mock file body",
+        )],
+        artifacts: Vec::new(),
+        assertions: vec![
+            assertion(
+                "uses_responses_endpoint",
+                first_used_responses_path,
+                "mock provider received POST /responses",
+            ),
+            assertion(
+                "returns_function_call",
+                result.tool_name == "Read" && result.call_id == "call_probe",
+                "first Responses output requested Read",
+            ),
+            assertion(
+                "sends_function_call_output",
+                second_included_tool_output,
+                "second Responses input included function_call_output",
+            ),
+            assertion(
+                "final_response_completed",
+                result.final_text.contains("completed after tool output"),
+                &result.final_text,
+            ),
+        ],
+        final_message: result.final_text,
+        final_message_kind: "summary".to_string(),
+        prompt_review_notes: vec![
+            "Responses provider turns should preserve call_id across function_call and function_call_output."
+                .to_string(),
+        ],
+    })
+}
+
 enum StreamFixtureResponse {
     Incomplete,
     Completed(String),
@@ -1159,6 +1234,208 @@ fn start_streaming_fixture_server(
     Ok(StreamingFixtureServer {
         url: format!("http://{addr}"),
         join: Some(join),
+    })
+}
+
+#[derive(Debug)]
+struct ResponsesFixtureRequest {
+    path: String,
+    body: Value,
+}
+
+struct ResponsesFixtureServer {
+    url: String,
+    join: Option<thread::JoinHandle<Vec<ResponsesFixtureRequest>>>,
+}
+
+impl ResponsesFixtureServer {
+    fn finish(mut self) -> ProbeResult<Vec<ResponsesFixtureRequest>> {
+        let join = self
+            .join
+            .take()
+            .ok_or_else(|| "responses fixture server already joined".to_string())?;
+        join.join()
+            .map_err(|_| "responses fixture server thread panicked".to_string())
+    }
+}
+
+impl Drop for ResponsesFixtureServer {
+    fn drop(&mut self) {
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResponsesProbeResult {
+    requests: Vec<ResponsesFixtureRequest>,
+    call_id: String,
+    tool_name: String,
+    final_text: String,
+}
+
+fn start_responses_fixture_server() -> ProbeResult<ResponsesFixtureServer> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("failed to bind responses fixture server: {e}"))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| format!("failed to read responses fixture server addr: {e}"))?;
+    listener
+        .set_nonblocking(false)
+        .map_err(|e| format!("failed to configure responses fixture server: {e}"))?;
+    let join = thread::spawn(move || {
+        let mut requests = Vec::new();
+        for index in 0..2 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            if let Ok(request) = read_json_http_request(&mut stream) {
+                requests.push(request);
+            }
+            let body = if index == 0 {
+                json!({
+                    "id": "resp_probe_1",
+                    "output": [{
+                        "type": "function_call",
+                        "call_id": "call_probe",
+                        "name": "Read",
+                        "arguments": "{\"path\":\"workspace://probe.md\"}"
+                    }]
+                })
+            } else {
+                json!({
+                    "id": "resp_probe_2",
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "Responses turn completed after tool output."
+                        }]
+                    }]
+                })
+            };
+            let body_text = body.to_string();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body_text.len()
+            );
+            let _ = stream.write_all(headers.as_bytes());
+            let _ = stream.write_all(body_text.as_bytes());
+            let _ = stream.flush();
+        }
+        requests
+    });
+    Ok(ResponsesFixtureServer {
+        url: format!("http://{addr}"),
+        join: Some(join),
+    })
+}
+
+fn read_json_http_request(stream: &mut TcpStream) -> ProbeResult<ResponsesFixtureRequest> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| e.to_string())?;
+    let cloned = stream.try_clone().map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(cloned);
+    let mut content_length = 0usize;
+    let mut request_path = String::new();
+    loop {
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        if bytes == 0 || line == "\r\n" || line == "\n" {
+            break;
+        }
+        if request_path.is_empty() {
+            let parts = line.split_whitespace().collect::<Vec<_>>();
+            request_path = parts.get(1).copied().unwrap_or_default().to_string();
+        }
+        let lower = line.to_ascii_lowercase();
+        if let Some(value) = lower.strip_prefix("content-length:") {
+            content_length = value.trim().parse::<usize>().unwrap_or(0);
+        }
+    }
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 {
+        reader.read_exact(&mut body).map_err(|e| e.to_string())?;
+    }
+    let body = if body.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_slice::<Value>(&body).map_err(|e| e.to_string())?
+    };
+    Ok(ResponsesFixtureRequest {
+        path: request_path,
+        body,
+    })
+}
+
+fn run_responses_tool_turn_probe(base_url: &str) -> ProbeResult<ResponsesProbeResult> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let first = client
+        .post(format!("{base_url}/responses"))
+        .json(&json!({
+            "model": "probe-responses",
+            "input": [{ "role": "user", "content": "read the probe file" }],
+            "tools": [{
+                "type": "function",
+                "name": "Read",
+                "description": "Read one resource",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"]
+                }
+            }],
+            "tool_choice": "required"
+        }))
+        .send()
+        .and_then(|response| response.json::<Value>())
+        .map_err(|e| e.to_string())?;
+    let call = first
+        .get("output")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .ok_or_else(|| "responses fixture did not return output".to_string())?;
+    let call_id = call
+        .get("call_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let tool_name = call
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let second = client
+        .post(format!("{base_url}/responses"))
+        .json(&json!({
+            "model": "probe-responses",
+            "input": [
+                call.clone(),
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id.clone(),
+                    "output": "mock file body"
+                }
+            ]
+        }))
+        .send()
+        .and_then(|response| response.json::<Value>())
+        .map_err(|e| e.to_string())?;
+    let final_text = second
+        .pointer("/output/0/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Ok(ResponsesProbeResult {
+        requests: Vec::new(),
+        call_id,
+        tool_name,
+        final_text,
     })
 }
 
@@ -2798,6 +3075,7 @@ mod tests {
             "agent-basic-turn",
             "stream-retry",
             "stream-error-next-turn",
+            "responses-tool-turn",
             "tool-call-contract",
             "mcp-list-tools",
             "mcp-call-tool",
