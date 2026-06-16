@@ -26,6 +26,18 @@ fn register_runtime_hook(state: &State<'_, AppState>, payload: &Value) -> Result
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true),
         ),
+        source_scope: None,
+        plugin_id: None,
+        plugin_root: None,
+        plugin_data_root: None,
+        source_path: None,
+        source_relative_path: None,
+        command: None,
+        command_windows: None,
+        timeout_sec: None,
+        r#async: None,
+        status_message: None,
+        raw: None,
     };
     with_store_mut(state, |store| {
         mcp_tools_store::push_runtime_hook(store, hook.clone());

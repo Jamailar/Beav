@@ -4,12 +4,14 @@ pub(super) fn install_thrive_plugin_from_path(
     app: &AppHandle,
     state: &State<'_, AppState>,
     source_path: &Path,
+    requested_plugin: Option<&str>,
 ) -> Result<Value, String> {
     install_thrive_plugin_from_path_for_marketplace(
         app,
         state,
         source_path,
         THRIVE_PLUGIN_LOCAL_MARKETPLACE,
+        requested_plugin,
     )
 }
 
@@ -18,6 +20,7 @@ pub(super) fn install_thrive_plugin_from_path_for_marketplace(
     state: &State<'_, AppState>,
     source_path: &Path,
     marketplace: &str,
+    requested_plugin: Option<&str>,
 ) -> Result<Value, String> {
     validate_plugin_segment(marketplace, "plugin marketplace")?;
     if !source_path.exists() {
@@ -34,9 +37,9 @@ pub(super) fn install_thrive_plugin_from_path_for_marketplace(
     fs::create_dir_all(&temp_root).map_err(|error| error.to_string())?;
 
     let resolved_source = if source_path.is_dir() {
-        resolve_plugin_source_root(source_path)?
+        resolve_plugin_source_root_for_install(source_path, requested_plugin)?
     } else {
-        extract_plugin_archive(source_path, &temp_root)?
+        extract_plugin_archive(source_path, &temp_root, requested_plugin)?
     };
 
     let manifest = load_thrive_plugin_manifest(&resolved_source)?;

@@ -42,7 +42,7 @@ pub(super) fn load_thrive_plugin_manifest(
     plugin_root: &Path,
 ) -> Result<RawThrivePluginManifest, String> {
     let manifest_path = find_thrive_plugin_manifest_path(plugin_root)
-        .ok_or_else(|| "missing .redbox-plugin/plugin.json".to_string())?;
+        .ok_or_else(|| "missing .codex-plugin/plugin.json".to_string())?;
     let content = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("failed to read plugin manifest: {error}"))?;
     let mut manifest = serde_json::from_str::<RawThrivePluginManifest>(&content)
@@ -93,17 +93,59 @@ pub(super) fn validate_thrive_plugin_manifest(
         ("actions", manifest.actions.as_deref()),
         ("media", manifest.media.as_deref()),
     ] {
-        validate_manifest_relative_path(plugin_root, field, raw_path)?;
+        let _ = validate_manifest_relative_path(plugin_root, field, raw_path);
     }
+    validate_manifest_hooks(plugin_root, manifest.hooks.as_ref())?;
     if let Some(interface) = manifest.interface.as_ref() {
+        if let Some(composer_icon) = interface.composer_icon.as_deref() {
+            let _ = validate_manifest_relative_path(
+                plugin_root,
+                "interface.composerIcon",
+                Some(composer_icon),
+            );
+        }
         if let Some(logo) = interface.logo.as_deref() {
-            validate_manifest_relative_path(plugin_root, "interface.logo", Some(logo))?;
+            let _ = validate_manifest_relative_path(plugin_root, "interface.logo", Some(logo));
+        }
+        for screenshot in &interface.screenshots {
+            let _ = validate_manifest_relative_path(
+                plugin_root,
+                "interface.screenshots",
+                Some(screenshot),
+            );
         }
         if let Some(default_prompt) = interface.default_prompt.as_ref() {
             validate_default_prompts(default_prompt)?;
         }
     }
     validate_plugin_home(manifest)?;
+    Ok(())
+}
+
+fn validate_manifest_hooks(plugin_root: &Path, hooks: Option<&Value>) -> Result<(), String> {
+    let Some(hooks) = hooks else {
+        return Ok(());
+    };
+    if let Some(path) = hooks.as_str() {
+        let _ = validate_manifest_relative_path(plugin_root, "hooks", Some(path));
+        return Ok(());
+    }
+    if let Some(paths) = hooks
+        .as_array()
+        .and_then(|items| items.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+    {
+        for path in paths {
+            let _ = validate_manifest_relative_path(plugin_root, "hooks", Some(path));
+        }
+        return Ok(());
+    }
+    if hooks.is_object()
+        || hooks
+            .as_array()
+            .is_some_and(|items| items.iter().all(Value::is_object))
+    {
+        return Ok(());
+    }
     Ok(())
 }
 
@@ -209,27 +251,148 @@ fn validate_default_prompts(value: &Value) -> Result<(), String> {
     let prompts = if let Some(prompt) = value.as_str() {
         vec![prompt]
     } else if let Some(items) = value.as_array() {
-        if items.len() > 3 {
-            return Err("interface.defaultPrompt supports at most 3 prompts".to_string());
-        }
         items
             .iter()
-            .map(|item| {
-                item.as_str()
-                    .ok_or_else(|| "interface.defaultPrompt entries must be strings".to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?
+            .filter_map(Value::as_str)
+            .take(3)
+            .collect::<Vec<_>>()
     } else {
-        return Err("interface.defaultPrompt must be a string or string array".to_string());
+        return Ok(());
     };
     for prompt in prompts {
         let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
         if normalized.is_empty() {
-            return Err("interface.defaultPrompt entries must not be empty".to_string());
+            continue;
         }
         if normalized.chars().count() > 128 {
-            return Err("interface.defaultPrompt entries must be at most 128 chars".to_string());
+            continue;
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_plugin_root(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("redbox-plugin-test-{name}-{nonce}"));
+        fs::create_dir_all(&root).expect("create temp plugin root");
+        root
+    }
+
+    #[test]
+    fn loads_codex_plugin_manifest_fields_and_paths() {
+        let root = temp_plugin_root("codex-manifest");
+        fs::create_dir_all(root.join(".codex-plugin")).expect("create manifest dir");
+        fs::create_dir_all(root.join("assets")).expect("create assets dir");
+        fs::write(root.join("assets/icon.png"), "").expect("write icon");
+        fs::write(
+            root.join(".codex-plugin/plugin.json"),
+            r##"{
+  "name": "demo-plugin",
+  "version": "1.2.3",
+  "description": "Demo",
+  "keywords": ["codex", "mcp"],
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json",
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "Demo Plugin",
+    "websiteURL": "https://example.com",
+    "privacyPolicyURL": "https://example.com/privacy",
+    "termsOfServiceURL": "https://example.com/terms",
+    "brandColor": "#3B82F6",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png",
+    "screenshots": ["./assets/icon.png"],
+    "defaultPrompt": ["Summarize this"]
+  }
+}"##,
+        )
+        .expect("write manifest");
+
+        let manifest = load_thrive_plugin_manifest(&root).expect("load manifest");
+
+        assert_eq!(manifest.name, "demo-plugin");
+        assert_eq!(manifest.version.as_deref(), Some("1.2.3"));
+        assert_eq!(manifest.keywords, vec!["codex", "mcp"]);
+        assert_eq!(manifest.mcp_servers.as_deref(), Some("./.mcp.json"));
+        assert_eq!(manifest.apps.as_deref(), Some("./.app.json"));
+        assert_eq!(
+            manifest
+                .interface
+                .as_ref()
+                .and_then(|interface| interface.website_url.as_deref()),
+            Some("https://example.com")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ignores_invalid_optional_codex_manifest_resources() {
+        let root = temp_plugin_root("codex-invalid-optional");
+        fs::create_dir_all(root.join(".codex-plugin")).expect("create manifest dir");
+        fs::write(
+            root.join(".codex-plugin/plugin.json"),
+            r#"{
+  "name": "demo-plugin",
+  "skills": "skills",
+  "mcpServers": "../outside/.mcp.json",
+  "apps": "/tmp/.app.json",
+  "hooks": true,
+  "interface": {
+    "displayName": "Demo",
+    "composerIcon": "assets/icon.png",
+    "logo": "/tmp/logo.png",
+    "screenshots": ["assets/shot1.png"],
+    "defaultPrompt": ["Summarize this", {"prompt": "ignored object"}, ""]
+  }
+}"#,
+        )
+        .expect("write manifest");
+
+        let manifest = load_thrive_plugin_manifest(&root).expect("load manifest");
+
+        assert_eq!(manifest.name, "demo-plugin");
+        assert_eq!(
+            manifest
+                .interface
+                .as_ref()
+                .and_then(|interface| interface.display_name.as_deref()),
+            Some("Demo")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prefers_codex_manifest_over_legacy_manifest() {
+        let root = temp_plugin_root("manifest-priority");
+        fs::create_dir_all(root.join(".codex-plugin")).expect("create codex dir");
+        fs::create_dir_all(root.join(".redbox-plugin")).expect("create legacy dir");
+        fs::write(
+            root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"codex-plugin","version":"1.0.0"}"#,
+        )
+        .expect("write codex manifest");
+        fs::write(
+            root.join(".redbox-plugin/plugin.json"),
+            r#"{"name":"legacy-plugin","version":"1.0.0"}"#,
+        )
+        .expect("write legacy manifest");
+
+        let manifest = load_thrive_plugin_manifest(&root).expect("load manifest");
+
+        assert_eq!(manifest.name, "codex-plugin");
+
+        let _ = fs::remove_dir_all(root);
+    }
 }
