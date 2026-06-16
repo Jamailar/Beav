@@ -4,8 +4,16 @@ export function createPluginsBridge(core: BridgeCore) {
   return {
     plugins: {
       list: () => core.invokeChannel('plugins:list'),
+      connectors: () => core.invokeChannel('plugins:connectors'),
       marketplace: (payload?: { url?: string }) => core.invokeChannel('plugins:marketplace', payload || {}),
-      install: (payload: { path: string }) => core.invokeChannel('plugins:install', payload),
+      codexMarketplace: (payload?: { path?: string; codexRoot?: string }) =>
+        core.invokeChannel('plugins:codex-marketplace', payload || {}),
+      discoverLocal: (payload: { path?: string; sourceRoot?: string }) =>
+        core.invokeChannel('plugins:discover-local', payload),
+      install: (payload: { path: string; pluginName?: string; pluginId?: string; id?: string }) =>
+        core.invokeChannel('plugins:install', payload),
+      installCodex: (payload: { path?: string; pluginName?: string; pluginId?: string; id?: string; remotePluginId?: string; remoteMarketplaceName?: string; codexRoot?: string }) =>
+        core.invokeChannel('plugins:install-codex', payload),
       installMarketplace: (payload: { id?: string; repo: string; version?: string; packageUrl?: string }) =>
         core.invokeChannel('plugins:install-marketplace', payload),
       setEnabled: (payload: { pluginId: string; enabled: boolean }) =>

@@ -12,6 +12,7 @@ import type {
   DiagnosticsPendingReport,
   NotificationPermissionState,
   NotificationSettingsPayload,
+  CodexPluginMarketplaceItem,
   ThrivePluginMarketplaceItem,
   ThrivePluginSummary,
 } from '../../types';
@@ -2462,7 +2463,9 @@ interface ToolsSettingsSectionProps {
     mcpInspectingId: string;
     thrivePlugins: ThrivePluginSummary[];
     thrivePluginMarketplace: ThrivePluginMarketplaceItem[];
+    codexPluginMarketplace: CodexPluginMarketplaceItem[];
     thrivePluginMarketplaceLoading: boolean;
+    codexPluginMarketplaceLoading: boolean;
     thrivePluginsLoading: boolean;
     thrivePluginBusyId: string;
     thrivePluginStatusMessage: string;
@@ -2470,7 +2473,9 @@ interface ToolsSettingsSectionProps {
     setThrivePluginRepoInput: Dispatch<SetStateAction<string>>;
     handleRefreshThrivePlugins: () => Promise<void>;
     handleRefreshThrivePluginMarketplace: () => Promise<void>;
+    handleRefreshCodexPluginMarketplace: () => Promise<void>;
     handleInstallThriveMarketplacePlugin: (plugin: ThrivePluginMarketplaceItem) => Promise<void>;
+    handleInstallCodexMarketplacePlugin: (plugin: CodexPluginMarketplaceItem) => Promise<void>;
     handleInstallThrivePluginFromRepo: () => Promise<void>;
     handleToggleThrivePlugin: (plugin: ThrivePluginSummary) => Promise<void>;
     handleUninstallThrivePlugin: (plugin: ThrivePluginSummary) => Promise<void>;
@@ -2615,7 +2620,9 @@ export function ToolsSettingsSection({
     mcpInspectingId,
     thrivePlugins,
     thrivePluginMarketplace,
+    codexPluginMarketplace,
     thrivePluginMarketplaceLoading,
+    codexPluginMarketplaceLoading,
     thrivePluginsLoading,
     thrivePluginBusyId,
     thrivePluginStatusMessage,
@@ -2623,7 +2630,9 @@ export function ToolsSettingsSection({
     setThrivePluginRepoInput,
     handleRefreshThrivePlugins,
     handleRefreshThrivePluginMarketplace,
+    handleRefreshCodexPluginMarketplace,
     handleInstallThriveMarketplacePlugin,
+    handleInstallCodexMarketplacePlugin,
     handleInstallThrivePluginFromRepo,
     handleToggleThrivePlugin,
     handleUninstallThrivePlugin,
@@ -2690,7 +2699,44 @@ export function ToolsSettingsSection({
 }: ToolsSettingsSectionProps) {
     const [runtimeSessionQuery, setRuntimeSessionQuery] = useState('');
     const [isThrivePluginMarketplaceOpen, setIsThrivePluginMarketplaceOpen] = useState(false);
+    const [pluginMarketplaceTab, setPluginMarketplaceTab] = useState<'community' | 'codex'>('community');
+    const [pluginMarketplaceSearch, setPluginMarketplaceSearch] = useState('');
     const [isCliRuntimeExpanded, setIsCliRuntimeExpanded] = useState(false);
+    const pluginMarketplaceQuery = pluginMarketplaceSearch.trim().toLowerCase();
+    const filteredCodexPluginMarketplace = useMemo(() => {
+        if (!pluginMarketplaceQuery) {
+            return codexPluginMarketplace;
+        }
+        return codexPluginMarketplace.filter((plugin) => [
+            plugin.name,
+            plugin.displayName,
+            plugin.description,
+            plugin.shortDescription,
+            plugin.category,
+            plugin.sourceLabel,
+            plugin.remotePluginId,
+            plugin.sourceRoot,
+            ...plugin.keywords,
+            ...plugin.capabilities,
+            ...plugin.appConnectorIds,
+        ].some((value) => String(value || '').toLowerCase().includes(pluginMarketplaceQuery)));
+    }, [codexPluginMarketplace, pluginMarketplaceQuery]);
+    const filteredThrivePluginMarketplace = useMemo(() => {
+        if (!pluginMarketplaceQuery) {
+            return thrivePluginMarketplace;
+        }
+        return thrivePluginMarketplace.filter((plugin) => [
+            plugin.id,
+            plugin.name,
+            plugin.displayName,
+            plugin.author,
+            plugin.description,
+            plugin.repo,
+            plugin.packageAssetName,
+            plugin.manifestUrl,
+            ...plugin.capabilities,
+        ].some((value) => String(value || '').toLowerCase().includes(pluginMarketplaceQuery)));
+    }, [pluginMarketplaceQuery, thrivePluginMarketplace]);
     const mcpRuntimeMap = useMemo(
         () =>
             Object.fromEntries(
@@ -2701,7 +2747,10 @@ export function ToolsSettingsSection({
 
     const openThrivePluginMarketplace = () => {
         setIsThrivePluginMarketplaceOpen(true);
-        void handleRefreshThrivePluginMarketplace();
+        void Promise.all([
+            handleRefreshThrivePluginMarketplace(),
+            handleRefreshCodexPluginMarketplace(),
+        ]);
     };
 
     const runtimeSessionSourceLabel = (session: {
@@ -3871,11 +3920,13 @@ export function ToolsSettingsSection({
                             <div className="flex items-center gap-2">
                                 <button
                                     type="button"
-                                    onClick={() => void handleRefreshThrivePluginMarketplace()}
-                                    disabled={thrivePluginMarketplaceLoading}
+                                    onClick={() => void (pluginMarketplaceTab === 'codex'
+                                        ? handleRefreshCodexPluginMarketplace()
+                                        : handleRefreshThrivePluginMarketplace())}
+                                    disabled={pluginMarketplaceTab === 'codex' ? codexPluginMarketplaceLoading : thrivePluginMarketplaceLoading}
                                     className="flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
                                 >
-                                    <RefreshCw className={clsx('h-3 w-3', thrivePluginMarketplaceLoading && 'animate-spin')} />
+                                    <RefreshCw className={clsx('h-3 w-3', (pluginMarketplaceTab === 'codex' ? codexPluginMarketplaceLoading : thrivePluginMarketplaceLoading) && 'animate-spin')} />
                                     刷新
                                 </button>
                                 <button
@@ -3888,39 +3939,152 @@ export function ToolsSettingsSection({
                                 </button>
                             </div>
                         </div>
-                        <form
-                            className="flex items-center gap-2 border-b border-border px-4 py-3"
-                            onSubmit={(event) => {
-                                event.preventDefault();
-                                void handleInstallThrivePluginFromRepo();
-                            }}
-                        >
-                            <input
-                                value={thrivePluginRepoInput}
-                                onChange={(event) => setThrivePluginRepoInput(event.target.value)}
-                                placeholder="owner/repo 或 GitHub URL"
-                                className="min-w-0 flex-1 rounded border border-border bg-surface-secondary px-3 py-2 text-xs text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent-primary"
-                            />
-                            <button
-                                type="submit"
-                                disabled={!thrivePluginRepoInput.trim() || thrivePluginBusyId.startsWith('repo:')}
-                                className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+                            <div className="flex items-center gap-1">
+                                {([
+                                    ['community', '社区插件'],
+                                    ['codex', 'Codex 插件'],
+                                ] as const).map(([tab, label]) => (
+                                    <button
+                                        key={tab}
+                                        type="button"
+                                        onClick={() => setPluginMarketplaceTab(tab)}
+                                        className={clsx(
+                                            'rounded px-3 py-1.5 text-xs font-medium transition-colors',
+                                            pluginMarketplaceTab === tab
+                                                ? 'bg-surface-secondary text-text-primary'
+                                                : 'text-text-tertiary hover:bg-surface-secondary hover:text-text-primary',
+                                        )}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="relative ml-auto min-w-[180px] flex-1 sm:max-w-xs">
+                                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
+                                <input
+                                    value={pluginMarketplaceSearch}
+                                    onChange={(event) => setPluginMarketplaceSearch(event.target.value)}
+                                    placeholder="搜索插件"
+                                    className="h-8 w-full rounded border border-border bg-surface-secondary pl-8 pr-8 text-xs text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent-primary"
+                                />
+                                {pluginMarketplaceSearch ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setPluginMarketplaceSearch('')}
+                                        className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-text-tertiary transition-colors hover:bg-surface-primary hover:text-text-primary"
+                                        aria-label="清空搜索"
+                                    >
+                                        <X className="h-3 w-3" />
+                                    </button>
+                                ) : null}
+                            </div>
+                        </div>
+                        {pluginMarketplaceTab === 'community' ? (
+                            <form
+                                className="flex items-center gap-2 border-b border-border px-4 py-3"
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void handleInstallThrivePluginFromRepo();
+                                }}
                             >
-                                <Download className="h-3 w-3" />
-                                {thrivePluginBusyId.startsWith('repo:') ? '安装中' : '安装'}
-                            </button>
-                        </form>
+                                <input
+                                    value={thrivePluginRepoInput}
+                                    onChange={(event) => setThrivePluginRepoInput(event.target.value)}
+                                    placeholder="owner/repo 或 GitHub URL"
+                                    className="min-w-0 flex-1 rounded border border-border bg-surface-secondary px-3 py-2 text-xs text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent-primary"
+                                />
+                                <button
+                                    type="submit"
+                                    disabled={!thrivePluginRepoInput.trim() || thrivePluginBusyId.startsWith('repo:')}
+                                    className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                >
+                                    <Download className="h-3 w-3" />
+                                    {thrivePluginBusyId.startsWith('repo:') ? '安装中' : '安装'}
+                                </button>
+                            </form>
+                        ) : null}
                         <div className="min-h-0 flex-1 overflow-auto">
-                            {thrivePluginMarketplaceLoading && thrivePluginMarketplace.length === 0 ? (
+                            {pluginMarketplaceTab === 'codex' ? (
+                                codexPluginMarketplaceLoading && codexPluginMarketplace.length === 0 ? (
+                                    <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-tertiary">
+                                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                        正在读取市场
+                                    </div>
+                                ) : filteredCodexPluginMarketplace.length === 0 ? (
+                                    <div className="px-4 py-8 text-center text-xs text-text-tertiary">{pluginMarketplaceQuery ? '没有匹配插件' : '市场暂无插件'}</div>
+                                ) : (
+                                    <div className="divide-y divide-border">
+                                        {filteredCodexPluginMarketplace.map((plugin) => {
+                                            const busy = thrivePluginBusyId === (plugin.installedPluginId || plugin.id);
+                                            const hasInstallSource = Boolean(plugin.sourceRoot || plugin.remotePluginId);
+                                            const installDisabled = busy || plugin.installed || !plugin.installable || !hasInstallSource || Boolean(plugin.error);
+                                            return (
+                                                <div key={`${plugin.sourceRoot || plugin.remotePluginId || plugin.id}:${plugin.id}`} className="px-4 py-3">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <div className="truncate text-sm font-medium text-text-primary">{plugin.displayName || plugin.name}</div>
+                                                                {plugin.version ? (
+                                                                    <span className="rounded bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-tertiary">v{plugin.version}</span>
+                                                                ) : null}
+                                                                <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{plugin.sourceLabel}</span>
+                                                                {plugin.remote ? (
+                                                                    <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">remote</span>
+                                                                ) : null}
+                                                                {plugin.installed ? (
+                                                                    <span className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500">已安装</span>
+                                                                ) : null}
+                                                                {plugin.error ? (
+                                                                    <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-500">异常</span>
+                                                                ) : null}
+                                                            </div>
+                                                            <div className="mt-1 truncate text-xs text-text-tertiary">{plugin.shortDescription || plugin.description || plugin.sourceRoot || plugin.remotePluginId}</div>
+                                                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{plugin.name}</span>
+                                                                {plugin.category ? (
+                                                                    <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{plugin.category}</span>
+                                                                ) : null}
+                                                                {plugin.appConnectorIds.slice(0, 3).map((connectorId) => (
+                                                                    <span key={connectorId} className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">
+                                                                        {connectorId}
+                                                                    </span>
+                                                                ))}
+                                                                {plugin.capabilities.slice(0, 6).map((capability) => (
+                                                                    <span key={capability} className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">
+                                                                        {capability}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                            {plugin.error ? (
+                                                                <div className="mt-2 truncate font-mono text-[10px] text-red-500">{plugin.error}</div>
+                                                            ) : null}
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleInstallCodexMarketplacePlugin(plugin)}
+                                                            disabled={installDisabled}
+                                                            className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                                        >
+                                                            <Download className="h-3 w-3" />
+                                                            {plugin.installed ? '已安装' : busy ? '安装中' : plugin.installable && hasInstallSource ? '安装' : '仅展示'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )
+                            ) : thrivePluginMarketplaceLoading && thrivePluginMarketplace.length === 0 ? (
                                 <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-tertiary">
                                     <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                                     正在读取市场
                                 </div>
-                            ) : thrivePluginMarketplace.length === 0 ? (
-                                <div className="px-4 py-8 text-center text-xs text-text-tertiary">市场暂无插件</div>
+                            ) : filteredThrivePluginMarketplace.length === 0 ? (
+                                <div className="px-4 py-8 text-center text-xs text-text-tertiary">{pluginMarketplaceQuery ? '没有匹配插件' : '市场暂无插件'}</div>
                             ) : (
                                 <div className="divide-y divide-border">
-                                    {thrivePluginMarketplace.map((plugin) => {
+                                    {filteredThrivePluginMarketplace.map((plugin) => {
                                         const busy = thrivePluginBusyId === (plugin.installedPluginId || plugin.id);
                                         return (
                                             <div key={`${plugin.repo}:${plugin.id}`} className="px-4 py-3">
@@ -4545,7 +4709,7 @@ export function ToolsSettingsSection({
                                         value={runtimeDraftInput}
                                         onChange={(e) => setRuntimeDraftInput(e.target.value)}
                                         rows={4}
-                                        placeholder="输入一条开发者测试任务，例如：根据随机漫步素材写一篇文案并保存到稿件。"
+                                        placeholder="输入一条开发者测试任务，例如：根据随机选题素材写一篇文案并保存到稿件。"
                                         className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
                                     />
                                     <button

@@ -25,11 +25,13 @@ mod tests {
                 "member-skill-distiller",
                 "redclaw-style-definition",
                 "skill-creator",
+                "social-cover-director",
                 "tts-director",
                 "video-director",
                 "wander-synthesis",
                 "writing-style",
                 "wwud",
+                "xhs-comment-insight",
                 "xhs-title",
             ])
         );

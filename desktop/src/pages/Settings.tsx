@@ -64,6 +64,7 @@ import type {
   CliRuntimeToolRecord,
   DiagnosticsLogStatus,
   DiagnosticsPendingReport,
+  CodexPluginMarketplaceItem,
   NotificationSettingsPayload,
   ThriveSkillMarketplaceItem,
   ThrivePluginMarketplaceItem,
@@ -628,6 +629,18 @@ type RuntimeHookDefinition = {
   type: string;
   matcher?: string;
   enabled?: boolean;
+  sourceScope?: string;
+  pluginId?: string;
+  pluginRoot?: string;
+  pluginDataRoot?: string;
+  sourcePath?: string;
+  sourceRelativePath?: string;
+  command?: string;
+  commandWindows?: string;
+  timeoutSec?: number;
+  async?: boolean;
+  statusMessage?: string;
+  raw?: unknown;
 };
 
 type RuntimePerfCollector = {
@@ -1598,7 +1611,9 @@ export function Settings({
   // Tools State
   const [thrivePlugins, setThrivePlugins] = useState<ThrivePluginSummary[]>([]);
   const [thrivePluginMarketplace, setThrivePluginMarketplace] = useState<ThrivePluginMarketplaceItem[]>([]);
+  const [codexPluginMarketplace, setCodexPluginMarketplace] = useState<CodexPluginMarketplaceItem[]>([]);
   const [thrivePluginMarketplaceLoading, setThrivePluginMarketplaceLoading] = useState(false);
+  const [codexPluginMarketplaceLoading, setCodexPluginMarketplaceLoading] = useState(false);
   const [thrivePluginsLoading, setThrivePluginsLoading] = useState(false);
   const [thrivePluginBusyId, setThrivePluginBusyId] = useState('');
   const [thrivePluginStatusMessage, setThrivePluginStatusMessage] = useState('');
@@ -4306,6 +4321,24 @@ export function Settings({
     }
   }, []);
 
+  const loadCodexPluginMarketplace = useCallback(async () => {
+    setCodexPluginMarketplaceLoading(true);
+    try {
+      const result = await window.ipcRenderer.plugins.codexMarketplace();
+      if (result.success === false) {
+        throw new Error(result.error || 'Codex 插件市场加载失败');
+      }
+      setCodexPluginMarketplace(Array.isArray(result.plugins) ? result.plugins : []);
+      setThrivePluginStatusMessage('');
+    } catch (error) {
+      console.error('Failed to load Codex plugin marketplace', error);
+      setCodexPluginMarketplace([]);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCodexPluginMarketplaceLoading(false);
+    }
+  }, []);
+
   const handleInstallThriveMarketplacePlugin = useCallback(async (plugin: ThrivePluginMarketplaceItem) => {
     setThrivePluginBusyId(plugin.installedPluginId || plugin.id);
     setThrivePluginStatusMessage(`正在安装 ${plugin.displayName || plugin.name}`);
@@ -4331,6 +4364,40 @@ export function Settings({
       setThrivePluginBusyId('');
     }
   }, [loadThrivePluginMarketplace, loadThrivePlugins]);
+
+  const handleInstallCodexMarketplacePlugin = useCallback(async (plugin: CodexPluginMarketplaceItem) => {
+    if (!plugin.sourceRoot && !plugin.remotePluginId) {
+      setThrivePluginStatusMessage('Codex 插件缺少可安装来源');
+      return;
+    }
+    setThrivePluginBusyId(plugin.installedPluginId || plugin.id);
+    setThrivePluginStatusMessage(`正在安装 ${plugin.displayName || plugin.name}`);
+    try {
+      const result = plugin.sourceRoot
+        ? await window.ipcRenderer.plugins.installCodex({
+          path: plugin.sourceRoot,
+          pluginName: plugin.name,
+        })
+        : await window.ipcRenderer.plugins.installCodex({
+          remotePluginId: plugin.remotePluginId || undefined,
+          remoteMarketplaceName: plugin.sourceLabel,
+          pluginName: plugin.name,
+        });
+      if (result.success === false) {
+        throw new Error(result.error || 'Codex 插件安装失败');
+      }
+      setThrivePluginStatusMessage(result.plugin ? `已安装 ${result.plugin.displayName}` : 'Codex 插件已安装');
+      await Promise.all([
+        loadThrivePlugins(),
+        loadCodexPluginMarketplace(),
+      ]);
+    } catch (error) {
+      console.error('Failed to install Codex marketplace plugin', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadCodexPluginMarketplace, loadThrivePlugins]);
 
   const handleInstallThrivePluginFromRepo = useCallback(async () => {
     const repo = thrivePluginRepoInput
@@ -7157,13 +7224,13 @@ export function Settings({
                   </div>
 
                   <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">漫步模式</h3>
+                    <h3 className="text-sm font-medium text-text-primary mb-4">选题中心模式</h3>
                     <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <h4 className="text-sm font-medium text-text-primary">多选题模式</h4>
                           <p className="text-xs text-text-tertiary mt-1.5 leading-relaxed">
-                            漫步默认使用 Agent Runtime。关闭时每次生成 1 个方向；开启后每次基于同样素材一次性生成 3 个方向供选择。
+                            选题中心默认使用 Agent Runtime。关闭时每次生成 1 个方向；开启后每次基于同样素材一次性生成 3 个方向供选择。
                           </p>
                         </div>
                         <button
@@ -7854,7 +7921,9 @@ export function Settings({
                 mcpInspectingId={mcpInspectingId}
                 thrivePlugins={thrivePlugins}
                 thrivePluginMarketplace={thrivePluginMarketplace}
+                codexPluginMarketplace={codexPluginMarketplace}
                 thrivePluginMarketplaceLoading={thrivePluginMarketplaceLoading}
+                codexPluginMarketplaceLoading={codexPluginMarketplaceLoading}
                 thrivePluginsLoading={thrivePluginsLoading}
                 thrivePluginBusyId={thrivePluginBusyId}
                 thrivePluginStatusMessage={thrivePluginStatusMessage}
@@ -7862,7 +7931,9 @@ export function Settings({
                 setThrivePluginRepoInput={setThrivePluginRepoInput}
                 handleRefreshThrivePlugins={loadThrivePlugins}
                 handleRefreshThrivePluginMarketplace={loadThrivePluginMarketplace}
+                handleRefreshCodexPluginMarketplace={loadCodexPluginMarketplace}
                 handleInstallThriveMarketplacePlugin={handleInstallThriveMarketplacePlugin}
+                handleInstallCodexMarketplacePlugin={handleInstallCodexMarketplacePlugin}
                 handleInstallThrivePluginFromRepo={handleInstallThrivePluginFromRepo}
                 handleToggleThrivePlugin={handleToggleThrivePlugin}
                 handleUninstallThrivePlugin={handleUninstallThrivePlugin}

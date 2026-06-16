@@ -87,13 +87,38 @@ export interface ThrivePluginSummary {
   capabilities: string[];
   approvalRequired: string[];
   uiSlots: string[];
+  appConnectorIds?: string[];
+  appConnectors?: Array<{
+    name: string;
+    id: string;
+    category?: string | null;
+  }>;
   mcpServersPath?: string | null;
   skillsPath?: string | null;
+  appsPath?: string | null;
+  hooksPath?: string | null;
   actionsPath?: string | null;
   mediaPath?: string | null;
   homeWidgets?: number;
   homeQuickActions?: number;
   error?: string | null;
+}
+
+export interface ThrivePluginConnectorAppInfo {
+  id: string;
+  name: string;
+  description?: string | null;
+  logoUrl?: string | null;
+  logoUrlDark?: string | null;
+  distributionChannel?: string | null;
+  branding?: unknown;
+  appMetadata?: unknown;
+  labels?: unknown;
+  installUrl?: string | null;
+  isAccessible: boolean;
+  isEnabled: boolean;
+  pluginDisplayNames: string[];
+  category?: string | null;
 }
 
 export interface ThrivePluginMarketplaceItem {
@@ -117,6 +142,58 @@ export interface ThrivePluginMarketplaceResponse {
   success: boolean;
   registryUrl: string;
   plugins: ThrivePluginMarketplaceItem[];
+  error?: string;
+}
+
+export interface CodexPluginMarketplaceItem {
+  id: string;
+  name: string;
+  remotePluginId?: string | null;
+  version?: string | null;
+  displayName?: string | null;
+  description?: string | null;
+  shortDescription?: string | null;
+  category?: string | null;
+  logoUrl?: string | null;
+  keywords: string[];
+  capabilities: string[];
+  appConnectorIds: string[];
+  sourceRoot?: string | null;
+  sourceLabel: string;
+  remote: boolean;
+  installable: boolean;
+  installed: boolean;
+  installedPluginId: string;
+  error?: string | null;
+}
+
+export interface CodexPluginMarketplaceResponse {
+  success: boolean;
+  sourceRoots: string[];
+  remoteCatalogRoots?: string[];
+  plugins: CodexPluginMarketplaceItem[];
+  errors?: Array<{ path?: string; error?: string }>;
+  error?: string;
+}
+
+export interface ThrivePluginLocalCandidate {
+  name: string;
+  sourcePath?: string | null;
+  pluginRoot?: string | null;
+  valid: boolean;
+  version?: string | null;
+  displayName?: string | null;
+  description?: string | null;
+  error?: string | null;
+}
+
+export interface ThrivePluginDiscoverLocalResponse {
+  success: boolean;
+  sourceRoot: string;
+  kind: 'plugin' | 'codex-marketplace' | 'directory' | string;
+  marketplacePath?: string;
+  marketplaceName?: string;
+  plugins: ThrivePluginLocalCandidate[];
   error?: string;
 }
 
@@ -1174,6 +1251,32 @@ declare global {
           session?: unknown;
           error?: string;
         }>;
+        logout: () => Promise<{ success?: boolean; error?: string }>;
+        getProducts: () => Promise<{
+          success?: boolean;
+          products?: Array<Record<string, unknown>>;
+          error?: string;
+        }>;
+        getProduct: (payload: { productId: string }) => Promise<{
+          success?: boolean;
+          product?: Record<string, unknown>;
+          error?: string;
+        }>;
+        createPagePayOrder: (payload: Record<string, unknown>) => Promise<{
+          success?: boolean;
+          order?: Record<string, unknown>;
+          error?: string;
+        }>;
+        getOrderStatus: (payload: { outTradeNo: string }) => Promise<{
+          success?: boolean;
+          order?: Record<string, unknown>;
+          error?: string;
+        }>;
+        openPaymentForm: (payload: { paymentForm: string }) => Promise<{
+          success?: boolean;
+          opened?: string;
+          error?: string;
+        }>;
         getPricing: () => Promise<{
           success: boolean;
           pricing?: Record<string, unknown> | null;
@@ -1686,7 +1789,10 @@ declare global {
       plugins: {
         list: () => Promise<{ success: boolean; schemaVersion: number; root: string; plugins: ThrivePluginSummary[]; error?: string }>;
         marketplace: (payload?: { url?: string }) => Promise<ThrivePluginMarketplaceResponse>;
-        install: (payload: { path: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        codexMarketplace: (payload?: { path?: string; codexRoot?: string }) => Promise<CodexPluginMarketplaceResponse>;
+        discoverLocal: (payload: { path?: string; sourceRoot?: string }) => Promise<ThrivePluginDiscoverLocalResponse>;
+        install: (payload: { path: string; pluginName?: string; pluginId?: string; id?: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        installCodex: (payload: { path?: string; pluginName?: string; pluginId?: string; id?: string; remotePluginId?: string; remoteMarketplaceName?: string; codexRoot?: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
         installMarketplace: (payload: { id?: string; repo: string; version?: string; packageUrl?: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
         setEnabled: (payload: { pluginId: string; enabled: boolean }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
         uninstall: (payload: { pluginId: string }) => Promise<{ success: boolean; pluginId?: string; error?: string }>;
@@ -1757,7 +1863,7 @@ declare global {
           spaces?: Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }>;
         }>;
         switch: (spaceId: string) => Promise<unknown>;
-        create: () => Promise<unknown>;
+        create: (payload: { name: string }) => Promise<unknown>;
         rename: (payload: { id: string; name: string }) => Promise<unknown>;
         delete: (spaceId: string) => Promise<unknown>;
         onChanged: (listener: (...args: unknown[]) => void) => void;
@@ -2029,8 +2135,10 @@ declare global {
       };
       wander: {
         listHistory: <T = unknown>() => Promise<T>;
+        abandonHistory: (id: string) => Promise<unknown>;
         deleteHistory: (id: string) => Promise<unknown>;
         getGuidedItems: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        listCommentCandidates: <T = unknown>() => Promise<T>;
         getRandom: <T = unknown>() => Promise<T>;
         brainstorm: (payload: Record<string, unknown>) => void;
         onProgress: (listener: (...args: unknown[]) => void) => void;
