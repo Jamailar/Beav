@@ -12,7 +12,6 @@ import {
     Layers,
     Loader2,
     Music2,
-    Paperclip,
     PencilLine,
     Play,
     Plus,
@@ -142,8 +141,6 @@ import { Chat, clearFixedSessionWarmSnapshot } from './Chat';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { parseAiPricingCatalog, type AiPricingCatalog } from '../features/settings/settingsModel';
-
-type GenerationSurface = 'manual' | 'agent';
 
 type GenerationSubmitButtonProps = {
     onClick: () => void;
@@ -1456,7 +1453,6 @@ export function GenerationStudio({
     const [pricingCatalog, setPricingCatalog] = useState<AiPricingCatalog | null>(null);
     const [contextIntent, setContextIntent] = useState<GenerationIntent | null>(null);
     const [studioMode, setStudioMode] = useState<StudioMode>('image');
-    const [generationSurface, setGenerationSurface] = useState<GenerationSurface>('manual');
     const [, setBindTarget] = useState('');
     const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([]);
     const deletedFeedStateRef = useRef<DeletedFeedState>(readDeletedFeedState());
@@ -1546,7 +1542,7 @@ export function GenerationStudio({
         useCallback((state) => Object.values(state.jobsById).filter(isGenerationStudioMediaJob), []),
         shallowArrayEqual,
     );
-    const isAgentMode = generationSurface === 'agent';
+    const isAgentMode = true;
     const activeGenerationProjectId = studioMode === 'image'
         ? imageProjectId
         : studioMode === 'video'
@@ -1557,7 +1553,7 @@ export function GenerationStudio({
                 ? digitalHumanProjectId
                 : audioProjectId;
     const generationAgentTitle = useMemo(
-        () => contextIntent?.sourceTitle ? `Agent 模式 · ${contextIntent.sourceTitle}` : 'Agent 模式',
+        () => contextIntent?.sourceTitle || '自由创作',
         [contextIntent?.sourceTitle],
     );
     const generationAgentContextId = useMemo(
@@ -1807,7 +1803,7 @@ export function GenerationStudio({
             } catch (error) {
                 if (requestId !== agentSessionRequestIdRef.current) return;
                 console.error('Failed to initialize generation agent session:', error);
-                setAgentSessionError(error instanceof Error ? error.message : 'Agent 模式会话初始化失败');
+                setAgentSessionError(error instanceof Error ? error.message : '创作会话初始化失败');
             } finally {
                 if (requestId === agentSessionRequestIdRef.current) {
                     setIsAgentSessionLoading(false);
@@ -3078,31 +3074,6 @@ export function GenerationStudio({
             void appAlert(error instanceof Error ? error.message : '清空生成记录失败');
         }
     }, [agentSessionId, feedEntries, generationAgentContextId, generationJobBootstrapFilter, updateFeedEntries]);
-    const handlePickAgentAttachment = useCallback(async () => {
-        if (!agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
-        try {
-            const result = await window.ipcRenderer.chat.pickAttachment({
-                sessionId: agentSessionId,
-            }) as { success?: boolean; canceled?: boolean; error?: string; attachment?: UploadedFileAttachment };
-            if (!result?.success) {
-                throw new Error(result?.error || '上传附件失败');
-            }
-            if (result.canceled || !result.attachment) return;
-            setAgentAttachment(result.attachment);
-            if (studioMode === 'cover') {
-                setCoverError('');
-            } else {
-                setImageError('');
-            }
-        } catch (error) {
-            console.error('Failed to pick generation agent attachment:', error);
-            if (studioMode === 'cover') {
-                setCoverError(error instanceof Error ? error.message : '上传附件失败');
-            } else {
-                setImageError(error instanceof Error ? error.message : '上传附件失败');
-            }
-        }
-    }, [agentExecutionActive, agentSessionId, isAgentSessionLoading, studioMode]);
     const handleSendAgentMessage = useCallback(async () => {
         const content = currentAgentRequest.prompt.trim();
         if ((!content && !agentAttachment) || !agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
@@ -3295,49 +3266,6 @@ export function GenerationStudio({
                 <Music2 className="h-4 w-4" />
                 生音频
             </button>
-            <button
-                type="button"
-                onClick={() => setStudioMode('digital-human')}
-                className={clsx(
-                    'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-4 py-1.5 text-[14px] font-medium',
-                    studioMode === 'digital-human'
-                        ? 'border-brand-red/50 bg-brand-red text-white'
-                        : 'border-border bg-surface-primary text-text-secondary',
-                )}
-            >
-                <UserRound className="h-4 w-4" />
-                数字人
-            </button>
-            {!isDigitalHumanMode && (
-            <button
-                type="button"
-                role="switch"
-                aria-checked={isAgentMode}
-                aria-label="Agent 模式"
-                onClick={() => setGenerationSurface((prev) => prev === 'agent' ? 'manual' : 'agent')}
-                className="inline-flex shrink-0 items-center gap-3 whitespace-nowrap rounded-full px-1 py-1 text-[14px] font-medium text-text-secondary transition-colors"
-            >
-                <span className="inline-flex items-center gap-2">
-                    <Sparkles className={clsx('h-4 w-4 transition-colors', isAgentMode ? 'text-brand-red' : 'text-text-tertiary')} />
-                    <span>Agent 模式</span>
-                </span>
-                <span
-                    className={clsx(
-                        'relative inline-flex h-7 w-12 shrink-0 rounded-full border transition-colors duration-200',
-                        isAgentMode
-                            ? 'border-brand-red/40 bg-brand-red'
-                            : 'border-border bg-surface-tertiary',
-                    )}
-                >
-                    <span
-                        className={clsx(
-                            'absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.22)] transition-transform duration-200',
-                            isAgentMode ? 'translate-x-[22px]' : 'translate-x-0.5',
-                        )}
-                    />
-                </span>
-            </button>
-            )}
             {feedEntries.length > 0 && (
                 <button
                     type="button"
@@ -3552,17 +3480,6 @@ export function GenerationStudio({
                                         <div className="flex flex-wrap items-center gap-2">
                                             {studioMode === 'image' ? (
                                                 <>
-                                                    {isAgentMode && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void handlePickAgentAttachment()}
-                                                            disabled={!agentSessionId || isAgentSessionLoading || agentExecutionActive}
-                                                            className="inline-flex h-10 items-center gap-1.5 rounded-[10px] border border-border bg-surface-secondary px-3 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-45"
-                                                        >
-                                                            <Paperclip className="h-3.5 w-3.5" />
-                                                            附件
-                                                        </button>
-                                                    )}
                                                     <PopoverSelect
                                                         value={imageModel}
                                                         onChange={setImageModel}
@@ -3618,17 +3535,6 @@ export function GenerationStudio({
                                                 </>
                                             ) : studioMode === 'cover' ? (
                                                 <>
-                                                    {isAgentMode && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void handlePickAgentAttachment()}
-                                                            disabled={!agentSessionId || isAgentSessionLoading || agentExecutionActive}
-                                                            className="inline-flex h-10 items-center gap-1.5 rounded-[10px] border border-border bg-surface-secondary px-3 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-45"
-                                                        >
-                                                            <Paperclip className="h-3.5 w-3.5" />
-                                                            附件
-                                                        </button>
-                                                    )}
                                                     <PopoverSelect
                                                         value={coverModel}
                                                         onChange={setCoverModel}

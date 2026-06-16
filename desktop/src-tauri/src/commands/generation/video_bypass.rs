@@ -4,6 +4,7 @@ use super::progress::{
 };
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{with_store, with_store_mut};
+use crate::runtime::append_runtime_event_for_session;
 use crate::store::{
     media as media_store, settings as settings_store, work_items as work_items_store,
 };
@@ -11,6 +12,56 @@ use crate::*;
 use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, State};
+
+fn optional_payload_string(payload: &Value, key: &str) -> Option<String> {
+    payload_string(payload, key).and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn reference_image_count(payload: &Value) -> usize {
+    payload_field(payload, "referenceImages")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn truncate_event_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn append_video_generation_event(
+    state: &State<'_, AppState>,
+    payload: &Value,
+    project_id: Option<String>,
+    event_type: &str,
+    event_payload: Value,
+) {
+    let result = with_store_mut(state, |store| {
+        append_runtime_event_for_session(
+            store,
+            "media_generation",
+            event_type,
+            optional_payload_string(payload, "sessionId")
+                .or_else(|| optional_payload_string(payload, "session_id")),
+            optional_payload_string(payload, "taskId")
+                .or_else(|| optional_payload_string(payload, "sourceTaskId")),
+            optional_payload_string(payload, "toolCallId")
+                .or_else(|| optional_payload_string(payload, "tool_call_id")),
+            project_id,
+            Some(event_payload),
+        );
+        Ok(())
+    });
+    if let Err(error) = result {
+        eprintln!("[video-gen] runtime-event:write-error error={error}");
+    }
+}
 
 pub(super) fn handle_video_generation_bypass(
     app: &AppHandle,
@@ -53,6 +104,23 @@ pub(super) fn handle_video_generation_bypass(
         let absolute_path = media_root_path.join(&relative_path);
         let (preview_url, thumbnail_url) = {
             let Some((endpoint, api_key, default_model)) = &real_video_config else {
+                append_video_generation_event(
+                    state,
+                    payload,
+                    project_id.clone(),
+                    "request.failed",
+                    json!({
+                        "mediaKind": "video",
+                        "channel": channel,
+                        "generationMode": payload_field(payload, "generationMode")
+                            .and_then(Value::as_str)
+                            .unwrap_or("text-to-video"),
+                        "referenceCount": reference_image_count(payload),
+                        "assetIndex": index,
+                        "assetCount": count,
+                        "error": "video generation requires a configured video provider"
+                    }),
+                );
                 return Err("video generation requires a configured video provider".to_string());
             };
             let generation_mode = payload_field(payload, "generationMode")
@@ -67,6 +135,22 @@ pub(super) fn handle_video_generation_bypass(
                 .and_then(Value::as_array)
                 .map(|items| items.len())
                 .unwrap_or(0);
+            append_video_generation_event(
+                state,
+                payload,
+                project_id.clone(),
+                "request.started",
+                json!({
+                    "mediaKind": "video",
+                    "channel": channel,
+                    "model": effective_video_model,
+                    "generationMode": generation_mode,
+                    "durationSeconds": duration_seconds,
+                    "referenceCount": reference_count,
+                    "assetIndex": index,
+                    "assetCount": count
+                }),
+            );
             emit_video_generation_progress(
                 app,
                 &video_log_context,
@@ -82,6 +166,23 @@ pub(super) fn handle_video_generation_bypass(
             ) {
                 Ok(response) => response,
                 Err(error) => {
+                    append_video_generation_event(
+                        state,
+                        payload,
+                        project_id.clone(),
+                        "request.failed",
+                        json!({
+                            "mediaKind": "video",
+                            "channel": channel,
+                            "model": effective_video_model,
+                            "generationMode": generation_mode,
+                            "durationSeconds": duration_seconds,
+                            "referenceCount": reference_count,
+                            "assetIndex": index,
+                            "assetCount": count,
+                            "error": truncate_event_text(&error, 600)
+                        }),
+                    );
                     emit_video_generation_progress(
                         app,
                         &video_log_context,
@@ -172,12 +273,45 @@ pub(super) fn handle_video_generation_bypass(
                     fs::write(&absolute_path, bytes).map_err(|error| error.to_string())?;
                 }
             } else {
+                append_video_generation_event(
+                    state,
+                    payload,
+                    project_id.clone(),
+                    "response.empty",
+                    json!({
+                        "mediaKind": "video",
+                        "channel": channel,
+                        "model": effective_video_model,
+                        "generationMode": generation_mode,
+                        "durationSeconds": duration_seconds,
+                        "referenceCount": reference_count,
+                        "assetIndex": index,
+                        "assetCount": count
+                    }),
+                );
                 return Err(
                     "video generation response did not include a usable media result".to_string(),
                 );
             }
             let thumbnail_url =
                 crate::ensure_video_thumbnail_for_path(Some(app), state, &absolute_path);
+            append_video_generation_event(
+                state,
+                payload,
+                project_id.clone(),
+                "request.completed",
+                json!({
+                    "mediaKind": "video",
+                    "channel": channel,
+                    "model": effective_video_model,
+                    "generationMode": generation_mode,
+                    "durationSeconds": duration_seconds,
+                    "referenceCount": reference_count,
+                    "assetIndex": index,
+                    "assetCount": count,
+                    "relativePath": relative_path
+                }),
+            );
             emit_video_generation_progress(
                 app,
                 &video_log_context,

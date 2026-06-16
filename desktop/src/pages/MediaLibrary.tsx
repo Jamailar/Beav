@@ -42,6 +42,9 @@ interface MediaListResponse {
     success?: boolean;
     error?: string;
     assets?: MediaAsset[];
+    total?: number;
+    nextCursor?: string | null;
+    hasMore?: boolean;
 }
 
 interface FileNode {
@@ -450,6 +453,9 @@ export function MediaLibrary({
     const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
     const [videoGenError, setVideoGenError] = useState('');
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
+    const [mediaNextCursor, setMediaNextCursor] = useState<string | null>(null);
+    const [mediaTotal, setMediaTotal] = useState(0);
+    const [isLoadingMoreMedia, setIsLoadingMoreMedia] = useState(false);
     const [expandedAssetId, setExpandedAssetId] = useState<string | null>(null);
     const [contextMenu, setContextMenu] = useState<MediaAssetContextMenuState>({
         visible: false,
@@ -490,6 +496,8 @@ export function MediaLibrary({
                     .filter((asset) => !deletedAssetIdsRef.current.has(asset.id))
                     .sort(compareMediaAssetsByCreatedAtDesc);
                 setAssets(nextAssets);
+                setMediaNextCursor(typeof mediaResult.nextCursor === 'string' ? mediaResult.nextCursor : null);
+                setMediaTotal(Number.isFinite(mediaResult.total) ? Number(mediaResult.total) : nextAssets.length);
                 setDrafts((prev) => Object.fromEntries(
                     Object.entries(prev).filter(([assetId]) => nextAssets.some((asset) => asset.id === assetId))
                 ));
@@ -512,6 +520,38 @@ export function MediaLibrary({
             }
         }
     }, []);
+
+    const loadMoreMedia = useCallback(async () => {
+        if (!mediaNextCursor || isLoadingMoreMedia) return;
+        setIsLoadingMoreMedia(true);
+        try {
+            const mediaResult = await window.ipcRenderer.media.list({
+                limit: 500,
+                cursor: mediaNextCursor,
+            }) as MediaListResponse;
+            if (!mediaResult?.success) {
+                setError(mediaResult?.error || '加载更多媒体失败');
+                return;
+            }
+            const nextAssets = (Array.isArray(mediaResult.assets) ? mediaResult.assets : [])
+                .map(normalizeMediaAsset)
+                .filter((asset) => !deletedAssetIdsRef.current.has(asset.id));
+            setAssets((current) => {
+                const seen = new Set(current.map((asset) => asset.id));
+                return [...current, ...nextAssets.filter((asset) => !seen.has(asset.id))]
+                    .sort(compareMediaAssetsByCreatedAtDesc);
+            });
+            setMediaNextCursor(typeof mediaResult.nextCursor === 'string' ? mediaResult.nextCursor : null);
+            setMediaTotal((current) => (
+                Number.isFinite(mediaResult.total) ? Number(mediaResult.total) : Math.max(current, assets.length + nextAssets.length)
+            ));
+        } catch (error) {
+            console.error('Failed to load more media:', error);
+            setError('加载更多媒体失败');
+        } finally {
+            setIsLoadingMoreMedia(false);
+        }
+    }, [assets.length, isLoadingMoreMedia, mediaNextCursor]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -1046,7 +1086,7 @@ export function MediaLibrary({
 
                     <div className="hidden xl:flex items-center gap-1.5 min-w-0 ml-2">
                         <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-primary/70 text-text-secondary whitespace-nowrap">
-                            总资产 {sourceStats.all}
+                            总资产 {mediaTotal || sourceStats.all}
                         </span>
                         <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border whitespace-nowrap', SOURCE_META.generated.chipClass)}>
                             已生成 {sourceStats.generated}
@@ -1175,9 +1215,10 @@ export function MediaLibrary({
                 ) : filteredAssets.length === 0 ? (
                     <div className="text-sm text-text-tertiary">暂无媒体资产</div>
                 ) : (
-                    <div className="flex items-start gap-4">
-                        {masonryColumns.map((columnAssets, columnIndex) => (
-                            <div key={`media-masonry-column-${columnIndex}`} className="min-w-0 flex-1 space-y-4">
+                    <div className="space-y-4">
+                        <div className="flex items-start gap-4">
+                            {masonryColumns.map((columnAssets, columnIndex) => (
+                                <div key={`media-masonry-column-${columnIndex}`} className="min-w-0 flex-1 space-y-4">
                                 {columnAssets.map((asset) => {
                                     const draft = getDraft(asset);
                                     const sourceMeta = SOURCE_META[asset.source] ?? SOURCE_META.imported;
@@ -1271,8 +1312,22 @@ export function MediaLibrary({
                                         </div>
                                     );
                                 })}
+                                </div>
+                            ))}
+                        </div>
+                        {mediaNextCursor && (
+                            <div className="flex justify-center">
+                                <button
+                                    type="button"
+                                    onClick={() => void loadMoreMedia()}
+                                    disabled={isLoadingMoreMedia}
+                                    className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-surface-primary px-3 text-xs text-text-secondary transition hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <RefreshCw className={clsx('h-3.5 w-3.5', isLoadingMoreMedia && 'animate-spin')} />
+                                    {isLoadingMoreMedia ? '加载中' : '加载更多'}
+                                </button>
                             </div>
-                        ))}
+                        )}
                     </div>
                 )}
             </div>

@@ -86,6 +86,12 @@ const canCopyPreviewText = (target: ChatMessageLinkTarget): boolean => (
     && typeof target.previewText === 'string'
 );
 
+const isReadableManuscriptPreview = (target: ChatMessageLinkTarget): boolean => (
+    target.kind === 'manuscript'
+    || String(target.extension || '').toLowerCase() === 'md'
+    || String(target.extension || '').toLowerCase() === 'markdown'
+);
+
 export function RedClawFilePreviewPane({
     target,
     onClose,
@@ -150,6 +156,14 @@ export function RedClawFilePreviewPane({
         }
 
         if ((target.kind === 'text' || target.kind === 'html' || target.kind === 'manuscript') && typeof target.previewText === 'string') {
+            if (isReadableManuscriptPreview(target)) {
+                return (
+                    <article className="h-full w-full overflow-auto bg-surface-secondary/30 px-6 py-5 text-[16px] leading-7 text-text-secondary whitespace-pre-wrap">
+                        {target.previewText}
+                    </article>
+                );
+            }
+
             return (
                 <pre className="h-full w-full overflow-auto bg-surface-secondary/30 p-4 font-mono text-xs leading-5 text-text-secondary whitespace-pre-wrap">
                     {target.previewText}

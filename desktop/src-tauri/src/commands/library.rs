@@ -15,7 +15,11 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, State};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    OnceLock,
+};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,7 +122,7 @@ pub(crate) fn persist_media_workspace_catalog(state: &State<'_, AppState>) -> Re
 fn backfill_video_thumbnails_for_media_assets(
     app: &AppHandle,
     state: &State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let root = media_root(state)?;
     let candidates = with_store(state, |store| {
         Ok(media_store::list_assets(&store)
@@ -146,7 +150,7 @@ fn backfill_video_thumbnails_for_media_assets(
             .collect::<Vec<_>>())
     })?;
     if candidates.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let updates = candidates
@@ -157,7 +161,7 @@ fn backfill_video_thumbnails_for_media_assets(
         })
         .collect::<Vec<_>>();
     if updates.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     with_store_mut(state, |store| {
@@ -169,7 +173,51 @@ fn backfill_video_thumbnails_for_media_assets(
         }
         Ok(())
     })?;
-    persist_media_workspace_catalog(state)
+    persist_media_workspace_catalog(state)?;
+    Ok(true)
+}
+
+fn media_thumbnail_backfill_active() -> &'static AtomicBool {
+    static ACTIVE: OnceLock<AtomicBool> = OnceLock::new();
+    ACTIVE.get_or_init(|| AtomicBool::new(false))
+}
+
+struct MediaThumbnailBackfillGuard(&'static AtomicBool);
+
+impl Drop for MediaThumbnailBackfillGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn schedule_video_thumbnail_backfill(app: &AppHandle) {
+    let active = media_thumbnail_backfill_active();
+    if active.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = MediaThumbnailBackfillGuard(media_thumbnail_backfill_active());
+        let state = app_handle.state::<AppState>();
+        match backfill_video_thumbnails_for_media_assets(&app_handle, &state) {
+            Ok(true) => {
+                let _ = app_handle.emit(
+                    "knowledge:changed",
+                    json!({ "at": now_iso(), "kind": "media-assets" }),
+                );
+                let _ =
+                    app_handle.emit("data:changed", json!({ "at": now_iso(), "scope": "media" }));
+            }
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!(
+                    "[{} media thumbnails] background backfill failed: {error}",
+                    app_brand_display_name()
+                );
+            }
+        }
+    });
 }
 
 fn media_thumbnail_url_is_usable(value: Option<&str>) -> bool {
@@ -1634,12 +1682,51 @@ pub fn handle_library_channel(
             }
             "media:list" => {
                 let _ = ensure_store_hydrated_for_media(state);
-                let _ = backfill_video_thumbnails_for_media_assets(app, state);
-                with_store(state, |store| {
-                    let mut assets = media_store::list_assets(&store);
-                    assets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                    Ok(json!({ "success": true, "assets": assets }))
-                })
+                schedule_video_thumbnail_backfill(app);
+                let mut assets = with_store(state, |store| Ok(media_store::list_assets(&store)))?;
+                assets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                let total = assets.len();
+                let offset = payload
+                    .get("cursor")
+                    .and_then(|value| match value {
+                        Value::String(raw) => raw.parse::<usize>().ok(),
+                        Value::Number(number) => number.as_u64().map(|value| value as usize),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        payload
+                            .get("offset")
+                            .and_then(|value| value.as_u64())
+                            .map(|value| value as usize)
+                    })
+                    .unwrap_or(0)
+                    .min(total);
+                let requested_limit = payload
+                    .get("limit")
+                    .and_then(|value| value.as_u64())
+                    .map(|value| value.clamp(1, 1_000) as usize);
+                let next_assets = if let Some(limit) = requested_limit {
+                    assets
+                        .into_iter()
+                        .skip(offset)
+                        .take(limit)
+                        .collect::<Vec<_>>()
+                } else {
+                    assets
+                };
+                let next_offset = offset.saturating_add(next_assets.len());
+                let next_cursor = if next_offset < total {
+                    Some(next_offset.to_string())
+                } else {
+                    None
+                };
+                Ok(json!({
+                    "success": true,
+                    "assets": next_assets,
+                    "total": total,
+                    "nextCursor": next_cursor,
+                    "hasMore": next_cursor.is_some()
+                }))
             }
             "media:open-root" => {
                 let root = media_root(state)?;

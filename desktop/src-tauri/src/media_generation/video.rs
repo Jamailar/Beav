@@ -27,7 +27,7 @@ pub(crate) fn build_video_request_body(
     let prompt = payload_string(payload, "prompt").unwrap_or_default();
     let mut generation_mode =
         payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-video".to_string());
-    let reference_images = extract_reference_images(payload, 5)
+    let reference_images = extract_reference_image_values(payload, 5)?
         .into_iter()
         .map(|item| normalize_media_value_for_remote(&item))
         .collect::<Result<Vec<_>, _>>()?;
