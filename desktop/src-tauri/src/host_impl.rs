@@ -2774,6 +2774,7 @@ pub(crate) fn execute_interactive_tool_call(
             runtime_mode,
             session_id,
             tool_call_id,
+            _model_config,
         );
         let prepared = tool_executor.prepare_tool_call(name, arguments)?;
         let name = prepared.name.clone();

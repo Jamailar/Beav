@@ -14,4 +14,5 @@ pub mod router;
 pub mod shell;
 pub mod tool_search;
 pub mod web_access;
+pub mod web_search;
 pub mod workspace_search;

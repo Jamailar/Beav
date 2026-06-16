@@ -52,6 +52,7 @@ pub struct AppCliExecutor<'a> {
     runtime_mode: &'a str,
     session_id: Option<&'a str>,
     tool_call_id: Option<&'a str>,
+    model_config: Option<&'a Value>,
 }
 
 const IMAGE_DIRECTOR_SKILL_NAME: &str = "image-director";
@@ -508,6 +509,7 @@ impl<'a> AppCliExecutor<'a> {
         runtime_mode: &'a str,
         session_id: Option<&'a str>,
         tool_call_id: Option<&'a str>,
+        model_config: Option<&'a Value>,
     ) -> Self {
         Self {
             app,
@@ -515,6 +517,7 @@ impl<'a> AppCliExecutor<'a> {
             runtime_mode,
             session_id,
             tool_call_id,
+            model_config,
         }
     }
 
@@ -709,6 +712,7 @@ impl<'a> AppCliExecutor<'a> {
                 self.handle_memory(&tokens, payload)
             }
             "webfetch" => self.handle_web(&["fetch".to_string()], payload),
+            "websearch" => self.handle_web(&["search".to_string()], payload),
             "sessionresourceslist" => self.handle_session_resources_list(payload),
             "sessionresourcesget" => self.handle_session_resources_get(payload),
             "videoanalyze" => self.handle_video_analyze(payload),
@@ -2579,6 +2583,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "knowledge list|search",
             "work list|ready|get|update",
             "memory list|search|recall|add|update|archive|delete|rebuild-index|diagnostics",
+            "web fetch|search",
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
             "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",

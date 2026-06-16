@@ -54,7 +54,7 @@ const APP_CLI_DESCRIPTION: &str = "Structured business actions for the current r
 const REDBOX_EDITOR_DESCRIPTION: &str = "Structured editor actions for the currently bound video/audio manuscript package. Use the script-first flow and controlled ffmpeg actions.";
 const READ_DESCRIPTION: &str = "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, or editor://current/script. Do not use bash/curl for web pages.";
 const LIST_DESCRIPTION: &str = "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, assets:// for asset library entries, or media:// for media.";
-const SEARCH_DESCRIPTION: &str = "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and assets:// for asset library lookup. This is not a web search tool.";
+const SEARCH_DESCRIPTION: &str = "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and assets:// for asset library lookup. For public web search, use Operate(resource=\"web\", operation=\"search\", input={\"query\":\"...\"}).";
 const WRITE_DESCRIPTION: &str = "Write content to a virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
 const REDBOX_DESCRIPTION: &str = "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
 const TOOL_SEARCH_DESCRIPTION: &str = "Search deferred Operate actions and MCP tools that are available to this session but not exposed directly in the current turn. Use this when a tool or action is reported as deferred.";
@@ -442,6 +442,61 @@ fn web_fetch_input_schema() -> Value {
         ],
         &["url"],
         Some("Fetch a user-provided public web page URL. This does not perform web search."),
+    )
+}
+
+fn web_search_input_schema() -> Value {
+    object_schema(
+        &[
+            ("query", string_schema("Public web search query.")),
+            (
+                "limit",
+                integer_schema("Maximum source entries to return.", 1, 10),
+            ),
+            (
+                "mode",
+                json!({
+                    "type": "string",
+                    "enum": ["auto", "hosted", "local"],
+                    "description": "auto/hosted prefer provider-hosted web search when supported; local uses configured Tavily/SearXNG/DuckDuckGo fallback."
+                }),
+            ),
+            (
+                "allowFallback",
+                json!({
+                    "type": "boolean",
+                    "description": "Whether to fall back to configured local search if provider-hosted search is unavailable."
+                }),
+            ),
+            (
+                "searchContextSize",
+                json!({
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": "OpenAI Responses web_search context size hint."
+                }),
+            ),
+            (
+                "allowedDomains",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 100,
+                    "description": "Optional provider-supported allow list for search domains."
+                }),
+            ),
+            (
+                "blockedDomains",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 100,
+                    "description": "Optional provider-supported block list for search domains."
+                }),
+            ),
+        ],
+        &["query"],
+        Some("Search the public web. Prefer this for current facts, news, prices, schedules, or source-backed answers."),
     )
 }
 
@@ -3274,6 +3329,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "web",
         description: "Fetch a user-provided public http/https URL and return readable page text. Use this for explicit URLs instead of bash curl. This does not search the web.",
         input_schema: web_fetch_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "web.search",
+        namespace: "web",
+        description: "Search the public web and return provider-hosted or configured search results with source metadata. Use this for current facts, recent events, prices, schedules, or when the user asks to look something up.",
+        input_schema: web_search_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
