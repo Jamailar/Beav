@@ -39,7 +39,7 @@ use api_keys::has_official_plaintext_api_key_record;
 pub(crate) use auth_refresh::refresh_official_auth_for_ai_request;
 #[cfg(test)]
 use auth_refresh::refresh_official_auth_session_in_settings;
-use auth_refresh::refresh_official_auth_session_with_lock;
+use auth_refresh::{force_official_reauth, refresh_official_auth_session_with_lock};
 pub(crate) use cache::{bootstrap_official_auth_session, trigger_official_cached_data_refresh};
 #[cfg(test)]
 use call_records::value_as_f64;

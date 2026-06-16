@@ -57,16 +57,13 @@ fn run_authenticated_official_request_inner(
         format!("path={path} kind={kind:?} error={error}"),
     );
     if kind == auth::AuthErrorKind::ReauthRequired {
-        clear_official_auth_state(settings);
-        let _ = apply_official_settings_update(
+        force_official_reauth(
             app,
             state,
-            settings,
-            "official-auth-unauthorized",
-            None,
             expected_generation,
+            "official-auth-unauthorized",
+            error.clone(),
         );
-        let _ = auth::mark_auth_reauth_required(app, state, error.clone());
     } else {
         let _ = auth::mark_auth_degraded(app, state, error.clone(), kind);
     }

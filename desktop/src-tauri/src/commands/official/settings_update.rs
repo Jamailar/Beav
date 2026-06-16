@@ -63,6 +63,17 @@ pub(super) fn apply_official_settings_update(
             );
         }
     }
+    if let Some(expected_generation) = expected_generation {
+        let matches = auth::auth_generation_matches(state, expected_generation)?;
+        if !matches {
+            log_official_auth(
+                state,
+                "stale-update-dropped-before-write",
+                format!("source={source} expectedGeneration={expected_generation}"),
+            );
+            return Err("auth generation changed; stale update dropped".to_string());
+        }
+    }
     let merged_settings = with_store_mut(state, |store| {
         Ok(settings_store::update_settings(store, |settings| {
             merge_official_settings(settings, &next_settings);
