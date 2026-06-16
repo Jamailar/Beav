@@ -329,7 +329,7 @@ impl AiModelManager {
             .or_else(|| payload_string(settings, "wireApi"))
             .as_deref()
             .and_then(|value| ProviderWireApi::from_config(Some(value)))
-            .unwrap_or_else(|| ProviderWireApi::infer(&protocol));
+            .unwrap_or_else(|| ProviderWireApi::infer_for_endpoint(&protocol, &base_url));
         let reasoning_effort = normalize_reasoning_effort(
             override_string(request_override, &["reasoningEffort", "reasoning_effort"])
                 .or_else(|| payload_string(settings, "reasoning_effort"))
@@ -613,6 +613,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.wire_api, ProviderWireApi::Responses);
+    }
+
+    #[test]
+    fn resolve_chat_config_defaults_wire_api_by_endpoint() {
+        let official = json!({
+            "api_endpoint": "https://api.openai.com/v1",
+            "api_key": "sk-test",
+            "model_name": "gpt-5"
+        });
+        let compat = json!({
+            "api_endpoint": "https://gateway.example.com/v1",
+            "api_key": "sk-test",
+            "model_name": "gpt-5"
+        });
+
+        assert_eq!(
+            AiModelManager::resolve_chat_config(&official, None)
+                .unwrap()
+                .wire_api,
+            ProviderWireApi::Responses
+        );
+        assert_eq!(
+            AiModelManager::resolve_chat_config(&compat, None)
+                .unwrap()
+                .wire_api,
+            ProviderWireApi::ChatCompat
+        );
     }
 
     #[test]

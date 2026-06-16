@@ -683,11 +683,20 @@ impl ProviderWireApi {
         }
     }
 
-    pub fn infer(protocol: &str) -> Self {
+    pub fn infer_for_endpoint(protocol: &str, base_url: &str) -> Self {
         match protocol.trim().to_ascii_lowercase().as_str() {
             "anthropic" => Self::Anthropic,
             "gemini" => Self::Gemini,
-            _ => Self::ChatCompat,
+            _ => {
+                let normalized = base_url.trim().trim_end_matches('/').to_ascii_lowercase();
+                if normalized == "https://api.openai.com/v1"
+                    || normalized == "http://api.openai.com/v1"
+                {
+                    Self::Responses
+                } else {
+                    Self::ChatCompat
+                }
+            }
         }
     }
 

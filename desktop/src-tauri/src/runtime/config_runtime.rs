@@ -137,7 +137,7 @@ pub fn resolve_chat_config(
                     .or_else(|| payload_string(settings, "wireApi"))
                     .as_deref(),
             )
-            .unwrap_or_else(|| ProviderWireApi::infer(&protocol)),
+            .unwrap_or_else(|| ProviderWireApi::infer_for_endpoint(&protocol, &base_url)),
             base_url,
             api_key: payload_string(settings, "api_key"),
             model_name,

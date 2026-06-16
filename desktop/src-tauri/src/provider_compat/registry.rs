@@ -95,6 +95,7 @@ fn normalized_provider_key(protocol: &str, base_url: &str, model_name: &str) -> 
     format!("{protocol_key}:{host_key}:{model_key}")
 }
 
+#[allow(dead_code)]
 pub(crate) fn provider_profile_from_parts(
     protocol: &str,
     base_url: &str,
@@ -104,7 +105,7 @@ pub(crate) fn provider_profile_from_parts(
         protocol,
         base_url,
         model_name,
-        ProviderWireApi::infer(protocol),
+        ProviderWireApi::infer_for_endpoint(protocol, base_url),
     )
 }
 
