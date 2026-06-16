@@ -224,11 +224,7 @@ async fn send_openai_request_to_path(
     transport_mode: TransportMode,
     max_time_seconds: Option<u64>,
 ) -> Result<reqwest::Response, LlmTransportError> {
-    let url = format!(
-        "{}{}",
-        normalize_base_url(&config.base_url),
-        endpoint_path
-    );
+    let url = format!("{}{}", normalize_base_url(&config.base_url), endpoint_path);
     let provider_profile = openai_provider_profile(config);
     let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let timeout_label = max_time_seconds
@@ -1271,7 +1267,10 @@ pub(crate) fn openai_chat_body_to_responses_body(body: &Value) -> Value {
     if let Some(temperature) = body.get("temperature") {
         output["temperature"] = temperature.clone();
     }
-    if let Some(max_tokens) = body.get("max_tokens").or_else(|| body.get("max_completion_tokens")) {
+    if let Some(max_tokens) = body
+        .get("max_tokens")
+        .or_else(|| body.get("max_completion_tokens"))
+    {
         output["max_output_tokens"] = max_tokens.clone();
     }
     if let Some(effort) = body.get("reasoning_effort").and_then(Value::as_str) {
@@ -1545,7 +1544,9 @@ mod tests {
             Some("function_call_output")
         );
         assert_eq!(
-            converted.pointer("/reasoning/effort").and_then(Value::as_str),
+            converted
+                .pointer("/reasoning/effort")
+                .and_then(Value::as_str),
             Some("low")
         );
     }

@@ -178,6 +178,16 @@ fn session_access_token(session: Option<&Value>) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+fn session_access_token_is_current(session: Option<&Value>) -> bool {
+    let Some(token) = session_access_token(session) else {
+        return false;
+    };
+    match jwt_expiration_ms(&token) {
+        Some(expires_at) => expires_at > now_ms() as i64,
+        None => true,
+    }
+}
+
 fn session_refresh_token(session: Option<&Value>) -> Option<String> {
     session
         .and_then(|value| {
@@ -316,6 +326,10 @@ pub(crate) fn classify_auth_error(error: &str) -> AuthErrorKind {
         || normalized.contains("账号已禁用")
         || normalized.contains("invalid refresh token")
         || normalized.contains("refresh token invalid")
+        || normalized.contains("refresh token expired")
+        || normalized.contains("refresh_token_expired")
+        || normalized.contains("token_expired")
+        || normalized.contains("token expired")
         || normalized.contains("旧账号体系")
         || normalized.contains("legacy account realm")
     {
@@ -421,6 +435,10 @@ fn schedule_auth_cache_persist(store_path: PathBuf, cache: AuthCacheRecord) {
             eprintln!("[{} auth cache persist] {error}", app_brand_display_name());
         }
     });
+}
+
+fn clear_auth_cache(store_path: &Path) -> Result<(), String> {
+    persist_auth_cache(store_path, &AuthCacheRecord::default())
 }
 
 fn load_auth_cache(store_path: &Path) -> Result<AuthCacheRecord, String> {
@@ -676,7 +694,7 @@ pub(crate) fn sync_auth_runtime_from_settings(
         runtime.last_error = None;
         runtime.last_error_kind = None;
         runtime.unknown_expiry_refresh_attempted = false;
-        runtime.status = if session_access_token(session.as_ref()).is_some() {
+        runtime.status = if session_access_token_is_current(session.as_ref()) {
             AuthStatus::Authenticated
         } else if secrets.refresh_token.is_some() {
             AuthStatus::Restoring
@@ -757,6 +775,7 @@ pub(crate) fn mark_auth_reauth_required(
 ) -> Result<AuthStateSnapshot, String> {
     let message = message.into();
     write_secrets(&AuthSecretBundle::default())?;
+    clear_auth_cache(&state.store_path)?;
     let snapshot = with_auth_runtime_mut(state, |runtime| {
         runtime.generation = runtime.generation.saturating_add(1);
         runtime.status = AuthStatus::ReauthRequired;
@@ -777,6 +796,7 @@ pub(crate) fn mark_auth_logged_out(
     state: &State<'_, AppState>,
 ) -> Result<AuthStateSnapshot, String> {
     write_secrets(&AuthSecretBundle::default())?;
+    clear_auth_cache(&state.store_path)?;
     let snapshot = with_auth_runtime_mut(state, |runtime| {
         let next_generation = runtime.generation;
         *runtime = AuthRuntimeState::default();
@@ -869,7 +889,7 @@ pub(crate) fn initialize_auth_runtime(
         };
         runtime.next_refresh_at_ms = session_expires_at_ms(cache.session.as_ref())
             .map(|expires_at| expires_at.saturating_sub(5 * 60 * 1000));
-        runtime.status = if session_access_token(cache.session.as_ref()).is_some() {
+        runtime.status = if session_access_token_is_current(cache.session.as_ref()) {
             AuthStatus::Authenticated
         } else if secrets.refresh_token.is_some() {
             AuthStatus::Restoring
@@ -971,6 +991,18 @@ mod tests {
     }
 
     #[test]
+    fn session_access_token_is_current_rejects_expired_jwt() {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+        let expired_payload = URL_SAFE_NO_PAD.encode(r#"{"exp":1}"#);
+        let future_payload = URL_SAFE_NO_PAD.encode(r#"{"exp":4102444800}"#);
+        let expired = json!({ "accessToken": format!("{header}.{expired_payload}.signature") });
+        let future = json!({ "accessToken": format!("{header}.{future_payload}.signature") });
+
+        assert!(!session_access_token_is_current(Some(&expired)));
+        assert!(session_access_token_is_current(Some(&future)));
+    }
+
+    #[test]
     fn classify_auth_error_recognizes_reauth_required_cases() {
         assert_eq!(
             classify_auth_error("invalid_grant: refresh token revoked"),
@@ -978,6 +1010,14 @@ mod tests {
         );
         assert_eq!(
             classify_auth_error("Invalid refresh token"),
+            AuthErrorKind::ReauthRequired
+        );
+        assert_eq!(
+            classify_auth_error("token_expired"),
+            AuthErrorKind::ReauthRequired
+        );
+        assert_eq!(
+            classify_auth_error("refresh token expired"),
             AuthErrorKind::ReauthRequired
         );
         assert_eq!(

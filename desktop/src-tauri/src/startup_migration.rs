@@ -42,6 +42,9 @@ struct StartupMigrationReceipt {
     status: String,
     legacy_db_path: Option<String>,
     source_fingerprint: Option<String>,
+    legacy_workspace_path: Option<String>,
+    legacy_workspace_fingerprint: Option<String>,
+    legacy_markdown_count: Option<usize>,
     started_at: Option<String>,
     completed_at: Option<String>,
     imported_counts: Option<Value>,
@@ -181,6 +184,54 @@ fn count_legacy_markdown_manuscripts(workspace_root: &Path) -> usize {
         .unwrap_or(0)
 }
 
+fn legacy_manuscripts_fingerprint(workspace_root: &Path) -> Option<String> {
+    let manuscripts_root = workspace_root.join("manuscripts");
+    let metadata = fs::metadata(&manuscripts_root).ok()?;
+    let modified = metadata.modified().ok()?;
+    let modified_ms = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some(format!(
+        "{}:{}:{}",
+        manuscripts_root.display(),
+        metadata.len(),
+        modified_ms
+    ))
+}
+
+fn legacy_markdown_count_for_probe(
+    store_path: &Path,
+    workspace_root: &Path,
+    receipt: Option<&StartupMigrationReceipt>,
+) -> usize {
+    let workspace_path = workspace_root.display().to_string();
+    let fingerprint = legacy_manuscripts_fingerprint(workspace_root);
+    if let Some(cached_count) = receipt
+        .filter(|item| {
+            item.version >= STARTUP_MIGRATION_VERSION
+                && item.legacy_workspace_path.as_deref() == Some(workspace_path.as_str())
+                && item.legacy_workspace_fingerprint == fingerprint
+        })
+        .and_then(|item| item.legacy_markdown_count)
+    {
+        return cached_count;
+    }
+
+    let count = count_legacy_markdown_manuscripts(workspace_root);
+    let mut next = receipt.cloned().unwrap_or_else(|| StartupMigrationReceipt {
+        version: STARTUP_MIGRATION_VERSION,
+        status: "probe".to_string(),
+        ..StartupMigrationReceipt::default()
+    });
+    next.version = STARTUP_MIGRATION_VERSION;
+    next.legacy_workspace_path = Some(workspace_path);
+    next.legacy_workspace_fingerprint = fingerprint;
+    next.legacy_markdown_count = Some(count);
+    let _ = save_startup_migration_receipt(store_path, &next);
+    count
+}
+
 fn migrate_legacy_markdown_manuscripts(workspace_root: &Path) -> Result<Value, String> {
     let manuscripts_root = workspace_root.join("manuscripts");
     let files = list_legacy_markdown_manuscripts(&manuscripts_root)?;
@@ -315,12 +366,12 @@ pub(crate) fn probe_startup_migration(
     );
     let workspace_root =
         crate::workspace_root_from_snapshot(&settings, &active_space_id, store_path).ok();
+    let receipt = load_startup_migration_receipt(store_path);
     let legacy_markdown_count = workspace_root
         .as_ref()
-        .map(|path| count_legacy_markdown_manuscripts(path))
+        .map(|path| legacy_markdown_count_for_probe(store_path, path, receipt.as_ref()))
         .unwrap_or(0);
     let needs_project_upgrade = legacy_markdown_count > 0;
-    let receipt = load_startup_migration_receipt(store_path);
 
     let Some(db_path) = legacy_db_path.as_ref() else {
         let failed_message = receipt
@@ -482,6 +533,9 @@ fn write_failed_receipt(
             .map(PathBuf::from)
             .as_deref()
             .and_then(legacy_db_fingerprint),
+        legacy_workspace_path: None,
+        legacy_workspace_fingerprint: None,
+        legacy_markdown_count: None,
         started_at: Some(now_iso()),
         completed_at: None,
         imported_counts: None,
@@ -519,6 +573,9 @@ fn execute_startup_migration(app: AppHandle) -> Result<AppStore, String> {
             .as_deref()
             .map(Path::new)
             .and_then(legacy_db_fingerprint),
+        legacy_workspace_path: None,
+        legacy_workspace_fingerprint: None,
+        legacy_markdown_count: None,
         started_at: Some(now_iso()),
         completed_at: None,
         imported_counts: None,
@@ -615,7 +672,7 @@ fn execute_startup_migration(app: AppHandle) -> Result<AppStore, String> {
             .workspace_root_cache
             .lock()
             .map_err(|_| "workspace cache lock is poisoned".to_string())?;
-        *cache = workspace_root;
+        *cache = workspace_root.clone();
     }
 
     let imported_counts = counts_payload(&imported_store);
@@ -627,6 +684,9 @@ fn execute_startup_migration(app: AppHandle) -> Result<AppStore, String> {
         None
     };
     started_receipt.project_upgrade_counts = project_upgrade_counts.clone();
+    started_receipt.legacy_workspace_path = Some(workspace_root.display().to_string());
+    started_receipt.legacy_workspace_fingerprint = legacy_manuscripts_fingerprint(&workspace_root);
+    started_receipt.legacy_markdown_count = Some(0);
     save_startup_migration_receipt(&state.store_path, &started_receipt)?;
 
     let completed_message = startup_completed_message(

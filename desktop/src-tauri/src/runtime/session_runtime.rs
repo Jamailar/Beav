@@ -61,8 +61,9 @@ use history::{
 };
 use query::session_ids_for_query;
 pub use query::{
-    checkpoints_for_session, checkpoints_value_for_session, tool_results_for_session,
-    tool_results_value_for_session, trace_for_session, trace_value_for_session,
+    checkpoints_for_session, checkpoints_value_for_session, runtime_events_value_for_session,
+    tool_results_for_session, tool_results_value_for_session, trace_for_session,
+    trace_value_for_session,
 };
 pub use reference_resolver::resolve_session_file_reference_inputs;
 #[cfg(test)]
@@ -312,7 +313,8 @@ mod tests {
     };
     use super::*;
     use crate::runtime::{
-        SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
+        RuntimeEventRecord, SessionCheckpointRecord, SessionToolResultRecord,
+        SessionTranscriptRecord,
     };
 
     fn test_session(id: &str) -> ChatSessionRecord {
@@ -482,6 +484,10 @@ mod tests {
         assert!(trace_value_for_session(&store, "session-1", false, None).is_array());
         assert!(tool_results_value_for_session(&store, "session-1", false, None, None).is_array());
         assert!(checkpoints_value_for_session(&store, "session-1", false, None, None).is_array());
+        assert!(
+            runtime_events_value_for_session(&store, "session-1", false, None, None, None)
+                .is_array()
+        );
     }
 
     #[test]
@@ -537,6 +543,88 @@ mod tests {
 
         let traces = trace_value_for_session(&store, "session-parent", true, None);
         assert_eq!(traces.as_array().map(|items| items.len()), Some(2));
+    }
+
+    #[test]
+    fn runtime_events_query_filters_and_includes_child_sessions() {
+        let mut store = crate::AppStore::default();
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "session-parent".to_string(),
+            title: "Parent".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({"contextType": "chat"})),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
+        });
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "session-child".to_string(),
+            title: "Child".to_string(),
+            created_at: "2".to_string(),
+            updated_at: "2".to_string(),
+            metadata: Some(json!({
+                "contextType": "chat",
+                "parentSessionId": "session-parent"
+            })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
+        });
+        store.runtime_events.push(RuntimeEventRecord {
+            id: "event-parent".to_string(),
+            category: "media_generation".to_string(),
+            event_type: "request.started".to_string(),
+            session_id: Some("session-parent".to_string()),
+            created_at: 1,
+            ..RuntimeEventRecord::default()
+        });
+        store.runtime_events.push(RuntimeEventRecord {
+            id: "event-child".to_string(),
+            category: "media_generation".to_string(),
+            event_type: "request.completed".to_string(),
+            session_id: Some("session-child".to_string()),
+            created_at: 2,
+            ..RuntimeEventRecord::default()
+        });
+        store.runtime_events.push(RuntimeEventRecord {
+            id: "event-other".to_string(),
+            category: "other".to_string(),
+            event_type: "request.completed".to_string(),
+            session_id: Some("session-child".to_string()),
+            created_at: 3,
+            ..RuntimeEventRecord::default()
+        });
+
+        let direct = runtime_events_value_for_session(
+            &store,
+            "session-parent",
+            false,
+            Some("media_generation"),
+            None,
+            None,
+        );
+        assert_eq!(direct.as_array().map(|items| items.len()), Some(1));
+
+        let children = runtime_events_value_for_session(
+            &store,
+            "session-parent",
+            true,
+            Some("media_generation"),
+            Some("request.completed"),
+            None,
+        );
+        assert_eq!(children.as_array().map(|items| items.len()), Some(1));
+        assert_eq!(
+            children
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("id"))
+                .and_then(Value::as_str),
+            Some("event-child")
+        );
     }
 
     #[test]

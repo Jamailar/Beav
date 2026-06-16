@@ -242,6 +242,10 @@ pub(crate) struct WanderHistoryRecord {
     pub(crate) items: String,
     pub(crate) result: String,
     pub(crate) created_at: i64,
+    #[serde(default)]
+    pub(crate) status: Option<String>,
+    #[serde(default)]
+    pub(crate) abandoned_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,6 +296,7 @@ pub(crate) struct AppStore {
     pub(crate) session_tool_results: Vec<SessionToolResultRecord>,
     pub(crate) runtime_tasks: Vec<RuntimeTaskRecord>,
     pub(crate) runtime_task_traces: Vec<RuntimeTaskTraceRecord>,
+    pub(crate) runtime_events: Vec<RuntimeEventRecord>,
     pub(crate) collab_sessions: Vec<CollabSessionRecord>,
     pub(crate) collab_members: Vec<CollabMemberRecord>,
     pub(crate) collab_tasks: Vec<CollabTaskRecord>,

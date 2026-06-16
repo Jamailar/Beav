@@ -35,7 +35,8 @@ pub(crate) fn search(
         .trim()
         .to_ascii_lowercase();
     let prefer_hosted = mode != "local";
-    let allow_fallback = payload_bool(payload, &["allowFallback", "allow_fallback"]).unwrap_or(true);
+    let allow_fallback =
+        payload_bool(payload, &["allowFallback", "allow_fallback"]).unwrap_or(true);
 
     if prefer_hosted {
         match hosted_search(&config, payload, &query, limit) {
@@ -259,7 +260,11 @@ fn normalized_string_array(payload: &Value, keys: &[&str]) -> Option<Vec<String>
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .take(100)
-                .map(|value| value.trim_start_matches("https://").trim_start_matches("http://"))
+                .map(|value| {
+                    value
+                        .trim_start_matches("https://")
+                        .trim_start_matches("http://")
+                })
                 .map(|value| value.trim_matches('/').to_string())
                 .collect::<Vec<_>>()
         })

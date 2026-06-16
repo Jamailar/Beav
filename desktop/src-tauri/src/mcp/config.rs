@@ -60,10 +60,12 @@ pub fn effective_server_config(server: &McpServerRecord) -> McpEffectiveServerCo
             .or_else(|| value.get("mcp"))
     });
     let required = bool_field(root_policy, "required").unwrap_or(false);
-    let startup_timeout_ms =
-        u64_field(root_policy, "startupTimeoutMs").unwrap_or(DEFAULT_MCP_STARTUP_TIMEOUT_MS);
-    let tool_timeout_ms =
-        u64_field(root_policy, "toolTimeoutMs").unwrap_or(DEFAULT_MCP_TOOL_TIMEOUT_MS);
+    let startup_timeout_ms = u64_field(root_policy, "startupTimeoutMs")
+        .or_else(|| u64_field(root_policy, "startupTimeoutSec").map(|value| value * 1000))
+        .unwrap_or(DEFAULT_MCP_STARTUP_TIMEOUT_MS);
+    let tool_timeout_ms = u64_field(root_policy, "toolTimeoutMs")
+        .or_else(|| u64_field(root_policy, "toolTimeoutSec").map(|value| value * 1000))
+        .unwrap_or(DEFAULT_MCP_TOOL_TIMEOUT_MS);
     let supports_parallel_tool_calls =
         bool_field(root_policy, "supportsParallelToolCalls").unwrap_or(true);
     let elicitation_pauses_timeout =

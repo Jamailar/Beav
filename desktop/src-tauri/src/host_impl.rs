@@ -27,7 +27,7 @@ use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Deserialize)]
@@ -2758,6 +2758,43 @@ pub(crate) fn apply_openai_reasoning_effort(config: &ResolvedChatConfig, body: &
     object.insert("reasoning_effort".to_string(), json!(effort));
 }
 
+fn attach_codex_post_tool_stop_marker(value: &mut Value, reason: String) {
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "codexPostToolUse".to_string(),
+            json!({
+                "continue": false,
+                "reason": reason,
+            }),
+        );
+    }
+}
+
+fn codex_post_tool_stop_reason(value: &Value) -> Option<String> {
+    value.get("codexPostToolUse").and_then(|marker| {
+        (marker.get("continue").and_then(Value::as_bool) == Some(false)).then(|| {
+            marker
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("PostToolUse hook requested the turn stop")
+                .to_string()
+        })
+    })
+}
+
+fn emit_codex_post_tool_stop_checkpoint(app: &AppHandle, session_id: Option<&str>, reason: &str) {
+    emit_runtime_task_checkpoint_saved(
+        app,
+        None,
+        session_id,
+        "hook.post_tool_use_stop",
+        "PostToolUse hook stopped the turn",
+        Some(json!({ "reason": reason })),
+    );
+}
+
 pub(crate) fn execute_interactive_tool_call(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -2777,86 +2814,67 @@ pub(crate) fn execute_interactive_tool_call(
             tool_call_id,
             _model_config,
         );
-        let prepared = tool_executor.prepare_tool_call(name, arguments)?;
+        let mut prepared = tool_executor.prepare_tool_call(name, arguments)?;
+        if let Some(updated_arguments) = tools::hooks::run_pre_tool_use_hooks(
+            app,
+            state,
+            session_id,
+            tool_call_id,
+            &prepared,
+            _model_config,
+        )? {
+            prepared.arguments = updated_arguments;
+        }
         let name = prepared.name.clone();
         let arguments = &prepared.arguments;
         let action = tool_action_name(arguments);
         let tool_plan_fingerprint = prepared.plan_fingerprint.clone();
+        let finish_result = |raw_result: Result<Value, String>| -> Result<Value, String> {
+            let mut structured = match raw_result {
+                Ok(value) => Ok(ensure_structured_tool_success(
+                    &name,
+                    action.as_deref(),
+                    value,
+                    Some(&tool_plan_fingerprint),
+                )),
+                Err(error) => Err(ensure_structured_tool_error(
+                    &name,
+                    action.as_deref(),
+                    &error,
+                    Some(&tool_plan_fingerprint),
+                )),
+            };
+            let hook_response = match &structured {
+                Ok(value) => value.clone(),
+                Err(error) => serde_json::from_str::<Value>(error)
+                    .unwrap_or_else(|_| json!({ "ok": false, "errorText": error })),
+            };
+            if let Some(reason) = tools::hooks::run_post_tool_use_hooks(
+                app,
+                state,
+                session_id,
+                tool_call_id,
+                &prepared,
+                &hook_response,
+                _model_config,
+            ) {
+                if let Ok(value) = structured.as_mut() {
+                    attach_codex_post_tool_stop_marker(value, reason);
+                }
+            }
+            structured
+        };
         if let Some(result) = tool_executor.dispatch_mcp_tool(&prepared) {
-            return result
-                .map(|value| {
-                    ensure_structured_tool_success(
-                        &name,
-                        action.as_deref(),
-                        value,
-                        Some(&tool_plan_fingerprint),
-                    )
-                })
-                .map_err(|error| {
-                    ensure_structured_tool_error(
-                        &name,
-                        action.as_deref(),
-                        &error,
-                        Some(&tool_plan_fingerprint),
-                    )
-                });
+            return finish_result(result);
         }
         if let Some(result) = tool_executor.dispatch_mcp_resource_tool(&prepared) {
-            return result
-                .map(|value| {
-                    ensure_structured_tool_success(
-                        &name,
-                        action.as_deref(),
-                        value,
-                        Some(&tool_plan_fingerprint),
-                    )
-                })
-                .map_err(|error| {
-                    ensure_structured_tool_error(
-                        &name,
-                        action.as_deref(),
-                        &error,
-                        Some(&tool_plan_fingerprint),
-                    )
-                });
+            return finish_result(result);
         }
         if let Some(result) = tool_executor.dispatch_tool_search(&prepared) {
-            return result
-                .map(|value| {
-                    ensure_structured_tool_success(
-                        &name,
-                        action.as_deref(),
-                        value,
-                        Some(&tool_plan_fingerprint),
-                    )
-                })
-                .map_err(|error| {
-                    ensure_structured_tool_error(
-                        &name,
-                        action.as_deref(),
-                        &error,
-                        Some(&tool_plan_fingerprint),
-                    )
-                });
+            return finish_result(result);
         }
         if let Some(result) = tool_executor.dispatch_action_tool(&prepared) {
-            return result
-                .map(|value| {
-                    ensure_structured_tool_success(
-                        &name,
-                        action.as_deref(),
-                        value,
-                        Some(&tool_plan_fingerprint),
-                    )
-                })
-                .map_err(|error| {
-                    ensure_structured_tool_error(
-                        &name,
-                        action.as_deref(),
-                        &error,
-                        Some(&tool_plan_fingerprint),
-                    )
-                });
+            return finish_result(result);
         }
         let call_manuscript_channel = |channel: &str, payload: Value| -> Result<Value, String> {
             commands::manuscripts::handle_manuscripts_channel(app, state, channel, &payload)
@@ -3764,23 +3782,7 @@ pub(crate) fn execute_interactive_tool_call(
             other => Err(format!("unsupported interactive tool: {other}")),
         };
 
-        raw_result
-            .map(|value| {
-                ensure_structured_tool_success(
-                    &name,
-                    action.as_deref(),
-                    value,
-                    Some(&tool_plan_fingerprint),
-                )
-            })
-            .map_err(|error| {
-                ensure_structured_tool_error(
-                    &name,
-                    action.as_deref(),
-                    &error,
-                    Some(&tool_plan_fingerprint),
-                )
-            })
+        finish_result(raw_result)
     }));
     match execution {
         Ok(result) => result,
@@ -6760,6 +6762,7 @@ pub(crate) fn run_anthropic_interactive_chat_runtime(
         );
         let mut skill_activations = Vec::<InteractiveSkillActivation>::new();
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
+        let mut codex_post_tool_stop = None::<String>;
         for call in tool_calls {
             ensure_interactive_runtime_not_cancelled(state, session_id)?;
             let description = interactive_tool_call_description(&call.name, &call.arguments);
@@ -6877,6 +6880,9 @@ pub(crate) fn run_anthropic_interactive_chat_runtime(
                         true,
                         &result_text,
                     ));
+                    if codex_post_tool_stop.is_none() {
+                        codex_post_tool_stop = codex_post_tool_stop_reason(&result_value);
+                    }
                 }
                 Err(error) => {
                     emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
@@ -6904,9 +6910,25 @@ pub(crate) fn run_anthropic_interactive_chat_runtime(
                     now_ms().saturating_sub(tool_started_at)
                 ),
             );
+            if codex_post_tool_stop.is_some() {
+                break;
+            }
             ensure_interactive_runtime_not_cancelled(state, session_id)?;
         }
         ensure_interactive_runtime_not_cancelled(state, session_id)?;
+        if let Some(reason) = codex_post_tool_stop {
+            emit_codex_post_tool_stop_checkpoint(app, session_id, &reason);
+            save_runtime_session_bundle(
+                state,
+                session_id,
+                "anthropic",
+                runtime_mode,
+                &config.model_name,
+                &canonical_messages,
+            )?;
+            finalize_interactive_runtime_state(state, session_id, &reason, Some("completed"));
+            return Ok(reason);
+        }
         if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
@@ -7377,6 +7399,7 @@ pub(crate) fn run_gemini_interactive_chat_runtime(
         );
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         let mut skill_activations = Vec::<InteractiveSkillActivation>::new();
+        let mut codex_post_tool_stop = None::<String>;
         for call in tool_calls {
             ensure_interactive_runtime_not_cancelled(state, session_id)?;
             let description = interactive_tool_call_description(&call.name, &call.arguments);
@@ -7493,6 +7516,9 @@ pub(crate) fn run_gemini_interactive_chat_runtime(
                         true,
                         &result_text,
                     ));
+                    if codex_post_tool_stop.is_none() {
+                        codex_post_tool_stop = codex_post_tool_stop_reason(&result_value);
+                    }
                 }
                 Err(error) => {
                     emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
@@ -7520,9 +7546,25 @@ pub(crate) fn run_gemini_interactive_chat_runtime(
                     now_ms().saturating_sub(tool_started_at)
                 ),
             );
+            if codex_post_tool_stop.is_some() {
+                break;
+            }
             ensure_interactive_runtime_not_cancelled(state, session_id)?;
         }
         ensure_interactive_runtime_not_cancelled(state, session_id)?;
+        if let Some(reason) = codex_post_tool_stop {
+            emit_codex_post_tool_stop_checkpoint(app, session_id, &reason);
+            save_runtime_session_bundle(
+                state,
+                session_id,
+                "gemini",
+                runtime_mode,
+                &config.model_name,
+                &canonical_messages,
+            )?;
+            finalize_interactive_runtime_state(state, session_id, &reason, Some("completed"));
+            return Ok(reason);
+        }
         if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
@@ -7614,8 +7656,7 @@ pub(crate) fn run_openai_interactive_chat_runtime(
         };
         let turn_policy =
             provider_profile.turn_policy(runtime_mode, tool_choice, wander_saw_tool_call);
-        let streaming_enabled =
-            !is_wander && !should_prefer_non_streaming_openai_turn(runtime_mode, config);
+        let streaming_enabled = !should_prefer_non_streaming_openai_turn(runtime_mode, config);
         let turn_index = tool_turn + usize::from(forcing_toolless_turn);
         if let Some(current_session_id) = session_id {
             emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
@@ -7958,6 +7999,7 @@ pub(crate) fn run_openai_interactive_chat_runtime(
         );
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         let mut skill_activations = Vec::<InteractiveSkillActivation>::new();
+        let mut codex_post_tool_stop = None::<String>;
         let mut authoring_continuation_instruction = None::<String>;
         let mut authoring_error_correction_instruction = None::<String>;
         for call in tool_calls {
@@ -8146,6 +8188,9 @@ pub(crate) fn run_openai_interactive_chat_runtime(
                         true,
                         &result_text,
                     ));
+                    if codex_post_tool_stop.is_none() {
+                        codex_post_tool_stop = codex_post_tool_stop_reason(&result_value);
+                    }
                 }
                 Err(error) => {
                     let failure_text = error.clone();
@@ -8246,9 +8291,25 @@ pub(crate) fn run_openai_interactive_chat_runtime(
                     ));
                 }
             }
+            if codex_post_tool_stop.is_some() {
+                break;
+            }
             ensure_interactive_runtime_not_cancelled(state, session_id)?;
         }
         ensure_interactive_runtime_not_cancelled(state, session_id)?;
+        if let Some(reason) = codex_post_tool_stop {
+            emit_codex_post_tool_stop_checkpoint(app, session_id, &reason);
+            save_runtime_session_bundle(
+                state,
+                session_id,
+                "openai",
+                runtime_mode,
+                &config.model_name,
+                &canonical_messages,
+            )?;
+            finalize_interactive_runtime_state(state, session_id, &reason, Some("completed"));
+            return Ok(reason);
+        }
         if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
@@ -9212,15 +9273,21 @@ pub(crate) async fn ipc_invoke(
     channel: String,
     payload: Option<Value>,
 ) -> Result<Value, String> {
+    let started_at = Instant::now();
+    let channel_for_log = channel.clone();
     let payload_value = payload.unwrap_or(Value::Null);
     let app_for_blocking = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let managed_state = app_for_blocking.state::<AppState>();
         channel_router::handle_channel(&app_for_blocking, &channel, payload_value, &managed_state)
     })
     .await
-    .map_err(|error| error.to_string())
-    .and_then(|result| result)
+    .map_err(|error| error.to_string());
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if elapsed_ms >= 250 {
+        eprintln!("[ipc][slow] channel={channel_for_log} elapsed_ms={elapsed_ms}");
+    }
+    result.and_then(|result| result)
 }
 
 #[tauri::command]

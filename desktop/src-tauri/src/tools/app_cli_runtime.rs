@@ -80,6 +80,25 @@ pub(super) fn handle(
                     .unwrap_or(50)
             }),
         ),
+        "get-events" => executor.call_channel(
+            "runtime:get-events",
+            json!({
+                "sessionId": args
+                    .string(&["session-id", "sessionId"])
+                    .or_else(|| payload_string(payload, "sessionId"))
+                    .unwrap_or_default(),
+                "category": args
+                    .string(&["category"])
+                    .or_else(|| payload_string(payload, "category")),
+                "eventType": args
+                    .string(&["event-type", "eventType"])
+                    .or_else(|| payload_string(payload, "eventType")),
+                "limit": args
+                    .i64(&["limit"])
+                    .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64))
+                    .unwrap_or(50)
+            }),
+        ),
         "tasks" => {
             let sub = tokens.get(1).map(String::as_str).unwrap_or("list");
             let nested_args = parse_cli_args(&tokens[2..])?;

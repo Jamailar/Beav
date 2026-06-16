@@ -674,6 +674,58 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("session.resources.get"),
             )
         }
+        ("plugin" | "plugins", "list" | "search") => app_cli_action_call(
+            "plugins.list",
+            payload,
+            Some("Operate"),
+            Some("plugins.list"),
+        ),
+        ("plugin" | "plugins", "connectors" | "connector" | "apps" | "appinfo") => {
+            app_cli_action_call(
+                "plugins.connectors",
+                payload,
+                Some("Operate"),
+                Some("plugins.connectors"),
+            )
+        }
+        ("plugin" | "plugins", "marketplace" | "registry") => app_cli_action_call(
+            "plugins.marketplace",
+            payload,
+            Some("Operate"),
+            Some("plugins.marketplace"),
+        ),
+        ("plugin" | "plugins", "codexmarketplace" | "codex-marketplace" | "codex") => {
+            app_cli_action_call(
+                "plugins.codexMarketplace",
+                payload,
+                Some("Operate"),
+                Some("plugins.codexMarketplace"),
+            )
+        }
+        ("plugin" | "plugins", "discover" | "discoverlocal" | "inspect") => app_cli_action_call(
+            "plugins.discoverLocal",
+            payload,
+            Some("Operate"),
+            Some("plugins.discoverLocal"),
+        ),
+        ("plugin" | "plugins", "installcodex" | "install-codex") => app_cli_action_call(
+            "plugins.installCodex",
+            payload,
+            Some("Operate"),
+            Some("plugins.installCodex"),
+        ),
+        ("plugin" | "plugins", "install" | "create" | "add") => app_cli_action_call(
+            "plugins.install",
+            payload,
+            Some("Operate"),
+            Some("plugins.install"),
+        ),
+        ("plugin" | "plugins", "request" | "requestinstall" | "suggest") => app_cli_action_call(
+            "plugins.requestInstall",
+            payload,
+            Some("Operate"),
+            Some("plugins.requestInstall"),
+        ),
         ("memory", "create" | "update") => {
             app_cli_action_call("memory.add", payload, Some("Operate"), Some("memory.add"))
         }
@@ -1539,6 +1591,7 @@ fn runtime_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         "runtime_query" => Some("runtime.query"),
         "runtime_get_checkpoints" => Some("runtime.getCheckpoints"),
         "runtime_get_tool_results" => Some("runtime.getToolResults"),
+        "runtime_get_events" => Some("runtime.getEvents"),
         "tasks_create" => Some("runtime.tasks.create"),
         "tasks_list" => Some("runtime.tasks.list"),
         "tasks_get" => Some("runtime.tasks.get"),
@@ -1721,6 +1774,7 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         ["runtime", "query", ..] => Some("runtime.query"),
         ["runtime", "get-checkpoints", ..] => Some("runtime.getCheckpoints"),
         ["runtime", "get-tool-results", ..] => Some("runtime.getToolResults"),
+        ["runtime", "get-events", ..] => Some("runtime.getEvents"),
         ["runtime", "tasks", "create", ..] => Some("runtime.tasks.create"),
         ["runtime", "tasks", "list", ..] => Some("runtime.tasks.list"),
         ["runtime", "tasks", "get", ..] => Some("runtime.tasks.get"),
@@ -1787,6 +1841,7 @@ fn legacy_runtime_command(action: &str) -> String {
         "runtime_resume" => "runtime resume".to_string(),
         "runtime_fork_session" => "runtime fork-session".to_string(),
         "runtime_get_trace" => "runtime get-trace".to_string(),
+        "runtime_get_events" => "runtime get-events".to_string(),
         "background_tasks_list" => "runtime background list".to_string(),
         "background_tasks_get" => "runtime background get".to_string(),
         "background_tasks_cancel" => "runtime background cancel".to_string(),
@@ -2425,6 +2480,38 @@ mod tests {
                     "resource": resource,
                     "operation": operation,
                     "input": { "kind": "image", "id": "media-1" }
+                }),
+            );
+            assert_eq!(normalized.name, "workflow", "{resource}.{operation}");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!(action)),
+                "{resource}.{operation}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizes_operate_plugin_resources_to_structured_actions() {
+        let cases = [
+            ("plugins", "list", "plugins.list"),
+            ("plugins", "connectors", "plugins.connectors"),
+            ("plugins", "marketplace", "plugins.marketplace"),
+            ("plugins", "codexMarketplace", "plugins.codexMarketplace"),
+            ("plugins", "discoverLocal", "plugins.discoverLocal"),
+            ("plugins", "install", "plugins.install"),
+            ("plugins", "installCodex", "plugins.installCodex"),
+            ("plugins", "request", "plugins.requestInstall"),
+            ("plugin", "requestInstall", "plugins.requestInstall"),
+        ];
+
+        for (resource, operation, action) in cases {
+            let normalized = normalize_tool_call(
+                "Operate",
+                &json!({
+                    "resource": resource,
+                    "operation": operation,
+                    "input": { "toolId": "demo-plugin" }
                 }),
             );
             assert_eq!(normalized.name, "workflow", "{resource}.{operation}");

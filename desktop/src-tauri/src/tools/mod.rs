@@ -6,6 +6,7 @@ pub mod compat;
 pub mod executor;
 pub mod families;
 pub mod guards;
+pub mod hooks;
 pub mod knowledge_search;
 pub mod packs;
 pub mod plan;
