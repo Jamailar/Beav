@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, State};
 
+use crate::membership::{ensure_entitlement, ENTITLEMENT_SPACES_CREATE};
 use crate::persistence::{
     apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
     with_store_mut,
@@ -12,154 +13,6 @@ use crate::{
     ensure_redclaw_space_writing_style_skill, make_id, now_iso, payload_string,
     payload_value_as_string, storage_safe_file_stem, update_workspace_root_cache, AppState,
 };
-
-const SPACE_CREATION_MEMBERSHIP_REQUIRED_ERROR: &str = "创始会员可创建新空间";
-
-fn parse_time_ms(value: &Value) -> Option<i64> {
-    match value {
-        Value::Number(number) => number.as_i64(),
-        Value::String(text) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                chrono::DateTime::parse_from_rfc3339(trimmed)
-                    .map(|datetime| datetime.timestamp_millis())
-                    .ok()
-                    .or_else(|| trimmed.parse::<i64>().ok())
-            }
-        }
-        _ => None,
-    }
-}
-
-fn value_contains_founder(value: Option<&Value>) -> bool {
-    let Some(value) = value else {
-        return false;
-    };
-    let normalized = value
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| value.to_string())
-        .trim()
-        .to_lowercase();
-    [
-        "founder",
-        "founding",
-        "founder_sponsor",
-        "founder-sponsor",
-        "创始",
-        "赞助",
-    ]
-    .iter()
-    .any(|token| normalized.contains(token))
-}
-
-fn user_has_active_premium_membership(user: Option<&Value>) -> bool {
-    let Some(user) = user.and_then(Value::as_object) else {
-        return false;
-    };
-    let membership_type = user
-        .get("membership_type")
-        .or_else(|| user.get("membershipType"))
-        .or_else(|| user.get("memberType"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase();
-    if !matches!(
-        membership_type.as_str(),
-        "premium" | "founder" | "founder_sponsor" | "founder-sponsor"
-    ) {
-        return false;
-    }
-    let expires_at = user
-        .get("membership_expires_at")
-        .or_else(|| user.get("membershipExpiresAt"))
-        .and_then(parse_time_ms);
-    expires_at.is_none_or(|timestamp| timestamp > chrono::Utc::now().timestamp_millis())
-}
-
-fn record_is_active_founder(record: Option<&Value>) -> bool {
-    let Some(record) = record.and_then(Value::as_object) else {
-        return false;
-    };
-    let status = record
-        .get("status")
-        .or_else(|| record.get("state"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase();
-    let explicitly_inactive = record.get("active").and_then(Value::as_bool) == Some(false)
-        || record.get("enabled").and_then(Value::as_bool) == Some(false)
-        || matches!(
-            status.as_str(),
-            "inactive" | "expired" | "cancelled" | "canceled"
-        );
-    if explicitly_inactive {
-        return false;
-    }
-    [
-        "tier",
-        "type",
-        "badge",
-        "product_id",
-        "productId",
-        "plan",
-        "scope",
-        "name",
-        "label",
-    ]
-    .iter()
-    .any(|key| value_contains_founder(record.get(*key)))
-}
-
-fn session_has_space_creation_membership(session: Option<&Value>) -> bool {
-    let Some(session) = session.and_then(Value::as_object) else {
-        return false;
-    };
-    let user = session.get("user");
-    let candidates = [
-        session.get("membership"),
-        session.get("subscription"),
-        session.get("founderMembership"),
-        session.get("founder_sponsor"),
-        user.and_then(|value| value.get("membership")),
-        user.and_then(|value| value.get("subscription")),
-        user.and_then(|value| value.get("founderMembership")),
-        user.and_then(|value| value.get("founder_sponsor")),
-    ];
-    if candidates.into_iter().any(record_is_active_founder) || user_has_active_premium_membership(user)
-    {
-        return true;
-    }
-    [
-        session.get("entitlements"),
-        session.get("memberships"),
-        user.and_then(|value| value.get("entitlements")),
-        user.and_then(|value| value.get("memberships")),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(Value::as_array)
-    .any(|items| items.iter().any(|item| record_is_active_founder(Some(item))))
-}
-
-fn ensure_space_creation_membership(state: &State<'_, AppState>) -> Result<(), String> {
-    let snapshot = crate::auth::auth_state_snapshot(state).unwrap_or_default();
-    if session_has_space_creation_membership(snapshot.session.as_ref()) {
-        return Ok(());
-    }
-    let settings_session = with_store(state, |store| {
-        let settings = settings_store::settings_snapshot(&store);
-        Ok(crate::official_settings_session(&settings))
-    })?;
-    if session_has_space_creation_membership(settings_session.as_ref()) {
-        return Ok(());
-    }
-    Err(SPACE_CREATION_MEMBERSHIP_REQUIRED_ERROR.to_string())
-}
 
 pub(crate) fn spaces_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
     with_store(state, |store| {
@@ -193,7 +46,9 @@ pub fn handle_spaces_channel(
         match channel {
             "spaces:list" => spaces_list_value(state),
             "spaces:create" => {
-                if let Err(error) = ensure_space_creation_membership(state) {
+                if let Err(error) =
+                    ensure_entitlement(state, ENTITLEMENT_SPACES_CREATE, "创始会员可创建新空间")
+                {
                     return Ok(json!({ "success": false, "error": error }));
                 }
                 let Some(raw_name) = payload_string(payload, "name") else {

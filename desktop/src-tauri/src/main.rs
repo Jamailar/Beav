@@ -37,6 +37,7 @@ mod media_generation;
 mod media_runtime;
 mod media_task_context;
 mod member_skill;
+mod membership;
 mod memory;
 mod memory_maintenance;
 mod official_support;

@@ -16,7 +16,8 @@ import { useGlobalKnowledgeSearch } from '../features/app-shell/useGlobalKnowled
 import { useLayoutSidebar } from '../features/app-shell/useLayoutSidebar';
 import { useLayoutSpaces } from '../features/app-shell/useLayoutSpaces';
 import { useLayoutTheme } from '../features/app-shell/useLayoutTheme';
-import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
+import { ENTITLEMENTS } from '../features/membership/entitlementKeys';
+import { useMembership } from '../features/membership/useMembership';
 import { asRecord, resolveFounderSponsorState, valueContainsFounder } from '../utils/membership';
 
 interface LayoutProps {
@@ -215,7 +216,7 @@ function orderStatusIsFinalFailure(order: Record<string, unknown> | null): boole
 
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const { t } = useI18n();
-  const { snapshot: officialAuthSnapshot } = useOfficialAuthState();
+  const { snapshot: officialAuthSnapshot, can: canUseMembershipEntitlement } = useMembership();
   const [founderSponsorOpen, setFounderSponsorOpen] = useState(false);
   const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
@@ -262,7 +263,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     closeSpaceDialog,
     submitSpaceDialog,
   } = useLayoutSpaces(sidebarVisualCollapsed, {
-    canCreateSpace: founderSponsorState.active,
+    canCreateSpace: canUseMembershipEntitlement(ENTITLEMENTS.spacesCreate),
     openMembershipModal: () => setFounderSponsorOpen(true),
   });
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
