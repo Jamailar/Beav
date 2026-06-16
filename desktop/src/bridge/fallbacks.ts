@@ -262,6 +262,12 @@ export function buildFallbackResponse(channel: string, error: unknown, payload?:
       plugins: [],
     };
   }
+  if (channel === 'plugins:connectors') {
+    return {
+      success: true,
+      connectors: [],
+    };
+  }
   if (channel === 'plugins:marketplace') {
     return {
       success: true,
@@ -269,8 +275,25 @@ export function buildFallbackResponse(channel: string, error: unknown, payload?:
       plugins: [],
     };
   }
+  if (channel === 'plugins:codex-marketplace') {
+    return {
+      success: true,
+      sourceRoots: [],
+      plugins: [],
+      errors: [],
+    };
+  }
+  if (channel === 'plugins:discover-local') {
+    return {
+      success: true,
+      sourceRoot: '',
+      kind: 'directory',
+      plugins: [],
+    };
+  }
   if (
     channel === 'plugins:install'
+    || channel === 'plugins:install-codex'
     || channel === 'plugins:install-marketplace'
     || channel === 'plugins:set-enabled'
     || channel === 'plugins:uninstall'

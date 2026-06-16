@@ -32,6 +32,7 @@ export function createSystemBridge(core: BridgeCore) {
           unreadOnly: payload?.unreadOnly,
         },
         {
+          timeoutMs: 6000,
           fallback: { success: false, error: 'Notification sync unavailable' },
         },
       ),
@@ -42,6 +43,7 @@ export function createSystemBridge(core: BridgeCore) {
           unreadOnly: payload?.unreadOnly,
         },
         {
+          timeoutMs: 6000,
           fallback: { success: false, error: 'Notification list unavailable' },
         },
       ),
@@ -49,6 +51,7 @@ export function createSystemBridge(core: BridgeCore) {
         'notifications_mark_remote_read',
         { notificationId: payload.notificationId },
         {
+          timeoutMs: 6000,
           fallback: { success: false, error: 'Notification read unavailable' },
         },
       ),
@@ -56,6 +59,7 @@ export function createSystemBridge(core: BridgeCore) {
         'notifications_mark_all_remote_read',
         undefined,
         {
+          timeoutMs: 6000,
           fallback: { success: false, error: 'Notification read-all unavailable' },
         },
       ),

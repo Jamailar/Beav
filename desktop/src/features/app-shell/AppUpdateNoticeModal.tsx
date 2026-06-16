@@ -1,8 +1,8 @@
 import { Download, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useI18n } from '../../i18n';
+import { SAFE_REMARK_PLUGINS } from '../../utils/markdownRemarkPlugins';
 import type { AppUpdateNoticePayload } from './useAppUpdateNotice';
 
 interface AppUpdateNoticeModalProps {
@@ -95,7 +95,7 @@ export function AppUpdateNoticeModal({
               '[&_pre]:bg-surface-secondary [&_pre]:border [&_pre]:border-border [&_pre]:rounded-lg [&_pre]:p-4 [&_pre]:overflow-x-auto [&_pre]:my-4'
             )}
           >
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={SAFE_REMARK_PLUGINS}>
               {String(notice.body || '').trim() || t('layout.noReleaseNotes')}
             </ReactMarkdown>
           </div>
