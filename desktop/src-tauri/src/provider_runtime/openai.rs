@@ -456,6 +456,7 @@ mod tests {
     fn redclaw_qwen_turns_start_streaming_until_circuit_breaker_opens() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
             base_url: "https://api.ziz.hk/thrive/v1".to_string(),
             api_key: Some("rbx-live-1".to_string()),
             model_name: "qwen3.5-plus".to_string(),
@@ -480,6 +481,7 @@ mod tests {
     fn non_qwen_redclaw_models_keep_streaming_behavior() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: Some("sk-test".to_string()),
             model_name: "gpt-5.4".to_string(),

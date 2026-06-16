@@ -318,6 +318,7 @@ mod tests {
     fn openai_profile() -> crate::provider_compat::ProviderProfile {
         provider_profile_from_config(&ResolvedChatConfig {
             protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: None,
             model_name: "gpt-5".to_string(),

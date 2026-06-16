@@ -649,10 +649,56 @@ pub struct CollabSessionSnapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedChatConfig {
     pub protocol: String,
+    pub wire_api: ProviderWireApi,
     pub base_url: String,
     pub api_key: Option<String>,
     pub model_name: String,
     pub reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderWireApi {
+    Responses,
+    #[default]
+    ChatCompat,
+    Anthropic,
+    Gemini,
+}
+
+impl ProviderWireApi {
+    pub fn from_config(value: Option<&str>) -> Option<Self> {
+        let normalized = value?
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['-', '_', ' '], "");
+        match normalized.as_str() {
+            "responses" | "openairesponses" | "response" => Some(Self::Responses),
+            "chat" | "chatcompat" | "chatcompletions" | "openai" | "openaicompatible" => {
+                Some(Self::ChatCompat)
+            }
+            "anthropic" | "messages" | "anthropicmessages" => Some(Self::Anthropic),
+            "gemini" | "generatecontent" => Some(Self::Gemini),
+            _ => None,
+        }
+    }
+
+    pub fn infer(protocol: &str) -> Self {
+        match protocol.trim().to_ascii_lowercase().as_str() {
+            "anthropic" => Self::Anthropic,
+            "gemini" => Self::Gemini,
+            _ => Self::ChatCompat,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Responses => "responses",
+            Self::ChatCompat => "chatCompat",
+            Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

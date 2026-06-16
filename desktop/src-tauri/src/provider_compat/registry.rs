@@ -1,4 +1,4 @@
-use crate::runtime::ResolvedChatConfig;
+use crate::runtime::{ProviderWireApi, ResolvedChatConfig};
 
 use super::{
     ProviderCapabilities, ProviderFamily, ProviderProfile, ProviderThinkingDisableParameter,
@@ -100,16 +100,32 @@ pub(crate) fn provider_profile_from_parts(
     base_url: &str,
     model_name: &str,
 ) -> ProviderProfile {
+    provider_profile_from_parts_with_wire_api(
+        protocol,
+        base_url,
+        model_name,
+        ProviderWireApi::infer(protocol),
+    )
+}
+
+fn provider_profile_from_parts_with_wire_api(
+    protocol: &str,
+    base_url: &str,
+    model_name: &str,
+    wire_api: ProviderWireApi,
+) -> ProviderProfile {
     let normalized_protocol = protocol.trim().to_ascii_lowercase();
     let lower_hint = format!("{model_name} {base_url}").to_ascii_lowercase();
     match normalized_protocol.as_str() {
         "anthropic" => ProviderProfile {
             key: normalized_provider_key(protocol, base_url, model_name),
+            wire_api,
             provider_family: ProviderFamily::Anthropic,
             capabilities: anthropic_capabilities(),
         },
         "gemini" => ProviderProfile {
             key: normalized_provider_key(protocol, base_url, model_name),
+            wire_api,
             provider_family: ProviderFamily::Gemini,
             capabilities: gemini_capabilities(),
         },
@@ -132,6 +148,7 @@ pub(crate) fn provider_profile_from_parts(
             let capabilities = model_capability_overrides(model_name, base_capabilities);
             ProviderProfile {
                 key: normalized_provider_key(protocol, base_url, model_name),
+                wire_api,
                 provider_family,
                 capabilities,
             }
@@ -140,7 +157,12 @@ pub(crate) fn provider_profile_from_parts(
 }
 
 pub(crate) fn provider_profile_from_config(config: &ResolvedChatConfig) -> ProviderProfile {
-    provider_profile_from_parts(&config.protocol, &config.base_url, &config.model_name)
+    provider_profile_from_parts_with_wire_api(
+        &config.protocol,
+        &config.base_url,
+        &config.model_name,
+        config.wire_api,
+    )
 }
 
 #[cfg(test)]

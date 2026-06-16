@@ -4,7 +4,7 @@ use std::path::Path;
 use serde_json::json;
 use serde_json::Value;
 
-use crate::runtime::ResolvedChatConfig;
+use crate::runtime::{ProviderWireApi, ResolvedChatConfig};
 use crate::{ai_model_manager::AiModelManager, payload_string};
 
 fn normalize_reasoning_effort(value: Option<&str>) -> Option<String> {
@@ -29,6 +29,8 @@ pub fn runtime_warm_settings_fingerprint(settings: &Value, workspace_root: &Path
         "redbox_auth_session_json",
         "reasoning_effort",
         "reasoningEffort",
+        "wire_api",
+        "wireApi",
     ] {
         parts.push(payload_string(settings, key).unwrap_or_default());
     }
@@ -127,8 +129,15 @@ pub fn resolve_chat_config(
         if base_url.trim().is_empty() || model_name.trim().is_empty() {
             return None;
         }
+        let protocol = infer_protocol(&base_url, None, None);
         Some(ResolvedChatConfig {
-            protocol: infer_protocol(&base_url, None, None),
+            protocol: protocol.clone(),
+            wire_api: ProviderWireApi::from_config(
+                payload_string(settings, "wire_api")
+                    .or_else(|| payload_string(settings, "wireApi"))
+                    .as_deref(),
+            )
+            .unwrap_or_else(|| ProviderWireApi::infer(&protocol)),
             base_url,
             api_key: payload_string(settings, "api_key"),
             model_name,
