@@ -26,11 +26,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
 const WANDER_SYNTHESIS_SKILL: &str = "wander-synthesis";
+const XHS_COMMENT_INSIGHT_SKILL: &str = "xhs-comment-insight";
 const XHS_TITLE_SKILL: &str = "xhs-title";
 const CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CHAT_ATTACHMENT_PENDING_TTL_MS: u128 = 72 * 60 * 60 * 1000;
 const WANDER_READY_MIN_ITEMS: usize = 3;
+const WANDER_COMMENT_MIN_ITEMS: usize = 1;
+const WANDER_COMMENT_TARGET_ITEMS: usize = 1;
 const WANDER_VISUAL_EXCERPT_LIMIT: usize = 6;
 const WANDER_VISUAL_EXCERPT_MAX_CHARS: usize = 420;
 const WANDER_NOT_ENOUGH_ITEMS_MESSAGE: &str = "可用于漫步的素材不足 3 条，请先采集更多内容。";
@@ -664,6 +667,135 @@ fn collect_wander_candidate_items(store: &AppStore) -> Vec<Value> {
         items.push(wander_item_from_doc(source));
     }
     items
+}
+
+fn collect_wander_comment_candidate_items(store: &AppStore) -> Vec<Value> {
+    store
+        .knowledge_notes
+        .iter()
+        .filter_map(wander_comment_item_from_note)
+        .collect()
+}
+
+fn wander_comment_item_from_note(note: &KnowledgeNoteRecord) -> Option<Value> {
+    let folder = note.folder_path.as_ref().map(PathBuf::from)?;
+    let comments_path = folder.join("comments.json");
+    let comments_value = fs::read_to_string(&comments_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())?;
+    let comments = comments_value.get("comments").and_then(Value::as_array)?;
+    if comments.is_empty() {
+        return None;
+    }
+    let mut scored_comments = comments
+        .iter()
+        .filter_map(|comment| {
+            let text = xhs_comment_text(comment);
+            if text.trim().is_empty() {
+                return None;
+            }
+            Some((xhs_comment_score(comment), comment.clone(), text))
+        })
+        .collect::<Vec<_>>();
+    if scored_comments.is_empty() {
+        return None;
+    }
+    scored_comments.sort_by(|left, right| right.0.cmp(&left.0));
+    let comment_lines = scored_comments
+        .iter()
+        .take(12)
+        .enumerate()
+        .map(|(index, (score, comment, text))| {
+            let author = comment
+                .get("author")
+                .and_then(|value| value.get("nickname"))
+                .and_then(Value::as_str)
+                .unwrap_or("小红书用户");
+            let level = comment.get("level").and_then(Value::as_i64).unwrap_or(0);
+            let location = comment
+                .get("location")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let location_suffix = if location.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" | {location}")
+            };
+            format!(
+                "{}. {}{} | score={} | level={}: {}",
+                index + 1,
+                author,
+                location_suffix,
+                score,
+                level,
+                normalize_wander_bundle_text(text, 180)
+            )
+        })
+        .collect::<Vec<_>>();
+    if comment_lines.is_empty() {
+        return None;
+    }
+
+    let mut item = wander_item_from_note(note);
+    if let Some(object) = item.as_object_mut() {
+        object.insert("type".to_string(), json!("note"));
+        object.insert(
+            "content".to_string(),
+            json!(format!(
+                "{}\n评论区摘录：{}",
+                note.excerpt.clone().unwrap_or_else(|| note
+                    .content
+                    .chars()
+                    .take(260)
+                    .collect::<String>()),
+                comment_lines
+                    .iter()
+                    .take(4)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            )),
+        );
+        if let Some(meta) = object.get_mut("meta").and_then(Value::as_object_mut) {
+            meta.insert("sourceType".to_string(), json!("xhs-comments"));
+            meta.insert("commentCount".to_string(), json!(comments.len()));
+            meta.insert(
+                "commentsPath".to_string(),
+                json!(comments_path.display().to_string()),
+            );
+            meta.insert(
+                "commentSummary".to_string(),
+                json!(comment_lines.join("\n")),
+            );
+            if let Some(material_ref) = meta.get_mut("materialRef").and_then(Value::as_object_mut) {
+                material_ref.insert(
+                    "explorationHint".to_string(),
+                    json!("先读取 meta.json 和 comments.json。评论区洞察优先分析评论里的追问、反驳、补充信息、情绪和可二次创作痛点；不要只复述原笔记正文。"),
+                );
+            }
+        }
+    }
+    Some(item)
+}
+
+fn xhs_comment_score(comment: &Value) -> i64 {
+    let metrics = comment.get("metrics").unwrap_or(&Value::Null);
+    let likes = metrics.get("likes").and_then(Value::as_i64).unwrap_or(0);
+    let replies = metrics.get("replies").and_then(Value::as_i64).unwrap_or(0);
+    likes
+        .saturating_mul(2)
+        .saturating_add(replies.saturating_mul(3))
+}
+
+fn xhs_comment_text(comment: &Value) -> String {
+    comment
+        .get("content")
+        .and_then(|value| value.get("text"))
+        .and_then(Value::as_str)
+        .or_else(|| comment.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string()
 }
 
 fn wander_item_source_id(item: &Value) -> String {
@@ -1410,13 +1542,289 @@ fn normalize_wander_result(raw: Value, multi_choice: bool) -> Value {
     })
 }
 
+#[derive(Debug, Clone)]
+struct CommentInsightPriorTopic {
+    history_id: String,
+    title: String,
+    content_direction: String,
+    core_tension: String,
+    angle: String,
+    material_entry: String,
+}
+
+fn normalize_comment_insight_key(raw: &str) -> Option<String> {
+    let normalized = raw
+        .trim()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn push_comment_insight_key(keys: &mut HashSet<String>, raw: Option<&str>) {
+    if let Some(key) = raw.and_then(normalize_comment_insight_key) {
+        keys.insert(key);
+    }
+}
+
+fn comment_insight_source_keys(item: &Value) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    push_comment_insight_key(&mut keys, item.get("id").and_then(Value::as_str));
+    let meta = item.get("meta").and_then(Value::as_object);
+    if let Some(meta) = meta {
+        for key in [
+            "sourceId",
+            "folderPath",
+            "filePath",
+            "workspacePath",
+            "commentsPath",
+            "sourceUrl",
+        ] {
+            push_comment_insight_key(&mut keys, meta.get(key).and_then(Value::as_str));
+        }
+        if let Some(material_ref) = meta.get("materialRef").and_then(Value::as_object) {
+            for key in ["folderPath", "workspacePath", "storageRoot", "sourceUrl"] {
+                push_comment_insight_key(&mut keys, material_ref.get(key).and_then(Value::as_str));
+            }
+        }
+        if let Some(comments_path) = meta.get("commentsPath").and_then(Value::as_str) {
+            if let Some(parent) = Path::new(comments_path).parent() {
+                push_comment_insight_key(&mut keys, parent.to_str());
+            }
+        }
+    }
+    keys
+}
+
+fn comment_insight_source_keys_for_items(items: &[Value]) -> HashSet<String> {
+    items
+        .iter()
+        .flat_map(comment_insight_source_keys)
+        .collect::<HashSet<_>>()
+}
+
+fn is_comment_insight_item(item: &Value) -> bool {
+    item.get("meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get("sourceType"))
+        .and_then(Value::as_str)
+        .map(|value| value.trim() == "xhs-comments")
+        .unwrap_or(false)
+}
+
+fn wander_result_primary_topic(result: &Value) -> CommentInsightPriorTopic {
+    let option = result
+        .get("selected_index")
+        .and_then(Value::as_u64)
+        .and_then(|index| {
+            result
+                .get("options")
+                .and_then(Value::as_array)
+                .and_then(|items| items.get(index as usize))
+        })
+        .or_else(|| {
+            result
+                .get("options")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+        })
+        .unwrap_or(result);
+    let topic = option
+        .get("topic")
+        .and_then(Value::as_object)
+        .or_else(|| result.get("topic").and_then(Value::as_object));
+    let frame = option
+        .get("direction_frame")
+        .and_then(Value::as_object)
+        .or_else(|| result.get("direction_frame").and_then(Value::as_object));
+    let read_topic = |key: &str| {
+        topic
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let read_frame = |key: &str| {
+        frame
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    CommentInsightPriorTopic {
+        history_id: String::new(),
+        title: read_topic("title"),
+        content_direction: option
+            .get("content_direction")
+            .and_then(Value::as_str)
+            .or_else(|| result.get("content_direction").and_then(Value::as_str))
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        core_tension: read_frame("core_tension"),
+        angle: read_frame("angle"),
+        material_entry: read_frame("material_entry"),
+    }
+}
+
+fn collect_comment_insight_prior_topics(
+    store: &AppStore,
+    current_items: &[Value],
+) -> Vec<CommentInsightPriorTopic> {
+    let current_keys = comment_insight_source_keys_for_items(current_items);
+    if current_keys.is_empty() {
+        return Vec::new();
+    }
+    let mut topics = Vec::new();
+    for record in &store.wander_history {
+        let Ok(record_items) = serde_json::from_str::<Vec<Value>>(&record.items) else {
+            continue;
+        };
+        if !record_items.iter().any(is_comment_insight_item) {
+            continue;
+        }
+        let record_keys = comment_insight_source_keys_for_items(&record_items);
+        if record_keys.is_disjoint(&current_keys) {
+            continue;
+        }
+        let Ok(result) = serde_json::from_str::<Value>(&record.result) else {
+            continue;
+        };
+        let mut topic = wander_result_primary_topic(&result);
+        if topic.title.trim().is_empty() && topic.content_direction.trim().is_empty() {
+            continue;
+        }
+        topic.history_id = record.id.clone();
+        topics.push(topic);
+    }
+    topics.sort_by(|left, right| left.history_id.cmp(&right.history_id));
+    topics
+}
+
+fn format_comment_insight_prior_topics(priors: &[CommentInsightPriorTopic]) -> String {
+    if priors.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec![
+        "同一条笔记已生成过这些评论区洞察选题，本轮禁止重复标题、评论信号、内容切口、核心矛盾和叙事角度：".to_string(),
+    ];
+    for (index, prior) in priors.iter().take(8).enumerate() {
+        lines.push(format!(
+            "{}. 标题：{}；方向：{}；矛盾：{}；角度：{}；素材切口：{}",
+            index + 1,
+            normalize_wander_bundle_text(&prior.title, 80),
+            normalize_wander_bundle_text(&prior.content_direction, 160),
+            normalize_wander_bundle_text(&prior.core_tension, 120),
+            normalize_wander_bundle_text(&prior.angle, 120),
+            normalize_wander_bundle_text(&prior.material_entry, 120)
+        ));
+    }
+    lines.push("如果评论区信息不足以产生新切口，也不要复用上面的旧选题。".to_string());
+    lines.join("\n")
+}
+
+fn normalize_comment_insight_text(raw: &str) -> String {
+    raw.trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(ch))
+        .collect()
+}
+
+fn comment_insight_text_tokens(raw: &str) -> HashSet<String> {
+    let normalized = normalize_comment_insight_text(raw);
+    let chars = normalized.chars().collect::<Vec<_>>();
+    let mut tokens = HashSet::new();
+    for ch in &chars {
+        tokens.insert(ch.to_string());
+    }
+    for window in chars.windows(2) {
+        tokens.insert(window.iter().collect::<String>());
+    }
+    tokens
+}
+
+fn comment_insight_text_similarity(left: &str, right: &str) -> f32 {
+    let left_tokens = comment_insight_text_tokens(left);
+    let right_tokens = comment_insight_text_tokens(right);
+    if left_tokens.is_empty() || right_tokens.is_empty() {
+        return 0.0;
+    }
+    let intersection = left_tokens.intersection(&right_tokens).count() as f32;
+    let union = left_tokens.union(&right_tokens).count() as f32;
+    if union <= 0.0 {
+        0.0
+    } else {
+        intersection / union
+    }
+}
+
+fn comment_insight_topic_text(topic: &CommentInsightPriorTopic) -> String {
+    [
+        topic.title.as_str(),
+        topic.content_direction.as_str(),
+        topic.core_tension.as_str(),
+        topic.angle.as_str(),
+        topic.material_entry.as_str(),
+    ]
+    .join("\n")
+}
+
+fn find_duplicate_comment_insight_topic(
+    result: &Value,
+    priors: &[CommentInsightPriorTopic],
+) -> Option<String> {
+    if priors.is_empty() {
+        return None;
+    }
+    let current = wander_result_primary_topic(result);
+    let current_title = normalize_comment_insight_text(&current.title);
+    let current_text = comment_insight_topic_text(&current);
+    for prior in priors {
+        let prior_title = normalize_comment_insight_text(&prior.title);
+        if !current_title.is_empty() && current_title == prior_title {
+            return Some(format!("标题与历史选题「{}」重复", prior.title));
+        }
+        let whole_similarity =
+            comment_insight_text_similarity(&current_text, &comment_insight_topic_text(prior));
+        let angle_similarity = comment_insight_text_similarity(&current.angle, &prior.angle);
+        let tension_similarity =
+            comment_insight_text_similarity(&current.core_tension, &prior.core_tension);
+        if whole_similarity >= 0.68 || (angle_similarity >= 0.72 && tension_similarity >= 0.58) {
+            return Some(format!("切口与历史选题「{}」过于相似", prior.title));
+        }
+    }
+    None
+}
+
 fn build_wander_task_prompt(
     items_text: &str,
     material_bundle: &str,
     materials_guide: &str,
     multi_choice: bool,
+    source_mode: &str,
+    avoidance_context: &str,
 ) -> String {
-    let output_requirement = if multi_choice {
+    let is_comment_mode = source_mode == "comments";
+    let output_requirement = if is_comment_mode {
+        [
+            "输出合同：仅输出一个 JSON 对象，不要 Markdown、不要 ```json 代码块、不要解释。",
+            "模式：single_choice。",
+            "顶层字段：content_direction, thinking_process, topic, direction_frame。",
+            "thinking_process 必须是 2-4 条短字符串数组，不能是对象，不能包含 material_analysis 等嵌套中间分析。",
+            "content_direction 必须是字符串，不能塞完整 JSON。",
+            "topic 必须包含 title 和 connections；connections 必须是 [1]。",
+            "direction_frame 必须包含 target_reader, core_tension, angle, material_entry。",
+            "输出前自检：如果 JSON 过长，只删减 thinking_process，不得删字段或截断 JSON。",
+        ]
+        .join("\n")
+    } else if multi_choice {
         [
             "输出合同：仅输出一个 JSON 对象，不要 Markdown、不要 ```json 代码块、不要解释。",
             "模式：multi_choice。",
@@ -1443,25 +1851,45 @@ fn build_wander_task_prompt(
         ]
         .join("\n")
     };
-    let output_template = if multi_choice {
+    let output_template = if is_comment_mode {
+        r#"{"content_direction":"...","thinking_process":["评论统计：...","需求判断：...","收敛判断：..."],"topic":{"title":"...","connections":[1]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}}"#
+    } else if multi_choice {
         r#"{"thinking_process":["母版选择：...","细节灵感：...","收敛判断：..."],"options":[{"content_direction":"...","topic":{"title":"...","connections":[1]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}},{"content_direction":"...","topic":{"title":"...","connections":[2]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}},{"content_direction":"...","topic":{"title":"...","connections":[1,2]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}}]}"#
     } else {
         r#"{"content_direction":"...","thinking_process":["母版选择：...","细节灵感：...","收敛判断：..."],"topic":{"title":"...","connections":[1]},"direction_frame":{"target_reader":"...","core_tension":"...","angle":"...","material_entry":"..."}}"#
     };
 
+    let task_line = if is_comment_mode {
+        format!("任务：使用已激活的 `{XHS_COMMENT_INSIGHT_SKILL}` 和 `{XHS_TITLE_SKILL}` skills，基于随机挑选的 1 条小红书笔记评论区生成 1 个潜在选题。")
+    } else {
+        format!("任务：使用已激活的 `{WANDER_SYNTHESIS_SKILL}` 和 `{XHS_TITLE_SKILL}` skills，基于本轮随机素材生成漫步选题。")
+    };
+    let method_line = if is_comment_mode {
+        "选题方法：本轮只分析 1 条小红书笔记。先统计和分析这条笔记评论区里的追问、反驳、补充、情绪和未满足需求，再收敛成 1 个可写的小红书潜在选题；不要跨素材综合，也不要把评论做成舆情摘要。".to_string()
+    } else {
+        "选题方法：先以 likes 最高的素材作为母版，拆它的标题、结构、情绪和表达公式；另外两条素材只用于寻找小细节、小场景、小反差，不要把三条素材硬串成一个大主题。越细、越小、越具体的选题越好。".to_string()
+    };
+    let material_label = if is_comment_mode {
+        "评论素材："
+    } else {
+        "随机素材："
+    };
+
     vec![
-        format!("任务：使用已激活的 `{WANDER_SYNTHESIS_SKILL}` 和 `{XHS_TITLE_SKILL}` skills，基于本轮随机素材生成漫步选题。"),
+        task_line,
         "边界：只使用本轮素材、宿主预读素材包和必要补读内容；不要引入长期记忆、用户档案、账号定位或其他知识库内容。".to_string(),
-        "选题方法：先以 likes 最高的素材作为母版，拆它的标题、结构、情绪和表达公式；另外两条素材只用于寻找小细节、小场景、小反差，不要把三条素材硬串成一个大主题。越细、越小、越具体的选题越好。".to_string(),
+        method_line,
         format!("标题：topic.title 必须先按 `{XHS_TITLE_SKILL}` 的小红书标题公式逻辑内部筛选，控制在 20 字以内；最终 JSON 只输出最终标题，不输出公式编号、候选标题或推荐理由。"),
         "工具：预读素材包足够时不要调用工具；确实缺信息时，只补读下面列出的素材路径。".to_string(),
+        String::new(),
+        avoidance_context.trim().to_string(),
         String::new(),
         output_requirement,
         String::new(),
         "JSON 模板：".to_string(),
         output_template.to_string(),
         String::new(),
-        "随机素材：".to_string(),
+        material_label.to_string(),
         items_text.to_string(),
         String::new(),
         "宿主预读素材包：".to_string(),
@@ -1692,6 +2120,14 @@ fn build_wander_material_bundle(items: &[Value]) -> String {
             }
             if let Some(visual_text) = format_wander_visual_blocks_for_prompt(item) {
                 sections.push(visual_text);
+            }
+            if let Some(comment_summary) = meta
+                .get("commentSummary")
+                .and_then(Value::as_str)
+                .map(|value| normalize_wander_bundle_text(value, 1400))
+                .filter(|value| !value.trim().is_empty())
+            {
+                sections.push(format!("- 评论区摘录:\n{comment_summary}"));
             }
             let Some(root) = resolve_wander_item_root(item) else {
                 sections.push("- 宿主预读: 未定位到素材根路径。".to_string());
@@ -2298,6 +2734,8 @@ fn rebuild_wander_history_from_sessions(store: &AppStore) -> Vec<WanderHistoryRe
             items: serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string()),
             result: serde_json::to_string(&result_value).unwrap_or_else(|_| "{}".to_string()),
             created_at,
+            status: None,
+            abandoned_at: None,
         });
     }
 
@@ -2340,9 +2778,11 @@ pub fn handle_chat_sessions_wander_channel(
             | "chat:discard-attachments"
             | "chat:transcribe-audio"
             | "wander:list-history"
+            | "wander:abandon-history"
             | "wander:delete-history"
             | "wander:get-random"
             | "wander:get-guided-items"
+            | "wander:list-comment-candidates"
             | "wander:brainstorm"
     ) {
         return None;
@@ -3208,10 +3648,30 @@ pub fn handle_chat_sessions_wander_channel(
                         store.wander_history = rebuilt;
                     }
                 }
-                let mut history = store.wander_history.clone();
+                let mut history = store
+                    .wander_history
+                    .iter()
+                    .filter(|item| item.status.as_deref() != Some("abandoned"))
+                    .cloned()
+                    .collect::<Vec<_>>();
                 history.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 Ok(json!(history))
             }),
+            "wander:abandon-history" => {
+                let history_id = payload_value_as_string(&payload).unwrap_or_default();
+                with_store_mut(state, |store| {
+                    let Some(record) = store
+                        .wander_history
+                        .iter_mut()
+                        .find(|item| item.id == history_id)
+                    else {
+                        return Err("选题不存在".to_string());
+                    };
+                    record.status = Some("abandoned".to_string());
+                    record.abandoned_at = Some(now_i64());
+                    Ok(json!({ "success": true }))
+                })
+            }
             "wander:delete-history" => {
                 let history_id = payload_value_as_string(&payload).unwrap_or_default();
                 with_store_mut(state, |store| {
@@ -3240,11 +3700,26 @@ pub fn handle_chat_sessions_wander_channel(
             "wander:get-guided-items" => with_store(state, |store| {
                 compose_guided_wander_items_for_state(state, &store, &payload)
             }),
+            "wander:list-comment-candidates" => {
+                let candidates = with_store(state, |store| {
+                    Ok(collect_wander_comment_candidate_items(&store))
+                })?;
+                let ready_candidates = enrich_wander_items_with_optional_index(state, candidates)?;
+                Ok(json!(ready_candidates))
+            }
             "wander:brainstorm" => {
                 let request_started_at = now_ms();
                 let (mut items, options) = parse_wander_brainstorm_payload(&payload);
                 let request_id = payload_string(&options, "requestId")
                     .unwrap_or_else(|| make_id("wander-request"));
+                let source_mode =
+                    payload_string(&options, "sourceMode").unwrap_or_else(|| "random".to_string());
+                let is_comment_mode = source_mode == "comments";
+                let min_items = if is_comment_mode {
+                    WANDER_COMMENT_MIN_ITEMS
+                } else {
+                    WANDER_READY_MIN_ITEMS
+                };
                 log_timing_event(
                     state,
                     "wander",
@@ -3257,22 +3732,30 @@ pub fn handle_chat_sessions_wander_channel(
                     let (excluded_ids, candidates) = with_store(state, |store| {
                         Ok((
                             recent_wander_excluded_ids(&store, 5),
-                            collect_wander_candidate_items(&store),
+                            if is_comment_mode {
+                                collect_wander_comment_candidate_items(&store)
+                            } else {
+                                collect_wander_candidate_items(&store)
+                            },
                         ))
                     })?;
                     let ready_candidates =
                         enrich_wander_items_with_optional_index(state, candidates)?;
                     items = pick_random_wander_items(
                         ready_candidates,
-                        WANDER_READY_MIN_ITEMS,
+                        if is_comment_mode {
+                            WANDER_COMMENT_TARGET_ITEMS
+                        } else {
+                            WANDER_READY_MIN_ITEMS
+                        },
                         &excluded_ids,
                     );
                 } else {
                     items = enrich_wander_items_with_optional_index(state, items)?;
                 }
-                if items.len() < WANDER_READY_MIN_ITEMS {
+                if items.len() < min_items {
                     return Ok(json!({
-                        "error": WANDER_NOT_ENOUGH_ITEMS_MESSAGE,
+                        "error": if is_comment_mode { "可用于评论区洞察的评论素材不足，请先采集带评论的小红书笔记。" } else { WANDER_NOT_ENOUGH_ITEMS_MESSAGE },
                         "result": Value::Null,
                         "historyId": Value::Null,
                         "items": []
@@ -3288,9 +3771,10 @@ pub fn handle_chat_sessions_wander_channel(
                     settings_started_at,
                     Some(format!("warmedAt={}", warm_wander.warmed_at)),
                 );
-                let multi_choice = payload_field(&options, "multiChoice")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false);
+                let multi_choice = !is_comment_mode
+                    && payload_field(&options, "multiChoice")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
                 let wander_session_id =
                     format!("session_wander_{}", slug_from_relative_path(&request_id));
                 let _ = app.emit(
@@ -3301,9 +3785,9 @@ pub fn handle_chat_sessions_wander_channel(
                         "phase": "collect",
                         "stepIndex": 1,
                         "totalSteps": 3,
-                        "title": "选择随机素材",
+                        "title": if is_comment_mode { "选择评论素材" } else { "选择随机素材" },
                         "status": "completed",
-                        "detail": format!("已装载 {} 条随机素材。", items.len()),
+                        "detail": if is_comment_mode { format!("已装载 {} 条带评论素材。", items.len()) } else { format!("已装载 {} 条随机素材。", items.len()) },
                     }),
                 );
                 let context_started_at = now_ms();
@@ -3344,12 +3828,27 @@ pub fn handle_chat_sessions_wander_channel(
                 let items_text = build_wander_items_text(&items);
                 let material_bundle = build_wander_material_bundle(&items);
                 let materials_guide = build_wander_materials_guide(&items);
+                let comment_prior_topics = if is_comment_mode {
+                    with_store(state, |store| {
+                        Ok(collect_comment_insight_prior_topics(&store, &items))
+                    })?
+                } else {
+                    Vec::new()
+                };
+                let avoidance_context = if is_comment_mode {
+                    format_comment_insight_prior_topics(&comment_prior_topics)
+                } else {
+                    String::new()
+                };
                 let prompt = build_wander_task_prompt(
                     &items_text,
                     &material_bundle,
                     &materials_guide,
                     multi_choice,
+                    &source_mode,
+                    &avoidance_context,
                 );
+                let mut final_prompt = prompt.clone();
                 log_timing_event(
                     state,
                     "wander",
@@ -3374,11 +3873,19 @@ pub fn handle_chat_sessions_wander_channel(
                     metadata.insert("contextContent".to_string(), json!(items_text));
                     metadata.insert("isContextBound".to_string(), json!(true));
                     metadata.insert("allowedTools".to_string(), json!(["resource"]));
-                    let required_skills = vec![
-                        WANDER_SYNTHESIS_SKILL.to_string(),
-                        XHS_TITLE_SKILL.to_string(),
-                    ];
+                    let required_skills = if is_comment_mode {
+                        vec![
+                            XHS_COMMENT_INSIGHT_SKILL.to_string(),
+                            XHS_TITLE_SKILL.to_string(),
+                        ]
+                    } else {
+                        vec![
+                            WANDER_SYNTHESIS_SKILL.to_string(),
+                            XHS_TITLE_SKILL.to_string(),
+                        ]
+                    };
                     metadata.insert("requiredSkill".to_string(), json!(required_skills.clone()));
+                    metadata.insert("sourceMode".to_string(), json!(source_mode.clone()));
                     metadata.insert(
                         "wanderMaterialBundleChars".to_string(),
                         json!(material_bundle.chars().count()),
@@ -3410,11 +3917,11 @@ pub fn handle_chat_sessions_wander_channel(
                         "totalSteps": 3,
                         "title": "生成选题",
                         "status": "running",
-                        "detail": "正在启动漫步 Agent，并基于已读取的关键素材生成最终选题。",
+                        "detail": if is_comment_mode { "正在启动评论洞察 Agent，并基于评论区生成最终选题。" } else { "正在启动漫步 Agent，并基于已读取的关键素材生成最终选题。" },
                     }),
                 );
                 let execution_started_at = now_ms();
-                let model_result = generate_wander_response(
+                let mut model_result = generate_wander_response(
                     app,
                     state,
                     &wander_session_id,
@@ -3455,7 +3962,63 @@ pub fn handle_chat_sessions_wander_channel(
                 let parse_started_at = now_ms();
                 let parsed_payload = parse_wander_json_payload(&model_result)
                     .unwrap_or_else(|| json!({ "content_direction": model_result.clone() }));
-                let result_value = normalize_wander_result(parsed_payload, multi_choice);
+                let mut result_value = normalize_wander_result(parsed_payload, multi_choice);
+                if is_comment_mode {
+                    if let Some(duplicate_reason) =
+                        find_duplicate_comment_insight_topic(&result_value, &comment_prior_topics)
+                    {
+                        let retry_prompt = format!(
+                            "{prompt}\n\n重复修正：上一版输出因为「{duplicate_reason}」被拒绝。请保留同一条笔记和评论区素材，但必须换一个评论信号、内容切口、核心矛盾和叙事角度；禁止复用上面历史选题或上一版输出。只输出新的 JSON。"
+                        );
+                        final_prompt = retry_prompt.clone();
+                        let _ = app.emit(
+                            "wander:progress",
+                            json!({
+                                "requestId": request_id.clone(),
+                                "sessionId": wander_session_id.clone(),
+                                "phase": "generate",
+                                "stepIndex": 3,
+                                "totalSteps": 3,
+                                "title": "修正重复切口",
+                                "status": "running",
+                                "detail": "检测到同笔记历史选题相似，正在换一个评论信号重新生成。",
+                            }),
+                        );
+                        model_result = generate_wander_response(
+                            app,
+                            state,
+                            &wander_session_id,
+                            warm_wander
+                                .model_config
+                                .as_ref()
+                                .ok_or_else(|| "wander model config missing".to_string())?,
+                            &retry_prompt,
+                        )?;
+                        let retry_payload = parse_wander_json_payload(&model_result)
+                            .unwrap_or_else(
+                                || json!({ "content_direction": model_result.clone() }),
+                            );
+                        result_value = normalize_wander_result(retry_payload, multi_choice);
+                    }
+                    if let Some(duplicate_reason) =
+                        find_duplicate_comment_insight_topic(&result_value, &comment_prior_topics)
+                    {
+                        let error_message = format!(
+                            "这条笔记已经有相近的评论区洞察选题：{duplicate_reason}。请换一条笔记，或补充更多评论后再试。"
+                        );
+                        return Ok(json!({
+                            "error": error_message,
+                            "result": serde_json::to_string(&result_value).unwrap_or_else(|_| "{}".to_string()),
+                            "items": items,
+                            "validationIssues": [{
+                                "path": "topic",
+                                "code": "duplicate_comment_insight",
+                                "message": duplicate_reason,
+                            }],
+                            "historyId": Value::Null,
+                        }));
+                    }
+                }
                 log_timing_event(
                     state,
                     "wander",
@@ -3532,7 +4095,7 @@ pub fn handle_chat_sessions_wander_channel(
                         id: make_id("message"),
                         session_id: wander_session_id.clone(),
                         role: "user".to_string(),
-                        content: prompt.clone(),
+                        content: final_prompt.clone(),
                         display_content: None,
                         attachment: None,
                         metadata: None,
@@ -3553,7 +4116,7 @@ pub fn handle_chat_sessions_wander_channel(
                         &wander_session_id,
                         "message",
                         "user",
-                        prompt.clone(),
+                        final_prompt.clone(),
                         Some(json!({ "source": "wander" })),
                     );
                     append_session_transcript(
@@ -3576,6 +4139,8 @@ pub fn handle_chat_sessions_wander_channel(
                         items: serde_json::to_string(&items).map_err(|error| error.to_string())?,
                         result: result_text.clone(),
                         created_at: now_i64(),
+                        status: None,
+                        abandoned_at: None,
                     });
                     Ok(())
                 })?;
@@ -3597,7 +4162,7 @@ pub fn handle_chat_sessions_wander_channel(
                         "totalSteps": 3,
                         "title": "保存结果",
                         "status": "completed",
-                        "detail": "漫步完成，结果已写入历史记录。",
+                        "detail": if is_comment_mode { "评论洞察完成，结果已写入历史记录。" } else { "漫步完成，结果已写入历史记录。" },
                     }),
                 );
                 log_timing_event(
@@ -3761,6 +4326,8 @@ mod tests {
             "素材 1 | 标题: 示例\n- 预读正文:\n这里是宿主预读的内容",
             "素材 1 | workspace 路径: knowledge/redbook/demo",
             false,
+            "random",
+            "",
         );
 
         assert!(prompt.contains("wander-synthesis"));
@@ -3781,6 +4348,60 @@ mod tests {
         assert!(!prompt.contains("MEMORY.md"));
         assert!(!prompt.contains("爆款方法"));
         assert!(!prompt.contains("隐藏连接"));
+    }
+
+    #[test]
+    fn build_wander_task_prompt_supports_comment_insight_mode() {
+        let prompt = build_wander_task_prompt(
+            "Item 1",
+            "素材 1 | 标题: 示例\n- 评论区摘录:\n1. 用户A | score=9 | level=0: 在哪上传？",
+            "素材 1 | workspace 路径: knowledge/redbook/demo",
+            false,
+            "comments",
+            "同一条笔记已生成过这些评论区洞察选题，本轮禁止重复标题、评论信号、内容切口、核心矛盾和叙事角度：\n1. 标题：旧选题；方向：旧方向；矛盾：旧矛盾；角度：旧角度；素材切口：旧切口",
+        );
+
+        assert!(prompt.contains("xhs-comment-insight"));
+        assert!(prompt.contains("随机挑选的 1 条小红书笔记评论区生成 1 个潜在选题"));
+        assert!(prompt.contains("评论素材："));
+        assert!(prompt.contains("本轮只分析 1 条小红书笔记"));
+        assert!(prompt.contains("旧选题"));
+        assert!(prompt.contains("禁止重复标题"));
+        assert!(prompt.contains("connections 必须是 [1]"));
+        assert!(!prompt.contains("likes 最高的素材作为母版"));
+        assert!(!prompt.contains("connections 只能包含 1-3"));
+    }
+
+    #[test]
+    fn duplicate_comment_insight_detection_rejects_reused_title() {
+        let prior = CommentInsightPriorTopic {
+            history_id: "wander-old".to_string(),
+            title: "搜狐靠什么活到现在".to_string(),
+            content_direction: "评论区多人追问搜狐靠什么赚钱。".to_string(),
+            core_tension: "大家以为搜狐没落了，但还在持续赚钱。".to_string(),
+            angle: "从评论区追问切入解释搜狐收入来源。".to_string(),
+            material_entry: "高赞评论追问搜狐现在靠啥赚钱。".to_string(),
+        };
+        let result = json!({
+            "content_direction": "评论区追问搜狐靠什么赚钱。",
+            "direction_frame": {
+                "target_reader": "不了解搜狐业务的人",
+                "core_tension": "以为搜狐没落了但它还活得很好",
+                "angle": "解释搜狐收入来源",
+                "material_entry": "评论区追问搜狐靠啥赚钱"
+            },
+            "topic": {
+                "title": "搜狐靠什么活到现在",
+                "connections": [1]
+            }
+        });
+
+        let duplicate = find_duplicate_comment_insight_topic(&result, &[prior]);
+
+        assert!(duplicate
+            .as_deref()
+            .unwrap_or_default()
+            .contains("标题与历史选题"));
     }
 
     #[test]

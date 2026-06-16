@@ -109,7 +109,7 @@ export function StartupMigrationModal({
                                 {countLine('转录记录', counts.transcriptRecords)}
                                 {countLine('检查点', counts.checkpoints)}
                                 {countLine('工具结果', counts.toolResults)}
-                                {countLine('漫步历史', counts.wanderHistory)}
+                                {countLine('选题历史', counts.wanderHistory)}
                             </div>
                         </div>
                     )}

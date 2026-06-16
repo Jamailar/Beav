@@ -1674,6 +1674,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [brandWorkspaceError, setBrandWorkspaceError] = useState('');
     const [enabledEcommercePlatforms, setEnabledEcommercePlatforms] = useState<EcommercePlatformRecord[]>([]);
     const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
+    const [mediaNextCursor, setMediaNextCursor] = useState<string | null>(null);
+    const [isLoadingMoreMedia, setIsLoadingMoreMedia] = useState(false);
     const [libraryTab, setLibraryTab] = useState<AssetLibraryTab>('assets');
     const [loading, setLoading] = useState(true);
     const [working, setWorking] = useState(false);
@@ -1817,7 +1819,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     brandWorkspaceBridge
                         ? brandWorkspaceBridge.list()
                         : Promise.resolve({ success: false, error: '品牌工作区不可用', brands: [] }),
-                    window.ipcRenderer.media.list({ limit: 500 }) as Promise<{ success?: boolean; error?: string; assets?: MediaAsset[] }>,
+                    window.ipcRenderer.media.list({ limit: 500 }) as Promise<{ success?: boolean; error?: string; assets?: MediaAsset[]; nextCursor?: string | null }>,
                     window.ipcRenderer.getSettings().catch(() => ({})),
                 ])
             ), { requestId });
@@ -1850,6 +1852,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     ))
                     : []
             );
+            setMediaNextCursor(typeof mediaResult?.nextCursor === 'string' ? mediaResult.nextCursor : null);
             hasLoadedSnapshotRef.current = true;
             if (!hasEnsuredDefaultCategoriesRef.current) {
                 const existingNames = new Set(nextCategories.map((item) => item.name.trim()));
@@ -1881,6 +1884,36 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             }
         }
     }, []);
+
+    const loadMoreMediaAssets = useCallback(async () => {
+        if (!mediaNextCursor || isLoadingMoreMedia) return;
+        setIsLoadingMoreMedia(true);
+        try {
+            const mediaResult = await window.ipcRenderer.media.list({
+                limit: 500,
+                cursor: mediaNextCursor,
+            }) as { success?: boolean; error?: string; assets?: MediaAsset[]; nextCursor?: string | null };
+            if (!mediaResult?.success) {
+                throw new Error(mediaResult?.error || '加载更多媒体失败');
+            }
+            const nextAssets = Array.isArray(mediaResult.assets)
+                ? mediaResult.assets.map(normalizeMediaAsset)
+                : [];
+            setMediaAssets((current) => {
+                const seen = new Set(current.map((asset) => asset.id));
+                return [...current, ...nextAssets.filter((asset) => !seen.has(asset.id))]
+                    .sort((a, b) => (
+                        new Date(b.createdAt || b.updatedAt || 0).getTime() - new Date(a.createdAt || a.updatedAt || 0).getTime()
+                    ));
+            });
+            setMediaNextCursor(typeof mediaResult.nextCursor === 'string' ? mediaResult.nextCursor : null);
+        } catch (loadError) {
+            console.error('Failed to load more media assets:', loadError);
+            setError(loadError instanceof Error ? loadError.message : '加载更多媒体失败');
+        } finally {
+            setIsLoadingMoreMedia(false);
+        }
+    }, [isLoadingMoreMedia, mediaNextCursor]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -2112,6 +2145,20 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             return haystack.includes(keyword);
         });
     }, [mediaAssets, query]);
+
+    const mediaLoadMoreControl = mediaNextCursor ? (
+        <div className="mt-4 flex justify-center">
+            <button
+                type="button"
+                onClick={() => void loadMoreMediaAssets()}
+                disabled={isLoadingMoreMedia}
+                className="inline-flex h-8 items-center gap-2 rounded-lg border border-[rgb(var(--color-border))] bg-white px-3 text-xs text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+                <RefreshCw className={clsx('h-3.5 w-3.5', isLoadingMoreMedia && 'animate-spin')} />
+                {isLoadingMoreMedia ? '加载中' : '加载更多'}
+            </button>
+        </div>
+    ) : null;
 
     const categoryStats = useMemo(() => {
         const stats = new Map<string, number>();
@@ -3912,105 +3959,111 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <div className="text-sm font-medium">暂无媒体</div>
                         </div>
                     ) : viewMode === 'grid' ? (
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                            {filteredMediaAssets.map((asset) => {
-                                const sourceUrl = mediaAssetSourceUrl(asset);
-                                const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
-                                const source = normalizeMediaSource(asset.source);
-                                return (
-                                    <div
-                                        key={asset.id}
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
-                                        onContextMenu={(event) => openMediaContextMenu(event, asset)}
-                                        onKeyDown={(event) => {
-                                            if (event.key !== 'Enter' && event.key !== ' ') return;
-                                            event.preventDefault();
-                                            void window.ipcRenderer.media.open({ assetId: asset.id });
-                                        }}
-                                        className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
-                                    >
-                                        <div className="aspect-video overflow-hidden bg-surface-secondary/50">
-                                            {previewUrl && asset.exists ? (
-                                                isAudioAsset(asset) ? (
-                                                    <AudioMediaThumb src={sourceUrl} />
-                                                ) : isVideoAsset(asset) ? (
-                                                    <VideoMediaThumb
-                                                        sourceUrl={sourceUrl}
-                                                        thumbnailUrl={asset.thumbnailUrl}
-                                                        label={asset.title || asset.id}
-                                                    />
+                        <>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                                {filteredMediaAssets.map((asset) => {
+                                    const sourceUrl = mediaAssetSourceUrl(asset);
+                                    const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
+                                    const source = normalizeMediaSource(asset.source);
+                                    return (
+                                        <div
+                                            key={asset.id}
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
+                                            onContextMenu={(event) => openMediaContextMenu(event, asset)}
+                                            onKeyDown={(event) => {
+                                                if (event.key !== 'Enter' && event.key !== ' ') return;
+                                                event.preventDefault();
+                                                void window.ipcRenderer.media.open({ assetId: asset.id });
+                                            }}
+                                            className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
+                                        >
+                                            <div className="aspect-video overflow-hidden bg-surface-secondary/50">
+                                                {previewUrl && asset.exists ? (
+                                                    isAudioAsset(asset) ? (
+                                                        <AudioMediaThumb src={sourceUrl} />
+                                                    ) : isVideoAsset(asset) ? (
+                                                        <VideoMediaThumb
+                                                            sourceUrl={sourceUrl}
+                                                            thumbnailUrl={asset.thumbnailUrl}
+                                                            label={asset.title || asset.id}
+                                                        />
+                                                    ) : (
+                                                        <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
+                                                    )
                                                 ) : (
-                                                    <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
-                                                )
-                                            ) : (
-                                                <div className="flex h-full w-full items-center justify-center text-text-tertiary">
-                                                    <Clapperboard className="h-6 w-6" />
+                                                    <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                                                        <Clapperboard className="h-6 w-6" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="space-y-1.5 p-2.5">
+                                                <div className="truncate text-xs font-semibold text-text-primary">{asset.title || asset.id}</div>
+                                                <div className="truncate text-[11px] text-text-tertiary">
+                                                    {asset.projectId || '未设置项目ID'}
                                                 </div>
-                                            )}
-                                        </div>
-                                        <div className="space-y-1.5 p-2.5">
-                                            <div className="truncate text-xs font-semibold text-text-primary">{asset.title || asset.id}</div>
-                                            <div className="truncate text-[11px] text-text-tertiary">
-                                                {asset.projectId || '未设置项目ID'}
-                                            </div>
-                                            <div className="flex items-center justify-between gap-2 text-[10px] text-text-tertiary">
-                                                <span>{MEDIA_SOURCE_LABEL[source]}</span>
-                                                <span>{mediaAssetKindLabel(asset)}</span>
+                                                <div className="flex items-center justify-between gap-2 text-[10px] text-text-tertiary">
+                                                    <span>{MEDIA_SOURCE_LABEL[source]}</span>
+                                                    <span>{mediaAssetKindLabel(asset)}</span>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                                    );
+                                })}
+                            </div>
+                            {mediaLoadMoreControl}
+                        </>
                     ) : (
-                        <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
-                            {filteredMediaAssets.map((asset) => {
-                                const sourceUrl = mediaAssetSourceUrl(asset);
-                                const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
-                                const source = normalizeMediaSource(asset.source);
-                                return (
-                                    <button
-                                        key={asset.id}
-                                        type="button"
-                                        onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
-                                        onContextMenu={(event) => openMediaContextMenu(event, asset)}
-                                        className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
-                                    >
-                                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
-                                            {previewUrl && asset.exists ? (
-                                                isAudioAsset(asset) ? (
-                                                    <AudioMediaThumb src={sourceUrl} compact />
-                                                ) : isVideoAsset(asset) ? (
-                                                    <VideoMediaThumb
-                                                        sourceUrl={sourceUrl}
-                                                        thumbnailUrl={asset.thumbnailUrl}
-                                                        label={asset.title || asset.id}
-                                                    />
+                        <>
+                            <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
+                                {filteredMediaAssets.map((asset) => {
+                                    const sourceUrl = mediaAssetSourceUrl(asset);
+                                    const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
+                                    const source = normalizeMediaSource(asset.source);
+                                    return (
+                                        <button
+                                            key={asset.id}
+                                            type="button"
+                                            onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
+                                            onContextMenu={(event) => openMediaContextMenu(event, asset)}
+                                            className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
+                                        >
+                                            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                                {previewUrl && asset.exists ? (
+                                                    isAudioAsset(asset) ? (
+                                                        <AudioMediaThumb src={sourceUrl} compact />
+                                                    ) : isVideoAsset(asset) ? (
+                                                        <VideoMediaThumb
+                                                            sourceUrl={sourceUrl}
+                                                            thumbnailUrl={asset.thumbnailUrl}
+                                                            label={asset.title || asset.id}
+                                                        />
+                                                    ) : (
+                                                        <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
+                                                    )
                                                 ) : (
-                                                    <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
-                                                )
-                                            ) : (
-                                                <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
-                                                    <Clapperboard className="h-5 w-5" />
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div className="min-w-0 flex-1">
-                                            <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{asset.title || asset.id}</div>
-                                            <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
-                                                {MEDIA_SOURCE_LABEL[source]} · {asset.projectId || '未设置项目ID'}
-                                                {asset.boundManuscriptPath ? ` · ${asset.boundManuscriptPath}` : ''}
+                                                    <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                                        <Clapperboard className="h-5 w-5" />
+                                                    </div>
+                                                )}
                                             </div>
-                                        </div>
-                                        <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
-                                            {formatAssetDate(asset.updatedAt || asset.createdAt)}
-                                        </div>
-                                    </button>
-                                );
-                            })}
-                        </div>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{asset.title || asset.id}</div>
+                                                <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
+                                                    {MEDIA_SOURCE_LABEL[source]} · {asset.projectId || '未设置项目ID'}
+                                                    {asset.boundManuscriptPath ? ` · ${asset.boundManuscriptPath}` : ''}
+                                                </div>
+                                            </div>
+                                            <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
+                                                {formatAssetDate(asset.updatedAt || asset.createdAt)}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {mediaLoadMoreControl}
+                        </>
                     )
                 ) : loading && subjects.length === 0 && categories.length === 0 ? (
                     <div className="text-sm text-[rgb(var(--color-text-secondary))]">资产库加载中...</div>

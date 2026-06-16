@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square, MoreHorizontal, Share2 } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import type { PendingChatMessage } from '../features/app-shell/types';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
+import { SAFE_REMARK_PLUGINS } from '../utils/markdownRemarkPlugins';
 import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { formatTimestampDateTime } from '../utils/time';
@@ -1489,7 +1489,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             return (
                 <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
                     <article className="prose prose-sm max-w-none prose-headings:text-text-primary prose-p:text-text-primary prose-li:text-text-primary prose-strong:text-text-primary prose-a:text-sky-700 prose-pre:bg-slate-900 prose-pre:text-slate-100 prose-code:text-rose-700">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        <ReactMarkdown remarkPlugins={SAFE_REMARK_PLUGINS}>
                             {note.content || ''}
                         </ReactMarkdown>
                     </article>
@@ -1570,14 +1570,13 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                     )}
                 </div>
                 <div className="min-w-0 flex-1 pb-5">
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
                         <div className="flex min-w-0 items-center gap-1.5">
                             <span className="truncate text-[14px] font-medium text-text-tertiary">{authorName}</span>
                             {comment.author?.isNoteAuthor && (
                                 <span className="rounded bg-black/[0.04] px-1.5 py-0.5 text-[10px] font-bold text-text-tertiary">作者</span>
                             )}
                         </div>
-                        <MoreHorizontal className="h-4 w-4 shrink-0 text-text-tertiary/60" />
                     </div>
                     <div className="mt-1 text-[15px] leading-relaxed text-text-primary">
                         {renderXhsCommentContent(comment)}
@@ -1595,6 +1594,61 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         );
     };
 
+    const renderXhsTranscriptionModule = (note: Note) => {
+        if (!note.video) return null;
+
+        const isCurrentNoteTranscribing = isTranscribing && selectedNote?.id === note.id;
+        const isProcessing = note.transcriptionStatus === 'processing' || isCurrentNoteTranscribing;
+        const hasTranscript = Boolean(note.transcript?.trim());
+        const isFailed = note.transcriptionStatus === 'failed' && !hasTranscript;
+        const statusLabel = hasTranscript ? '转录完成' : isProcessing ? '转录中' : isFailed ? '转录失败' : '等待转录';
+        const progressWidth = hasTranscript ? '100%' : isProcessing ? '62%' : isFailed ? '100%' : '0%';
+        const progressClass = hasTranscript
+            ? 'bg-emerald-500'
+            : isFailed
+                ? 'bg-rose-500'
+                : 'bg-accent-primary';
+
+        return (
+            <div className="rounded-2xl border border-black/[0.06] bg-black/[0.02] p-4">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-[13px] font-bold text-text-primary">
+                            <FileText className="h-4 w-4 text-text-secondary" />
+                            视频转录
+                        </div>
+                        <div className="mt-1 text-[12px] font-medium text-text-tertiary">{statusLabel}</div>
+                    </div>
+                    {!hasTranscript && (
+                        <button
+                            type="button"
+                            onClick={() => handleTranscribeNote(note.id)}
+                            disabled={isProcessing}
+                            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-black/[0.06] bg-white px-3 text-[12px] font-bold text-text-secondary transition hover:bg-black/[0.03] hover:text-text-primary disabled:opacity-45"
+                        >
+                            {isProcessing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                            {isFailed ? '重试' : isProcessing ? '处理中' : '开始'}
+                        </button>
+                    )}
+                </div>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
+                    <div
+                        className={clsx('h-full rounded-full transition-all duration-500', progressClass, isProcessing && 'animate-pulse')}
+                        style={{ width: progressWidth }}
+                    />
+                </div>
+                {hasTranscript && (
+                    <pre className="mt-4 max-h-[220px] overflow-auto whitespace-pre-wrap rounded-xl bg-white px-3 py-3 font-sans text-[13px] leading-relaxed text-text-secondary ring-1 ring-black/[0.04] custom-scrollbar">
+                        {note.transcript}
+                    </pre>
+                )}
+                {isFailed && (
+                    <div className="mt-3 text-[12px] font-medium text-rose-600">转录没有完成，可以重试。</div>
+                )}
+            </div>
+        );
+    };
+
     const renderXhsNoteDetail = (note: Note) => {
         const images = orderImages(note.images || []);
         const currentImage = images[selectedImageIndex] || getNoteCoverImage(note) || note.cover || '';
@@ -1608,7 +1662,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 onClick={() => setSelectedNote(null)}
             >
                 <div
-                    className="relative mx-4 grid h-[92vh] w-full max-w-[1220px] grid-cols-[minmax(0,1fr)_420px] overflow-hidden rounded-[28px] bg-white shadow-[0_42px_120px_-30px_rgba(0,0,0,0.55)] ring-1 ring-black/10 max-[980px]:grid-cols-1"
+                    className="relative mx-4 grid h-[86vh] w-full max-w-[1060px] grid-cols-[minmax(0,1fr)_380px] overflow-hidden rounded-[22px] bg-white shadow-[0_42px_120px_-30px_rgba(0,0,0,0.55)] ring-1 ring-black/10 max-[980px]:h-[90vh] max-[980px]:max-w-[560px] max-[980px]:grid-cols-1"
                     onClick={(event) => event.stopPropagation()}
                 >
                     <button
@@ -1686,9 +1740,9 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                     </div>
 
                     <div className="flex min-h-0 flex-col border-l border-black/[0.06] bg-white max-[980px]:border-l-0">
-                        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-black/[0.06] px-6 py-5">
+                        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-black/[0.06] px-5 py-4 pr-14">
                             <button type="button" onClick={() => openAuthorProfile(note)} className="flex min-w-0 items-center gap-3 text-left">
-                                <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full bg-black/[0.04] ring-1 ring-black/[0.05]">
+                                <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-black/[0.04] ring-1 ring-black/[0.05]">
                                     {note.authorAvatarUrl ? (
                                         <img src={resolveAssetUrl(note.authorAvatarUrl)} alt={note.author} className="h-full w-full object-cover" />
                                     ) : (
@@ -1696,51 +1750,32 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     )}
                                 </div>
                                 <div className="min-w-0">
-                                    <div className="truncate text-[17px] font-semibold text-text-primary">{note.author || '小红书用户'}</div>
-                                    {note.siteName && <div className="mt-0.5 truncate text-[11px] font-medium text-text-tertiary">{note.siteName}</div>}
+                                    <div className="truncate text-[16px] font-semibold text-text-primary">{note.author || '小红书用户'}</div>
                                 </div>
                             </button>
-                            <button
-                                type="button"
-                                onClick={() => openAuthorProfile(note)}
-                                className="shrink-0 rounded-full bg-[#ff2f55] px-6 py-2.5 text-[15px] font-extrabold text-white shadow-sm transition-all hover:bg-[#f7254d] active:scale-95"
-                            >
-                                关注
-                            </button>
+                            {note.folderPath && (
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                    <button type="button" title="在文件夹中打开" onClick={() => void handleShowInFolder(note.folderPath)} className="flex h-8 w-8 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary">
+                                        <FolderOpen className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            )}
                         </div>
 
                         <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
-                            <div className="space-y-4 px-6 py-5">
-                                <h1 className="text-[20px] font-extrabold leading-snug tracking-tight text-text-primary">{note.title}</h1>
-                                <div className="whitespace-pre-wrap text-[16px] leading-[1.72] text-text-primary">{note.content}</div>
+                            <div className="space-y-4 px-5 py-5">
+                                <h1 className="text-[19px] font-extrabold leading-snug tracking-tight text-text-primary">{note.title}</h1>
+                                <div className="whitespace-pre-wrap text-[15px] leading-[1.72] text-text-primary">{note.content}</div>
                                 {tags.length > 0 && (
                                     <div className="flex flex-wrap gap-2 pt-1">
-                                        {tags.map((tag) => (
-                                            <span key={tag} className="text-[15px] font-semibold text-[#24599a]">#{tag}</span>
-                                        ))}
+                                        {tags.map((tag) => <span key={tag} className="text-[14px] font-semibold text-[#24599a]">#{tag}</span>)}
                                     </div>
                                 )}
                                 <div className="pt-1 text-[12px] font-medium text-text-tertiary">{formatTimestampDateTime(note.createdAt)}</div>
+                                {renderXhsTranscriptionModule(note)}
                             </div>
 
-                            {note.video && note.transcript && (
-                                <div className="mx-6 mb-5 rounded-2xl border border-black/[0.05] bg-black/[0.02]">
-                                    <button
-                                        onClick={() => setShowTranscript(!showTranscript)}
-                                        className="flex w-full items-center justify-between px-4 py-3 text-[13px] font-bold text-text-primary"
-                                    >
-                                        <span className="inline-flex items-center gap-2"><FileText className="h-4 w-4" />转录</span>
-                                        <ChevronRight className={clsx('h-4 w-4 transition-transform', showTranscript && 'rotate-90')} />
-                                    </button>
-                                    {showTranscript && (
-                                        <pre className="max-h-[260px] overflow-auto whitespace-pre-wrap px-4 pb-4 font-sans text-[13px] leading-relaxed text-text-secondary custom-scrollbar">
-                                            {note.transcript}
-                                        </pre>
-                                    )}
-                                </div>
-                            )}
-
-                            <div className="border-t border-black/[0.06] px-6 py-5">
+                            <div className="border-t border-black/[0.06] px-5 py-5">
                                 <div className="mb-5 text-[16px] font-semibold text-text-tertiary">共 {formatCompactCount(totalComments)} 条评论</div>
                                 {comments.length > 0 ? (
                                     <div className="space-y-1">
@@ -1752,27 +1787,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     </div>
                                 )}
                             </div>
-                        </div>
-
-                        <div className="flex shrink-0 items-center gap-3 border-t border-black/[0.06] bg-white px-5 py-4">
-                            <div className="min-w-0 flex-1 rounded-full bg-black/[0.04] px-4 py-2.5 text-[14px] font-medium text-text-tertiary">说点什么...</div>
-                            <button title={`${APP_BRAND.aiDisplayName} 聊天`} onClick={() => openNoteInRedClaw(note)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-primary transition-colors hover:bg-black/[0.05]"><MessageCircle className="h-5 w-5" /></button>
-                            <span className="inline-flex shrink-0 items-center gap-1.5 text-[16px] font-semibold text-text-primary"><Heart className="h-6 w-6" />{formatCompactCount(note.stats?.likes)}</span>
-                            <span className="inline-flex shrink-0 items-center gap-1.5 text-[16px] font-semibold text-text-primary"><Star className="h-6 w-6" />{formatCompactCount(note.stats?.collects)}</span>
-                            <span className="inline-flex shrink-0 items-center gap-1.5 text-[16px] font-semibold text-text-primary"><MessageCircle className="h-6 w-6" />{formatCompactCount(totalComments)}</span>
-                            {note.sourceUrl && (
-                                <button title="打开来源" onClick={() => window.open(note.sourceUrl, '_blank')} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-primary transition-colors hover:bg-black/[0.05]"><Share2 className="h-5 w-5" /></button>
-                            )}
-                            <button title="在目录中查看" onClick={() => void handleShowInFolder(note.folderPath)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary"><FolderOpen className="h-5 w-5" /></button>
-                            {hasMedia && (
-                                <button title="存为封面模板" onClick={() => void handleSaveNoteCoverAsTemplate(note)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary"><BookmarkPlus className="h-5 w-5" /></button>
-                            )}
-                            {note.video && !note.transcript && (
-                                <button title="提取文字" onClick={() => handleTranscribeNote(note.id)} disabled={isTranscribing || note.transcriptionStatus === 'processing'} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary disabled:opacity-40">
-                                    {isTranscribing || note.transcriptionStatus === 'processing' ? <Loader2 className="h-5 w-5 animate-spin" /> : <RefreshCw className="h-5 w-5" />}
-                                </button>
-                            )}
-                            <button title="移除记录" onClick={() => handleDeleteNote(note.id)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-rose-50 hover:text-rose-500"><Trash2 className="h-5 w-5" /></button>
                         </div>
                     </div>
                 </div>

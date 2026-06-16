@@ -357,11 +357,22 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
 function App() {
   useOfficialAuthLifecycle();
   useLlmReadinessLifecycle();
-  const { snapshot: officialAuthState } = useOfficialAuthState();
+  const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
   const { snapshot: llmReadinessState, bootstrapped: llmReadinessBootstrapped } = useLlmReadinessState();
   const [appOnboardingOpen, setAppOnboardingOpen] = useState(false);
   const officialAuthStatus = String(officialAuthState?.status || '').trim();
-  const authOrLlmPending = !llmReadinessBootstrapped;
+  const officialAuthPending = !officialAuthBootstrapped
+    || officialAuthStatus === 'restoring'
+    || officialAuthStatus === 'refreshing';
+  const officialAuthLoggedIn = officialAuthBootstrapped
+    && officialAuthStatus !== 'anonymous'
+    && officialAuthStatus !== 'reauthRequired'
+    && officialAuthStatus !== 'restoring'
+    && Boolean(officialAuthState?.loggedIn);
+  const officialAuthNeedsLogin = officialAuthBootstrapped
+    && !officialAuthPending
+    && !officialAuthLoggedIn;
+  const llmReadinessPending = officialAuthLoggedIn && !llmReadinessBootstrapped;
 
   const openAppOnboarding = useCallback(() => {
     setAppOnboardingOpen(true);
@@ -378,7 +389,25 @@ function App() {
     }
   }, []);
 
-  if (authOrLlmPending) {
+  if (officialAuthPending) {
+    return (
+      <>
+        <OfficialLoginGate mode="checking" />
+        <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+      </>
+    );
+  }
+
+  if (officialAuthNeedsLogin) {
+    return (
+      <>
+        <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />
+        <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+      </>
+    );
+  }
+
+  if (llmReadinessPending) {
     return (
       <>
         <OfficialLoginGate mode="checking" />

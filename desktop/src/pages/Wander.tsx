@@ -125,6 +125,8 @@ interface WanderHistoryRecord {
   result: string | WanderResult | Record<string, unknown> | unknown;
   created_at?: number;
   createdAt?: number;
+  status?: string | null;
+  abandonedAt?: number | null;
 }
 
 interface WanderProgressCard {
@@ -143,18 +145,27 @@ interface WanderProps {
   onNavigateToRedClaw?: (payload: PendingChatMessage) => void;
 }
 
+type WanderSelectionMode = 'random' | 'manual' | 'comments';
+type WanderLaunchMode = 'random' | 'comments';
+
 export function Wander({ isActive = true, onExecutionStateChange, onTitleBarContentChange, onNavigateToRedClaw }: WanderProps) {
   const [items, setItems] = useState<WanderItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
-  const [selectionMode, setSelectionMode] = useState<'random' | 'manual'>('random');
+  const [selectionMode, setSelectionMode] = useState<WanderSelectionMode>('random');
+  const [activeSourceMode, setActiveSourceMode] = useState<WanderSelectionMode>('random');
+  const [pendingStartMode, setPendingStartMode] = useState<WanderLaunchMode | null>(null);
   const [guidedSourceMode, setGuidedSourceMode] = useState<'topic' | 'anchor'>('topic');
   const [guidedTopic, setGuidedTopic] = useState('');
   const [anchorQuery, setAnchorQuery] = useState('');
   const [anchorResults, setAnchorResults] = useState<WanderItem[]>([]);
   const [selectedAnchor, setSelectedAnchor] = useState<WanderItem | null>(null);
   const [anchorLoading, setAnchorLoading] = useState(false);
+  const [commentCandidateQuery, setCommentCandidateQuery] = useState('');
+  const [commentCandidates, setCommentCandidates] = useState<WanderItem[]>([]);
+  const [selectedCommentItem, setSelectedCommentItem] = useState<WanderItem | null>(null);
+  const [commentCandidatesLoading, setCommentCandidatesLoading] = useState(false);
   const [guidedWarning, setGuidedWarning] = useState<string | null>(null);
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
@@ -517,6 +528,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       || '未命名选题';
   }
 
+  function isAbandonedHistoryRecord(record: WanderHistoryRecord): boolean {
+    return String(record.status || '').trim() === 'abandoned' || Boolean(record.abandonedAt);
+  }
+
   const resolveWanderMaterialRef = (item: WanderItem): WanderMaterialRef | null => {
     const meta = (item.meta || {}) as Record<string, unknown>;
     const materialRef = meta.materialRef;
@@ -716,11 +731,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     });
 
     const content = [
-      '请基于以下“漫步选题”创作一篇完整的小红书文案。',
+      '请基于以下“选题中心结果”创作一篇完整的小红书文案。',
       '',
       '核心目标是写出一篇好文章，不是证明三条素材都被使用了。',
-      '漫步素材只是灵感池：优先继承高互动母版的表达公式；另外素材只在能提高成稿质量时借一个细节、场景、反差或词感。可以完全舍弃无助于成稿的素材。',
-      '不要把三篇内容强行关联成一个大主题；如果漫步选题仍然偏大，请继续缩小到一个具体人群、具体状态、具体动作或具体瞬间再写。',
+      '选题中心素材只是灵感池：优先继承高互动母版的表达公式；另外素材只在能提高成稿质量时借一个细节、场景、反差或词感。可以完全舍弃无助于成稿的素材。',
+      '不要把三篇内容强行关联成一个大主题；如果选题中心结果仍然偏大，请继续缩小到一个具体人群、具体状态、具体动作或具体瞬间再写。',
       '可按需读取下方素材目录或用户档案；素材目录不是正文文件，如需读取，请优先 Read “建议读取”里的具体文件，或先 List 目录再 Read 具体文件。',
       '本任务必须按两个连续阶段完成，不能跳过，也不能把前一阶段的技能输出当成后一阶段的完整上下文。',
       '阶段一：标题。先确保 `xhs-title` 已激活；如果上下文里没有该技能规则，只调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "xhs-title" })`。用它为当前选题生成 3 个候选标题，并基于点击欲望、准确性和不模板化程度选出 1 个最终标题。候选标题和分析只是内部中间产物，不要写入稿件或最终回复。',
@@ -732,7 +747,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       `标题：${activeTopic.title}`,
       `内容方向：${activeDirection || ''}`,
       '',
-      '## 参考素材（来自漫步）',
+      '## 参考素材（来自选题中心）',
       materialText,
       '',
       '## 输出要求',
@@ -744,7 +759,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
 
     onNavigateToRedClaw({
       content,
-      displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
+      displayContent: `基于选题中心灵感开始创作：${parsedResult.topic.title}`,
       sessionRouting: 'new',
       taskHints: {
         intent: 'manuscript_creation',
@@ -770,7 +785,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       },
       attachment: {
         type: 'wander-references',
-        title: '漫步参考素材',
+        title: '选题中心参考素材',
         items: referenceCards,
       },
       knowledgeReferences,
@@ -825,6 +840,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       setSelectedOptionIndex(0);
       setItems([]);
       setCurrentHistoryId(null);
+      setPendingStartMode(null);
       activeRequestIdRef.current = '';
     }
   };
@@ -845,7 +861,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   const loadHistoryList = useCallback(async () => {
     try {
       const list = await window.ipcRenderer.wander.listHistory() as WanderHistoryRecord[];
-      const normalized = Array.isArray(list) ? list : [];
+      const normalized = (Array.isArray(list) ? list : []).filter(record => !isAbandonedHistoryRecord(record));
       setHistoryList(normalized);
       return normalized;
     } catch (error) {
@@ -862,11 +878,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       if (!parsedRes) {
         setParsedResult(null);
         setParseError('历史结果解析失败');
-        setPhase('done');
-        setShowFinal(true);
-        setCurrentHistoryId(record.id);
-        setShowHistory(false);
-        return;
+      setPhase('done');
+      setShowFinal(true);
+      setCurrentHistoryId(record.id);
+      setPendingStartMode(null);
+      setShowHistory(false);
+      return;
       }
       setItems(parsedItems);
       setParsedResult(parsedRes);
@@ -876,6 +893,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       setPhase('done');
       setShowFinal(true);
       setCurrentHistoryId(record.id);
+      setPendingStartMode(null);
       setShowHistory(false);
     } catch (e) {
       console.error('Failed to parse history:', e);
@@ -897,7 +915,43 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         setParsedResult(null);
         setItems([]);
         setCurrentHistoryId(null);
+        setPendingStartMode(null);
       }
+    }
+  };
+
+  const clearTopicDetail = () => {
+    setPhase('idle');
+    setShowFinal(false);
+    setParsedResult(null);
+    setItems([]);
+    setCurrentHistoryId(null);
+    setSelectedOptionIndex(0);
+    setPendingStartMode(null);
+  };
+
+  const abandonSelectedTopic = async () => {
+    if (!selectedTopic || loading) return;
+    const targetId = selectedTopic.id;
+    const isPersistedTopic = targetId !== 'current-topic';
+
+    try {
+      let nextList = historyList.filter(record => record.id !== targetId);
+      if (isPersistedTopic) {
+        await window.ipcRenderer.wander.abandonHistory(targetId);
+        nextList = await loadHistoryList();
+      } else {
+        setHistoryList(nextList);
+      }
+
+      if (nextList.length > 0) {
+        loadHistory(nextList[0]);
+      } else {
+        clearTopicDetail();
+      }
+    } catch (error) {
+      console.error('Failed to abandon wander topic:', error);
+      setParseError('放弃失败，请稍后重试');
     }
   };
 
@@ -931,6 +985,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       setParseError(null);
       setItems([]);
       setCurrentHistoryId(null);
+      setPendingStartMode(null);
     }
   }, [currentHistoryId, items.length, loadHistoryList, loading, parsedResult, phase, showFinal, syncWanderSettings]);
 
@@ -988,6 +1043,35 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   }, [anchorQuery, guidedSourceMode, isActive, selectionMode]);
 
   useEffect(() => {
+    if (!isActive || pendingStartMode !== 'comments') return;
+    let cancelled = false;
+    setCommentCandidatesLoading(true);
+    window.ipcRenderer.wander.listCommentCandidates<WanderItem[]>()
+      .then((items) => {
+        if (cancelled) return;
+        const nextItems = Array.isArray(items) ? items : [];
+        setCommentCandidates(nextItems);
+        setSelectedCommentItem((current) => {
+          if (!current) return null;
+          return nextItems.some((item) => item.id === current.id) ? current : null;
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error('Failed to load wander comment candidates:', error);
+        setCommentCandidates([]);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCommentCandidatesLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, pendingStartMode]);
+
+  useEffect(() => {
     const handleWanderProgress = (_event: unknown, payload?: unknown) => {
       const data = (payload || {}) as Record<string, unknown>;
       const requestId = String(data.requestId || '').trim();
@@ -1037,21 +1121,28 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       const historyId = String(data.historyId || '').trim();
       const normalizedResult = normalizeWanderResultPayload(resultText);
       const normalizedIssues = normalizeWanderValidationIssues(data.validationIssues);
+      const resultItems = Array.isArray(data.items) ? data.items as WanderItem[] : null;
       if (error) {
         setParsedResult(normalizedResult);
         setParseError(error);
         setValidationIssues(normalizedIssues);
+        if (resultItems) {
+          setItems(resultItems);
+          activeItemsRef.current = resultItems;
+        }
         if (normalizedResult) {
           setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
         }
-        setLiveStatus(toStableTwoLineText('漫步失败'));
+        setLiveStatus(toStableTwoLineText('选题失败'));
       } else {
         if (normalizedResult) {
+          const nextItems = resultItems || activeItemsRef.current;
           setParsedResult(normalizedResult);
           setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
           setValidationIssues([]);
-          setItems(activeItemsRef.current);
-          setLiveStatus(toStableTwoLineText('漫步完成'));
+          setItems(nextItems);
+          activeItemsRef.current = nextItems;
+          setLiveStatus(toStableTwoLineText('选题完成'));
           if (historyId) {
             setCurrentHistoryId(historyId);
             void loadHistoryList();
@@ -1074,12 +1165,21 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     };
   }, [loadHistoryList]);
 
-  const startWander = async () => {
+  const startWander = async (modeOverride?: WanderSelectionMode) => {
+    const effectiveSelectionMode = modeOverride || selectionMode;
     const requestId = `wander-ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     activeRequestIdRef.current = requestId;
+    setActiveSourceMode(effectiveSelectionMode);
+    setPendingStartMode(null);
     setPhase('running');
     setLoading(true);
-    setLiveStatus(toStableTwoLineText(selectionMode === 'manual' ? '正在按方向选择素材...' : '正在初始化漫步...'));
+    setLiveStatus(toStableTwoLineText(
+      effectiveSelectionMode === 'manual'
+        ? '正在按方向选择素材...'
+        : effectiveSelectionMode === 'comments'
+          ? '正在选择评论素材...'
+          : '正在初始化选题...'
+    ));
     setProgressCards([]);
     setParsedResult(null);
     setSelectedOptionIndex(0);
@@ -1094,7 +1194,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         window.requestAnimationFrame(() => resolve());
       });
       let nextItems: WanderItem[] = [];
-      if (selectionMode === 'manual') {
+      if (effectiveSelectionMode === 'manual') {
         if (!hasGuidedInput) {
           setParseError(guidedSourceMode === 'topic' ? '请先输入主题。' : '请先选择一篇锚点笔记。');
           setPhase('done');
@@ -1123,15 +1223,17 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
           activeRequestIdRef.current = '';
           return;
         }
+      } else if (effectiveSelectionMode === 'comments') {
+        nextItems = selectedCommentItem ? [selectedCommentItem] : [];
       } else {
         nextItems = await window.ipcRenderer.wander.getRandom() as WanderItem[];
       }
       setItems(nextItems);
       activeItemsRef.current = nextItems;
-      if (nextItems.length === 0) {
-        setParseError(selectionMode === 'manual'
+      if (nextItems.length === 0 && effectiveSelectionMode !== 'comments') {
+        setParseError(effectiveSelectionMode === 'manual'
           ? '没有找到和当前方向相关的素材，请换一个主题或选择一篇锚点笔记。'
-          : '可用于漫步的素材不足 3 条，请先采集更多内容。');
+          : '可用于选题的素材不足 3 条，请先采集更多内容。');
         setPhase('done');
         setShowFinal(true);
         setLoading(false);
@@ -1142,16 +1244,20 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       window.ipcRenderer.wander.brainstorm({
         items: nextItems,
         options: {
-          multiChoice: multiChoiceEnabled,
+          multiChoice: effectiveSelectionMode === 'comments' ? false : multiChoiceEnabled,
           requestId,
-          sourceMode: selectionMode === 'manual' ? 'guided' : 'random',
+          sourceMode: effectiveSelectionMode === 'manual'
+            ? 'guided'
+            : effectiveSelectionMode === 'comments'
+              ? 'comments'
+              : 'random',
         },
       });
     } catch (error) {
       console.error('Brainstorm failed:', error);
       setParsedResult(null);
       setParseError('调用失败，请稍后重试');
-      setLiveStatus(toStableTwoLineText('漫步失败'));
+      setLiveStatus(toStableTwoLineText('选题失败'));
       setPhase('done');
       setShowFinal(true);
     } finally {
@@ -1174,67 +1280,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
   };
 
-  const titleBarContent = useMemo(() => (
-    <div className="flex w-full min-w-0 items-center justify-end gap-2 pr-2" data-no-window-drag>
-      {phase !== 'idle' && (
-        <>
-          <button
-            type="button"
-            onClick={() => { void loadHistoryList(); setShowHistory(true); }}
-            className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-          >
-            <History className="h-3.5 w-3.5" />
-            历史
-          </button>
-          <button
-            type="button"
-            onClick={startWander}
-            disabled={loading}
-            className="flex h-7 items-center gap-1.5 rounded-lg bg-surface-secondary px-2.5 text-[11px] font-bold text-text-primary transition-colors hover:bg-surface-tertiary disabled:opacity-40"
-          >
-            <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
-            再次漫步
-          </button>
-        </>
-      )}
-      <div className="flex h-7 items-center rounded-lg bg-surface-secondary p-0.5">
-        {[
-          ['random', '随机'] as const,
-          ['manual', '手工'] as const,
-        ].map(([mode, label]) => (
-          <button
-            key={mode}
-            type="button"
-            onClick={() => handleSelectionModeChange(mode)}
-            disabled={loading}
-            className={clsx(
-              'h-6 rounded-md px-2.5 text-[11px] font-black transition-all disabled:opacity-50',
-              selectionMode === mode
-                ? 'bg-surface-primary text-text-primary shadow-sm'
-                : 'text-text-tertiary hover:text-text-primary'
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="flex items-center gap-2">
-        <div className="text-[11px] font-bold text-text-tertiary/70">
-          多选题
-        </div>
-        <button
-          type="button"
-          onClick={() => void handleToggleMultiChoice()}
-          disabled={isSavingMode || loading}
-          className="ui-switch-track shrink-0 disabled:opacity-50"
-          data-size="sm"
-          data-state={multiChoiceEnabled ? 'on' : 'off'}
-        >
-          <div className="ui-switch-thumb" />
-        </button>
-      </div>
-    </div>
-  ), [handleSelectionModeChange, handleToggleMultiChoice, isSavingMode, loadHistoryList, loading, multiChoiceEnabled, phase, selectionMode, startWander]);
+  const titleBarContent = null;
 
   useEffect(() => {
     if (!onTitleBarContentChange) return;
@@ -1243,6 +1289,547 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       onTitleBarContentChange(null);
     };
   }, [isActive, onTitleBarContentChange, titleBarContent]);
+
+  const topicRows = useMemo(() => {
+    const hasPersistedCurrent = Boolean(
+      currentHistoryId && historyList.some(record => record.id === currentHistoryId && !isAbandonedHistoryRecord(record))
+    );
+    const generated = parsedResult && !hasPersistedCurrent
+      ? [{
+          id: currentHistoryId || 'current-topic',
+          title: activeOption?.topic.title || parsedResult.topic.title || '未命名选题',
+          direction: activeOption?.content_direction || parsedResult.content_direction || '',
+          createdAt: Date.now(),
+          source: activeSourceMode === 'comments' ? '评论洞察' : '灵感漫步',
+          score: validationIssues.length > 0 || parseError ? 62 : 86,
+          status: loading ? '生成中' : '待处理',
+          evidenceCount: items.length,
+          record: null as WanderHistoryRecord | null,
+        }]
+      : [];
+    const historyRows = historyList.filter(record => !isAbandonedHistoryRecord(record)).map((record, index) => {
+      const parsed = normalizeWanderResultPayload(record.result);
+      const optionIndex = resolveSelectedOptionIndex(parsed);
+      const selected = parsed?.options?.[optionIndex];
+      const recordItems = normalizeWanderItemsPayload(record.items);
+      const isCommentInsight = recordItems.some((item) => {
+        const meta = item.meta || {};
+        return String(meta.sourceType || '').trim() === 'xhs-comments';
+      });
+      return {
+        id: record.id,
+        title: selected?.topic.title || parsed?.topic.title || getHistoryTitle(record),
+        direction: selected?.content_direction || parsed?.content_direction || '',
+        createdAt: getHistoryCreatedAt(record),
+        source: isCommentInsight ? '评论洞察' : '灵感漫步',
+        score: Math.max(68, 91 - index * 3),
+        status: currentHistoryId === record.id ? '当前' : '待处理',
+        evidenceCount: recordItems.length || 3,
+        record,
+      };
+    });
+    const seen = new Set<string>();
+    return [...historyRows, ...generated]
+      .filter((row) => {
+        if (seen.has(row.id)) return false;
+        seen.add(row.id);
+        return true;
+      })
+      .sort((left, right) => right.createdAt - left.createdAt);
+  }, [activeOption?.content_direction, activeOption?.topic.title, activeSourceMode, currentHistoryId, historyList, items.length, loading, parseError, parsedResult, validationIssues.length]);
+
+  const isGeneratingTopic = loading || phase === 'running';
+  const selectedTopic = isGeneratingTopic
+    ? null
+    : currentHistoryId
+      ? topicRows.find((row) => row.id === currentHistoryId) || topicRows[0] || null
+      : topicRows.find((row) => row.id === 'current-topic') || topicRows[0] || null;
+
+  const selectedDetailResult = isGeneratingTopic
+    ? null
+    : parsedResult
+    || (selectedTopic?.record ? normalizeWanderResultPayload(selectedTopic.record.result) : null);
+  const selectedDetailOption = selectedDetailResult?.options?.[resolveSelectedOptionIndex(selectedDetailResult)];
+  const selectedDetailFrame = selectedDetailOption?.direction_frame || selectedDetailResult?.direction_frame;
+  const selectedDetailItems = isGeneratingTopic
+    ? []
+    : selectedTopic?.record
+    ? normalizeWanderItemsPayload(selectedTopic.record.items)
+    : items;
+  const filteredCommentCandidates = useMemo(() => {
+    const query = commentCandidateQuery.trim().toLowerCase();
+    if (!query) return commentCandidates;
+    return commentCandidates.filter((item) => {
+      const fields = [
+        item.title,
+        item.content,
+        String(item.meta?.sourceName || ''),
+      ];
+      return fields.some((field) => field.toLowerCase().includes(query));
+    });
+  }, [commentCandidateQuery, commentCandidates]);
+
+  const sourceActions = [
+    {
+      id: 'wander',
+      title: '灵感漫步',
+      mode: 'random' as const,
+      onClick: () => {
+        if (loading) return;
+        setSelectionMode('random');
+        setPendingStartMode('random');
+        setParseError(null);
+        setValidationIssues([]);
+        setGuidedWarning(null);
+      },
+    },
+    {
+      id: 'comments',
+      title: '评论区洞察',
+      mode: 'comments' as const,
+      onClick: () => {
+        if (loading) return;
+        setSelectionMode('comments');
+        setPendingStartMode('comments');
+        setParseError(null);
+        setValidationIssues([]);
+        setGuidedWarning(null);
+      },
+    },
+  ];
+
+  const renderTopicDetail = () => {
+    if (isGeneratingTopic) {
+      const loadingTitle = activeSourceMode === 'comments' ? '评论区洞察中' : '灵感漫步中';
+      return (
+        <aside className="flex min-h-0 flex-1 flex-col bg-surface-primary">
+          <div className="relative flex min-h-[250px] items-center justify-center border-b border-border px-8 py-16">
+            <div className="flex flex-col items-center text-center">
+              <WanderLoadingDice size={96} />
+              <div className="mt-2 text-[11px] font-semibold text-accent-primary">正在生成选题</div>
+              <h3 className="mt-3 text-[30px] font-extrabold leading-tight tracking-normal text-text-primary">
+                {loadingTitle}
+              </h3>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 custom-scrollbar">
+            <div className="mx-auto max-w-3xl rounded-lg border border-accent-primary/20 bg-accent-primary/5 p-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-accent-primary">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                {liveStatus || '正在准备素材...'}
+              </div>
+              {progressCards.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {progressCards.slice(0, 4).map((card) => (
+                    <div key={card.phase} className="flex items-center justify-between gap-3 rounded-md bg-surface-primary px-3 py-2 text-xs">
+                      <span className="truncate font-medium text-text-secondary">{card.title}</span>
+                      <span className="shrink-0 text-text-tertiary">{card.status === 'completed' ? '完成' : '进行中'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="mt-5 space-y-3">
+                <div className="h-3 w-2/3 rounded-full bg-border/70" />
+                <div className="h-3 w-full rounded-full bg-border/60" />
+                <div className="h-3 w-5/6 rounded-full bg-border/50" />
+              </div>
+            </div>
+          </div>
+        </aside>
+      );
+    }
+
+    if (pendingStartMode) {
+      const isCommentMode = pendingStartMode === 'comments';
+      const StartIcon = isCommentMode ? MessageSquarePlus : Dices;
+      const title = isCommentMode ? '评论区洞察' : '灵感漫步';
+      const actionLabel = isCommentMode ? '开始评论区洞察' : '开始漫步';
+
+      return (
+        <aside className="flex min-h-0 flex-1 flex-col bg-surface-primary">
+          <div className="flex min-h-0 flex-1 items-center justify-center px-8 py-10">
+            <div className="flex w-full max-w-xl flex-col items-center text-center">
+              {isCommentMode && (
+                <div className="mb-8 w-full rounded-lg border border-border bg-surface-secondary/40 p-3 text-left">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+                    <input
+                      value={commentCandidateQuery}
+                      onChange={(event) => setCommentCandidateQuery(event.target.value)}
+                      placeholder="搜索评论笔记"
+                      className="h-9 w-full rounded-md border border-border bg-surface-primary pl-9 pr-3 text-sm text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent-primary"
+                    />
+                  </div>
+                  <div className="mt-3 max-h-52 space-y-1 overflow-y-auto custom-scrollbar">
+                    {commentCandidatesLoading ? (
+                      <div className="rounded-md px-3 py-6 text-center text-xs text-text-tertiary">加载中</div>
+                    ) : filteredCommentCandidates.length === 0 ? (
+                      <div className="rounded-md px-3 py-6 text-center text-xs text-text-tertiary">暂无评论笔记</div>
+                    ) : (
+                      filteredCommentCandidates.slice(0, 5).map((item) => {
+                        const selected = selectedCommentItem?.id === item.id;
+                        const commentCount = Number(item.meta?.commentCount || 0);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setSelectedCommentItem(selected ? null : item)}
+                            className={clsx(
+                              'flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors',
+                              selected
+                                ? 'border-accent-primary/40 bg-accent-primary/10'
+                                : 'border-transparent hover:border-border hover:bg-surface-primary'
+                            )}
+                          >
+                            <div className={clsx(
+                              'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                              selected ? 'bg-accent-primary text-white' : 'bg-surface-tertiary text-text-secondary'
+                            )}>
+                              {selected ? <Check className="h-3.5 w-3.5" /> : <MessageSquarePlus className="h-3.5 w-3.5" />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-xs font-semibold text-text-primary">{item.title || '未命名笔记'}</div>
+                              <div className="mt-0.5 truncate text-[11px] text-text-tertiary">
+                                {commentCount > 0 ? `${commentCount} 条评论` : '评论素材'}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-primary/10 text-accent-primary">
+                <StartIcon className="h-7 w-7" />
+              </div>
+              <h3 className="mt-5 text-[30px] font-extrabold leading-tight tracking-normal text-text-primary">
+                {title}
+              </h3>
+              <button
+                type="button"
+                onClick={() => void startWander(pendingStartMode)}
+                disabled={loading}
+                className="mt-8 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+              >
+                <StartIcon className="h-4 w-4" />
+                {actionLabel}
+              </button>
+            </div>
+          </div>
+        </aside>
+      );
+    }
+
+    return (
+      <aside className="flex min-h-0 flex-1 flex-col bg-surface-primary">
+      <div className="relative flex min-h-[250px] items-center border-b border-border px-8 py-16">
+        <button
+          type="button"
+          onClick={abandonSelectedTopic}
+          disabled={!selectedTopic || loading}
+          className="absolute left-5 top-6 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface-primary px-3 text-xs font-semibold text-text-secondary transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-default disabled:opacity-40"
+        >
+          <X className="h-3.5 w-3.5" />
+          放弃
+        </button>
+        <div className="mx-auto max-w-3xl text-center">
+          <div className="text-[11px] font-semibold text-accent-primary">选题详情</div>
+          <h3 className="mt-3 text-[30px] font-extrabold leading-tight tracking-normal text-text-primary">
+            {selectedTopic?.title || '暂无选题'}
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={startCreateInRedClaw}
+          disabled={!canStartCreate}
+          className="absolute right-5 top-6 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-accent-primary px-3 text-xs font-semibold text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+        >
+          <MessageSquarePlus className="h-3.5 w-3.5" />
+          AI创作
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4 custom-scrollbar">
+        {loading && (
+          <div className="rounded-lg border border-accent-primary/20 bg-accent-primary/5 p-3">
+            <div className="flex items-center gap-2 text-xs font-semibold text-accent-primary">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              正在生成选题
+            </div>
+            <div className="mt-2 text-xs leading-relaxed text-text-secondary">{liveStatus || '正在准备素材...'}</div>
+            {progressCards.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                {progressCards.slice(0, 4).map((card) => (
+                  <div key={card.phase} className="flex items-center justify-between gap-2 rounded-md bg-surface-primary px-2 py-1.5 text-[11px]">
+                    <span className="truncate text-text-secondary">{card.title}</span>
+                    <span className="shrink-0 text-text-tertiary">{card.status === 'completed' ? '完成' : '进行中'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {parseError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-600">
+            {parseError}
+          </div>
+        )}
+
+        <section>
+          <div className="mb-2 text-[11px] font-semibold text-text-tertiary">内容方向</div>
+          <p className="text-[15px] leading-relaxed text-text-secondary">
+            {selectedDetailOption?.content_direction || selectedDetailResult?.content_direction || '选择或生成一个选题后，这里会显示内容方向。'}
+          </p>
+        </section>
+
+        <section className="grid grid-cols-2 gap-x-8 gap-y-3">
+          {[
+            ['热度', selectedTopic?.score || 0],
+            ['新鲜度', selectedTopic ? Math.min(96, selectedTopic.score + 5) : 0],
+            ['可写性', selectedTopic ? Math.max(65, selectedTopic.score - 4) : 0],
+            ['匹配度', selectedTopic ? Math.max(60, selectedTopic.score - 8) : 0],
+          ].map(([label, score]) => (
+            <div key={label} className="min-w-0">
+              <div className="text-[10px] font-semibold text-text-tertiary">{label}</div>
+              <div className="mt-1 flex items-center gap-2">
+                <div className="h-1 flex-1 overflow-hidden rounded-full bg-border">
+                  <div className="h-full rounded-full bg-accent-primary" style={{ width: `${Number(score)}%` }} />
+                </div>
+                <span className="w-6 text-right text-[11px] font-semibold text-text-primary">{score}</span>
+              </div>
+            </div>
+          ))}
+        </section>
+
+        {selectedDetailFrame && (
+          <section className="grid grid-cols-2 gap-x-8 gap-y-3">
+            {[
+              ['目标读者', selectedDetailFrame.target_reader],
+              ['核心矛盾', selectedDetailFrame.core_tension],
+              ['叙事角度', selectedDetailFrame.angle],
+              ['素材切口', selectedDetailFrame.material_entry],
+            ].map(([label, value]) => (
+              <div key={label} className="min-w-0">
+                <div className="text-[10px] font-semibold text-text-tertiary">{label}</div>
+                <div className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-text-primary">{value || '待补充'}</div>
+              </div>
+            ))}
+          </section>
+        )}
+
+        <section>
+          <div className="mb-2 text-[11px] font-semibold text-text-tertiary">证据素材</div>
+          <div className="grid grid-cols-3 gap-2">
+            {selectedDetailItems.slice(0, 4).map((item) => (
+              <div key={item.id} className="min-w-0 overflow-hidden rounded-md border border-border bg-surface-primary shadow-sm">
+                <div className="relative aspect-[4/5] w-full overflow-hidden bg-surface-secondary">
+                  {item.cover ? (
+                    <img
+                      src={resolveAssetUrl(item.cover)}
+                      alt={item.title}
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                      {item.type === 'video' ? <Play className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 px-2.5 py-2">
+                  <div className="line-clamp-1 text-[11px] font-semibold text-text-primary">{item.title}</div>
+                  <div className="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-text-tertiary">{item.content || '暂无摘要'}</div>
+                </div>
+              </div>
+            ))}
+            {selectedDetailItems.length === 0 && (
+              <div className="col-span-3 rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-text-tertiary">
+                暂无素材
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </aside>
+    );
+  };
+
+  const renderTopicList = () => (
+    <div className="flex min-h-0 w-[430px] shrink-0 flex-col border-r border-border">
+      <div className="border-b border-border bg-surface-primary px-5 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-text-primary">选题池</h2>
+            <div className="mt-1 text-xs text-text-tertiary">统一管理灵感漫步和评论洞察生成的选题</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 border-b border-border bg-surface-primary px-5 py-3">
+        {sourceActions.map((action) => {
+          const isPrimary = action.id === 'wander';
+          const isPending = pendingStartMode === action.mode;
+          const ActionIcon = isPrimary ? Sparkles : MessageSquarePlus;
+
+          return (
+            <button
+              key={action.id}
+              type="button"
+              onClick={action.onClick}
+              disabled={loading}
+              className={clsx(
+                'group flex h-14 min-w-0 items-center justify-between gap-3 rounded-xl border px-4 text-left shadow-sm transition-all active:scale-[0.99] disabled:cursor-default',
+                isPending
+                  ? 'border-accent-primary/36 bg-accent-primary/12 text-accent-primary shadow-[0_12px_28px_-22px_rgb(var(--color-accent-primary)/0.75)]'
+                  : isPrimary
+                  ? 'border-accent-primary/24 bg-accent-primary/10 text-accent-primary shadow-[0_12px_28px_-22px_rgb(var(--color-accent-primary)/0.75)] hover:border-accent-primary/36 hover:bg-accent-primary/14 disabled:bg-accent-primary/5'
+                  : 'border-border bg-surface-secondary/70 text-text-primary hover:border-accent-primary/24 hover:bg-surface-tertiary'
+              )}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className={clsx(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                    isPending || isPrimary ? 'bg-accent-primary/14 text-accent-primary' : 'bg-surface-tertiary text-text-secondary'
+                  )}
+                >
+                  <ActionIcon className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <span className="truncate text-sm font-extrabold">{action.title}</span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto bg-surface-secondary/25 custom-scrollbar">
+        {topicRows.length === 0 ? (
+          <div className="flex h-full min-h-[360px] flex-col items-center justify-center px-8 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div className="mt-4 text-sm font-semibold text-text-primary">暂无选题</div>
+            <div className="mt-1 max-w-sm text-xs leading-relaxed text-text-tertiary">点击上方“灵感漫步”生成第一组选题，后续评论洞察也会汇入这里。</div>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {topicRows.map((row) => {
+              const selected = selectedTopic?.id === row.id;
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => {
+                    if (row.record) {
+                      loadHistory(row.record);
+                    }
+                  }}
+                  className={clsx(
+                    'relative w-full px-5 py-3 text-left transition-colors',
+                    selected
+                      ? 'bg-accent-primary/12 shadow-[inset_0_0_0_1px_rgba(167,116,73,0.18)]'
+                      : 'bg-surface-primary hover:bg-surface-secondary/55'
+                  )}
+                >
+                  {selected && (
+                    <span className="absolute bottom-2 left-0 top-2 w-1 rounded-r-full bg-accent-primary" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={clsx(
+                        'truncate text-sm font-semibold',
+                        selected ? 'text-accent-primary' : 'text-text-primary'
+                      )}>{row.title}</span>
+                      {selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent-primary" />}
+                    </div>
+                    <div className={clsx(
+                      'mt-1 line-clamp-1 text-xs',
+                      selected ? 'text-text-secondary' : 'text-text-tertiary'
+                    )}>{row.direction || '暂无方向摘要'}</div>
+                  </div>
+                  <div className="mt-2 flex min-w-0 items-center gap-2 text-xs">
+                    <span className={clsx(
+                      'rounded-md px-2 py-1 text-[11px] font-semibold',
+                      selected ? 'bg-accent-primary text-white' : 'bg-accent-primary/10 text-accent-primary'
+                    )}>{row.source}</span>
+                    <span className={clsx('shrink-0', selected ? 'font-semibold text-accent-primary' : 'text-text-secondary')}>{row.status}</span>
+                    <span className="text-text-tertiary">{formatDate(row.createdAt)}</span>
+                    <div className="ml-auto flex w-20 items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border">
+                        <div className={clsx('h-full rounded-full', selected ? 'bg-accent-primary' : 'bg-accent-primary/80')} style={{ width: `${row.score}%` }} />
+                      </div>
+                      <span className={clsx('w-6 text-right text-[11px] font-semibold', selected ? 'text-accent-primary' : 'text-text-secondary')}>{row.score}</span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-surface-primary">
+      <div className="flex min-h-0 flex-1">
+        {renderTopicList()}
+        {renderTopicDetail()}
+      </div>
+
+      {showHistory && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-6 py-6" onClick={() => setShowHistory(false)}>
+          <div className="flex max-h-[75vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-border bg-surface-primary shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <div>
+                <h3 className="text-base font-semibold text-text-primary">选题历史</h3>
+                <p className="mt-0.5 text-xs text-text-tertiary">本地保存的灵感漫步记录</p>
+              </div>
+              <button type="button" onClick={() => setShowHistory(false)} className="flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2 custom-scrollbar">
+              {historyList.length === 0 ? (
+                <div className="px-4 py-10 text-center text-xs text-text-tertiary">暂无选题历史记录</div>
+              ) : (
+                historyList.map(record => (
+                  <button
+                    key={record.id}
+                    type="button"
+                    onClick={() => loadHistory(record)}
+                    className="group flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left hover:bg-surface-secondary"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-text-primary">{getHistoryTitle(record)}</div>
+                      <div className="mt-0.5 text-xs text-text-tertiary">{formatDate(getHistoryCreatedAt(record))}</div>
+                    </div>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => deleteHistory(record.id, e as unknown as React.MouseEvent)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          void deleteHistory(record.id, event as unknown as React.MouseEvent);
+                        }
+                      }}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-tertiary opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   const renderSourceNode = (item: WanderItem | undefined, index: number, position: string) => {
     if (!item) {
@@ -1302,7 +1889,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                 </div>
 
                 <h2 className="text-2xl font-extrabold tracking-tight text-text-primary mb-4">
-                  {selectionMode === 'manual' ? '按方向漫步' : '开启一次随机漫步'}
+                  {selectionMode === 'manual' ? '按方向选题' : '开启一次随机选题'}
                 </h2>
                 {selectionMode === 'manual' ? (
                   <div className="w-full max-w-2xl mb-8 space-y-4 text-left">
@@ -1428,12 +2015,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                 )}
 
                 <button
-                    onClick={startWander}
+                    onClick={() => { void startWander(); }}
                     disabled={selectionMode === 'manual' && !hasGuidedInput}
                     className="group px-8 py-3 bg-text-primary hover:bg-text-primary/90 text-white rounded-[20px] text-[15px] font-extrabold transition-all flex items-center gap-3 shadow-[0_20px_40px_-10px_rgba(0,0,0,0.2)] active:scale-95 disabled:opacity-40"
                 >
                     <Sparkles className="w-5 h-5 text-accent-primary group-hover:animate-pulse" />
-                    <span>{selectionMode === 'manual' ? '按方向漫步' : '开始灵感碰撞'}</span>
+                    <span>{selectionMode === 'manual' ? '按方向选题' : '开始灵感碰撞'}</span>
                 </button>
             </div>
         </div>
@@ -1858,7 +2445,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                     <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-black/[0.02] text-text-tertiary/20 mx-auto mb-4">
                         <History className="w-8 h-8" />
                     </div>
-                    <p className="text-[13px] font-bold text-text-tertiary/60">暂无漫步历史记录</p>
+                    <p className="text-[13px] font-bold text-text-tertiary/60">暂无选题历史记录</p>
                 </div>
               ) : (
                 historyList.map(record => {
