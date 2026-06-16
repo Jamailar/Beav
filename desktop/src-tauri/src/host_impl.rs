@@ -10,10 +10,10 @@ use crate::events::{
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_session_checkpoint, runtime_error_payload, runtime_warm_settings_fingerprint,
-    session_lineage_fields, InteractiveLoopGuard, InteractiveToolCall,
-    InteractiveToolOutcomeDigest, McpServerRecord, RedclawStateRecord, ResolvedChatConfig,
-    RuntimeWarmEntry, SessionToolResultRecord, SessionTranscriptRecord,
+    append_session_checkpoint, canonical_item_for_transcript_record, runtime_error_payload,
+    runtime_warm_settings_fingerprint, session_lineage_fields, InteractiveLoopGuard,
+    InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord, RedclawStateRecord,
+    ResolvedChatConfig, RuntimeWarmEntry, SessionToolResultRecord, SessionTranscriptRecord,
 };
 use crate::store::{settings as settings_store, subjects as subject_store};
 use crate::*;
@@ -740,7 +740,7 @@ pub(crate) fn ensure_video_thumbnail_for_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        append_generated_media_markdown, asset_preview_url_from_result,
+        append_generated_media_markdown, append_session_transcript, asset_preview_url_from_result,
         authoring_saved_final_summary, build_interactive_user_turn_messages,
         build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
         copy_file_into_dir, decode_command_json_stdout, guess_mime_and_kind,
@@ -763,6 +763,50 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::time::Instant;
+
+    #[test]
+    fn append_session_transcript_embeds_canonical_item_snapshot() {
+        let mut store = crate::AppStore::default();
+
+        append_session_transcript(
+            &mut store,
+            "session-live",
+            "message",
+            "user",
+            "hello".to_string(),
+            Some(json!({ "turnId": "turn-live" })),
+        );
+
+        let record = store.session_transcript_records.first().unwrap();
+        let canonical = record
+            .payload
+            .as_ref()
+            .and_then(|value| value.get("canonicalItem"))
+            .unwrap();
+
+        assert_eq!(
+            canonical.get("itemId").and_then(Value::as_str),
+            Some(record.id.as_str())
+        );
+        assert_eq!(
+            canonical.get("sessionId").and_then(Value::as_str),
+            Some("session-live")
+        );
+        assert_eq!(
+            canonical.get("turnId").and_then(Value::as_str),
+            Some("turn-live")
+        );
+        assert_eq!(
+            canonical.get("kind").and_then(Value::as_str),
+            Some("transcript_record")
+        );
+        assert!(canonical
+            .get("payload")
+            .and_then(|value| value.get("payload"))
+            .and_then(Value::as_object)
+            .map(|payload| !payload.contains_key("canonicalItem"))
+            .unwrap_or(false));
+    }
 
     #[test]
     fn guess_mime_and_kind_uses_svg_xml_mime() {
@@ -2195,17 +2239,31 @@ pub(crate) fn append_session_transcript(
     content: String,
     payload: Option<Value>,
 ) {
-    store
-        .session_transcript_records
-        .push(SessionTranscriptRecord {
-            id: make_id("transcript"),
-            session_id: session_id.to_string(),
-            record_type: record_type.to_string(),
-            role: role.to_string(),
-            content,
-            payload,
-            created_at: now_i64(),
-        });
+    let mut record = SessionTranscriptRecord {
+        id: make_id("transcript"),
+        session_id: session_id.to_string(),
+        record_type: record_type.to_string(),
+        role: role.to_string(),
+        content,
+        payload,
+        created_at: now_i64(),
+    };
+    let canonical_item = canonical_item_for_transcript_record(&record);
+    let canonical_value = serde_json::to_value(canonical_item).unwrap_or_else(|_| json!({}));
+    record.payload = Some(match record.payload.take() {
+        Some(Value::Object(mut object)) => {
+            object.insert("canonicalItem".to_string(), canonical_value);
+            Value::Object(object)
+        }
+        Some(value) => json!({
+            "value": value,
+            "canonicalItem": canonical_value,
+        }),
+        None => json!({
+            "canonicalItem": canonical_value,
+        }),
+    });
+    store.session_transcript_records.push(record);
 }
 
 pub(crate) fn append_debug_log(store: &mut AppStore, line: String) {

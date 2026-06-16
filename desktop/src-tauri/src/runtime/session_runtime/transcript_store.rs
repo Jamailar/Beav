@@ -28,7 +28,7 @@ pub(super) fn append_transcript_entry(
     writeln!(file, "{serialized}").map_err(|error| error.to_string())
 }
 
-pub(super) fn load_transcript_entries(
+pub(crate) fn load_transcript_entries(
     state: &State<'_, AppState>,
     session_id: &str,
 ) -> Result<Vec<SessionTranscriptFileEntry>, String> {

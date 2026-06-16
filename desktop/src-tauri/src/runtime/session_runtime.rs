@@ -28,6 +28,8 @@ mod bundle_store;
 mod checkpoint_events;
 #[path = "session_runtime/context.rs"]
 mod context;
+#[path = "session_runtime/export.rs"]
+mod export;
 #[path = "session_runtime/history.rs"]
 mod history;
 #[path = "session_runtime/query.rs"]
@@ -54,6 +56,11 @@ pub use context::{
     session_context_value_for_session, session_message_count_for_session,
     session_summary_text_for_session, update_session_context_record,
 };
+pub use export::{
+    apply_session_export_bundle_to_store, build_session_export_bundle,
+    canonical_item_for_transcript_record, persist_imported_session_export_files,
+    read_session_export_package, session_export_bundle_value, write_session_export_package,
+};
 pub use history::sanitize_runtime_history_messages;
 use history::{
     build_session_context_summary, estimate_tokens_from_chars,
@@ -76,8 +83,9 @@ pub use transcript_api::{
     remove_session_bundle, save_session_bundle_messages, transcript_resume_messages,
     transcript_session_meta_by_id, transcript_session_meta_value,
 };
+pub(crate) use transcript_store::load_transcript_entries;
 use transcript_store::{
-    append_transcript_entry, load_session_transcript_file_index, load_transcript_entries,
+    append_transcript_entry, load_session_transcript_file_index,
     persist_session_transcript_file_index, remove_session_transcript_meta,
     session_transcript_metadata_snapshot, session_transcript_path, update_session_transcript_index,
 };
@@ -625,6 +633,202 @@ mod tests {
                 .and_then(Value::as_str),
             Some("event-child")
         );
+    }
+
+    #[test]
+    fn session_export_bundle_includes_canonical_items_and_child_lineage() {
+        let mut store = crate::AppStore::default();
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "session-parent".to_string(),
+            title: "Parent".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "3".to_string(),
+            metadata: Some(json!({"contextType": "chat", "runtimeMode": "default"})),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
+        });
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "session-child".to_string(),
+            title: "Child".to_string(),
+            created_at: "2".to_string(),
+            updated_at: "4".to_string(),
+            metadata: Some(json!({
+                "contextType": "chat",
+                "parentSessionId": "session-parent"
+            })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
+        });
+        store.chat_messages.push(test_chat_message(
+            "session-parent",
+            "user",
+            "parent asks",
+            "10",
+        ));
+        store.chat_messages.push(crate::ChatMessageRecord {
+            id: "message-child".to_string(),
+            session_id: "session-child".to_string(),
+            role: "assistant".to_string(),
+            content: "child replies".to_string(),
+            display_content: None,
+            attachment: None,
+            metadata: Some(json!({ "turnId": "turn-child" })),
+            created_at: "11".to_string(),
+        });
+        store.session_checkpoints.push(SessionCheckpointRecord {
+            id: "checkpoint-1".to_string(),
+            session_id: "session-parent".to_string(),
+            checkpoint_type: "runtime.route".to_string(),
+            summary: "route".to_string(),
+            payload: Some(json!({ "turnId": "turn-parent" })),
+            created_at: 12,
+            ..SessionCheckpointRecord::default()
+        });
+        store.runtime_events.push(RuntimeEventRecord {
+            id: "event-child".to_string(),
+            category: "media_generation".to_string(),
+            event_type: "request.completed".to_string(),
+            session_id: Some("session-child".to_string()),
+            payload: Some(json!({ "turnId": "turn-child" })),
+            created_at: 13,
+            ..RuntimeEventRecord::default()
+        });
+
+        let bundle = build_session_export_bundle(
+            &store,
+            "session-parent",
+            true,
+            vec![SessionTranscriptFileEntry::Message {
+                entry_id: "entry-1".to_string(),
+                session_id: "session-parent".to_string(),
+                message: json!({
+                    "role": "user",
+                    "content": "file transcript",
+                    "turnId": "turn-parent"
+                }),
+                created_at: "14".to_string(),
+            }],
+            vec![json!({
+                "role": "assistant",
+                "content": "bundle snapshot"
+            })],
+        )
+        .unwrap();
+
+        assert_eq!(
+            bundle.manifest.child_session_ids,
+            vec!["session-child".to_string()]
+        );
+        assert_eq!(bundle.manifest.message_count, 2);
+        assert_eq!(bundle.manifest.checkpoint_count, 1);
+        assert_eq!(bundle.manifest.runtime_event_count, 1);
+        assert_eq!(bundle.manifest.transcript_file_entry_count, 1);
+        assert!(bundle
+            .manifest
+            .files
+            .iter()
+            .any(|item| item == "sessions.jsonl"));
+        assert_eq!(
+            bundle.manifest.item_count,
+            bundle.canonical_items.len() as i64
+        );
+
+        let kinds = bundle
+            .canonical_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect::<Vec<_>>();
+        assert!(kinds.contains(&"session_meta"));
+        assert!(kinds.contains(&"message"));
+        assert!(kinds.contains(&"checkpoint"));
+        assert!(kinds.contains(&"runtime_event"));
+        assert!(kinds.contains(&"transcript_file_entry"));
+        assert!(kinds.contains(&"bundle_message"));
+        assert!(bundle.canonical_items.iter().any(|item| {
+            item.item_id == "event-child" && item.turn_id.as_deref() == Some("turn-child")
+        }));
+    }
+
+    #[test]
+    fn session_export_bundle_import_restores_records_and_guards_overwrite() {
+        let mut source = crate::AppStore::default();
+        source.chat_sessions.push(ChatSessionRecord {
+            id: "session-restore".to_string(),
+            title: "Restore".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "2".to_string(),
+            metadata: Some(json!({"contextType": "chat"})),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
+        });
+        source.chat_messages.push(test_chat_message(
+            "session-restore",
+            "user",
+            "restore me",
+            "10",
+        ));
+        source
+            .session_transcript_records
+            .push(SessionTranscriptRecord {
+                id: "trace-restore".to_string(),
+                session_id: "session-restore".to_string(),
+                record_type: "message".to_string(),
+                role: "user".to_string(),
+                content: "restore me".to_string(),
+                payload: Some(json!({ "turnId": "turn-restore" })),
+                created_at: 11,
+            });
+        source.session_checkpoints.push(SessionCheckpointRecord {
+            id: "checkpoint-restore".to_string(),
+            session_id: "session-restore".to_string(),
+            checkpoint_type: "runtime.route".to_string(),
+            summary: "route".to_string(),
+            payload: None,
+            created_at: 12,
+            ..SessionCheckpointRecord::default()
+        });
+        source.runtime_events.push(RuntimeEventRecord {
+            id: "event-restore".to_string(),
+            category: "runtime".to_string(),
+            event_type: "turn.completed".to_string(),
+            session_id: Some("session-restore".to_string()),
+            created_at: 13,
+            ..RuntimeEventRecord::default()
+        });
+        let bundle = build_session_export_bundle(
+            &source,
+            "session-restore",
+            false,
+            Vec::new(),
+            vec![json!({ "role": "user", "content": "restore me" })],
+        )
+        .unwrap();
+
+        let mut imported = crate::AppStore::default();
+        let outcome = apply_session_export_bundle_to_store(&mut imported, &bundle, false).unwrap();
+        assert_eq!(outcome.session_id, "session-restore");
+        assert_eq!(imported.chat_sessions.len(), 1);
+        assert_eq!(imported.chat_messages.len(), 1);
+        assert_eq!(imported.session_transcript_records.len(), 1);
+        assert_eq!(imported.session_checkpoints.len(), 1);
+        assert_eq!(imported.runtime_events.len(), 1);
+
+        let duplicate = apply_session_export_bundle_to_store(&mut imported, &bundle, false);
+        assert!(duplicate.is_err());
+
+        imported.chat_messages[0].content = "stale".to_string();
+        let overwrite = apply_session_export_bundle_to_store(&mut imported, &bundle, true).unwrap();
+        assert!(overwrite.overwritten);
+        assert_eq!(imported.chat_sessions.len(), 1);
+        assert_eq!(imported.chat_messages.len(), 1);
+        assert_eq!(imported.chat_messages[0].content, "restore me");
+        assert_eq!(imported.runtime_events.len(), 1);
     }
 
     #[test]
