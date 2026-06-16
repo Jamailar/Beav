@@ -8,14 +8,23 @@ export interface WorkspaceSpace {
   name: string;
 }
 
-export function useLayoutSpaces(sidebarVisualCollapsed: boolean) {
+type SpaceDialogMode = 'create' | 'rename';
+
+type UseLayoutSpacesOptions = {
+  canCreateSpace?: boolean;
+  openMembershipModal?: () => void;
+};
+
+export function useLayoutSpaces(sidebarVisualCollapsed: boolean, options: UseLayoutSpacesOptions = {}) {
   const { t } = useI18n();
+  const { canCreateSpace = false, openMembershipModal } = options;
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [activeSpaceId, setActiveSpaceId] = useState<string>('');
   const [isSwitchingSpace, setIsSwitchingSpace] = useState(false);
   const [isSpaceMenuOpen, setIsSpaceMenuOpen] = useState(false);
   const [hoveredSpaceId, setHoveredSpaceId] = useState<string | null>(null);
   const [isSpaceDialogOpen, setIsSpaceDialogOpen] = useState(false);
+  const [spaceDialogMode, setSpaceDialogMode] = useState<SpaceDialogMode>('rename');
   const [spaceDialogName, setSpaceDialogName] = useState('');
   const [spaceDialogTargetId, setSpaceDialogTargetId] = useState<string | null>(null);
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
@@ -106,10 +115,23 @@ export function useLayoutSpaces(sidebarVisualCollapsed: boolean) {
 
   const openRenameSpaceDialog = useCallback((space: WorkspaceSpace) => {
     setIsSpaceMenuOpen(false);
+    setSpaceDialogMode('rename');
     setSpaceDialogTargetId(space.id);
     setSpaceDialogName(space.name);
     setIsSpaceDialogOpen(true);
   }, []);
+
+  const openCreateSpaceDialog = useCallback(() => {
+    setIsSpaceMenuOpen(false);
+    if (!canCreateSpace) {
+      openMembershipModal?.();
+      return;
+    }
+    setSpaceDialogMode('create');
+    setSpaceDialogTargetId(null);
+    setSpaceDialogName('');
+    setIsSpaceDialogOpen(true);
+  }, [canCreateSpace, openMembershipModal]);
 
   const handleDeleteSpace = useCallback(async (space: WorkspaceSpace) => {
     if (!space.id || space.id === 'default' || deletingSpaceId) return;
@@ -148,6 +170,7 @@ export function useLayoutSpaces(sidebarVisualCollapsed: boolean) {
   const closeSpaceDialog = useCallback(() => {
     if (isSpaceDialogSubmitting) return;
     setIsSpaceDialogOpen(false);
+    setSpaceDialogMode('rename');
     setSpaceDialogName('');
     setSpaceDialogTargetId(null);
   }, [isSpaceDialogSubmitting]);
@@ -162,7 +185,26 @@ export function useLayoutSpaces(sidebarVisualCollapsed: boolean) {
     setIsSpaceDialogSubmitting(true);
     try {
       if (!spaceDialogTargetId) {
-        void appAlert(t('layout.renameSpaceMissing'));
+        if (spaceDialogMode !== 'create') {
+          void appAlert(t('layout.renameSpaceMissing'));
+          return;
+        }
+
+        const result = await window.ipcRenderer.spaces.create({ name: trimmedName }) as {
+          success?: boolean;
+          activeSpaceId?: string;
+          error?: string;
+        } | null;
+        if (!result?.success) {
+          void appAlert(result?.error || t('layout.createSpaceFailed'));
+          return;
+        }
+
+        setIsSpaceDialogOpen(false);
+        setSpaceDialogMode('rename');
+        setSpaceDialogName('');
+        await loadSpaces();
+        window.location.reload();
         return;
       }
 
@@ -173,16 +215,17 @@ export function useLayoutSpaces(sidebarVisualCollapsed: boolean) {
       }
 
       setIsSpaceDialogOpen(false);
+      setSpaceDialogMode('rename');
       setSpaceDialogName('');
       setSpaceDialogTargetId(null);
       await loadSpaces();
     } catch (error) {
       console.error('Failed to submit space dialog:', error);
-      void appAlert(t('layout.renameSpaceFailedRetry'));
+      void appAlert(spaceDialogMode === 'create' ? t('layout.createSpaceFailedRetry') : t('layout.renameSpaceFailedRetry'));
     } finally {
       setIsSpaceDialogSubmitting(false);
     }
-  }, [loadSpaces, spaceDialogName, spaceDialogTargetId, t]);
+  }, [loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId, t]);
 
   return {
     spaces,
@@ -194,6 +237,7 @@ export function useLayoutSpaces(sidebarVisualCollapsed: boolean) {
     hoveredSpaceId,
     setHoveredSpaceId,
     isSpaceDialogOpen,
+    spaceDialogMode,
     spaceDialogName,
     setSpaceDialogName,
     isSpaceDialogSubmitting,
@@ -201,6 +245,7 @@ export function useLayoutSpaces(sidebarVisualCollapsed: boolean) {
     spaceMenuRef,
     closeSpaceMenu,
     handleSwitchSpace,
+    openCreateSpaceDialog,
     openRenameSpaceDialog,
     handleDeleteSpace,
     closeSpaceDialog,

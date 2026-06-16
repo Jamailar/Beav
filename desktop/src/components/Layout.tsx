@@ -1,5 +1,5 @@
-import { ReactNode, useCallback } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
+import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { MessageSquare, Settings as SettingsIcon, Folder, Dices, Pencil, ChevronDown, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2, Crown, BadgeCheck, X, Loader2, ExternalLink, RefreshCw, Gift, Monitor, Box, ShieldCheck, Coins, Headphones, Sparkles } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { ImmersiveMode, ViewType } from '../features/app-shell/types';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
@@ -16,6 +16,8 @@ import { useGlobalKnowledgeSearch } from '../features/app-shell/useGlobalKnowled
 import { useLayoutSidebar } from '../features/app-shell/useLayoutSidebar';
 import { useLayoutSpaces } from '../features/app-shell/useLayoutSpaces';
 import { useLayoutTheme } from '../features/app-shell/useLayoutTheme';
+import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
+import { asRecord, resolveFounderSponsorState, valueContainsFounder } from '../utils/membership';
 
 interface LayoutProps {
   children: ReactNode;
@@ -51,8 +53,170 @@ const NAV_ITEMS: SidebarNavItem[] = [
   // { id: 'skills', label: '技能库', icon: Lightbulb },
 ];
 
+const FOUNDER_SPONSOR_PRODUCT_ID = '827c5de5-c7b2-44df-b5c5-2b8b53eeb6ab';
+const FOUNDER_SPONSOR_POLL_INTERVAL_MS = 3000;
+const FOUNDER_SPONSOR_MAX_POLL_ATTEMPTS = 60;
+
+type FounderSponsorProduct = {
+  id: string;
+  name?: string;
+  amount?: string | number;
+  currency?: string;
+  membership_days?: number;
+};
+
+type FounderSponsorPaymentState =
+  | 'idle'
+  | 'loadingProduct'
+  | 'creatingOrder'
+  | 'waitingPayment'
+  | 'refreshingMembership'
+  | 'paid'
+  | 'error';
+
+function unwrapResponseItems(response: unknown): Record<string, unknown>[] {
+  const root = asRecord(response);
+  const candidates = [
+    response,
+    root?.products,
+    root?.items,
+    root?.data,
+    asRecord(root?.data)?.products,
+    asRecord(root?.data)?.items,
+  ];
+  for (const value of candidates) {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => asRecord(item))
+        .filter((item): item is Record<string, unknown> => Boolean(item));
+    }
+  }
+  return [];
+}
+
+function founderProductFromResponse(response: unknown): FounderSponsorProduct | null {
+  const items = unwrapResponseItems(response);
+  const product = items.find((item) => String(item.id || '').trim() === FOUNDER_SPONSOR_PRODUCT_ID)
+    || items.find((item) => [
+      item.code,
+      item.name,
+      item.label,
+      item.title,
+    ].some(valueContainsFounder));
+  return founderProductFromRecord(product || null);
+}
+
+function founderProductFromRecord(product: Record<string, unknown> | null): FounderSponsorProduct | null {
+  if (!product) return null;
+  return {
+    id: String(product.id || ''),
+    name: String(product.name || ''),
+    amount: product.amount as string | number | undefined,
+    currency: String(product.currency || 'CNY'),
+    membership_days: Number(product.membership_days || product.membershipDays || 0),
+  };
+}
+
+function fallbackFounderSponsorProduct(): FounderSponsorProduct {
+  return {
+    id: FOUNDER_SPONSOR_PRODUCT_ID,
+    amount: 199,
+    currency: 'CNY',
+  };
+}
+
+function formatFounderProductPrice(product: FounderSponsorProduct | null): string {
+  if (!product) return '';
+  const amount = Number(product.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  const currency = String(product.currency || 'CNY').toUpperCase();
+  const prefix = currency === 'CNY' || currency === 'RMB' ? '¥' : `${currency} `;
+  const fractionDigits = Number.isInteger(amount) ? 0 : 2;
+  return `${prefix}${amount.toLocaleString(undefined, { minimumFractionDigits: fractionDigits, maximumFractionDigits: 2 })}`;
+}
+
+function decodeHtmlEntities(value: string): string {
+  if (typeof document === 'undefined') return value;
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = value;
+  return textarea.value;
+}
+
+function extractUrlFromPaymentForm(paymentForm: string): string {
+  const formMatch = paymentForm.match(/<form\b[^>]*\baction=(["'])(.*?)\1[^>]*>([\s\S]*?)<\/form>/i);
+  if (!formMatch) return '';
+  const action = decodeHtmlEntities(formMatch[2] || '').trim();
+  const body = formMatch[3] || '';
+  if (!action) return '';
+  const params = new URLSearchParams();
+  const inputRegex = /<input\b[^>]*>/gi;
+  const attrRegex = /\b(name|value)=(["'])(.*?)\2/gi;
+  let inputMatch: RegExpExecArray | null;
+  while ((inputMatch = inputRegex.exec(body)) !== null) {
+    const inputTag = inputMatch[0] || '';
+    let name = '';
+    let value = '';
+    let attrMatch: RegExpExecArray | null;
+    attrRegex.lastIndex = 0;
+    while ((attrMatch = attrRegex.exec(inputTag)) !== null) {
+      const key = String(attrMatch[1] || '').toLowerCase();
+      const attrValue = decodeHtmlEntities(String(attrMatch[3] || ''));
+      if (key === 'name') name = attrValue;
+      if (key === 'value') value = attrValue;
+    }
+    if (name) params.append(name, value);
+  }
+  try {
+    const url = new URL(action);
+    params.forEach((value, key) => {
+      url.searchParams.set(key, value);
+    });
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+function extractPaymentTarget(order: Record<string, unknown>): string {
+  const candidates = [
+    order.payment_url,
+    order.paymentUrl,
+    order.payment_form,
+    order.paymentForm,
+    order.url,
+    order.code_url,
+    order.qr_code,
+    order.qrCode,
+  ];
+  for (const value of candidates) {
+    const normalized = String(value || '').trim();
+    if (!normalized) continue;
+    if (/^https?:\/\//i.test(normalized)) return normalized;
+    if (/<form[\s>]/i.test(normalized)) {
+      const parsed = extractUrlFromPaymentForm(normalized);
+      if (parsed) return parsed;
+      return normalized;
+    }
+  }
+  return '';
+}
+
+function orderStatusIsPaid(order: Record<string, unknown> | null): boolean {
+  if (!order) return false;
+  return [order.status, order.trade_status, order.tradeStatus]
+    .some((value) => ['paid', 'success', 'trade_success', 'trade_finished'].includes(String(value || '').trim().toLowerCase()));
+}
+
+function orderStatusIsFinalFailure(order: Record<string, unknown> | null): boolean {
+  if (!order) return false;
+  return [order.status, order.trade_status, order.tradeStatus]
+    .some((value) => ['failed', 'closed', 'cancelled', 'canceled', 'refunded', 'trade_closed'].includes(String(value || '').trim().toLowerCase()));
+}
+
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const { t } = useI18n();
+  const { snapshot: officialAuthSnapshot } = useOfficialAuthState();
+  const [founderSponsorOpen, setFounderSponsorOpen] = useState(false);
   const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
   const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
@@ -71,6 +235,10 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     toggleSidebarCollapsed,
     startSidebarResize,
   } = useLayoutSidebar();
+  const founderSponsorState = useMemo(
+    () => resolveFounderSponsorState(officialAuthSnapshot),
+    [officialAuthSnapshot],
+  );
   const {
     spaces,
     activeSpaceId,
@@ -81,17 +249,22 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     hoveredSpaceId,
     setHoveredSpaceId,
     isSpaceDialogOpen,
+    spaceDialogMode,
     spaceDialogName,
     setSpaceDialogName,
     isSpaceDialogSubmitting,
     deletingSpaceId,
     spaceMenuRef,
     handleSwitchSpace,
+    openCreateSpaceDialog,
     openRenameSpaceDialog,
     handleDeleteSpace,
     closeSpaceDialog,
     submitSpaceDialog,
-  } = useLayoutSpaces(sidebarVisualCollapsed);
+  } = useLayoutSpaces(sidebarVisualCollapsed, {
+    canCreateSpace: founderSponsorState.active,
+    openMembershipModal: () => setFounderSponsorOpen(true),
+  });
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const {
     updateNotice,
@@ -130,6 +303,14 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     }
     onNavigate(item.view);
   }, [onNavigate]);
+  const openFounderSponsorBilling = useCallback(() => {
+    setFounderSponsorOpen(false);
+    dispatchAppIntent({
+      type: 'settings.open',
+      tab: 'ai',
+      aiModelSubTab: 'login',
+    });
+  }, []);
 
   const renderSidebarNavItem = (item: SidebarNavItem) => {
     const { key, view, labelKey, icon: Icon, primary } = item;
@@ -244,6 +425,33 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
           {/* Footer */}
           <div className={clsx('border-t border-border', sidebarVisualCollapsed ? 'px-2 py-2 flex flex-col items-center gap-2' : 'px-4 py-2 space-y-2')}>
+            <button
+              type="button"
+              onClick={() => setFounderSponsorOpen(true)}
+              className={clsx(
+                'app-founder-sponsor-button group inline-flex shrink-0 items-center justify-center transition-all',
+                sidebarVisualCollapsed
+                  ? 'h-8 w-8 rounded-md'
+                  : 'h-9 w-full rounded-lg px-2.5'
+              )}
+              title={t(founderSponsorState.labelKey)}
+              aria-label={t(founderSponsorState.labelKey)}
+              data-active={founderSponsorState.active ? 'true' : 'false'}
+            >
+              {founderSponsorState.active ? (
+                <BadgeCheck className="h-[16px] w-[16px] shrink-0" strokeWidth={1.9} />
+              ) : (
+                <Crown className="h-[16px] w-[16px] shrink-0" strokeWidth={1.85} />
+              )}
+              {!sidebarVisualCollapsed && (
+                <>
+                  <span className="min-w-0 flex-1 truncate text-left text-[12px] font-semibold">
+                    {t(founderSponsorState.labelKey)}
+                  </span>
+                  <span className="app-founder-sponsor-status h-1.5 w-1.5 rounded-full" />
+                </>
+              )}
+            </button>
             {sidebarVisualCollapsed && (
               <button
                 type="button"
@@ -383,6 +591,16 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                         })
                       )}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        openCreateSpaceDialog();
+                      }}
+                      className="h-9 w-full border-t border-border px-2.5 text-[12px] text-accent-primary hover:bg-surface-secondary flex items-center gap-1.5"
+                    >
+                      <span className="text-[15px] leading-none">+</span>
+                      <span className="truncate">{t('layout.createSpace')}</span>
+                    </button>
 
                   </div>
                 )}
@@ -428,6 +646,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
           name={spaceDialogName}
           setName={setSpaceDialogName}
           isSubmitting={isSpaceDialogSubmitting}
+          title={t(spaceDialogMode === 'create' ? 'layout.createSpace' : 'layout.renameSpace')}
           submit={submitSpaceDialog}
           close={closeSpaceDialog}
         />
@@ -457,7 +676,341 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         />
       )}
 
+      {founderSponsorOpen && (
+        <FounderSponsorModal
+          active={founderSponsorState.active}
+          onClose={() => setFounderSponsorOpen(false)}
+          onOpenBilling={openFounderSponsorBilling}
+        />
+      )}
+
       <NotificationCenterDrawer />
+    </div>
+  );
+}
+
+function FounderSponsorModal({ active, onClose, onOpenBilling }: {
+  active: boolean;
+  onClose: () => void;
+  onOpenBilling: () => void;
+}) {
+  const { t } = useI18n();
+  const [product, setProduct] = useState<FounderSponsorProduct | null>(null);
+  const [paymentState, setPaymentState] = useState<FounderSponsorPaymentState>('loadingProduct');
+  const [paymentMessage, setPaymentMessage] = useState('');
+  const [orderNo, setOrderNo] = useState('');
+  const [pollOrderNo, setPollOrderNo] = useState('');
+  const benefitCards = [
+    { titleKey: 'layout.founderSponsor.benefitLifetimeTitle', descriptionKey: 'layout.founderSponsor.benefitLifetimeDesc', icon: Crown, tone: 'gold' },
+    { titleKey: 'layout.founderSponsor.benefitPointsTitle', descriptionKey: 'layout.founderSponsor.benefitPointsDesc', icon: Coins, tone: 'gold' },
+    { titleKey: 'layout.founderSponsor.benefitPrivilegesTitle', descriptionKey: 'layout.founderSponsor.benefitPrivilegesDesc', icon: Gift, tone: 'purple' },
+    { titleKey: 'layout.founderSponsor.benefitUnlimitedDevicesTitle', descriptionKey: 'layout.founderSponsor.benefitUnlimitedDevicesDesc', icon: Monitor, tone: 'green' },
+    { titleKey: 'layout.founderSponsor.benefitUnlimitedSpacesTitle', descriptionKey: 'layout.founderSponsor.benefitUnlimitedSpacesDesc', icon: Box, tone: 'blue' },
+    { titleKey: 'layout.founderSponsor.benefitSupportTitle', descriptionKey: 'layout.founderSponsor.benefitSupportDesc', icon: Headphones, tone: 'cyan' },
+  ] as const;
+  const productPrice = formatFounderProductPrice(product);
+  const displayPrice = productPrice || formatFounderProductPrice(fallbackFounderSponsorProduct());
+  const purchaseButtonLabel = displayPrice
+    ? t('layout.founderSponsor.unlockWithPrice', { price: displayPrice })
+    : t('layout.founderSponsor.unlockLifetime');
+  const controlsDisabled = paymentState === 'loadingProduct'
+    || paymentState === 'creatingOrder'
+    || paymentState === 'refreshingMembership';
+  const isWaitingPayment = paymentState === 'waitingPayment';
+
+  const refreshMembershipState = useCallback(async () => {
+    setPaymentState('refreshingMembership');
+    setPaymentMessage(t('layout.founderSponsor.syncing'));
+    await window.ipcRenderer.officialAuth.bootstrap({ reason: 'founder-sponsor-paid' });
+    await window.ipcRenderer.auth.refreshNow().catch(() => null);
+    setPaymentState('paid');
+    setPaymentMessage(t('layout.founderSponsor.paid'));
+  }, [t]);
+
+  const refreshOrderStatus = useCallback(async (targetOrderNo: string) => {
+    const result = await window.ipcRenderer.officialAuth.getOrderStatus({ outTradeNo: targetOrderNo }) as {
+      success?: boolean;
+      order?: Record<string, unknown>;
+      error?: string;
+    };
+    const order = asRecord(result?.order);
+    if (!result?.success || !order) {
+      throw new Error(result?.error || t('layout.founderSponsor.orderStatusFailed'));
+    }
+    if (orderStatusIsPaid(order)) {
+      await refreshMembershipState();
+      return 'paid' as const;
+    }
+    if (orderStatusIsFinalFailure(order)) {
+      setPaymentState('error');
+      setPaymentMessage(t('layout.founderSponsor.orderClosed'));
+      return 'failed' as const;
+    }
+    setPaymentMessage(t('layout.founderSponsor.waitingPayment'));
+    return 'pending' as const;
+  }, [refreshMembershipState, t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadProduct = async () => {
+      setPaymentState((current) => current === 'idle' || current === 'loadingProduct' ? 'loadingProduct' : current);
+      let nextProduct: FounderSponsorProduct | null = null;
+      try {
+        const detail = await window.ipcRenderer.officialAuth.getProduct({ productId: FOUNDER_SPONSOR_PRODUCT_ID });
+        nextProduct = founderProductFromRecord(asRecord(detail?.product));
+      } catch (error) {
+        console.warn('Failed to load founder sponsor product detail:', error);
+      }
+      if (!nextProduct) {
+        try {
+          const result = await window.ipcRenderer.officialAuth.getProducts();
+          nextProduct = founderProductFromResponse(result);
+        } catch (error) {
+          console.warn('Failed to load founder sponsor product list:', error);
+        }
+      }
+      if (cancelled) return;
+      setProduct(nextProduct || fallbackFounderSponsorProduct());
+      setPaymentMessage('');
+      setPaymentState((current) => current === 'loadingProduct' ? 'idle' : current);
+    };
+    void loadProduct();
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
+
+  useEffect(() => {
+    if (!pollOrderNo || paymentState !== 'waitingPayment') return;
+    let cancelled = false;
+    let timer: number | null = null;
+    let attempts = 0;
+
+    const poll = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      try {
+        const status = await refreshOrderStatus(pollOrderNo);
+        if (cancelled || status !== 'pending') return;
+      } catch (error) {
+        if (cancelled) return;
+        setPaymentMessage(error instanceof Error ? error.message : t('layout.founderSponsor.orderStatusFailed'));
+      }
+      if (!cancelled && attempts < FOUNDER_SPONSOR_MAX_POLL_ATTEMPTS) {
+        timer = window.setTimeout(poll, FOUNDER_SPONSOR_POLL_INTERVAL_MS);
+      }
+    };
+
+    timer = window.setTimeout(poll, 1200);
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [paymentState, pollOrderNo, refreshOrderStatus, t]);
+
+  const startPurchase = useCallback(async () => {
+    if (active) {
+      onOpenBilling();
+      return;
+    }
+    setPaymentState('creatingOrder');
+    setPaymentMessage('');
+    setOrderNo('');
+    setPollOrderNo('');
+    try {
+      const productId = String(product?.id || FOUNDER_SPONSOR_PRODUCT_ID).trim() || FOUNDER_SPONSOR_PRODUCT_ID;
+      const orderResult = await window.ipcRenderer.officialAuth.createPagePayOrder({
+        productId,
+        product_id: productId,
+        subject: t('layout.founderSponsor.title'),
+        pointsToDeduct: 0,
+        points_to_deduct: 0,
+      }) as {
+        success?: boolean;
+        order?: Record<string, unknown>;
+        error?: string;
+      };
+      if (!orderResult?.success || !orderResult.order) {
+        throw new Error(orderResult?.error || t('layout.founderSponsor.createOrderFailed'));
+      }
+      const order = orderResult.order;
+      const nextOrderNo = String(order.out_trade_no || order.outTradeNo || '').trim();
+      const paymentTarget = extractPaymentTarget(order);
+      if (!nextOrderNo || !paymentTarget) {
+        throw new Error(t('layout.founderSponsor.missingPaymentInfo'));
+      }
+      const openResult = await window.ipcRenderer.officialAuth.openPaymentForm({ paymentForm: paymentTarget }) as {
+        success?: boolean;
+        error?: string;
+      };
+      if (!openResult?.success) {
+        throw new Error(openResult?.error || t('layout.founderSponsor.openPaymentFailed'));
+      }
+      setOrderNo(nextOrderNo);
+      setPollOrderNo(nextOrderNo);
+      setPaymentState('waitingPayment');
+      setPaymentMessage(t('layout.founderSponsor.waitingPayment'));
+    } catch (error) {
+      setPaymentState('error');
+      setPaymentMessage(error instanceof Error ? error.message : t('layout.founderSponsor.createOrderFailed'));
+    }
+  }, [active, onOpenBilling, product?.id, t]);
+
+  return (
+    <div
+      className="app-founder-sponsor-backdrop fixed inset-0 z-[95] flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('layout.founderSponsor.title')}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="app-founder-sponsor-panel w-[min(620px,calc(100vw-32px))] overflow-hidden">
+        <div className="app-founder-sponsor-header relative px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-6 top-5 inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#756b60] transition-colors hover:bg-[#f4eadb] hover:text-[#2b241d]"
+            title={t('layout.close')}
+            aria-label={t('layout.close')}
+          >
+            <X className="h-5 w-5" strokeWidth={1.8} />
+          </button>
+          <div className="flex items-center gap-3.5 pr-10">
+            <div className="app-founder-sponsor-modal-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-xl">
+              {active ? (
+                <BadgeCheck className="h-6 w-6" strokeWidth={1.9} />
+              ) : (
+                <Crown className="h-6 w-6" strokeWidth={1.85} />
+              )}
+            </div>
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <h2 className="truncate text-[22px] font-bold leading-tight tracking-normal text-[#201b16]">
+                  {t('layout.founderSponsor.title')}
+                </h2>
+                <span className="app-founder-sponsor-lifetime-badge">{t('layout.founderSponsor.lifetimeBadge')}</span>
+              </div>
+              <div className="mt-1 text-[13px] font-medium text-[#7c746c]">
+                {active ? t('layout.founderSponsor.activeStatus') : t('layout.founderSponsor.subtitle')}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="app-founder-sponsor-body px-6 pb-4 pt-3.5">
+          <div className="app-founder-sponsor-value-hero">
+            <Sparkles className="app-founder-sponsor-sparkle app-founder-sponsor-sparkle--left" strokeWidth={1.7} />
+            <Sparkles className="app-founder-sponsor-sparkle app-founder-sponsor-sparkle--right" strokeWidth={1.7} />
+            <div className="app-founder-sponsor-price-block">
+              <div className="app-founder-sponsor-price">
+                {displayPrice}
+              </div>
+              <div className="mt-2 text-[16px] font-medium tracking-normal text-[#81786f]">
+                {t('layout.founderSponsor.priceCaption')}
+              </div>
+            </div>
+
+            <div className="app-founder-sponsor-points-card">
+              <div className="app-founder-sponsor-points-ribbon">{t('layout.founderSponsor.pointsRibbon')}</div>
+              <div className="flex items-center justify-center gap-3">
+                <Gift className="h-7 w-7 text-[#f06a2f]" strokeWidth={1.9} />
+                <div className="app-founder-sponsor-points-number">20,000</div>
+                <span className="app-founder-sponsor-points-pill">P</span>
+              </div>
+              <div className="mt-1 text-center text-[18px] font-bold leading-tight text-[#5b4030]">
+                {t('layout.founderSponsor.pointsTitle')}
+              </div>
+              <div className="mt-1 text-center text-[13px] font-semibold text-[#f05b2f]">
+                {t('layout.founderSponsor.pointsValue')}
+              </div>
+              <span className="app-founder-sponsor-mini-laurel app-founder-sponsor-mini-laurel--left" aria-hidden="true" />
+              <span className="app-founder-sponsor-mini-laurel app-founder-sponsor-mini-laurel--right" aria-hidden="true" />
+            </div>
+          </div>
+
+          <div className="app-founder-sponsor-benefit-heading">
+            <span className="app-founder-sponsor-heading-line" />
+            <span className="app-founder-sponsor-heading-dot" />
+            <h3>{t('layout.founderSponsor.memberBenefits')}</h3>
+            <span className="app-founder-sponsor-heading-dot" />
+            <span className="app-founder-sponsor-heading-line" />
+          </div>
+
+          <div className="app-founder-sponsor-benefit-grid">
+            {benefitCards.map(({ titleKey, descriptionKey, icon: Icon, tone }) => (
+              <div key={titleKey} className="app-founder-sponsor-benefit-tile">
+                <span className={`app-founder-sponsor-tile-icon app-founder-sponsor-tile-icon--${tone}`}>
+                  <Icon className="h-5 w-5" strokeWidth={1.8} />
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-bold leading-snug text-[#211c17]">{t(titleKey)}</div>
+                  <div className="mt-0.5 truncate text-[11px] font-medium text-[#80776f]">{t(descriptionKey)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="min-h-[26px]">
+            {paymentMessage || orderNo ? (
+              <div className={clsx(
+                'mt-4 rounded-xl border px-4 py-3 text-[13px] font-medium leading-relaxed',
+                paymentState === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-700'
+                  : paymentState === 'paid'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-[#e7dbc9] bg-white/72 text-[#756b60]'
+              )}>
+                {paymentMessage ? <div>{paymentMessage}</div> : null}
+                {orderNo ? <div className="mt-1 truncate text-[11px] opacity-80" title={orderNo}>{t('layout.founderSponsor.orderNo', { orderNo })}</div> : null}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-1 grid grid-cols-[1fr_96px] gap-3">
+            <button
+              type="button"
+              onClick={() => void startPurchase()}
+              disabled={controlsDisabled}
+              className="app-founder-sponsor-primary-action inline-flex h-11 items-center justify-center rounded-xl px-4 text-[17px] font-bold text-white transition-all hover:brightness-105 active:scale-[0.99] disabled:opacity-60"
+            >
+              {paymentState === 'creatingOrder' || paymentState === 'refreshingMembership' ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" strokeWidth={1.8} />
+              ) : active ? (
+                <BadgeCheck className="mr-2 h-4 w-4" strokeWidth={1.8} />
+              ) : (
+                <ExternalLink className="mr-2 h-4 w-4" strokeWidth={1.8} />
+              )}
+              {active ? t('layout.founderSponsor.manageButton') : purchaseButtonLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (isWaitingPayment && pollOrderNo) {
+                  void refreshOrderStatus(pollOrderNo);
+                  return;
+                }
+                onClose();
+              }}
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-[#e4d5bd] bg-white/78 px-3 text-[15px] font-bold text-[#5f564d] transition-colors hover:bg-[#fffaf2] hover:text-[#27211b]"
+            >
+              {isWaitingPayment ? (
+                <RefreshCw className="mr-2 h-5 w-5" strokeWidth={1.8} />
+              ) : null}
+              {isWaitingPayment ? t('layout.founderSponsor.refreshOrder') : t('app.cancel')}
+            </button>
+          </div>
+          <div className="mt-2.5 flex items-center justify-center gap-2 text-[12px] font-medium text-[#9a9289]">
+            <ShieldCheck className="h-4 w-4" strokeWidth={1.8} />
+            <span>{t('layout.founderSponsor.securePayment')}</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
