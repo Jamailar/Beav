@@ -2712,7 +2712,8 @@ pub(crate) fn model_config_value_from_resolved(config: &ResolvedChatConfig) -> V
         "baseURL": config.base_url,
         "apiKey": config.api_key,
         "modelName": config.model_name,
-        "protocol": config.protocol
+        "protocol": config.protocol,
+        "wireApi": config.wire_api.as_str()
     });
     if let Some(reasoning_effort) = config.reasoning_effort.as_ref() {
         value["reasoningEffort"] = json!(reasoning_effort);

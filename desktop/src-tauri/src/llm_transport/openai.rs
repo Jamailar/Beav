@@ -203,7 +203,32 @@ async fn send_openai_request(
     transport_mode: TransportMode,
     max_time_seconds: Option<u64>,
 ) -> Result<reqwest::Response, LlmTransportError> {
-    let url = format!("{}/chat/completions", normalize_base_url(&config.base_url));
+    send_openai_request_to_path(
+        state,
+        trace_label,
+        config,
+        "/chat/completions",
+        body,
+        transport_mode,
+        max_time_seconds,
+    )
+    .await
+}
+
+async fn send_openai_request_to_path(
+    state: &State<'_, AppState>,
+    trace_label: &str,
+    config: &ResolvedChatConfig,
+    endpoint_path: &str,
+    body: &Value,
+    transport_mode: TransportMode,
+    max_time_seconds: Option<u64>,
+) -> Result<reqwest::Response, LlmTransportError> {
+    let url = format!(
+        "{}{}",
+        normalize_base_url(&config.base_url),
+        endpoint_path
+    );
     let provider_profile = openai_provider_profile(config);
     let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let timeout_label = max_time_seconds
@@ -1097,6 +1122,297 @@ pub(crate) fn run_openai_streaming_chat_completion_transport(
     }
 }
 
+fn response_text_from_message_content(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("text")
+                    .or_else(|| item.get("content"))
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn chat_messages_to_responses_input(messages: &[Value]) -> (Option<String>, Vec<Value>) {
+    let mut instructions = Vec::<String>::new();
+    let mut input = Vec::<Value>::new();
+    for message in messages {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match role {
+            "system" | "developer" => {
+                let text = response_text_from_message_content(message.get("content"));
+                if !text.trim().is_empty() {
+                    instructions.push(text);
+                }
+            }
+            "tool" => {
+                let call_id = message
+                    .get("tool_call_id")
+                    .or_else(|| message.get("call_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !call_id.is_empty() {
+                    input.push(json!({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": response_text_from_message_content(message.get("content")),
+                    }));
+                }
+            }
+            "assistant" => {
+                let text = response_text_from_message_content(message.get("content"));
+                if !text.trim().is_empty() {
+                    input.push(json!({
+                        "role": "assistant",
+                        "content": text,
+                    }));
+                }
+                if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                    for tool_call in tool_calls {
+                        let Some(function) = tool_call.get("function") else {
+                            continue;
+                        };
+                        let name = function
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let call_id = tool_call
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if name.is_empty() || call_id.is_empty() {
+                            continue;
+                        }
+                        let arguments = match function.get("arguments") {
+                            Some(Value::String(text)) => text.clone(),
+                            Some(value) => value.to_string(),
+                            None => "{}".to_string(),
+                        };
+                        input.push(json!({
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": arguments,
+                        }));
+                    }
+                }
+            }
+            _ => {
+                input.push(json!({
+                    "role": if role == "assistant" { "assistant" } else { "user" },
+                    "content": response_text_from_message_content(message.get("content")),
+                }));
+            }
+        }
+    }
+    let instructions = if instructions.is_empty() {
+        None
+    } else {
+        Some(instructions.join("\n\n"))
+    };
+    (instructions, input)
+}
+
+fn chat_tools_to_responses_tools(tools: Option<&Value>) -> Option<Value> {
+    let items = tools?.as_array()?;
+    let converted = items
+        .iter()
+        .filter_map(|tool| {
+            if tool.get("type").and_then(Value::as_str) != Some("function") {
+                return None;
+            }
+            let function = tool.get("function")?;
+            let name = function.get("name").and_then(Value::as_str)?;
+            Some(json!({
+                "type": "function",
+                "name": name,
+                "description": function
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "parameters": function
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or_else(|| json!({ "type": "object", "properties": {} })),
+            }))
+        })
+        .collect::<Vec<_>>();
+    (!converted.is_empty()).then(|| Value::Array(converted))
+}
+
+pub(crate) fn openai_chat_body_to_responses_body(body: &Value) -> Value {
+    let messages = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let (instructions, input) = chat_messages_to_responses_input(&messages);
+    let mut output = json!({
+        "model": body.get("model").cloned().unwrap_or(Value::Null),
+        "input": input,
+    });
+    if let Some(instructions) = instructions {
+        output["instructions"] = json!(instructions);
+    }
+    if let Some(tools) = chat_tools_to_responses_tools(body.get("tools")) {
+        output["tools"] = tools;
+    }
+    if let Some(tool_choice) = body.get("tool_choice") {
+        output["tool_choice"] = tool_choice.clone();
+    }
+    if let Some(temperature) = body.get("temperature") {
+        output["temperature"] = temperature.clone();
+    }
+    if let Some(max_tokens) = body.get("max_tokens").or_else(|| body.get("max_completion_tokens")) {
+        output["max_output_tokens"] = max_tokens.clone();
+    }
+    if let Some(effort) = body.get("reasoning_effort").and_then(Value::as_str) {
+        output["reasoning"] = json!({ "effort": effort });
+    }
+    output
+}
+
+async fn run_responses_json_attempt(
+    state: &State<'_, AppState>,
+    config: &ResolvedChatConfig,
+    body: &Value,
+    max_time_seconds: Option<u64>,
+    allow_official_reauth_retry: bool,
+    transport_mode: TransportMode,
+) -> Result<Value, LlmTransportError> {
+    let mut config = config.clone();
+    let endpoint = format!("{}/responses", normalize_base_url(&config.base_url));
+    let response = send_openai_request_to_path(
+        state,
+        "responses-json",
+        &config,
+        "/responses",
+        body,
+        transport_mode,
+        max_time_seconds,
+    )
+    .await?;
+    let status = response.status().as_u16();
+    let raw = response
+        .text()
+        .await
+        .map_err(|error| LlmTransportError::from((transport_mode, error)))?;
+    if allow_official_reauth_retry && status == 401 {
+        if let Some(refreshed_api_key) = try_refresh_official_auth_for_ai_request(
+            &endpoint,
+            config.api_key.as_deref(),
+            "responses-json-http-401",
+        )
+        .map_err(|error| {
+            LlmTransportError::new(TransportErrorKind::Unknown, transport_mode, error)
+        })? {
+            config.api_key = Some(refreshed_api_key);
+            return Box::pin(run_responses_json_attempt(
+                state,
+                &config,
+                body,
+                max_time_seconds,
+                false,
+                transport_mode,
+            ))
+            .await;
+        }
+    }
+    if !(200..300).contains(&status) {
+        let details = http_error_details_from_text(status, &raw);
+        append_debug_trace_state(
+            state,
+            format!(
+                "{} | transport={}",
+                http_error_debug_line("ai-http", "POST", &endpoint, &details),
+                transport_mode.as_str(),
+            ),
+        );
+        return Err(LlmTransportError::with_status(
+            transport_mode,
+            status,
+            format_http_error_message("AI request", &details),
+            Some(raw),
+        ));
+    }
+    if raw.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str::<Value>(&raw).map_err(|error| {
+        append_debug_trace_state(
+            state,
+            format!(
+                "[ai-http] invalid_json method=POST url={} status={} transport={} model={} error={} raw={}",
+                endpoint,
+                status,
+                transport_mode.as_str(),
+                config.model_name,
+                error,
+                raw,
+            ),
+        );
+        LlmTransportError::new(
+            TransportErrorKind::Parse,
+            transport_mode,
+            format!("Invalid JSON response: {error}"),
+        )
+    })
+}
+
+pub(crate) fn run_openai_responses_json_transport(
+    state: &State<'_, AppState>,
+    config: &ResolvedChatConfig,
+    chat_body: &Value,
+    max_time_seconds: Option<u64>,
+    allow_official_reauth_retry: bool,
+) -> Result<Value, LlmTransportError> {
+    let body = openai_chat_body_to_responses_body(chat_body);
+    let attempt_once = |mode| {
+        run_transport_future(run_responses_json_attempt(
+            state,
+            config,
+            &body,
+            max_time_seconds,
+            allow_official_reauth_retry,
+            mode,
+        ))
+    };
+    let attempt =
+        |mode| run_json_attempt_with_retry(state, "responses-json", mode, || attempt_once(mode));
+
+    let preferred_mode = preferred_transport_mode(config);
+    match attempt(preferred_mode) {
+        Ok(value) => Ok(value),
+        Err(error) if error.should_retry_with_http1() && preferred_mode == TransportMode::Auto => {
+            append_debug_trace_state(
+                state,
+                format!(
+                    "[runtime][transport][openai][responses-json] retry upgrade=http1.1 reason={}",
+                    text_snippet(&error.to_string(), 200),
+                ),
+            );
+            let value = attempt(TransportMode::Http11).map_err(|retry_error| {
+                LlmTransportError::new(
+                    retry_error.kind,
+                    retry_error.transport_mode,
+                    format!("{error}; fallback failed: {retry_error}"),
+                )
+            })?;
+            remember_transport_mode(config, TransportMode::Http11);
+            Ok(value)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) fn run_openai_json_chat_completion_transport(
     state: &State<'_, AppState>,
     config: &ResolvedChatConfig,
@@ -1153,13 +1469,13 @@ pub(crate) fn run_openai_json_chat_completion_transport(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_retryable_json_error, openai_provider_profile, openai_reasoning_fragments,
-        preferred_transport_mode,
+        is_retryable_json_error, openai_chat_body_to_responses_body, openai_provider_profile,
+        openai_reasoning_fragments, preferred_transport_mode,
     };
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
     use crate::provider_compat::ProviderFamily;
     use crate::runtime::ResolvedChatConfig;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[test]
     fn minimax_defaults_to_http11_transport() {
@@ -1175,6 +1491,62 @@ mod tests {
         assert_eq!(
             openai_provider_profile(&config).provider_family,
             ProviderFamily::MiniMax
+        );
+    }
+
+    #[test]
+    fn responses_body_conversion_maps_messages_and_function_tools() {
+        let body = json!({
+            "model": "gpt-5",
+            "messages": [
+                { "role": "system", "content": "Be precise." },
+                { "role": "user", "content": "Read it" },
+                {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "Read",
+                            "arguments": "{\"path\":\"workspace://a.md\"}"
+                        }
+                    }]
+                },
+                { "role": "tool", "tool_call_id": "call_1", "content": "file body" }
+            ],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "description": "Read a resource",
+                    "parameters": { "type": "object" }
+                }
+            }],
+            "tool_choice": "auto",
+            "reasoning_effort": "low"
+        });
+
+        let converted = openai_chat_body_to_responses_body(&body);
+
+        assert_eq!(
+            converted.get("instructions").and_then(Value::as_str),
+            Some("Be precise.")
+        );
+        assert_eq!(
+            converted.pointer("/tools/0/name").and_then(Value::as_str),
+            Some("Read")
+        );
+        assert_eq!(
+            converted.pointer("/input/1/type").and_then(Value::as_str),
+            Some("function_call")
+        );
+        assert_eq!(
+            converted.pointer("/input/2/type").and_then(Value::as_str),
+            Some("function_call_output")
+        );
+        assert_eq!(
+            converted.pointer("/reasoning/effort").and_then(Value::as_str),
+            Some("low")
         );
     }
 

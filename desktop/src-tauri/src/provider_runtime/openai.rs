@@ -5,10 +5,11 @@ use tauri::{AppHandle, State};
 
 use super::{ProviderError, ProviderErrorKind, ProviderTurnDelivery, ProviderTurnResult};
 use crate::llm_transport::{
-    run_openai_json_chat_completion_transport, run_openai_streaming_chat_completion_transport,
-    LlmTransportError, TransportErrorKind,
+    run_openai_json_chat_completion_transport, run_openai_responses_json_transport,
+    run_openai_streaming_chat_completion_transport, LlmTransportError, TransportErrorKind,
 };
 use crate::provider_compat::InteractiveToolChoice;
+use crate::runtime::ProviderWireApi;
 use crate::{
     append_debug_log_state, normalize_base_url, now_ms, provider_profile_from_config, AppState,
     InteractiveToolCall, ResolvedChatConfig,
@@ -225,6 +226,81 @@ fn openai_json_reasoning_fragments(message: &Value) -> Vec<String> {
     fragments
 }
 
+fn extract_openai_responses_response(
+    response: &Value,
+) -> Result<(String, String, Vec<InteractiveToolCall>), ProviderError> {
+    let output = response
+        .get("output")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ProviderError::new(
+                ProviderErrorKind::Protocol,
+                false,
+                "Responses API returned no output",
+            )
+        })?;
+    let mut content = Vec::<String>::new();
+    let mut reasoning = Vec::<String>::new();
+    let mut tool_calls = Vec::<InteractiveToolCall>::new();
+    for item in output {
+        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "message" => {
+                if let Some(parts) = item.get("content").and_then(Value::as_array) {
+                    for part in parts {
+                        if let Some(text) = part
+                            .get("text")
+                            .or_else(|| part.get("content"))
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                        {
+                            content.push(text.to_string());
+                        }
+                    }
+                }
+            }
+            "function_call" => {
+                let name = item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let call_id = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if name.is_empty() || call_id.is_empty() {
+                    continue;
+                }
+                let arguments =
+                    openai_tool_arguments_value(item.get("arguments")).unwrap_or_else(|| json!({}));
+                tool_calls.push(InteractiveToolCall {
+                    id: call_id,
+                    name,
+                    arguments,
+                });
+            }
+            "reasoning" => {
+                if let Some(summary) = item.get("summary").and_then(Value::as_array) {
+                    for part in summary {
+                        if let Some(text) = part
+                            .get("text")
+                            .or_else(|| part.get("content"))
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                        {
+                            reasoning.push(text.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok((content.join(""), reasoning.join(""), tool_calls))
+}
+
 fn should_attempt_json_fallback(error: &LlmTransportError, allow_text_fallback: bool) -> bool {
     allow_text_fallback
         && !matches!(
@@ -244,6 +320,24 @@ pub(crate) fn run_openai_provider_turn(
     allow_official_reauth_retry: bool,
     allow_text_fallback: bool,
 ) -> Result<ProviderTurnResult, ProviderError> {
+    if matches!(config.wire_api, ProviderWireApi::Responses) {
+        let response = run_openai_responses_json_transport(
+            state,
+            config,
+            body,
+            max_time_seconds.or(Some(120)),
+            allow_official_reauth_retry,
+        )
+        .map_err(|error| provider_error_from_transport(&error))?;
+        let (content, reasoning_content, tool_calls) =
+            extract_openai_responses_response(&response)?;
+        return Ok(ProviderTurnResult {
+            content,
+            reasoning_content,
+            tool_calls,
+            delivery: ProviderTurnDelivery::JsonFallback,
+        });
+    }
     let streaming_requested = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     if !streaming_requested {
         let response = run_openai_json_chat_completion_transport(
@@ -370,7 +464,8 @@ fn is_stream_degrade_error(error: &LlmTransportError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_openai_json_assistant_response, openai_tool_arguments_value,
+        extract_openai_json_assistant_response, extract_openai_responses_response,
+        openai_tool_arguments_value,
         record_openai_stream_failure, record_openai_stream_success, should_attempt_json_fallback,
         should_prefer_non_streaming_openai_turn,
     };
@@ -449,6 +544,38 @@ mod tests {
         assert_eq!(
             tool_calls[0].arguments,
             json!({ "path": "knowledge://item" })
+        );
+    }
+
+    #[test]
+    fn responses_response_preserves_text_and_tool_calls() {
+        let (content, reasoning, tool_calls) = extract_openai_responses_response(&json!({
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [{ "text": "checked context" }]
+                },
+                {
+                    "type": "message",
+                    "content": [{ "type": "output_text", "text": "Need a file read." }]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "Read",
+                    "arguments": "{\"path\":\"workspace://a.md\"}"
+                }
+            ]
+        }))
+        .expect("responses output should parse");
+
+        assert_eq!(content, "Need a file read.");
+        assert_eq!(reasoning, "checked context");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].name, "Read");
+        assert_eq!(
+            tool_calls[0].arguments,
+            json!({ "path": "workspace://a.md" })
         );
     }
 
