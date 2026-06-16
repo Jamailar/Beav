@@ -8,6 +8,8 @@ mod collab_runtime;
 mod config_runtime;
 #[path = "runtime/context_bundle.rs"]
 mod context_bundle;
+#[path = "runtime/context_fragments.rs"]
+mod context_fragments;
 #[path = "runtime/contracts.rs"]
 mod contracts;
 #[path = "runtime/events.rs"]
@@ -16,6 +18,8 @@ mod events;
 mod interactive_loop;
 #[path = "runtime/interactive_recovery.rs"]
 mod interactive_recovery;
+#[path = "runtime/media_ref.rs"]
+mod media_ref;
 #[path = "runtime/orchestration_runtime.rs"]
 mod orchestration_runtime;
 #[path = "runtime/redclaw_orchestration.rs"]
@@ -34,10 +38,12 @@ pub use approval_runtime::*;
 pub use collab_runtime::*;
 pub use config_runtime::*;
 pub use context_bundle::*;
+pub use context_fragments::*;
 pub use contracts::*;
 pub use events::*;
 pub use interactive_loop::*;
 pub use interactive_recovery::*;
+pub use media_ref::*;
 pub use orchestration_runtime::*;
 pub use redclaw_orchestration::*;
 pub use session_runtime::*;
