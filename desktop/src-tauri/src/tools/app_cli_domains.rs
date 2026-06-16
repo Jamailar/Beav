@@ -1216,10 +1216,7 @@ impl<'a> AppCliExecutor<'a> {
         let action = tokens.first().map(String::as_str).unwrap_or("fetch");
         match action {
             "fetch" | "get" | "read" => crate::tools::web_access::fetch(payload),
-            "search" => Err(
-                "web search is not available; provide a URL and use Read(path=\"https://...\")"
-                    .to_string(),
-            ),
+            "search" => crate::tools::web_search::search(self.state, payload, self.model_config),
             other => Err(format!("unsupported web action: {other}")),
         }
     }

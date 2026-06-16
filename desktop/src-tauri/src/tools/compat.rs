@@ -459,12 +459,21 @@ fn normalize_search_call(arguments: &Value) -> NormalizedToolCall {
                 Some(path),
             )
         }
-        "web" => app_cli_legacy_command_call(
-            "help",
-            json!({ "resource": "web", "operation": "search", "input": Value::Object(object.clone()) }),
-            Some("Search"),
-            Some(path),
-        ),
+        "web" => {
+            let mut payload = Map::new();
+            if let Some(query) = object.get("query").and_then(Value::as_str) {
+                payload.insert("query".to_string(), json!(query));
+            } else if !resource_path.trim().is_empty() {
+                payload.insert("query".to_string(), json!(resource_path.trim_matches('/')));
+            }
+            copy_universal_as(&mut payload, &object, "limit", "limit");
+            app_cli_action_call(
+                "web.search",
+                Value::Object(payload),
+                Some("Search"),
+                Some(path),
+            )
+        }
         _ => universal_fs_call("workspace.search", resource_path, &object, Some("Search")),
     }
 }
@@ -2246,19 +2255,22 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_universal_search_web_to_help() {
+    fn normalizes_universal_search_web_to_web_search() {
         let normalized = normalize_tool_call(
             "Search",
             &json!({ "path": "web://", "query": "oh-my-codex" }),
         );
         assert_eq!(normalized.name, "workflow");
-        assert_eq!(normalized.arguments.get("command"), Some(&json!("help")));
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("web.search"))
+        );
         assert_eq!(
             normalized
                 .arguments
                 .get("payload")
-                .and_then(|value| value.get("operation")),
-            Some(&json!("search"))
+                .and_then(|value| value.get("query")),
+            Some(&json!("oh-my-codex"))
         );
     }
 

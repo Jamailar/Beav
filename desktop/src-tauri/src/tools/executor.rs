@@ -23,6 +23,7 @@ pub struct InteractiveToolExecutor<'a> {
     runtime_mode: &'a str,
     session_id: Option<&'a str>,
     tool_call_id: Option<&'a str>,
+    model_config: Option<&'a Value>,
 }
 
 impl<'a> InteractiveToolExecutor<'a> {
@@ -32,6 +33,7 @@ impl<'a> InteractiveToolExecutor<'a> {
         runtime_mode: &'a str,
         session_id: Option<&'a str>,
         tool_call_id: Option<&'a str>,
+        model_config: Option<&'a Value>,
     ) -> Self {
         Self {
             app,
@@ -39,6 +41,7 @@ impl<'a> InteractiveToolExecutor<'a> {
             runtime_mode,
             session_id,
             tool_call_id,
+            model_config,
         }
     }
 
@@ -470,6 +473,7 @@ impl<'a> InteractiveToolExecutor<'a> {
             self.runtime_mode,
             self.session_id,
             self.tool_call_id,
+            self.model_config,
         )
         .execute(arguments)
     }
