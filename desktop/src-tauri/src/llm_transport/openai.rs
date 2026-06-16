@@ -1165,6 +1165,7 @@ mod tests {
     fn minimax_defaults_to_http11_transport() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
             base_url: "https://api.minimaxi.com/v1".to_string(),
             api_key: None,
             model_name: "MiniMax-M2.7".to_string(),

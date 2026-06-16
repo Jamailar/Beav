@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::runtime::ProviderWireApi;
+
 use super::{InteractiveToolChoice, ProviderTurnPolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +42,7 @@ pub(crate) struct ProviderCapabilities {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderProfile {
     pub key: String,
+    pub wire_api: ProviderWireApi,
     pub provider_family: ProviderFamily,
     pub capabilities: ProviderCapabilities,
 }

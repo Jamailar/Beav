@@ -11,7 +11,7 @@ mod types;
 use serde_json::{json, Value};
 use std::path::Path;
 
-use crate::runtime::ResolvedChatConfig;
+use crate::runtime::{ProviderWireApi, ResolvedChatConfig};
 use crate::{
     infer_protocol, official_ai_api_key_from_settings, official_base_url_from_settings,
     payload_string,
@@ -26,7 +26,7 @@ pub(crate) use types::{
 use credentials::{
     is_local_base_url, normalize_base_url, official_plaintext_key, source_api_key, source_base_url,
     source_id, source_is_official, source_model, source_name, source_preset_id, source_protocol,
-    source_without_secrets,
+    source_wire_api, source_without_secrets,
 };
 
 pub(crate) struct AiModelManager;
@@ -202,6 +202,7 @@ impl AiModelManager {
                 preset_id: source_preset_id(source),
                 base_url: source_base_url(source),
                 protocol: source_protocol(source),
+                wire_api: source_wire_api(source),
                 model: source_model(source),
                 api_key_present: !source_api_key(source).is_empty(),
                 is_official: source_is_official(source),
@@ -312,6 +313,23 @@ impl AiModelManager {
         let protocol = override_string(request_override, &["protocol"])
             .or_else(|| (!source_protocol_value.is_empty()).then_some(source_protocol_value))
             .unwrap_or_else(|| infer_protocol(&base_url, Some(&preset_id), None));
+        let source_wire_api_value = source.as_ref().map(source_wire_api).unwrap_or_default();
+        let wire_api = override_string(request_override, &["wireApi", "wire_api"])
+            .or_else(|| (!source_wire_api_value.is_empty()).then_some(source_wire_api_value))
+            .or_else(|| {
+                route
+                    .get("wireApi")
+                    .or_else(|| route.get("wire_api"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+            })
+            .or_else(|| payload_string(settings, "wire_api"))
+            .or_else(|| payload_string(settings, "wireApi"))
+            .as_deref()
+            .and_then(|value| ProviderWireApi::from_config(Some(value)))
+            .unwrap_or_else(|| ProviderWireApi::infer(&protocol));
         let reasoning_effort = normalize_reasoning_effort(
             override_string(request_override, &["reasoningEffort", "reasoning_effort"])
                 .or_else(|| payload_string(settings, "reasoning_effort"))
@@ -344,6 +362,7 @@ impl AiModelManager {
             api_key,
             model_name,
             protocol,
+            wire_api,
             reasoning_effort,
             provider_template: override_string(
                 request_override,
@@ -412,6 +431,7 @@ impl AiModelManager {
         }
         Some(ResolvedChatConfig {
             protocol: resolved.protocol,
+            wire_api: resolved.wire_api,
             base_url: resolved.base_url,
             api_key: resolved.api_key,
             model_name: resolved.model_name,
@@ -437,6 +457,7 @@ pub(crate) fn resolved_value_for_debug(route: &AiResolvedRoute) -> Value {
         "baseURL": route.base_url,
         "modelName": route.model_name,
         "protocol": route.protocol,
+        "wireApi": route.wire_api.as_str(),
         "apiKeyPresent": route.api_key.as_deref().map(|key| !key.trim().is_empty()).unwrap_or(false),
         "provider": route.provider,
         "providerTemplate": route.provider_template,
@@ -568,6 +589,30 @@ mod tests {
 
         let route = AiModelManager::resolve(&settings, AiModelScope::Chat, None).unwrap();
         assert_eq!(route.model_name, "provider-chat-model");
+    }
+
+    #[test]
+    fn resolve_chat_config_tracks_explicit_wire_api() {
+        let settings = json!({
+            "api_endpoint": "https://custom.example/v1",
+            "default_ai_source_id": "custom-source",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "custom-source",
+                "baseURL": "https://api.openai.com/v1",
+                "model": "gpt-5",
+                "protocol": "openai",
+                "wireApi": "chatCompat"
+            })]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({})).unwrap()
+        });
+
+        let config = AiModelManager::resolve_chat_config(
+            &settings,
+            Some(&json!({ "wireApi": "responses" })),
+        )
+        .unwrap();
+
+        assert_eq!(config.wire_api, ProviderWireApi::Responses);
     }
 
     #[test]

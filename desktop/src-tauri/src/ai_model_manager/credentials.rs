@@ -65,6 +65,10 @@ pub(crate) fn source_protocol(source: &Value) -> String {
     trim_json_string(source, "protocol")
 }
 
+pub(crate) fn source_wire_api(source: &Value) -> String {
+    trim_json_string(source, "wireApi")
+}
+
 pub(crate) fn source_preset_id(source: &Value) -> String {
     trim_json_string(source, "presetId")
 }

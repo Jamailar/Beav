@@ -432,6 +432,7 @@ mod tests {
             config,
             ResolvedChatConfig {
                 protocol: "gemini".to_string(),
+                wire_api: ProviderWireApi::Gemini,
                 base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
                 api_key: Some("default-key".to_string()),
                 model_name: "gemini-2.5-pro".to_string(),
@@ -461,6 +462,7 @@ mod tests {
             config,
             ResolvedChatConfig {
                 protocol: "openai".to_string(),
+                wire_api: ProviderWireApi::ChatCompat,
                 base_url: "https://example.invalid/v1".to_string(),
                 api_key: Some("rbx-live-1".to_string()),
                 model_name: "gpt-5.3-codex".to_string(),
