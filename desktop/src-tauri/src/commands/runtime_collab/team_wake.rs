@@ -1,8 +1,6 @@
 use super::team_prompt::{format_team_member_prompt, team_member_session_metadata};
 use super::*;
-use crate::runtime::{
-    list_collab_members, list_collab_tasks, post_collab_message, submit_collab_report,
-};
+use crate::runtime::{list_collab_members, list_collab_tasks, submit_collab_report};
 
 fn team_wake_key(session_id: &str, member_id: &str) -> String {
     format!("{session_id}:{member_id}")
@@ -124,6 +122,7 @@ fn prepare_team_member_wake(
     })
 }
 
+#[cfg(test)]
 fn team_member_is_settled(status: &str) -> bool {
     matches!(
         status,
@@ -131,6 +130,7 @@ fn team_member_is_settled(status: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 pub(super) fn non_coordinator_members_settled(
     store: &crate::AppStore,
     session_id: &str,
@@ -149,94 +149,53 @@ fn finish_team_member_wake(
     input: &TeamWakeInput,
     result: Result<String, String>,
 ) -> Result<(), String> {
-    let (member, report, coordinator_message, coordinator_target) =
-        with_store_mut(state, |store| {
-            let now = now_i64();
-            let (status, summary, blockers) = match result {
-                Ok(response) => ("idle", response, Vec::<String>::new()),
-                Err(error) => ("failed", error.clone(), vec![error]),
-            };
-            let mut member = store
-                .collab_members
-                .iter_mut()
-                .find(|item| item.session_id == input.session.id && item.id == input.member.id)
-                .cloned()
-                .ok_or_else(|| "协作成员不存在".to_string())?;
-            if let Some(target) = store
-                .collab_members
-                .iter_mut()
-                .find(|item| item.session_id == input.session.id && item.id == input.member.id)
-            {
-                target.status = status.to_string();
-                target.last_seen_at = Some(now);
-                target.last_activity_at = Some(now);
-                target.last_report_at = Some(now);
-                target.last_error = if status == "failed" {
-                    Some(summary.clone())
-                } else {
-                    None
-                };
-                target.updated_at = now;
-                member = target.clone();
-            }
-            let report = submit_collab_report(
-                store,
-                &json!({
-                    "sessionId": input.session.id,
-                    "memberId": input.member.id,
-                    "taskId": input.member.current_task_id,
-                    "status": status,
-                    "reportType": if status == "failed" { "failure" } else { "progress" },
-                    "summary": summary,
-                    "blockers": blockers,
-                    "payload": {
-                        "source": "team_member_wake",
-                        "conversationId": input.conversation_id
-                    }
-                }),
-            )?;
-            let coordinator_id = store
-                .collab_sessions
-                .iter()
-                .find(|item| item.id == input.session.id)
-                .and_then(|item| item.coordinator_member_id.clone());
-            let coordinator_message = if let Some(coordinator_id) = coordinator_id.as_deref() {
-                if coordinator_id != input.member.id {
-                    Some(post_collab_message(
-                        store,
-                        &json!({
-                            "sessionId": input.session.id,
-                            "fromMemberId": input.member.id,
-                            "toMemberId": coordinator_id,
-                            "fromKind": "member",
-                            "messageType": "idle_notification",
-                            "kind": "message",
-                            "subject": format!("{} completed a turn", input.member.display_name),
-                            "body": report.summary,
-                            "payload": {
-                                "source": "team_member_wake",
-                                "reportId": report.id,
-                                "status": status
-                            }
-                        }),
-                    )?)
-                } else {
-                    None
-                }
+    let (member, report) = with_store_mut(state, |store| {
+        let now = now_i64();
+        let (status, summary, blockers) = match result {
+            Ok(response) => ("idle", response, Vec::<String>::new()),
+            Err(error) => ("failed", error.clone(), vec![error]),
+        };
+        let mut member = store
+            .collab_members
+            .iter_mut()
+            .find(|item| item.session_id == input.session.id && item.id == input.member.id)
+            .cloned()
+            .ok_or_else(|| "协作成员不存在".to_string())?;
+        if let Some(target) = store
+            .collab_members
+            .iter_mut()
+            .find(|item| item.session_id == input.session.id && item.id == input.member.id)
+        {
+            target.status = status.to_string();
+            target.last_seen_at = Some(now);
+            target.last_activity_at = Some(now);
+            target.last_report_at = Some(now);
+            target.last_error = if status == "failed" {
+                Some(summary.clone())
             } else {
                 None
             };
-            let coordinator_target = coordinator_id.as_deref().and_then(|coordinator_id| {
-                if non_coordinator_members_settled(store, &input.session.id, coordinator_id) {
-                    coordinator_message
-                        .as_ref()
-                        .and_then(|message| message.to_member_id.clone())
-                } else {
-                    None
+            target.updated_at = now;
+            member = target.clone();
+        }
+        let report = submit_collab_report(
+            store,
+            &json!({
+                "sessionId": input.session.id,
+                "memberId": input.member.id,
+                "taskId": input.member.current_task_id,
+                "status": status,
+                "reportType": if status == "failed" { "failure" } else { "progress" },
+                "summary": summary,
+                "blockers": blockers,
+                "payload": {
+                    "source": "team_member_wake",
+                    "conversationId": input.conversation_id
                 }
-            });
-            Ok((member, report, coordinator_message, coordinator_target))
-        })?;
+            }),
+        )?;
+        Ok((member, report))
+    })?;
 
     emit_collab_event(
         app,
@@ -250,23 +209,6 @@ fn finish_team_member_wake(
         None,
         json!({ "collabSessionId": report.session_id, "report": report }),
     );
-    if let Some(message) = coordinator_message {
-        emit_collab_event(
-            app,
-            "runtime:collab-message-delivered",
-            None,
-            json!({ "collabSessionId": message.session_id, "message": message }),
-        );
-    }
-    if let Some(member_id) = coordinator_target {
-        schedule_team_member_wake(
-            app,
-            state,
-            input.session.id.clone(),
-            member_id,
-            "member_completed",
-        );
-    }
     Ok(())
 }
 
@@ -385,4 +327,130 @@ fn has_pending_member_messages(
         }))
     })
     .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::runtime::{add_collab_member, create_collab_session, post_collab_message};
+
+    #[test]
+    fn explicit_member_messages_can_target_coordinator() {
+        let mut store = crate::AppStore::default();
+        let session = create_collab_session(
+            &mut store,
+            &json!({
+                "objective": "coordination",
+                "runtimeMode": "team",
+            }),
+        )
+        .unwrap();
+        let coordinator = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "总监",
+                "roleId": "leader",
+            }),
+        )
+        .unwrap();
+        let worker = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "成员",
+                "roleId": "member",
+            }),
+        )
+        .unwrap();
+        store.collab_sessions[0].coordinator_member_id = Some(coordinator.id.clone());
+
+        let member_reply = post_collab_message(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "fromMemberId": worker.id,
+                "toMemberId": coordinator.id,
+                "fromKind": "member",
+                "messageType": "message",
+                "body": "收到",
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            member_reply.to_member_id.as_deref(),
+            Some(coordinator.id.as_str())
+        );
+        assert_eq!(
+            member_reply.from_member_id.as_deref(),
+            Some(worker.id.as_str())
+        );
+    }
+
+    #[test]
+    fn explicit_coordinator_messages_can_target_members() {
+        let mut store = crate::AppStore::default();
+        let session = create_collab_session(
+            &mut store,
+            &json!({
+                "objective": "coordination",
+                "runtimeMode": "team",
+            }),
+        )
+        .unwrap();
+        let coordinator = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "总监",
+                "roleId": "leader",
+            }),
+        )
+        .unwrap();
+        let worker = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "成员",
+                "roleId": "member",
+            }),
+        )
+        .unwrap();
+        store.collab_sessions[0].coordinator_member_id = Some(coordinator.id.clone());
+
+        let user_message = post_collab_message(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "toMemberId": coordinator.id,
+                "fromKind": "user",
+                "messageType": "message",
+                "body": "测试",
+            }),
+        )
+        .unwrap();
+        let coordinator_message = post_collab_message(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "fromMemberId": coordinator.id,
+                "toMemberId": worker.id,
+                "fromKind": "system",
+                "messageType": "message",
+                "body": "请处理",
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            user_message.to_member_id.as_deref(),
+            Some(coordinator.id.as_str())
+        );
+        assert_eq!(
+            coordinator_message.to_member_id.as_deref(),
+            Some(worker.id.as_str())
+        );
+    }
 }
