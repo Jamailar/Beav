@@ -494,6 +494,8 @@ fn intent_priority_app_cli_actions(task_intent: Option<&str>) -> &'static [&'sta
 const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "web.fetch",
     "web.search",
+    "taskBrief.get",
+    "taskBrief.update",
     "session.resources.list",
     "session.resources.get",
     "memory.list",

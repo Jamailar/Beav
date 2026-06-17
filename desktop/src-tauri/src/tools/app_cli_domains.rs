@@ -1,6 +1,11 @@
 use super::*;
 use crate::store::settings as settings_store;
 
+const TASK_BRIEF_MAX_STRING_CHARS: usize = 4_000;
+const TASK_BRIEF_MAX_ARRAY_ITEMS: usize = 40;
+const TASK_BRIEF_MAX_OBJECT_FIELDS: usize = 80;
+const TASK_BRIEF_MAX_DEPTH: usize = 5;
+
 impl<'a> AppCliExecutor<'a> {
     pub(super) fn handle_session_resources(
         &self,
@@ -12,6 +17,101 @@ impl<'a> AppCliExecutor<'a> {
             "get" => self.handle_session_resources_get(payload),
             other => Err(format!("unsupported session-resources action: {other}")),
         }
+    }
+
+    pub(super) fn handle_task_brief(
+        &self,
+        tokens: &[String],
+        payload: &Value,
+    ) -> Result<Value, String> {
+        let action = tokens.first().map(String::as_str).unwrap_or("get");
+        match action {
+            "get" | "read" => self.handle_task_brief_get(payload),
+            "update" | "save" => self.handle_task_brief_update(payload),
+            other => Err(format!("unsupported taskBrief action: {other}")),
+        }
+    }
+
+    pub(super) fn handle_task_brief_get(&self, payload: &Value) -> Result<Value, String> {
+        let payload_session_id = payload_string(payload, "sessionId");
+        let Some(session_id) = self.session_id.or(payload_session_id.as_deref()) else {
+            return Err("taskBrief.get requires an active session".to_string());
+        };
+        with_store(self.state, |store| {
+            let session = store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .ok_or_else(|| "taskBrief.get could not find the active session".to_string())?;
+            let brief = session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("taskBrief").cloned())
+                .or_else(|| {
+                    session
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("taskHints"))
+                        .and_then(|task_hints| task_hints.get("taskBrief"))
+                        .cloned()
+                })
+                .unwrap_or_else(|| json!({}));
+            Ok(json!({
+                "success": true,
+                "sessionId": session_id,
+                "taskBrief": brief
+            }))
+        })
+    }
+
+    pub(super) fn handle_task_brief_update(&self, payload: &Value) -> Result<Value, String> {
+        let payload_session_id = payload_string(payload, "sessionId");
+        let Some(session_id) = self.session_id.or(payload_session_id.as_deref()) else {
+            return Err("taskBrief.update requires an active session".to_string());
+        };
+        let now = now_iso();
+        let patch = build_task_brief_patch(payload, &now);
+        with_store_mut(self.state, |store| {
+            let session = store
+                .chat_sessions
+                .iter_mut()
+                .find(|item| item.id == session_id)
+                .ok_or_else(|| "taskBrief.update could not find the active session".to_string())?;
+            let mut metadata_object = session
+                .metadata
+                .clone()
+                .and_then(|metadata| metadata.as_object().cloned())
+                .unwrap_or_default();
+            let mut next_brief = metadata_object
+                .get("taskBrief")
+                .cloned()
+                .or_else(|| {
+                    metadata_object
+                        .get("taskHints")
+                        .and_then(|task_hints| task_hints.get("taskBrief"))
+                        .cloned()
+                })
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            let previous_revision = next_brief
+                .get("revision")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if let Some(patch_object) = patch.as_object() {
+                merge_task_brief_object(&mut next_brief, patch_object);
+            }
+            next_brief.insert("revision".to_string(), json!(previous_revision + 1));
+            next_brief.insert("updatedAt".to_string(), json!(now));
+            let task_brief = Value::Object(next_brief);
+            metadata_object.insert("taskBrief".to_string(), task_brief.clone());
+            session.metadata = Some(Value::Object(metadata_object));
+            session.updated_at = now_iso();
+            Ok(json!({
+                "success": true,
+                "sessionId": session_id,
+                "taskBrief": task_brief
+            }))
+        })
     }
 
     pub(super) fn handle_session_resources_list(&self, payload: &Value) -> Result<Value, String> {
@@ -2970,4 +3070,76 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             "message": "已生成待审改稿提案。请在稿件编辑器里查看 diff，并手动接受或拒绝。"
         })))
     }
+}
+
+fn build_task_brief_patch(payload: &Value, now: &str) -> Value {
+    let mut patch = match payload.get("brief").and_then(Value::as_object) {
+        Some(brief) => brief.clone(),
+        None => payload.as_object().cloned().unwrap_or_default(),
+    };
+    for key in ["sessionId", "merge"] {
+        patch.remove(key);
+    }
+    if let Some(stage) = payload_string(payload, "stage") {
+        patch.insert("currentStage".to_string(), json!(stage));
+    }
+    if let Some(status) = payload_string(payload, "status") {
+        patch.insert("status".to_string(), json!(status));
+    }
+    patch.insert("lastUpdatedAt".to_string(), json!(now));
+    sanitize_task_brief_value(&Value::Object(patch), 0)
+}
+
+fn merge_task_brief_object(target: &mut Map<String, Value>, patch: &Map<String, Value>) {
+    for (key, value) in patch {
+        let sanitized = sanitize_task_brief_value(value, 0);
+        match (target.get_mut(key), sanitized) {
+            (Some(Value::Object(existing)), Value::Object(next)) => {
+                merge_task_brief_object(existing, &next);
+            }
+            (_, next) => {
+                target.insert(key.clone(), next);
+            }
+        }
+    }
+}
+
+fn sanitize_task_brief_value(value: &Value, depth: usize) -> Value {
+    if depth >= TASK_BRIEF_MAX_DEPTH {
+        return match value {
+            Value::String(text) => Value::String(truncate_task_brief_string(text)),
+            Value::Number(_) | Value::Bool(_) | Value::Null => value.clone(),
+            Value::Array(items) => json!({ "truncated": true, "itemCount": items.len() }),
+            Value::Object(object) => json!({ "truncated": true, "fieldCount": object.len() }),
+        };
+    }
+    match value {
+        Value::String(text) => Value::String(truncate_task_brief_string(text)),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .take(TASK_BRIEF_MAX_ARRAY_ITEMS)
+                .map(|item| sanitize_task_brief_value(item, depth + 1))
+                .collect(),
+        ),
+        Value::Object(object) => {
+            let mut next = Map::new();
+            for (key, item) in object.iter().take(TASK_BRIEF_MAX_OBJECT_FIELDS) {
+                next.insert(key.clone(), sanitize_task_brief_value(item, depth + 1));
+            }
+            Value::Object(next)
+        }
+        _ => value.clone(),
+    }
+}
+
+fn truncate_task_brief_string(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars().take(TASK_BRIEF_MAX_STRING_CHARS) {
+        out.push(ch);
+    }
+    if text.chars().count() > TASK_BRIEF_MAX_STRING_CHARS {
+        out.push_str("...[truncated]");
+    }
+    out
 }

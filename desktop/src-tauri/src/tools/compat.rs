@@ -744,6 +744,18 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("web", "search" | "lookup") => {
             app_cli_action_call("web.search", payload, Some("Operate"), Some("web.search"))
         }
+        ("taskbrief" | "task-brief" | "task_brief", "get" | "read") => app_cli_action_call(
+            "taskBrief.get",
+            payload,
+            Some("Operate"),
+            Some("taskBrief.get"),
+        ),
+        ("taskbrief" | "task-brief" | "task_brief", "update" | "save") => app_cli_action_call(
+            "taskBrief.update",
+            payload,
+            Some("Operate"),
+            Some("taskBrief.update"),
+        ),
         ("asset" | "assets" | "subject" | "subjects", "search" | "list") => app_cli_action_call(
             "assets.search",
             payload,
@@ -2702,6 +2714,35 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("query")),
             Some(&json!("SpaceX valuation today"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_task_brief_update_to_task_brief_update() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "taskBrief",
+                "operation": "update",
+                "input": {
+                    "stage": "research",
+                    "brief": {
+                        "currentStage": "research"
+                    }
+                }
+            }),
+        );
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("taskBrief.update"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("stage")),
+            Some(&json!("research"))
         );
     }
 

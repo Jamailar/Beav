@@ -713,6 +713,8 @@ impl<'a> AppCliExecutor<'a> {
             }
             "webfetch" => self.handle_web(&["fetch".to_string()], payload),
             "websearch" => self.handle_web(&["search".to_string()], payload),
+            "taskbriefget" => self.handle_task_brief_get(payload),
+            "taskbriefupdate" => self.handle_task_brief_update(payload),
             "sessionresourceslist" => self.handle_session_resources_list(payload),
             "sessionresourcesget" => self.handle_session_resources_get(payload),
             "pluginslist" => self.call_channel("plugins:list", json!({})),
@@ -1207,6 +1209,7 @@ impl<'a> AppCliExecutor<'a> {
             "work" => self.handle_work(args, payload),
             "memory" => self.handle_memory(args, payload),
             "web" => self.handle_web(args, payload),
+            "task-brief" | "task_brief" | "taskBrief" => self.handle_task_brief(args, payload),
             "redclaw" => self.handle_redclaw(args, payload),
             "runtime" => app_cli_runtime::handle(self, args, payload),
             "approval" => {
