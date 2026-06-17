@@ -1597,6 +1597,17 @@ export function GenerationStudio({
             .filter((jobId): jobId is string => Boolean(jobId)),
         [feedEntries],
     );
+    const visibleFeedItems = useMemo(
+        () => feedEntries
+            .map((entry, index) => ({ entry, index }))
+            .filter(({ entry, index }) => !(
+                isGenerationFeedEntry(entry)
+                && entry.status === 'success'
+                && index > 0
+                && isAgentSessionFeedEntry(feedEntries[index - 1])
+            )),
+        [feedEntries],
+    );
     const isDigitalHumanMode = studioMode === 'digital-human';
     const generationJobBootstrapFilter = useMemo(() => ({ limit: 100, queueMode: 'free_creation' as const }), []);
     const agentGenerationJobBootstrapFilter = useMemo(
@@ -3338,11 +3349,11 @@ export function GenerationStudio({
                     </div>
                 )}
                 <main ref={feedScrollRef} className={clsx('flex-1 min-h-0 overflow-y-auto', onReturnHome ? 'pt-0' : 'pt-6')}>
-                    {feedEntries.length === 0 ? (
+                    {visibleFeedItems.length === 0 ? (
                         <div className="min-h-[280px]" />
                     ) : (
                         <div className="mx-auto max-w-[860px] space-y-7 pb-10">
-                            {feedEntries.map((entry, index) => (
+                            {visibleFeedItems.map(({ entry, index }) => (
                                 isGenerationFeedEntry(entry) ? (
                                     <FeedEntryMessage
                                         key={entry.id}
