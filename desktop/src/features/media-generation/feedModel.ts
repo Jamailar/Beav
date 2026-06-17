@@ -893,7 +893,7 @@ export function requestFromJobProjection(job: MediaJobProjection): GenerationReq
     const model = job.providerModel || stringField(request, ['model']);
     const generationMode = stringField(request, ['generationMode', 'mode']);
 
-    if (job.kind === 'audio') {
+    if (job.kind === 'audio' || job.kind === 'audio_sequence') {
         return {
             type: 'audio',
             prompt,
@@ -998,6 +998,40 @@ export function isSamePendingGenerationRequest(entry: FeedEntry, jobEntry: Gener
     return Math.abs(entry.createdAt - jobEntry.createdAt) < 120_000;
 }
 
+function pendingGenerationMatchScore(entry: FeedEntry, jobEntry: GenerationFeedEntry): number {
+    if (!isGenerationFeedEntry(entry) || entry.jobId || entry.status !== 'running') return Number.POSITIVE_INFINITY;
+    if (entry.request.type !== jobEntry.request.type) return Number.POSITIVE_INFINITY;
+
+    const timeDelta = feedTime(jobEntry.createdAt) - feedTime(entry.createdAt);
+    if (!Number.isFinite(timeDelta) || timeDelta < -5_000 || timeDelta > 15 * 60_000) {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    const pendingPrompt = entry.request.prompt.trim();
+    const jobPrompt = jobEntry.request.prompt.trim();
+    if (pendingPrompt && jobPrompt && pendingPrompt === jobPrompt) {
+        return timeDelta;
+    }
+
+    // Agent mode may turn the user's short request into a longer executable prompt.
+    // In that flow the optimistic placeholder still represents the first matching
+    // media job of the same kind created immediately after the user sends.
+    return timeDelta + 120_000;
+}
+
+function findPendingGenerationIndex(entries: FeedEntry[], jobEntry: GenerationFeedEntry): number {
+    let bestIndex = -1;
+    let bestScore = Number.POSITIVE_INFINITY;
+    entries.forEach((entry, index) => {
+        const score = pendingGenerationMatchScore(entry, jobEntry);
+        if (score < bestScore) {
+            bestScore = score;
+            bestIndex = index;
+        }
+    });
+    return bestIndex;
+}
+
 export function errorMessageFromJobProjection(job: MediaJobProjection): string {
     const attemptError = typeof job.attempt?.lastError === 'string' ? job.attempt.lastError : '';
     const resultError = typeof job.result?.error === 'string' ? job.result.error : '';
@@ -1037,20 +1071,27 @@ export function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobPro
     };
 }
 
-export function isGenerationStudioMediaJob(job: MediaJobProjection): boolean {
-    return job.queueMode === 'free_creation'
-        && (job.kind === 'image' || job.kind === 'video' || job.kind === 'video_sequence' || job.kind === 'audio');
+export function isGenerationStudioMediaJob(job: MediaJobProjection, ownerSessionId?: string | null): boolean {
+    const supportedKind = job.kind === 'image'
+        || job.kind === 'video'
+        || job.kind === 'video_sequence'
+        || job.kind === 'audio'
+        || job.kind === 'audio_sequence';
+    if (!supportedKind) return false;
+    if (job.queueMode === 'free_creation') return true;
+    return Boolean(ownerSessionId && job.queueMode === 'ai_generation' && job.ownerSessionId === ownerSessionId);
 }
 
 export function mergeMediaJobsIntoFeedEntries(
     entries: FeedEntry[],
     jobs: MediaJobProjection[],
     deleted: DeletedFeedState,
+    options?: { ownerSessionId?: string | null },
 ): FeedEntry[] {
     let changed = false;
     const next = [...entries];
     const sortedJobs = jobs
-        .filter(isGenerationStudioMediaJob)
+        .filter((job) => isGenerationStudioMediaJob(job, options?.ownerSessionId))
         .filter((job) => !isJobDeleted(job, deleted))
         .sort((left, right) => {
             const timeDelta = feedTime(left.createdAt) - feedTime(right.createdAt);
@@ -1071,7 +1112,7 @@ export function mergeMediaJobsIntoFeedEntries(
 
         const jobEntry = feedEntryFromJobProjection(job);
         if (!jobEntry) continue;
-        const pendingIndex = next.findIndex((entry) => isSamePendingGenerationRequest(entry, jobEntry));
+        const pendingIndex = findPendingGenerationIndex(next, jobEntry);
         if (pendingIndex >= 0) {
             next[pendingIndex] = applyJobProjectionToFeedEntry({
                 ...(next[pendingIndex] as GenerationFeedEntry),

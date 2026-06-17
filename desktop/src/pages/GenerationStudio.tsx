@@ -161,7 +161,7 @@ function GenerationSubmitButton({
     pending = false,
     agent = false,
 }: GenerationSubmitButtonProps) {
-    const showEstimate = Boolean(estimate) && !pending && !agent;
+    const showEstimate = Boolean(estimate) && !pending;
     const accessibleLabel = showEstimate ? `${ariaLabel}，预计消耗 ${estimate?.label} 积分` : ariaLabel;
     return (
         <button
@@ -177,11 +177,13 @@ function GenerationSubmitButton({
         >
             {pending ? (
                 <Loader2 className="h-5 w-5 animate-spin" />
-            ) : agent ? (
-                <ArrowUp className="h-5 w-5" />
             ) : (
                 <>
-                    <Sparkles className="h-4.5 w-4.5 shrink-0" />
+                    {agent ? (
+                        <ArrowUp className="h-5 w-5 shrink-0" />
+                    ) : (
+                        <Sparkles className="h-4.5 w-4.5 shrink-0" />
+                    )}
                     {showEstimate && (
                         <span className="inline-flex items-baseline gap-0.5 leading-none">
                             <span className="text-[12px] font-semibold">~{estimate?.label}</span>
@@ -217,18 +219,13 @@ const IMAGE_ASPECT_RATIO_OPTIONS = [
     { value: '16:9', label: '16:9' },
 ] as const;
 
-const IMAGE_QUALITY_OPTIONS = [
-    { value: 'low', label: 'low' },
-    { value: 'medium', label: 'medium' },
-    { value: 'high', label: 'high' },
-] as const;
-
 const IMAGE_RESOLUTION_OPTIONS = [
-    { value: 'auto', label: '自动' },
     { value: '1K', label: '1K' },
     { value: '2K', label: '2K' },
     { value: '4K', label: '4K' },
 ] as const;
+
+const DEFAULT_IMAGE_QUALITY = 'medium';
 
 const IMAGE_COUNT_OPTIONS = [
     { value: '1', label: '1 张' },
@@ -1169,9 +1166,20 @@ function MetaRow({ request }: { request: GenerationRequest }) {
     );
 }
 
+function placeholderMediaGridClass(request: GenerationRequest, itemCount: number, aspectRatio: string): string {
+    if (request.type === 'audio') return 'max-w-[520px]';
+    const ratio = parseAspectRatio(aspectRatio, request.type === 'video' ? '16 / 9' : '4 / 3');
+    const portrait = ratio.height > ratio.width;
+    if (itemCount === 1) {
+        return portrait ? 'max-w-[220px]' : 'max-w-[360px]';
+    }
+    return portrait ? 'max-w-[380px] grid-cols-2' : 'max-w-[520px] grid-cols-2';
+}
+
 function FeedEntryMessage({
     entry,
     isActive,
+    inlineWithAgent = false,
     onRegenerate,
     onEdit,
     onDelete,
@@ -1180,6 +1188,7 @@ function FeedEntryMessage({
 }: {
     entry: GenerationFeedEntry;
     isActive: boolean;
+    inlineWithAgent?: boolean;
     onRegenerate: (entry: GenerationFeedEntry) => void;
     onEdit: (entry: GenerationFeedEntry) => void;
     onDelete: (entryId: string) => void;
@@ -1191,7 +1200,7 @@ function FeedEntryMessage({
     const progress = estimateGenerationProgress(entry.request, now - entry.createdAt);
     const placeholderCount = placeholderCountForRequest(entry.request);
     const placeholderAspectRatio = placeholderAspectRatioForRequest(entry.request);
-    const mediaGridClass = feedMediaGridClass(entry.request, placeholderCount);
+    const placeholderGridClass = placeholderMediaGridClass(entry.request, placeholderCount, placeholderAspectRatio);
     const assetGridClass = feedMediaGridClass(entry.request, entry.assets.length);
     const mediaHeightClass = feedMediaHeightClass(entry.request);
 
@@ -1203,49 +1212,64 @@ function FeedEntryMessage({
     }, [entry.createdAt, isActive, isRunning]);
 
     return (
-        <article className="space-y-3">
-            <div className="flex items-start gap-2.5">
-                <ReferenceStack request={entry.request} preview={entry.referencePreview} />
-                <div className="min-w-0 flex-1 space-y-2">
-                    <MetaRow request={entry.request} />
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-tertiary">
-                        <span>{formatRelativeTime(entry.createdAt)}</span>
-                        <span>·</span>
-                        <span>{SOURCE_LABELS[entry.source] || entry.source}</span>
-                        {entry.sourceTitle && (
-                            <>
-                                <span>·</span>
-                                <span className="truncate">{entry.sourceTitle}</span>
-                            </>
-                        )}
+        <article className={clsx('space-y-3', inlineWithAgent && '-mt-4 space-y-2')}>
+            {inlineWithAgent ? (
+                <div className="flex max-w-[620px] items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                        <MetaRow request={entry.request} />
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => onDelete(entry.id)}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-brand-red/10 hover:text-brand-red"
+                        aria-label="删除创作记录"
+                        title="删除创作记录"
+                    >
+                        <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                 </div>
-            </div>
+            ) : (
+                <>
+                    <div className="flex items-start gap-2.5">
+                        <ReferenceStack request={entry.request} preview={entry.referencePreview} />
+                        <div className="min-w-0 flex-1 space-y-2">
+                            <MetaRow request={entry.request} />
+                            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-tertiary">
+                                <span>{formatRelativeTime(entry.createdAt)}</span>
+                                <span>·</span>
+                                <span>{SOURCE_LABELS[entry.source] || entry.source}</span>
+                                {entry.sourceTitle && (
+                                    <>
+                                        <span>·</span>
+                                        <span className="truncate">{entry.sourceTitle}</span>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
 
-            <div className="flex max-w-[680px] items-start gap-2">
-                <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-6 text-text-primary">
-                    {entry.request.prompt}
-                </div>
-                <button
-                    type="button"
-                    onClick={() => onDelete(entry.id)}
-                    className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-brand-red/10 hover:text-brand-red"
-                    aria-label="删除创作记录"
-                    title="删除创作记录"
-                >
-                    <Trash2 className="h-3.5 w-3.5" />
-                </button>
-            </div>
+                    <div className="flex max-w-[680px] items-start gap-2">
+                        <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-6 text-text-primary">
+                            {entry.request.prompt}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => onDelete(entry.id)}
+                            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-brand-red/10 hover:text-brand-red"
+                            aria-label="删除创作记录"
+                            title="删除创作记录"
+                        >
+                            <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                    </div>
 
-            <ReferencePreviewStrip request={entry.request} />
+                    <ReferencePreviewStrip request={entry.request} />
+                </>
+            )}
 
             {isRunning && (
-                <div className={clsx(
-                    entry.request.type === 'audio'
-                        ? 'max-w-[620px]'
-                        : 'max-w-[760px] rounded-[16px] border border-border bg-surface-secondary px-4 py-3',
-                )}>
-                    <div className="mb-2.5 flex items-center justify-between gap-4">
+                <div className="max-w-[560px] space-y-2">
+                    <div className="flex items-center justify-between gap-4">
                         <div className="text-[12px] font-medium text-text-secondary">
                             任务创作中 {progress}%...
                         </div>
@@ -1253,7 +1277,7 @@ function FeedEntryMessage({
                             {entry.request.type === 'cover' ? '正在生成封面' : entry.request.type === 'image' ? '正在生成图片' : entry.request.type === 'audio' ? '正在生成音频' : '正在生成视频'}
                         </div>
                     </div>
-                    <div className="h-2.5 overflow-hidden rounded-full bg-surface-tertiary">
+                    <div className="h-1.5 overflow-hidden rounded-full bg-surface-tertiary">
                         <div
                             className="h-full rounded-full bg-[linear-gradient(90deg,rgb(var(--color-brand-red)/1)_0%,rgb(var(--color-accent-primary)/1)_100%)] transition-[width] duration-700 ease-out"
                             style={{ width: `${progress}%` }}
@@ -1269,14 +1293,11 @@ function FeedEntryMessage({
             )}
 
             {isRunning && entry.assets.length === 0 && entry.request.type !== 'audio' && (
-                <div className={clsx('grid gap-4', mediaGridClass)}>
+                <div className={clsx('grid gap-3', placeholderGridClass)}>
                     {Array.from({ length: placeholderCount }).map((_, index) => (
                         <div
                             key={`${entry.id}-placeholder-${index}`}
-                            className={clsx(
-                                'relative overflow-hidden rounded-[16px] border border-border bg-surface-secondary',
-                                mediaHeightClass,
-                            )}
+                            className="relative w-full overflow-hidden rounded-[14px] border border-border bg-surface-secondary"
                             style={{ aspectRatio: placeholderAspectRatio }}
                         >
                             <div
@@ -1472,8 +1493,7 @@ export function GenerationStudio({
     const [imageModel, setImageModel] = useState('');
     const [imageAspectRatio, setImageAspectRatio] = useState('4:3');
     const [imageSize, setImageSize] = useState('');
-    const [imageQuality, setImageQuality] = useState('medium');
-    const [imageResolution, setImageResolution] = useState('auto');
+    const [imageResolution, setImageResolution] = useState('1K');
     const [imageMode, setImageMode] = useState<ImageGenerationMode>('text-to-image');
     const [imageReferences, setImageReferences] = useState<ReferenceItem[]>([]);
     const [isReadingImageRefs, setIsReadingImageRefs] = useState(false);
@@ -1539,7 +1559,9 @@ export function GenerationStudio({
     const [isReadingCoverRefs, setIsReadingCoverRefs] = useState(false);
     const [coverError, setCoverError] = useState('');
     const trackedJobs = useMediaJobsStore(
-        useCallback((state) => Object.values(state.jobsById).filter(isGenerationStudioMediaJob), []),
+        useCallback((state) => (
+            Object.values(state.jobsById).filter((job) => isGenerationStudioMediaJob(job, agentSessionId))
+        ), [agentSessionId]),
         shallowArrayEqual,
     );
     const isAgentMode = true;
@@ -1577,6 +1599,12 @@ export function GenerationStudio({
     );
     const isDigitalHumanMode = studioMode === 'digital-human';
     const generationJobBootstrapFilter = useMemo(() => ({ limit: 100, queueMode: 'free_creation' as const }), []);
+    const agentGenerationJobBootstrapFilter = useMemo(
+        () => agentSessionId
+            ? { limit: 100, queueMode: 'ai_generation' as const, ownerSessionId: agentSessionId }
+            : null,
+        [agentSessionId],
+    );
     const updateFeedEntries = useCallback(
         (updater: FeedEntry[] | ((prev: FeedEntry[]) => FeedEntry[])) => {
             setFeedEntries((prev) => {
@@ -1669,6 +1697,10 @@ export function GenerationStudio({
         bootstrapFilter: generationJobBootstrapFilter,
         bootstrapIncludesTrackedJobs: true,
     });
+    useMediaJobSubscription([], {
+        enabled: isActive && Boolean(agentGenerationJobBootstrapFilter),
+        bootstrapFilter: agentGenerationJobBootstrapFilter,
+    });
 
     const loadContext = useCallback(async (overwriteDraftDefaults = false) => {
         try {
@@ -1681,7 +1713,6 @@ export function GenerationStudio({
             setCoverModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || '') : prev));
             setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '4:3') : prev));
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
-            setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? normalizeImageQuality(normalizedSettings.image_quality) : prev));
             setCoverQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? normalizeImageQuality(normalizedSettings.image_quality) : prev));
             const nextSettingsVoiceTtsModel = String(normalizedSettings.voice_tts_model || normalizedSettings.tts_model || DEFAULT_AUDIO_TTS_MODEL).trim();
             const previousSettingsVoiceTtsModel = lastSettingsVoiceTtsModelRef.current;
@@ -1814,9 +1845,11 @@ export function GenerationStudio({
 
     useEffect(() => {
         updateFeedEntries((prev) => {
-            return mergeMediaJobsIntoFeedEntries(prev, trackedJobs, deletedFeedStateRef.current);
+            return mergeMediaJobsIntoFeedEntries(prev, trackedJobs, deletedFeedStateRef.current, {
+                ownerSessionId: agentSessionId,
+            });
         });
-    }, [trackedJobs, updateFeedEntries]);
+    }, [agentSessionId, trackedJobs, updateFeedEntries]);
 
     useEffect(() => {
         if (!previewAsset) return;
@@ -1934,9 +1967,9 @@ export function GenerationStudio({
     const imageCostEstimate = useMemo(() => estimateImageGenerationPoints(pricingCatalog, {
         model: imageModel,
         count: imageCount,
-        quality: imageQuality,
+        quality: DEFAULT_IMAGE_QUALITY,
         resolution: imageResolution,
-    }), [imageCount, imageModel, imageQuality, imageResolution, pricingCatalog]);
+    }), [imageCount, imageModel, imageResolution, pricingCatalog]);
     const coverCostEstimate = useMemo(() => estimateCoverGenerationPoints(pricingCatalog, {
         model: coverModel,
         count: coverCount,
@@ -2361,7 +2394,7 @@ export function GenerationStudio({
             model: imageModel,
             aspectRatio: imageAspectRatio,
             size: imageSize,
-            quality: imageQuality,
+            quality: DEFAULT_IMAGE_QUALITY,
             resolution: imageResolution,
             imageMode,
             referenceItems: imageReferences,
@@ -2376,7 +2409,6 @@ export function GenerationStudio({
         imageModel,
         imagePrompt,
         imageProjectId,
-        imageQuality,
         imageReferences,
         imageResolution,
         imageSize,
@@ -2609,8 +2641,7 @@ export function GenerationStudio({
             setImageModel(entry.request.model);
             setImageAspectRatio(entry.request.aspectRatio);
             setImageSize(entry.request.size);
-            setImageQuality(entry.request.quality);
-            setImageResolution(entry.request.resolution);
+            setImageResolution(entry.request.resolution || '1K');
             setImageMode(entry.request.generationMode);
             setImageReferences(entry.request.referenceItems);
             return;
@@ -2922,7 +2953,7 @@ export function GenerationStudio({
             model: imageModel,
             aspectRatio: imageAspectRatio,
             size: imageSize,
-            quality: imageQuality,
+            quality: DEFAULT_IMAGE_QUALITY,
             resolution: imageResolution,
             imageMode,
             referenceItems: imageReferences,
@@ -2953,7 +2984,6 @@ export function GenerationStudio({
         imageModel,
         imageProjectId,
         imagePrompt,
-        imageQuality,
         imageReferences,
         imageResolution,
         imageSize,
@@ -3167,7 +3197,17 @@ export function GenerationStudio({
         }
         shouldScrollFeedToBottomRef.current = true;
         setAgentSendNonce((value) => value + 1);
-        ensureAgentFeedEntry(agentSessionId, Date.now(), { bump: true, reviveDeleted: true });
+        const agentSendTimestamp = Date.now();
+        ensureAgentFeedEntry(agentSessionId, agentSendTimestamp, { bump: true, reviveDeleted: true });
+        updateFeedEntries((prev) => [
+            ...prev,
+            createGenerationFeedEntry(currentAgentRequest, {
+                id: makeId('generation'),
+                createdAt: agentSendTimestamp + 1,
+                source: contextIntent?.source || 'standalone',
+                sourceTitle: contextIntent?.sourceTitle,
+            }),
+        ]);
         const runtimeContext = buildGenerationAgentRuntimeContext({
             mode: studioMode,
             request: currentAgentRequest,
@@ -3211,6 +3251,7 @@ export function GenerationStudio({
         isAgentSessionLoading,
         recentAgentAssets,
         studioMode,
+        updateFeedEntries,
     ]);
     const studioToolbar = (
         <div className="flex items-center gap-2.5 overflow-x-auto">
@@ -3301,12 +3342,13 @@ export function GenerationStudio({
                         <div className="min-h-[280px]" />
                     ) : (
                         <div className="mx-auto max-w-[860px] space-y-7 pb-10">
-                            {feedEntries.map((entry) => (
+                            {feedEntries.map((entry, index) => (
                                 isGenerationFeedEntry(entry) ? (
                                     <FeedEntryMessage
                                         key={entry.id}
                                         entry={entry}
                                         isActive={isActive}
+                                        inlineWithAgent={index > 0 && isAgentSessionFeedEntry(feedEntries[index - 1])}
                                         onRegenerate={handleRegenerate}
                                         onEdit={handleEditEntry}
                                         onDelete={handleDeleteEntry}
@@ -3359,6 +3401,7 @@ export function GenerationStudio({
                                             clearSignal={entry.sessionId === agentSessionId ? agentClearNonce : 0}
                                             onSessionActivity={(sessionId, updatedAt) => {
                                                 if (entry.sessionId !== agentSessionId || sessionId !== agentSessionId) return;
+                                                if (feedEntries.some((item) => isGenerationFeedEntry(item) && item.status === 'running')) return;
                                                 const nextCreatedAt = feedTime(updatedAt);
                                                 ensureAgentFeedEntry(agentSessionId, nextCreatedAt || Date.now(), { bump: true });
                                             }}
@@ -3491,30 +3534,18 @@ export function GenerationStudio({
                                                         disabled={imageModelOptions.length === 0}
                                                         emptyText="未添加生图模型"
                                                     />
-                                                    {!isAgentMode && (
-                                                        <>
-                                                            <ImageAspectRatioPicker
-                                                                value={imageAspectRatio}
-                                                                onChange={setImageAspectRatio}
-                                                            />
-                                                            <PopoverSelect
-                                                                value={imageResolution}
-                                                                onChange={setImageResolution}
-                                                                options={IMAGE_RESOLUTION_OPTIONS}
-                                                                className="min-w-[82px]"
-                                                                title="分辨率"
-                                                                panelClassName="w-[220px]"
-                                                            />
-                                                            <PopoverSelect
-                                                                value={imageQuality}
-                                                                onChange={setImageQuality}
-                                                                options={IMAGE_QUALITY_OPTIONS}
-                                                                className="min-w-[86px]"
-                                                                title="质量"
-                                                                panelClassName="w-[220px]"
-                                                            />
-                                                        </>
-                                                    )}
+                                                    <ImageAspectRatioPicker
+                                                        value={imageAspectRatio}
+                                                        onChange={setImageAspectRatio}
+                                                    />
+                                                    <PopoverSelect
+                                                        value={imageResolution}
+                                                        onChange={setImageResolution}
+                                                        options={IMAGE_RESOLUTION_OPTIONS}
+                                                        className="min-w-[82px]"
+                                                        title="清晰度"
+                                                        panelClassName="w-[220px]"
+                                                    />
                                                     <PopoverSelect
                                                         value={String(imageCount)}
                                                         onChange={(value) => setImageCount(Number(value) || 1)}
@@ -3528,7 +3559,7 @@ export function GenerationStudio({
                                                         disabled={isAgentMode ? !canSendAgentMessage : (!hasImageConfig || !imageModel.trim())}
                                                         title={isAgentMode ? '发送给 Agent' : '生成图片'}
                                                         ariaLabel={isAgentMode ? '发送给 Agent' : '生成图片'}
-                                                        estimate={isAgentMode ? null : imageCostEstimate}
+                                                        estimate={imageCostEstimate}
                                                         pending={isAgentMode && agentExecutionActive}
                                                         agent={isAgentMode}
                                                     />
@@ -3584,7 +3615,7 @@ export function GenerationStudio({
                                                         disabled={isAgentMode ? !canSendAgentMessage : (!hasImageConfig || !coverModel.trim())}
                                                         title={isAgentMode ? '发送给 Agent' : '生成封面'}
                                                         ariaLabel={isAgentMode ? '发送给 Agent' : '生成封面'}
-                                                        estimate={isAgentMode ? null : coverCostEstimate}
+                                                        estimate={coverCostEstimate}
                                                         pending={isAgentMode && agentExecutionActive}
                                                         agent={isAgentMode}
                                                     />
@@ -3683,7 +3714,7 @@ export function GenerationStudio({
                                                         disabled={isAgentMode ? !canSendAgentMessage : (!hasVoiceConfig || !audioVoiceId.trim())}
                                                         title={isAgentMode ? '发送给 Agent' : '生成音频'}
                                                         ariaLabel={isAgentMode ? '发送给 Agent' : '生成音频'}
-                                                        estimate={isAgentMode ? null : audioCostEstimate}
+                                                        estimate={audioCostEstimate}
                                                         pending={isAgentMode && agentExecutionActive}
                                                         agent={isAgentMode}
                                                     />
@@ -3776,7 +3807,7 @@ export function GenerationStudio({
                                                         disabled={isAgentMode ? !canSendAgentMessage : !hasVideoConfig}
                                                         title={isAgentMode ? '发送给 Agent' : '生成视频'}
                                                         ariaLabel={isAgentMode ? '发送给 Agent' : '生成视频'}
-                                                        estimate={isAgentMode ? null : videoCostEstimate}
+                                                        estimate={videoCostEstimate}
                                                         pending={isAgentMode && agentExecutionActive}
                                                         agent={isAgentMode}
                                                     />
