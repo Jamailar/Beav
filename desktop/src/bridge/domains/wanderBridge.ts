@@ -3,7 +3,7 @@ import type { BridgeCore, Listener } from '../types';
 export function createWanderBridge(core: BridgeCore) {
   return {
     wander: {
-      listHistory: <T = unknown>() => core.invokeChannel('wander:list-history') as Promise<T>,
+      listHistory: <T = unknown>(options?: { includeAbandoned?: boolean }) => core.invokeChannel('wander:list-history', options || {}) as Promise<T>,
       abandonHistory: (id: string) => core.invokeChannel('wander:abandon-history', id),
       deleteHistory: (id: string) => core.invokeChannel('wander:delete-history', id),
       getGuidedItems: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('wander:get-guided-items', payload) as Promise<T>,

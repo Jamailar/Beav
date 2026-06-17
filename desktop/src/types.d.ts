@@ -2148,7 +2148,7 @@ declare global {
         };
       };
       wander: {
-        listHistory: <T = unknown>() => Promise<T>;
+        listHistory: <T = unknown>(options?: { includeAbandoned?: boolean }) => Promise<T>;
         abandonHistory: (id: string) => Promise<unknown>;
         deleteHistory: (id: string) => Promise<unknown>;
         getGuidedItems: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;

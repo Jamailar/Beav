@@ -80,8 +80,7 @@ export type AudioSubmitPayload = {
 } & ModelRouteOverride;
 
 export type CoverGeneratePayload = {
-    templateImage?: string;
-    baseImage?: string;
+    referenceImages?: string[];
     titles: Array<{ id: string; type: 'main'; text: string }>;
     titleMode: 'titles';
     titlePrompt?: undefined;
@@ -261,9 +260,9 @@ export function buildCoverGeneratePayload(
     request: CoverGenerationRequest,
     options: CoverSubmitOptions,
 ): CoverGeneratePayload {
+    const referenceImages = request.referenceItems.map((item) => item.dataUrl).filter(Boolean);
     return {
-        templateImage: request.templateImage?.dataUrl,
-        baseImage: request.baseImage?.dataUrl,
+        referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
         titles: [{ id: options.titleId, type: 'main', text: request.prompt.trim() }],
         titleMode: 'titles',
         titlePrompt: undefined,

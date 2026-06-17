@@ -87,6 +87,44 @@ pub(super) fn official_session_needs_refresh(settings: &Value) -> bool {
     }
 }
 
+fn value_is_missing(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::String(text)) => text.trim().is_empty(),
+        Some(Value::Null) => true,
+        Some(_) => false,
+        None => true,
+    }
+}
+
+fn merge_missing_user_membership_fields(existing_user: Option<&Value>, next_user: Option<&mut Value>) {
+    let Some(existing_user) = existing_user.and_then(Value::as_object) else {
+        return;
+    };
+    let Some(next_user) = next_user.and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    for key in [
+        "membership_type",
+        "membershipType",
+        "memberType",
+        "membership_expires_at",
+        "membershipExpiresAt",
+        "membership",
+        "memberships",
+        "entitlements",
+        "subscription",
+        "founderMembership",
+        "founder_sponsor",
+    ] {
+        if value_is_missing(next_user.get(key)) {
+            if let Some(value) = existing_user.get(key) {
+                next_user.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+}
+
 pub(super) fn merge_session_with_existing(existing: Option<&Value>, session: &mut Value) {
     let Some(session_object) = session.as_object_mut() else {
         return;
@@ -103,6 +141,11 @@ pub(super) fn merge_session_with_existing(existing: Option<&Value>, session: &mu
         if let Some(user) = existing_object.get("user") {
             session_object.insert("user".to_string(), user.clone());
         }
+    } else {
+        merge_missing_user_membership_fields(
+            existing_object.get("user"),
+            session_object.get_mut("user"),
+        );
     }
 
     for key in [
@@ -126,4 +169,68 @@ pub(super) fn merge_session_with_existing(existing: Option<&Value>, session: &mu
     }
 
     session_object.insert("updatedAt".to_string(), json!(now_ms() as i64));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_session_with_existing_preserves_missing_user_membership_fields() {
+        let existing = json!({
+            "accessToken": "old-access",
+            "refreshToken": "old-refresh",
+            "user": {
+                "id": "user-1",
+                "display_name": "Jamba",
+                "membership_type": "PREMIUM",
+                "membership_expires_at": "2126-05-24T07:07:15.586Z"
+            }
+        });
+        let mut next = json!({
+            "accessToken": "new-access",
+            "user": {
+                "id": "user-1",
+                "display_name": "Jamba"
+            }
+        });
+
+        merge_session_with_existing(Some(&existing), &mut next);
+
+        assert_eq!(
+            next.pointer("/user/membership_type").and_then(Value::as_str),
+            Some("PREMIUM")
+        );
+        assert_eq!(
+            next.pointer("/user/membership_expires_at").and_then(Value::as_str),
+            Some("2126-05-24T07:07:15.586Z")
+        );
+        assert_eq!(
+            next.get("refreshToken").and_then(Value::as_str),
+            Some("old-refresh")
+        );
+    }
+
+    #[test]
+    fn merge_session_with_existing_does_not_override_explicit_user_membership_fields() {
+        let existing = json!({
+            "user": {
+                "id": "user-1",
+                "membership_type": "PREMIUM"
+            }
+        });
+        let mut next = json!({
+            "user": {
+                "id": "user-1",
+                "membership_type": "FREE"
+            }
+        });
+
+        merge_session_with_existing(Some(&existing), &mut next);
+
+        assert_eq!(
+            next.pointer("/user/membership_type").and_then(Value::as_str),
+            Some("FREE")
+        );
+    }
 }

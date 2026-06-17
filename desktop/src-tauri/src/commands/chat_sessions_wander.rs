@@ -3674,6 +3674,10 @@ pub fn handle_chat_sessions_wander_channel(
                 }
             }
             "wander:list-history" => with_store_mut(state, |store| {
+                let include_abandoned = payload
+                    .get("includeAbandoned")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 if store.wander_history.is_empty() {
                     let rebuilt = rebuild_wander_history_from_sessions(store);
                     if !rebuilt.is_empty() {
@@ -3683,7 +3687,9 @@ pub fn handle_chat_sessions_wander_channel(
                 let mut history = store
                     .wander_history
                     .iter()
-                    .filter(|item| item.status.as_deref() != Some("abandoned"))
+                    .filter(|item| {
+                        include_abandoned || item.status.as_deref() != Some("abandoned")
+                    })
                     .cloned()
                     .collect::<Vec<_>>();
                 history.sort_by(|a, b| b.created_at.cmp(&a.created_at));

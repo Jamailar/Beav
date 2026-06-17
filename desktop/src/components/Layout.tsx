@@ -214,6 +214,51 @@ function orderStatusIsFinalFailure(order: Record<string, unknown> | null): boole
     .some((value) => ['failed', 'closed', 'cancelled', 'canceled', 'refunded', 'trade_closed'].includes(String(value || '').trim().toLowerCase()));
 }
 
+function pointsRecordFromResponse(response: unknown): Record<string, unknown> | null {
+  const root = asRecord(response);
+  return asRecord(root?.points)
+    || asRecord(root?.data)
+    || root;
+}
+
+function pointsRecordFromAuthSnapshot(snapshot: unknown): Record<string, unknown> | null {
+  const root = asRecord(snapshot);
+  const session = asRecord(root?.session);
+  const user = asRecord(root?.user) || asRecord(session?.user);
+  const data = asRecord(root?.data);
+  return asRecord(root?.points)
+    || asRecord(session?.points)
+    || asRecord(user?.points)
+    || asRecord(data?.points)
+    || null;
+}
+
+function pointsBalanceFromRecord(points: Record<string, unknown> | null): number | null {
+  if (!points) return null;
+  const candidates = [
+    points.points,
+    points.balance,
+    points.pointsBalance,
+    points.current_points,
+    points.currentPoints,
+    points.available_points,
+    points.availablePoints,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function formatPointsBalance(points: number | null): string {
+  if (points === null) return '';
+  return points.toLocaleString(undefined, {
+    minimumFractionDigits: Number.isInteger(points) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const { t } = useI18n();
   const { snapshot: officialAuthSnapshot, can: canUseMembershipEntitlement } = useMembership();
@@ -433,14 +478,15 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 'app-founder-sponsor-button group inline-flex shrink-0 items-center justify-center transition-all',
                 sidebarVisualCollapsed
                   ? 'h-8 w-8 rounded-md'
-                  : 'h-9 w-full rounded-lg px-2.5'
+                  : 'h-9 w-full rounded-lg px-2.5',
+                isSpaceMenuOpen && 'z-0'
               )}
               title={t(founderSponsorState.labelKey)}
               aria-label={t(founderSponsorState.labelKey)}
               data-active={founderSponsorState.active ? 'true' : 'false'}
             >
               {founderSponsorState.active ? (
-                <BadgeCheck className="h-[16px] w-[16px] shrink-0" strokeWidth={1.9} />
+                <Crown className="h-[16px] w-[16px] shrink-0" strokeWidth={1.9} />
               ) : (
                 <Crown className="h-[16px] w-[16px] shrink-0" strokeWidth={1.85} />
               )}
@@ -449,7 +495,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                   <span className="min-w-0 flex-1 truncate text-left text-[12px] font-semibold">
                     {t(founderSponsorState.labelKey)}
                   </span>
-                  <span className="app-founder-sponsor-status h-1.5 w-1.5 rounded-full" />
                 </>
               )}
             </button>
@@ -467,7 +512,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             <div
               className={clsx(
                 'app-sidebar-footer-meta flex items-center gap-2 text-[11px] text-text-tertiary/90 whitespace-nowrap transition-[max-height,opacity,transform]',
-                sidebarVisualCollapsed ? 'max-h-0 overflow-hidden opacity-0 translate-y-1' : 'max-h-8 overflow-visible opacity-100 translate-y-0 justify-start'
+                sidebarVisualCollapsed ? 'max-h-0 overflow-hidden opacity-0 translate-y-1' : 'max-h-8 overflow-visible opacity-100 translate-y-0 justify-start',
+                isSpaceMenuOpen && 'relative z-[140]'
               )}
             >
               <button
@@ -522,7 +568,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
                 {isSpaceMenuOpen && (
                   <div
-                    className="app-space-menu absolute right-0 bottom-full mb-1.5 w-[172px] rounded-lg border border-border shadow-lg z-50 overflow-hidden"
+                    className="app-space-menu absolute right-0 bottom-full z-[1] mb-1.5 w-[172px] overflow-hidden rounded-lg border border-border shadow-lg"
                   >
                     <div className="max-h-44 overflow-y-auto">
                       {spaces.length === 0 ? (
@@ -696,11 +742,15 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
   onOpenBilling: () => void;
 }) {
   const { t } = useI18n();
+  const { snapshot: officialAuthSnapshot } = useMembership();
   const [product, setProduct] = useState<FounderSponsorProduct | null>(null);
   const [paymentState, setPaymentState] = useState<FounderSponsorPaymentState>('loadingProduct');
   const [paymentMessage, setPaymentMessage] = useState('');
   const [orderNo, setOrderNo] = useState('');
   const [pollOrderNo, setPollOrderNo] = useState('');
+  const [pointsSnapshot, setPointsSnapshot] = useState<Record<string, unknown> | null>(() => pointsRecordFromAuthSnapshot(officialAuthSnapshot));
+  const [pointsLoading, setPointsLoading] = useState(false);
+  const [pointsError, setPointsError] = useState('');
   const benefitCards = [
     { titleKey: 'layout.founderSponsor.benefitLifetimeTitle', descriptionKey: 'layout.founderSponsor.benefitLifetimeDesc', icon: Crown, tone: 'gold' },
     { titleKey: 'layout.founderSponsor.benefitPointsTitle', descriptionKey: 'layout.founderSponsor.benefitPointsDesc', icon: Coins, tone: 'gold' },
@@ -718,6 +768,40 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
     || paymentState === 'creatingOrder'
     || paymentState === 'refreshingMembership';
   const isWaitingPayment = paymentState === 'waitingPayment';
+  const pointsBalance = useMemo(() => pointsBalanceFromRecord(pointsSnapshot), [pointsSnapshot]);
+  const pointsBalanceLabel = formatPointsBalance(pointsBalance);
+
+  const refreshPointsBalance = useCallback(async () => {
+    if (!active) return;
+    setPointsLoading(true);
+    setPointsError('');
+    try {
+      const result = await window.ipcRenderer.officialAuth.getPoints();
+      const nextPoints = pointsRecordFromResponse(result);
+      if (nextPoints) {
+        setPointsSnapshot(nextPoints);
+      } else {
+        setPointsError(t('layout.founderSponsor.pointsBalancePending'));
+      }
+    } catch (error) {
+      setPointsError(error instanceof Error ? error.message : t('layout.founderSponsor.pointsBalancePending'));
+    } finally {
+      setPointsLoading(false);
+    }
+  }, [active, t]);
+
+  useEffect(() => {
+    const nextPoints = pointsRecordFromAuthSnapshot(officialAuthSnapshot);
+    if (nextPoints) {
+      setPointsSnapshot(nextPoints);
+    }
+  }, [officialAuthSnapshot]);
+
+  useEffect(() => {
+    if (active) {
+      void refreshPointsBalance();
+    }
+  }, [active, refreshPointsBalance]);
 
   const refreshMembershipState = useCallback(async () => {
     setPaymentState('refreshingMembership');
@@ -752,6 +836,11 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
   }, [refreshMembershipState, t]);
 
   useEffect(() => {
+    if (active) {
+      setPaymentState('idle');
+      setPaymentMessage('');
+      return;
+    }
     let cancelled = false;
     const loadProduct = async () => {
       setPaymentState((current) => current === 'idle' || current === 'loadingProduct' ? 'loadingProduct' : current);
@@ -779,7 +868,7 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
     return () => {
       cancelled = true;
     };
-  }, [t]);
+  }, [active, t]);
 
   useEffect(() => {
     if (!pollOrderNo || paymentState !== 'waitingPayment') return;
@@ -904,7 +993,93 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
           </div>
         </div>
 
-        <div className="app-founder-sponsor-body px-6 pb-4 pt-3.5">
+        {active ? (
+          <div className="app-founder-sponsor-body px-6 pb-5 pt-4">
+            <div className="app-founder-member-overview">
+              <div className="app-founder-member-card app-founder-member-card--identity">
+                <span className="app-founder-member-card-icon">
+                  <Crown className="h-5 w-5" strokeWidth={1.9} />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[12px] font-bold text-[#8a6a35]">{t('layout.founderSponsor.planLabel')}</div>
+                  <div className="mt-1 truncate text-[20px] font-black leading-tight text-[#2a2118]">{t('layout.founderSponsor.planName')}</div>
+                  <div className="mt-1 inline-flex h-6 items-center rounded-md border border-[#e6c78e] bg-[#fff7e6] px-2 text-[12px] font-bold text-[#a86618]">
+                    {t('layout.founderSponsor.lifetimeBadge')}
+                  </div>
+                </div>
+              </div>
+
+              <div className="app-founder-member-card app-founder-member-card--points">
+                <button
+                  type="button"
+                  onClick={() => void refreshPointsBalance()}
+                  disabled={pointsLoading}
+                  className="app-founder-member-refresh"
+                  title={t('layout.founderSponsor.refreshPoints')}
+                  aria-label={t('layout.founderSponsor.refreshPoints')}
+                >
+                  <RefreshCw className={clsx('h-4 w-4', pointsLoading && 'animate-spin')} strokeWidth={1.9} />
+                </button>
+                <div className="text-[12px] font-bold text-[#8a6a35]">{t('layout.founderSponsor.pointsBalance')}</div>
+                <div className="mt-2 flex min-w-0 items-end gap-2">
+                  <div className={clsx(
+                    'min-w-0 truncate font-black leading-none tracking-normal',
+                    pointsBalance === null ? 'text-[24px] text-[#5f554b]' : 'text-[34px] text-[#b87519]'
+                  )}>
+                    {pointsBalance === null ? t('layout.founderSponsor.pointsBalancePending') : pointsBalanceLabel}
+                  </div>
+                  {pointsBalance !== null ? (
+                    <span className="pb-1 text-[13px] font-bold text-[#7f7468]">{t('layout.founderSponsor.pointsUnit')}</span>
+                  ) : null}
+                </div>
+                <div className="mt-2 text-[12px] font-semibold text-[#8a8178]">
+                  {pointsError || t('layout.founderSponsor.pointsBalanceCaption')}
+                </div>
+              </div>
+            </div>
+
+            <div className="app-founder-sponsor-benefit-heading app-founder-sponsor-benefit-heading--member">
+              <span className="app-founder-sponsor-heading-line" />
+              <span className="app-founder-sponsor-heading-dot" />
+              <h3>{t('layout.founderSponsor.memberBenefits')}</h3>
+              <span className="app-founder-sponsor-heading-dot" />
+              <span className="app-founder-sponsor-heading-line" />
+            </div>
+
+            <div className="app-founder-sponsor-benefit-grid">
+              {benefitCards.map(({ titleKey, descriptionKey, icon: Icon, tone }) => (
+                <div key={titleKey} className="app-founder-sponsor-benefit-tile">
+                  <span className={`app-founder-sponsor-tile-icon app-founder-sponsor-tile-icon--${tone}`}>
+                    <Icon className="h-5 w-5" strokeWidth={1.8} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-[13px] font-bold leading-snug text-[#211c17]">{t(titleKey)}</div>
+                    <div className="mt-0.5 truncate text-[11px] font-medium text-[#80776f]">{t(descriptionKey)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5 grid grid-cols-[1fr_96px] gap-3">
+              <button
+                type="button"
+                onClick={onOpenBilling}
+                className="app-founder-sponsor-primary-action inline-flex h-11 items-center justify-center rounded-xl px-4 text-[17px] font-bold text-white transition-all hover:brightness-105 active:scale-[0.99]"
+              >
+                <BadgeCheck className="mr-2 h-4 w-4" strokeWidth={1.8} />
+                {t('layout.founderSponsor.manageButton')}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="inline-flex h-11 items-center justify-center rounded-xl border border-[#e4d5bd] bg-white/78 px-3 text-[15px] font-bold text-[#5f564d] transition-colors hover:bg-[#fffaf2] hover:text-[#27211b]"
+              >
+                {t('app.cancel')}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="app-founder-sponsor-body px-6 pb-4 pt-3.5">
           <div className="app-founder-sponsor-value-hero">
             <Sparkles className="app-founder-sponsor-sparkle app-founder-sponsor-sparkle--left" strokeWidth={1.7} />
             <Sparkles className="app-founder-sponsor-sparkle app-founder-sponsor-sparkle--right" strokeWidth={1.7} />
@@ -921,7 +1096,7 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
               <div className="app-founder-sponsor-points-ribbon">{t('layout.founderSponsor.pointsRibbon')}</div>
               <div className="flex items-center justify-center gap-3">
                 <Gift className="h-7 w-7 text-[#f06a2f]" strokeWidth={1.9} />
-                <div className="app-founder-sponsor-points-number">20,000</div>
+                <div className="app-founder-sponsor-points-number">22,000</div>
                 <span className="app-founder-sponsor-points-pill">P</span>
               </div>
               <div className="mt-1 text-center text-[18px] font-bold leading-tight text-[#5b4030]">
@@ -1010,7 +1185,8 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
             <ShieldCheck className="h-4 w-4" strokeWidth={1.8} />
             <span>{t('layout.founderSponsor.securePayment')}</span>
           </div>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

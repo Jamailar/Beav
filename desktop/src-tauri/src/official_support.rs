@@ -935,12 +935,45 @@ pub(crate) fn normalize_official_auth_session(raw: &Value) -> Result<Value, Stri
     }))
 }
 
+fn looks_like_machine_user_id(value: &str) -> bool {
+    let trimmed = value.trim();
+    let parts: Vec<&str> = trimmed.split('-').collect();
+    parts.len() == 5
+        && parts
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(part, len)| part.len() == len && part.chars().all(|ch| ch.is_ascii_hexdigit()))
+}
+
+fn official_user_display_name(user: &Value) -> Value {
+    for key in [
+        "displayName",
+        "display_name",
+        "nickname",
+        "nickName",
+        "name",
+        "username",
+        "userName",
+        "email",
+        "phone",
+        "mobile",
+    ] {
+        if let Some(value) = payload_string(user, key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() && !looks_like_machine_user_id(trimmed) {
+                return json!(trimmed);
+            }
+        }
+    }
+    Value::Null
+}
+
 pub(crate) fn official_account_summary_local(settings: &Value, models: &[Value]) -> Value {
     let session = official_settings_session(settings).unwrap_or_else(|| json!({}));
     let user = session.get("user").cloned().unwrap_or_else(|| json!({}));
     json!({
         "loggedIn": official_access_token_from_settings(settings).is_some(),
-        "displayName": user.get("displayName").cloned().or_else(|| user.get("name").cloned()).unwrap_or(Value::Null),
+        "displayName": official_user_display_name(&user),
         "email": user.get("email").cloned().unwrap_or(Value::Null),
         "apiKeyPresent": official_ai_api_key_from_settings(settings).is_some(),
         "planName": user.get("planName").cloned().unwrap_or_else(|| json!(format!("{} Official", app_brand_display_name()))),

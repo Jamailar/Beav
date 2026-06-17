@@ -463,6 +463,8 @@ select {
 }
 
 .app-founder-sponsor-button {
+  position: relative;
+  overflow: hidden;
   gap: 9px;
   color: rgb(118 70 23 / 0.96);
   background:
@@ -480,16 +482,46 @@ select {
 }
 
 .app-founder-sponsor-button[data-active='true'] {
-  color: rgb(16 112 92 / 0.98);
+  color: rgb(255 239 190 / 0.98);
   background:
-    linear-gradient(135deg, rgb(255 255 255 / 0.72), rgb(236 253 245 / 0.66)),
-    linear-gradient(135deg, rgb(20 184 166 / 0.16), rgb(var(--color-accent-primary) / 0.08));
-  border-color: rgb(20 184 166 / 0.3);
+    radial-gradient(circle at 18% 16%, rgb(255 243 196 / 0.32), transparent 28%),
+    linear-gradient(135deg, rgb(70 43 18 / 0.96), rgb(154 101 31 / 0.92) 48%, rgb(45 27 13 / 0.98));
+  border-color: rgb(245 211 132 / 0.76);
+  box-shadow:
+    0 14px 32px -20px rgb(146 64 14 / 0.78),
+    0 0 0 1px rgb(255 250 225 / 0.16) inset,
+    0 1px 0 rgb(255 255 255 / 0.24) inset;
 }
 
-.app-founder-sponsor-status {
-  background: currentColor;
-  box-shadow: 0 0 0 4px rgb(255 255 255 / 0.42);
+.app-founder-sponsor-button[data-active='true']::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(120deg, transparent 0%, rgb(255 255 255 / 0.18) 22%, transparent 42%);
+  opacity: 0.58;
+}
+
+.app-founder-sponsor-button[data-active='true']:hover {
+  color: rgb(255 247 214 / 1);
+  border-color: rgb(255 227 157 / 0.92);
+  box-shadow:
+    0 18px 38px -20px rgb(146 64 14 / 0.9),
+    0 0 0 1px rgb(255 250 225 / 0.2) inset,
+    0 1px 0 rgb(255 255 255 / 0.28) inset;
+}
+
+.app-founder-sponsor-button[data-active='true'] > svg,
+.app-founder-sponsor-button[data-active='true'] > span {
+  position: relative;
+  z-index: 1;
+}
+
+.app-founder-sponsor-button[data-active='true'] > svg {
+  color: rgb(255 226 137 / 1);
+  filter: drop-shadow(0 1px 1px rgb(58 31 8 / 0.55));
 }
 
 .app-founder-sponsor-modal-icon {
@@ -715,6 +747,93 @@ select {
   gap: 7px 8px;
 }
 
+.app-founder-member-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 12px;
+}
+
+.app-founder-member-card {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgb(237 211 170 / 0.88);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 18% 0%, rgb(255 242 202 / 0.58), transparent 38%),
+    linear-gradient(180deg, rgb(255 253 248 / 0.96), rgb(255 248 237 / 0.88));
+  box-shadow:
+    0 18px 38px -30px rgb(138 82 20 / 0.56),
+    0 1px 0 rgb(255 255 255 / 0.74) inset;
+}
+
+.app-founder-member-card--identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 132px;
+  padding: 18px;
+}
+
+.app-founder-member-card--points {
+  min-height: 132px;
+  padding: 18px 44px 18px 18px;
+}
+
+.app-founder-member-card-icon {
+  display: inline-flex;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(234 200 139 / 0.88);
+  border-radius: 14px;
+  color: #b87519;
+  background:
+    radial-gradient(circle at 36% 24%, rgb(255 255 255 / 0.96), rgb(255 242 202 / 0.82) 58%, rgb(222 170 80 / 0.3));
+  box-shadow:
+    0 18px 30px -24px rgb(138 82 20 / 0.72),
+    0 0 0 1px rgb(255 255 255 / 0.68) inset;
+}
+
+.app-founder-member-refresh {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(232 211 177 / 0.9);
+  border-radius: 10px;
+  color: #9b6a29;
+  background: rgb(255 255 255 / 0.62);
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.app-founder-member-refresh:hover {
+  color: #744512;
+  background: rgb(255 250 242 / 0.92);
+  border-color: rgb(216 172 99 / 0.9);
+  transform: translateY(-1px);
+}
+
+.app-founder-member-refresh:disabled {
+  cursor: default;
+  opacity: 0.62;
+  transform: none;
+}
+
+.app-founder-sponsor-benefit-heading--member {
+  margin-top: 14px;
+}
+
 .app-founder-sponsor-benefit-tile {
   display: flex;
   min-width: 0;
@@ -804,6 +923,15 @@ select {
     padding: 34px 16px 20px;
   }
 
+  .app-founder-member-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-founder-member-card--identity,
+  .app-founder-member-card--points {
+    min-height: 116px;
+  }
+
   .app-founder-sponsor-benefit-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -828,11 +956,32 @@ select {
 }
 
 [data-theme='dark'] .app-founder-sponsor-button[data-active='true'] {
-  color: rgb(153 246 228 / 0.96);
+  color: rgb(255 239 190 / 0.98);
   background:
-    linear-gradient(135deg, rgb(255 255 255 / 0.08), rgb(20 184 166 / 0.12)),
-    rgb(24 24 27 / 0.78);
-  border-color: rgb(20 184 166 / 0.3);
+    radial-gradient(circle at 18% 16%, rgb(255 243 196 / 0.28), transparent 28%),
+    linear-gradient(135deg, rgb(64 39 17 / 0.96), rgb(135 86 25 / 0.9) 48%, rgb(38 23 11 / 0.98));
+  border-color: rgb(245 211 132 / 0.66);
+  box-shadow:
+    0 18px 40px -24px rgb(245 158 11 / 0.76),
+    0 0 0 1px rgb(255 250 225 / 0.14) inset,
+    0 1px 0 rgb(255 255 255 / 0.18) inset;
+}
+
+[data-theme='dark'] .app-founder-member-card {
+  border-color: rgb(245 211 132 / 0.26);
+  background:
+    radial-gradient(circle at 18% 0%, rgb(255 226 137 / 0.12), transparent 38%),
+    linear-gradient(180deg, rgb(52 39 25 / 0.96), rgb(32 26 20 / 0.94));
+  box-shadow:
+    0 18px 38px -30px rgb(245 158 11 / 0.42),
+    0 1px 0 rgb(255 255 255 / 0.08) inset;
+}
+
+[data-theme='dark'] .app-founder-member-card-icon,
+[data-theme='dark'] .app-founder-member-refresh {
+  border-color: rgb(245 211 132 / 0.24);
+  background: rgb(255 255 255 / 0.08);
+  color: rgb(253 230 138 / 0.96);
 }
 
 [data-theme='dark'] .app-founder-sponsor-modal-icon {
@@ -2300,21 +2449,21 @@ select {
 }
 
 .redclaw-rename-dialog-backdrop {
-  background: rgb(15 8 10 / 0.5);
+  background-color: rgb(15 8 10 / 0.5) !important;
   backdrop-filter: blur(8px);
 }
 
 .redclaw-rename-dialog {
   border: 1px solid rgb(92 66 69 / 0.2);
-  background: rgb(255 250 247 / 0.98);
-  color: rgb(45 31 33 / 1);
+  background-color: rgb(255 250 247 / 1) !important;
+  color: rgb(45 31 33 / 1) !important;
   box-shadow: 0 26px 70px rgb(15 8 10 / 0.32);
 }
 
 [data-theme='dark'] .redclaw-rename-dialog {
   border-color: rgb(255 236 229 / 0.18);
-  background: rgb(31 13 18 / 0.98);
-  color: rgb(255 247 243 / 0.96);
+  background-color: rgb(31 13 18 / 1) !important;
+  color: rgb(255 247 243 / 0.96) !important;
 }
 
 .redclaw-rename-dialog-title {
@@ -2341,8 +2490,8 @@ select {
 
 .redclaw-rename-dialog-input {
   border: 1px solid rgb(92 66 69 / 0.2);
-  background: rgb(255 255 255 / 0.9);
-  color: rgb(45 31 33 / 1);
+  background-color: rgb(255 255 255 / 1) !important;
+  color: rgb(45 31 33 / 1) !important;
 }
 
 .redclaw-rename-dialog-input:focus {
@@ -2352,8 +2501,8 @@ select {
 
 [data-theme='dark'] .redclaw-rename-dialog-input {
   border-color: rgb(255 236 229 / 0.18);
-  background: rgb(255 247 243 / 0.08);
-  color: rgb(255 247 243 / 0.96);
+  background-color: rgb(48 25 30 / 1) !important;
+  color: rgb(255 247 243 / 0.96) !important;
 }
 
 .redclaw-rename-dialog-error {
@@ -2362,8 +2511,8 @@ select {
 
 .redclaw-rename-dialog-secondary {
   border: 1px solid rgb(92 66 69 / 0.18);
-  background: transparent;
-  color: rgb(88 66 69 / 0.9);
+  background-color: rgb(255 255 255 / 0.82) !important;
+  color: rgb(88 66 69 / 0.9) !important;
 }
 
 .redclaw-rename-dialog-secondary:hover {
@@ -2373,7 +2522,8 @@ select {
 
 [data-theme='dark'] .redclaw-rename-dialog-secondary {
   border-color: rgb(255 236 229 / 0.18);
-  color: rgb(246 235 232 / 0.76);
+  background-color: rgb(255 245 241 / 0.08) !important;
+  color: rgb(246 235 232 / 0.76) !important;
 }
 
 [data-theme='dark'] .redclaw-rename-dialog-secondary:hover {
@@ -2382,8 +2532,8 @@ select {
 }
 
 .redclaw-rename-dialog-primary {
-  background: rgb(45 31 33 / 1);
-  color: rgb(255 255 255 / 1);
+  background-color: rgb(45 31 33 / 1) !important;
+  color: rgb(255 255 255 / 1) !important;
 }
 
 .redclaw-rename-dialog-primary:hover {
@@ -2391,11 +2541,118 @@ select {
 }
 
 [data-theme='dark'] .redclaw-rename-dialog-primary {
-  background: rgb(255 247 243 / 0.92);
-  color: rgb(31 13 18 / 1);
+  background-color: rgb(255 247 243 / 0.92) !important;
+  color: rgb(31 13 18 / 1) !important;
 }
 
 [data-theme='dark'] .redclaw-rename-dialog-primary:hover {
+  background: rgb(255 255 255 / 1);
+}
+
+.redclaw-manuscript-dialog-backdrop {
+  background-color: rgb(15 8 10 / 0.46) !important;
+  backdrop-filter: blur(8px);
+}
+
+.redclaw-manuscript-dialog {
+  border: 1px solid rgb(92 66 69 / 0.22);
+  background-color: rgb(255 250 247 / 1) !important;
+  color: rgb(45 31 33 / 1) !important;
+  box-shadow: 0 26px 70px rgb(15 8 10 / 0.3);
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog {
+  border-color: rgb(255 236 229 / 0.18);
+  background-color: rgb(31 13 18 / 1) !important;
+  color: rgb(255 247 243 / 0.96) !important;
+}
+
+.redclaw-manuscript-dialog-title {
+  color: inherit;
+}
+
+.redclaw-manuscript-dialog-close {
+  color: rgb(118 88 91 / 0.78);
+}
+
+.redclaw-manuscript-dialog-close:hover {
+  background: rgb(92 66 69 / 0.08);
+  color: rgb(45 31 33 / 1);
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog-close {
+  color: rgb(230 207 202 / 0.72);
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog-close:hover {
+  background: rgb(255 245 241 / 0.1);
+  color: rgb(255 247 243 / 0.96);
+}
+
+.redclaw-manuscript-dialog-input {
+  border: 1px solid rgb(92 66 69 / 0.2);
+  border-color: rgb(92 66 69 / 0.2);
+  background-color: rgb(255 255 255 / 1) !important;
+  color: rgb(45 31 33 / 1) !important;
+}
+
+.redclaw-manuscript-dialog-input::placeholder {
+  color: rgb(118 88 91 / 0.66);
+}
+
+.redclaw-manuscript-dialog-input:focus {
+  border-color: rgb(var(--color-accent-primary) / 0.55);
+  box-shadow: 0 0 0 3px rgb(var(--color-accent-primary) / 0.12);
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog-input {
+  border-color: rgb(255 236 229 / 0.18);
+  background-color: rgb(48 25 30 / 1) !important;
+  color: rgb(255 247 243 / 0.96) !important;
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog-input::placeholder {
+  color: rgb(230 207 202 / 0.56);
+}
+
+.redclaw-manuscript-dialog-secondary {
+  border: 1px solid rgb(92 66 69 / 0.18);
+  border-color: rgb(92 66 69 / 0.18);
+  background-color: rgb(255 255 255 / 0.82) !important;
+  color: rgb(88 66 69 / 0.92) !important;
+}
+
+.redclaw-manuscript-dialog-secondary:hover {
+  background: rgb(92 66 69 / 0.07);
+  color: rgb(45 31 33 / 1);
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog-secondary {
+  border-color: rgb(255 236 229 / 0.18);
+  background-color: rgb(255 245 241 / 0.08) !important;
+  color: rgb(246 235 232 / 0.78) !important;
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog-secondary:hover {
+  background: rgb(255 245 241 / 0.1);
+  color: rgb(255 247 243 / 0.96);
+}
+
+.redclaw-manuscript-dialog-primary {
+  background-color: rgb(45 31 33 / 1) !important;
+  color: rgb(255 255 255 / 1) !important;
+}
+
+.redclaw-manuscript-dialog-primary:hover {
+  background: rgb(70 45 48 / 1);
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog-primary {
+  background-color: rgb(255 247 243 / 0.92) !important;
+  color: rgb(31 13 18 / 1) !important;
+}
+
+[data-theme='dark'] .redclaw-manuscript-dialog-primary:hover {
   background: rgb(255 255 255 / 1);
 }
 
@@ -2459,6 +2716,28 @@ select {
 [data-theme='dark'] .text-zinc-600,
 [data-theme='dark'] .text-zinc-500 {
   color: rgb(var(--color-text-secondary) / 1) !important;
+}
+
+[data-theme='dark'] .app-onboarding .text-zinc-950,
+[data-theme='dark'] .app-onboarding .text-zinc-900,
+[data-theme='dark'] .app-onboarding .text-zinc-800 {
+  color: rgb(var(--color-text-primary) / 1) !important;
+}
+
+[data-theme='dark'] .app-onboarding .text-zinc-700,
+[data-theme='dark'] .app-onboarding .text-zinc-600,
+[data-theme='dark'] .app-onboarding .text-zinc-500,
+[data-theme='dark'] .app-onboarding .text-zinc-400 {
+  color: rgb(var(--color-text-secondary) / 1) !important;
+}
+
+[data-theme='dark'] .app-onboarding .bg-zinc-950 {
+  background-color: rgb(var(--color-text-primary) / 1) !important;
+}
+
+[data-theme='dark'] .app-onboarding .bg-zinc-300,
+[data-theme='dark'] .app-onboarding .bg-zinc-200 {
+  background-color: rgb(var(--color-text-tertiary) / 0.72) !important;
 }
 
 [data-theme='dark'] .legacy-theme-panel {

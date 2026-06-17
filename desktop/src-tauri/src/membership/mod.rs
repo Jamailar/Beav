@@ -13,10 +13,12 @@ pub(crate) const ENTITLEMENT_FEATURES_MEMBER_ONLY: &str = "features.member_only"
 pub(crate) const ENTITLEMENT_SUPPORT_PRIORITY: &str = "support.priority";
 
 const PREMIUM_PLANS: &[&str] = &["premium", "founder", "founder_sponsor", "founder-sponsor"];
+const FOUNDER_PLANS: &[&str] = &["premium", "founder", "founder_sponsor", "founder-sponsor"];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MembershipState {
     pub active: bool,
+    pub founder_active: bool,
     pub entitlements: BTreeMap<String, Value>,
 }
 
@@ -233,12 +235,22 @@ fn state_from_session(session: Option<&Value>) -> MembershipState {
                 .iter()
                 .any(|item| record_is_active_founder(Some(item)))
         });
+    let founder_plan_active = membership_active
+        && user
+            .and_then(Value::as_object)
+            .and_then(|user| {
+                user.get("membership_type")
+                    .or_else(|| user.get("membershipType"))
+                    .or_else(|| user.get("memberType"))
+            })
+            .and_then(Value::as_str)
+            .map(|plan| FOUNDER_PLANS.contains(&plan.trim().to_lowercase().as_str()))
+            .unwrap_or(false);
+    let has_founder_membership = founder_active || founder_plan_active;
 
-    let active = membership_active || founder_active;
+    let active = membership_active || has_founder_membership;
     if active {
         for key in [
-            ENTITLEMENT_SPACES_CREATE,
-            ENTITLEMENT_SPACES_CREATE_UNLIMITED,
             ENTITLEMENT_DEVICES_LOGIN_UNLIMITED,
             ENTITLEMENT_FEATURES_MEMBER_ONLY,
             ENTITLEMENT_SUPPORT_PRIORITY,
@@ -248,9 +260,20 @@ fn state_from_session(session: Option<&Value>) -> MembershipState {
                 .or_insert(Value::Bool(true));
         }
     }
+    if has_founder_membership {
+        for key in [
+            ENTITLEMENT_SPACES_CREATE,
+            ENTITLEMENT_SPACES_CREATE_UNLIMITED,
+        ] {
+            entitlements
+                .entry(key.to_string())
+                .or_insert(Value::Bool(true));
+        }
+    }
 
     MembershipState {
         active,
+        founder_active: has_founder_membership,
         entitlements,
     }
 }
@@ -286,15 +309,19 @@ fn entitlement_value_is_enabled(value: Option<&Value>) -> bool {
 }
 
 pub(crate) fn can_use_entitlement(membership: &MembershipState, entitlement: &str) -> bool {
+    if entitlement == ENTITLEMENT_SPACES_CREATE {
+        if !membership.founder_active {
+            return false;
+        }
+        return entitlement_value_is_enabled(membership.entitlements.get(entitlement))
+            || entitlement_value_is_enabled(
+                membership
+                    .entitlements
+                    .get(ENTITLEMENT_SPACES_CREATE_UNLIMITED),
+            );
+    }
     if entitlement_value_is_enabled(membership.entitlements.get(entitlement)) {
         return true;
-    }
-    if entitlement == ENTITLEMENT_SPACES_CREATE {
-        return entitlement_value_is_enabled(
-            membership
-                .entitlements
-                .get(ENTITLEMENT_SPACES_CREATE_UNLIMITED),
-        );
     }
     false
 }
@@ -309,4 +336,36 @@ pub(crate) fn ensure_entitlement(
         return Ok(());
     }
     Err(error_message.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn founder_active_membership_can_create_spaces() {
+        let mut entitlements = BTreeMap::new();
+        entitlements.insert(ENTITLEMENT_SPACES_CREATE.to_string(), json!(true));
+        let membership = MembershipState {
+            active: true,
+            founder_active: true,
+            entitlements,
+        };
+
+        assert!(can_use_entitlement(&membership, ENTITLEMENT_SPACES_CREATE));
+    }
+
+    #[test]
+    fn non_founder_membership_cannot_create_spaces_even_with_space_entitlement() {
+        let mut entitlements = BTreeMap::new();
+        entitlements.insert(ENTITLEMENT_SPACES_CREATE.to_string(), json!(true));
+        let membership = MembershipState {
+            active: true,
+            founder_active: false,
+            entitlements,
+        };
+
+        assert!(!can_use_entitlement(&membership, ENTITLEMENT_SPACES_CREATE));
+    }
 }

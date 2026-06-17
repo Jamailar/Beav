@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
-import { RefreshCw, Sparkles, History, X, Trash2, Dices, FileText, Play, MessageSquarePlus, Search, Square, CheckSquare, Shuffle, Check } from 'lucide-react';
+import { RefreshCw, Sparkles, History, X, Trash2, Dices, FileText, Play, MessageSquarePlus, Search, Square, CheckSquare, Shuffle, Check, Eye, EyeOff } from 'lucide-react';
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
@@ -9,7 +9,7 @@ import {
   AUTHORING_ALLOWED_TOOLS,
   buildTaskBriefPromptSection,
 } from '../utils/redclawAuthoring';
-import type { AuthoringTaskHints, TaskBriefSeed } from '../utils/redclawAuthoring';
+import type { AuthoringTaskHints, TaskBriefArticleStrategy, TaskBriefSeed } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { uiDebug } from '../utils/uiDebug';
 import { APP_BRAND } from '../config/brand';
@@ -148,6 +148,7 @@ interface WanderProps {
 
 type WanderSelectionMode = 'random' | 'manual' | 'comments';
 type WanderLaunchMode = 'random' | 'comments';
+type CommentSourceMode = 'random' | 'custom';
 
 export function Wander({ isActive = true, onExecutionStateChange, onTitleBarContentChange, onNavigateToRedClaw }: WanderProps) {
   const [items, setItems] = useState<WanderItem[]>([]);
@@ -167,6 +168,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   const [commentCandidates, setCommentCandidates] = useState<WanderItem[]>([]);
   const [selectedCommentItem, setSelectedCommentItem] = useState<WanderItem | null>(null);
   const [commentCandidatesLoading, setCommentCandidatesLoading] = useState(false);
+  const [commentSourceMode, setCommentSourceMode] = useState<CommentSourceMode>('random');
   const [guidedWarning, setGuidedWarning] = useState<string | null>(null);
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
@@ -175,6 +177,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
   const [showFinal, setShowFinal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showAbandonedTopics, setShowAbandonedTopics] = useState(false);
   const [historyList, setHistoryList] = useState<WanderHistoryRecord[]>([]);
   const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState('');
@@ -730,6 +733,15 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         hasTranscript: Boolean(meta.hasTranscript),
       };
     });
+    const initialArticleStrategy: TaskBriefArticleStrategy = {
+      articleStyle: '待判断',
+      readerQuestion: '',
+      corePromise: '',
+      titleDirection: '',
+      openingDirection: '',
+      structureDirection: '',
+      avoidDirection: [],
+    };
     const taskBrief: TaskBriefSeed = {
       taskType: 'wander_manuscript_creation',
       goal: `围绕选题「${activeTopic.title}」创作一篇独立小红书文案，并保存到 wander 稿件工程。`,
@@ -737,16 +749,20 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       todo: [
         { id: 'research_decision', text: '判断是否需要外部调研；需要当前事实时调用 web.search', status: 'todo' },
         { id: 'research_brief', text: '把素材和搜索结果压缩成可写作的事实 brief', status: 'todo' },
-        { id: 'title_skill', text: '调用 xhs-title 生成候选标题并选出最终标题', status: 'todo' },
-        { id: 'writing_skill', text: '调用 writing-style 完成正文写作和自检', status: 'todo' },
+        { id: 'article_strategy', text: '根据选题和调研结果判断文章打法，并写入 articleStrategy', status: 'todo' },
+        { id: 'title_skill', text: '带着 articleStrategy 调用 xhs-title，生成分风格候选标题并选出最终标题', status: 'todo' },
+        { id: 'writing_skill', text: '带着 articleStrategy 和最终标题调用 writing-style 完成正文写作和自检', status: 'todo' },
         { id: 'save', text: '创建稿件工程并用 Write 保存最终文案', status: 'todo' },
       ],
       importantContext: [
         { kind: 'constraint', text: '这是一篇围绕选题独立创作的新内容，不是评论区洞察说明或素材复盘。' },
         { kind: 'constraint', text: '原笔记和评论只可作为后台参考数据来源，正文禁止出现“原文”“原笔记”“评论区”“评论里”“有用户评论”“大家在评论区问”等来源痕迹。' },
         { kind: 'validation', text: '如果任务涉及当下事实、数据、平台规则、产品、价格、政策、人物或案例，必须先用 web.search 调研并把可用事实写入 brief。' },
+        { kind: 'validation', text: '标题和正文必须共同服从 articleStrategy；不能标题走悬念、正文走解释，或标题绕开读者最直接的问题。' },
         { kind: 'validation', text: '最终保存前必须检查正文是否使用了 brief 中的关键事实、是否调用了 xhs-title 和 writing-style、是否没有来源痕迹。' },
       ],
+      articleStrategy: initialArticleStrategy,
+      titleCandidates: [],
       domain: {
         platform: 'xiaohongshu',
         topicTitle: activeTopic.title,
@@ -763,13 +779,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       '选题中心素材只是后台参考数据来源，只能用来校准事实、需求、场景、痛点和表达方向；正文中禁止出现“原文”“原笔记”“评论区”“评论里”“有用户评论”“大家在评论区问”等来源痕迹。',
       '如果参考素材来自评论洞察，也必须把它转化为独立内容里的读者问题、场景或判断，不要把读者带回素材现场。',
       '可按需读取下方素材目录或用户档案；素材目录不是正文文件，如需读取，请优先 Read “建议读取”里的具体文件，或先 List 目录再 Read 具体文件。',
-      '本任务必须按四个连续阶段完成，不能跳过，也不能把前一阶段的技能输出当成后一阶段的完整上下文。',
+      '本任务必须按五个连续阶段完成，不能跳过，也不能把前一阶段的技能输出当成后一阶段的完整上下文。',
       '阶段一：调研判断。先调用 `taskBrief.update` 初始化工作 brief；然后判断这个选题是否涉及当下事实、产品、平台规则、价格、政策、人物、案例、数据或其它容易过期的信息；涉及就必须调用 `Operate(resource="web", operation="search", input={ "query": "<搜索词>" })` 做搜索，并把可用事实、来源和不确定点写回 Task Brief。若不需要外部调研，也要把“不需要外部调研”的判断和理由写回 Task Brief。',
-      '阶段二：标题。必须显式调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "xhs-title" })`，让日志可审计；然后基于独立选题生成 3 个候选标题，并基于点击欲望、准确性和不模板化程度选出 1 个最终标题。候选标题和分析只是内部中间产物，不要写入稿件或最终回复。',
-      '阶段三：正文。拿阶段二选出的最终标题作为正文唯一标题，然后必须显式调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`，让日志可审计；正文阶段由 `writing-style` 主导，必须服从它的用户档案读取、语言节奏、结构禁区和自检要求。',
-      '阶段四：保存。创建稿件工程并保存最终文案。',
+      '阶段二：文章打法定向。根据选题、调研事实和读者真实好奇心，先判断 `articleStrategy`，再调用 `taskBrief.update` 写入：articleStyle、readerQuestion、corePromise、titleDirection、openingDirection、structureDirection、avoidDirection。这个阶段要先回答“读者看到这个选题，脑子里最直接的问题是什么”，并判断标题和正文应该走直接疑问、反常识、数据冲击、故事化、观点型还是其它打法。',
+      '阶段三：标题。必须显式调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "xhs-title" })`，让日志可审计；标题必须服从 `articleStrategy`，不要自由套公式。生成至少 4 个分风格候选标题，至少包含“直接疑问”和“悬念表达”两类，并把完整 titleCandidates、selectedTitle、selectedTitleReason 写回 Task Brief。最终选择时优先贴近 readerQuestion；除非悬念标题明显更强，否则商业解释型/反常识型内容优先直接疑问。',
+      '阶段四：正文。拿阶段三选出的最终标题作为正文唯一标题，然后必须显式调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`，让日志可审计；正文阶段由 `writing-style` 主导，但必须同时服从 `articleStrategy`：开头兑现 openingDirection，结构服从 structureDirection，信息密度和语气服从 articleStyle。',
+      '阶段五：保存。创建稿件工程并保存最终文案。',
       '如果 `writing-style` 要求读取用户档案或创作者档案，正文动笔前必须先读取；不要因为已经完成标题阶段，就省略写作风格上下文。创建稿件工程后，后续 `Write` 的 content 仍然必须是按 `writing-style` 自检后的完整正文。',
-      '完稿前按 `writing-style` 自检标题、开头、结构、事实边界、语气和禁区；内容质量优先于素材覆盖率。正文不要写成报告式大纲，不要输出孤立分隔线，不要只模仿素材格式。',
+      '完稿前按 `articleStrategy` 和 `writing-style` 双重自检标题、开头、结构、事实边界、语气和禁区；内容质量优先于素材覆盖率。正文不要写成报告式大纲，不要输出孤立分隔线，不要只模仿素材格式。',
       '',
       '## 灵感选题',
       `标题：${activeTopic.title}`,
@@ -782,11 +799,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       '',
       '## 输出要求',
       '1. 先完成调研判断；需要当前事实时必须搜索，不需要时不要为了形式搜索。',
-      '2. 再显式调用 `xhs-title` 完成标题阶段，内部选择 1 个最终标题；最终稿件和最终回复都只保留这个最终标题。',
-      '3. 再显式调用 `writing-style` 完成正文阶段；正文必须按该技能规则写作和自检，不能只沿用标题阶段的上下文。',
-      '4. 正文必须是一篇独立小红书内容，禁止提到参考来源来自原笔记或评论区。',
-      '5. 如目标工程不存在，先调用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 创建 post 文件夹稿件工程。',
-      '6. 完成后调用 `Write(path="manuscripts://current", content="<最终标题和按 writing-style 自检后的完整正文>")` 保存；保存成功后的最终回复只给运行总结和稿件链接，不要重复全文。',
+      '2. 再完成文章打法定向，并把完整 `articleStrategy` 写入 Task Brief；标题和正文都必须受它约束。',
+      '3. 再显式调用 `xhs-title` 完成标题阶段，内部选择 1 个最终标题；必须把完整候选标题、评分和选择理由写入 Task Brief；最终稿件和最终回复都只保留最终标题。',
+      '4. 再显式调用 `writing-style` 完成正文阶段；正文必须按该技能规则和 `articleStrategy` 写作、自检，不能只沿用标题阶段的上下文。',
+      '5. 正文必须是一篇独立小红书内容，禁止提到参考来源来自原笔记或评论区。',
+      '6. 如目标工程不存在，先调用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 创建 post 文件夹稿件工程。',
+      '7. 完成后调用 `Write(path="manuscripts://current", content="<最终标题和按 articleStrategy + writing-style 自检后的完整正文>")` 保存；保存成功后的最终回复只给运行总结和稿件链接，不要重复全文。',
     ].join('\n');
 
     onNavigateToRedClaw({
@@ -894,15 +912,17 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   };
 
   // 加载历史记录列表
-  const loadHistoryList = useCallback(async () => {
+  const loadHistoryList = useCallback(async (options?: { includeAbandoned?: boolean }) => {
     try {
-      const list = await window.ipcRenderer.wander.listHistory() as WanderHistoryRecord[];
-      const normalized = (Array.isArray(list) ? list : []).filter(record => !isAbandonedHistoryRecord(record));
+      const list = await window.ipcRenderer.wander.listHistory({
+        includeAbandoned: Boolean(options?.includeAbandoned),
+      }) as WanderHistoryRecord[];
+      const normalized = Array.isArray(list) ? list : [];
       setHistoryList(normalized);
-      return normalized;
+      return normalized.filter(record => !isAbandonedHistoryRecord(record));
     } catch (error) {
       console.error('Failed to load wander history list:', error);
-      return historyListRef.current;
+      return historyListRef.current.filter(record => !isAbandonedHistoryRecord(record));
     }
   }, []);
 
@@ -941,10 +961,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     e.stopPropagation();
     await window.ipcRenderer.wander.deleteHistory(id);
     const newList = historyList.filter(h => h.id !== id);
+    const activeList = newList.filter(record => !isAbandonedHistoryRecord(record));
     setHistoryList(newList);
     if (currentHistoryId === id) {
-      if (newList.length > 0) {
-        loadHistory(newList[0]);
+      if (activeList.length > 0) {
+        loadHistory(activeList[0]);
       } else {
         setPhase('idle');
         setShowFinal(false);
@@ -967,17 +988,15 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   };
 
   const abandonSelectedTopic = async () => {
-    if (!selectedTopic || loading) return;
+    if (!selectedTopic || selectedTopic.abandoned || loading) return;
     const targetId = selectedTopic.id;
     const isPersistedTopic = targetId !== 'current-topic';
 
     try {
-      let nextList = historyList.filter(record => record.id !== targetId);
+      let nextList = historyList.filter(record => record.id !== targetId && !isAbandonedHistoryRecord(record));
       if (isPersistedTopic) {
         await window.ipcRenderer.wander.abandonHistory(targetId);
-        nextList = await loadHistoryList();
-      } else {
-        setHistoryList(nextList);
+        nextList = await loadHistoryList({ includeAbandoned: showAbandonedTopics });
       }
 
       if (nextList.length > 0) {
@@ -1031,6 +1050,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   });
 
   useEffect(() => {
+    if (!isActive || !showAbandonedTopics) return;
+    void loadHistoryList({ includeAbandoned: true });
+  }, [isActive, loadHistoryList, showAbandonedTopics]);
+
+  useEffect(() => {
     if (!isActive) return;
     const handleSettingsUpdated = () => {
       void syncWanderSettings();
@@ -1079,7 +1103,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   }, [anchorQuery, guidedSourceMode, isActive, selectionMode]);
 
   useEffect(() => {
-    if (!isActive || pendingStartMode !== 'comments') return;
+    if (!isActive || pendingStartMode !== 'comments' || commentSourceMode !== 'custom') return;
     let cancelled = false;
     setCommentCandidatesLoading(true);
     window.ipcRenderer.wander.listCommentCandidates<WanderItem[]>()
@@ -1105,7 +1129,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     return () => {
       cancelled = true;
     };
-  }, [isActive, pendingStartMode]);
+  }, [commentSourceMode, isActive, pendingStartMode]);
 
   useEffect(() => {
     const handleWanderProgress = (_event: unknown, payload?: unknown) => {
@@ -1260,7 +1284,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
           return;
         }
       } else if (effectiveSelectionMode === 'comments') {
-        nextItems = selectedCommentItem ? [selectedCommentItem] : [];
+        nextItems = commentSourceMode === 'custom' && selectedCommentItem ? [selectedCommentItem] : [];
       } else {
         nextItems = await window.ipcRenderer.wander.getRandom() as WanderItem[];
       }
@@ -1326,10 +1350,13 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     };
   }, [isActive, onTitleBarContentChange, titleBarContent]);
 
+  const activeHistoryList = useMemo(
+    () => historyList.filter(record => !isAbandonedHistoryRecord(record)),
+    [historyList]
+  );
+
   const topicRows = useMemo(() => {
-    const hasPersistedCurrent = Boolean(
-      currentHistoryId && historyList.some(record => record.id === currentHistoryId && !isAbandonedHistoryRecord(record))
-    );
+    const hasPersistedCurrent = Boolean(currentHistoryId && historyList.some(record => record.id === currentHistoryId));
     const generated = parsedResult && !hasPersistedCurrent
       ? [{
           id: currentHistoryId || 'current-topic',
@@ -1340,14 +1367,17 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
           score: validationIssues.length > 0 || parseError ? 62 : 86,
           status: loading ? '生成中' : '待处理',
           evidenceCount: items.length,
+          abandoned: false,
           record: null as WanderHistoryRecord | null,
         }]
       : [];
-    const historyRows = historyList.filter(record => !isAbandonedHistoryRecord(record)).map((record, index) => {
+    const topicHistoryList = showAbandonedTopics ? historyList : activeHistoryList;
+    const historyRows = topicHistoryList.map((record, index) => {
       const parsed = normalizeWanderResultPayload(record.result);
       const optionIndex = resolveSelectedOptionIndex(parsed);
       const selected = parsed?.options?.[optionIndex];
       const recordItems = normalizeWanderItemsPayload(record.items);
+      const abandoned = isAbandonedHistoryRecord(record);
       const isCommentInsight = recordItems.some((item) => {
         const meta = item.meta || {};
         return String(meta.sourceType || '').trim() === 'xhs-comments';
@@ -1359,8 +1389,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         createdAt: getHistoryCreatedAt(record),
         source: isCommentInsight ? '评论洞察' : '灵感漫步',
         score: Math.max(68, 91 - index * 3),
-        status: currentHistoryId === record.id ? '当前' : '待处理',
+        status: abandoned ? '已放弃' : currentHistoryId === record.id ? '当前' : '待处理',
         evidenceCount: recordItems.length || 3,
+        abandoned,
         record,
       };
     });
@@ -1372,7 +1403,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         return true;
       })
       .sort((left, right) => right.createdAt - left.createdAt);
-  }, [activeOption?.content_direction, activeOption?.topic.title, activeSourceMode, currentHistoryId, historyList, items.length, loading, parseError, parsedResult, validationIssues.length]);
+  }, [activeHistoryList, activeOption?.content_direction, activeOption?.topic.title, activeSourceMode, currentHistoryId, historyList, items.length, loading, parseError, parsedResult, showAbandonedTopics, validationIssues.length]);
 
   const isGeneratingTopic = loading || phase === 'running';
   const selectedTopic = isGeneratingTopic
@@ -1426,6 +1457,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       onClick: () => {
         if (loading) return;
         setSelectionMode('comments');
+        setCommentSourceMode('random');
+        setSelectedCommentItem(null);
+        setCommentCandidateQuery('');
+        setCommentCandidatesLoading(false);
         setPendingStartMode('comments');
         setParseError(null);
         setValidationIssues([]);
@@ -1480,12 +1515,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       const StartIcon = isCommentMode ? MessageSquarePlus : Dices;
       const title = isCommentMode ? '评论区洞察' : '灵感漫步';
       const actionLabel = isCommentMode ? '开始评论区洞察' : '开始漫步';
+      const customCommentSelection = isCommentMode && commentSourceMode === 'custom';
+      const startDisabled = loading || (customCommentSelection && !selectedCommentItem);
 
       return (
         <aside className="flex min-h-0 flex-1 flex-col bg-surface-primary">
           <div className="flex min-h-0 flex-1 items-center justify-center px-8 py-10">
             <div className="flex w-full max-w-xl flex-col items-center text-center">
-              {isCommentMode && (
+              {customCommentSelection && (
                 <div className="mb-8 w-full rounded-lg border border-border bg-surface-secondary/40 p-3 text-left">
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
@@ -1545,12 +1582,36 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
               <button
                 type="button"
                 onClick={() => void startWander(pendingStartMode)}
-                disabled={loading}
+                disabled={startDisabled}
                 className="mt-8 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
               >
                 <StartIcon className="h-4 w-4" />
                 {actionLabel}
               </button>
+              {isCommentMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextMode: CommentSourceMode = customCommentSelection ? 'random' : 'custom';
+                    setCommentSourceMode(nextMode);
+                    if (nextMode === 'random') {
+                      setSelectedCommentItem(null);
+                      setCommentCandidateQuery('');
+                      setCommentCandidatesLoading(false);
+                    }
+                  }}
+                  aria-pressed={customCommentSelection}
+                  className={clsx(
+                    'mt-3 inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-colors',
+                    customCommentSelection
+                      ? 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/15'
+                      : 'border-border bg-surface-primary text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
+                  )}
+                >
+                  {customCommentSelection ? <Shuffle className="h-3.5 w-3.5" /> : <MessageSquarePlus className="h-3.5 w-3.5" />}
+                  {customCommentSelection ? '随机选择' : '指定笔记'}
+                </button>
+              )}
             </div>
           </div>
         </aside>
@@ -1563,7 +1624,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         <button
           type="button"
           onClick={abandonSelectedTopic}
-          disabled={!selectedTopic || loading}
+          disabled={!selectedTopic || selectedTopic.abandoned || loading}
           className="absolute left-5 top-6 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface-primary px-3 text-xs font-semibold text-text-secondary transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-default disabled:opacity-40"
         >
           <X className="h-3.5 w-3.5" />
@@ -1699,6 +1760,15 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
             <h2 className="text-base font-semibold text-text-primary">选题池</h2>
             <div className="mt-1 text-xs text-text-tertiary">统一管理灵感漫步和评论洞察生成的选题</div>
           </div>
+          <button
+            type="button"
+            onClick={() => setShowAbandonedTopics((value) => !value)}
+            aria-pressed={showAbandonedTopics}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface-primary px-2.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+          >
+            {showAbandonedTopics ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            {showAbandonedTopics ? '隐藏已放弃' : '展示已放弃'}
+          </button>
         </div>
       </div>
 
@@ -1767,6 +1837,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                     'relative w-full px-5 py-3 text-left transition-colors',
                     selected
                       ? 'bg-accent-primary/12 shadow-[inset_0_0_0_1px_rgba(167,116,73,0.18)]'
+                      : row.abandoned
+                      ? 'bg-surface-secondary/45 hover:bg-surface-secondary/65'
                       : 'bg-surface-primary hover:bg-surface-secondary/55'
                   )}
                 >
@@ -1777,7 +1849,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                     <div className="flex items-center gap-2">
                       <span className={clsx(
                         'truncate text-sm font-semibold',
-                        selected ? 'text-accent-primary' : 'text-text-primary'
+                        selected ? 'text-accent-primary' : row.abandoned ? 'text-text-secondary' : 'text-text-primary'
                       )}>{row.title}</span>
                       {selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent-primary" />}
                     </div>
@@ -1789,9 +1861,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                   <div className="mt-2 flex min-w-0 items-center gap-2 text-xs">
                     <span className={clsx(
                       'rounded-md px-2 py-1 text-[11px] font-semibold',
-                      selected ? 'bg-accent-primary text-white' : 'bg-accent-primary/10 text-accent-primary'
+                      selected ? 'bg-accent-primary text-white' : row.abandoned ? 'bg-surface-tertiary text-text-tertiary' : 'bg-accent-primary/10 text-accent-primary'
                     )}>{row.source}</span>
-                    <span className={clsx('shrink-0', selected ? 'font-semibold text-accent-primary' : 'text-text-secondary')}>{row.status}</span>
+                    <span className={clsx('shrink-0', selected ? 'font-semibold text-accent-primary' : row.abandoned ? 'text-text-tertiary' : 'text-text-secondary')}>{row.status}</span>
                     <span className="text-text-tertiary">{formatDate(row.createdAt)}</span>
                     <div className="ml-auto flex w-20 items-center gap-2">
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border">
@@ -1829,10 +1901,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2 custom-scrollbar">
-              {historyList.length === 0 ? (
+              {activeHistoryList.length === 0 ? (
                 <div className="px-4 py-10 text-center text-xs text-text-tertiary">暂无选题历史记录</div>
               ) : (
-                historyList.map(record => (
+                activeHistoryList.map(record => (
                   <button
                     key={record.id}
                     type="button"

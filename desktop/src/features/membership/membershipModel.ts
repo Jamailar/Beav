@@ -5,6 +5,7 @@ export type MembershipPlan = 'free' | 'premium' | 'founder' | 'founder_sponsor' 
 
 export type MembershipState = {
   active: boolean;
+  founderActive: boolean;
   plan: MembershipPlan;
   expiresAtMs: number | null;
   entitlements: Record<string, boolean | number | string>;
@@ -16,12 +17,15 @@ export type FounderSponsorState = {
 };
 
 const PREMIUM_PLANS = ['premium', 'founder', 'founder_sponsor', 'founder-sponsor'];
+const FOUNDER_PLANS = ['premium', 'founder', 'founder_sponsor', 'founder-sponsor'];
 const LEGACY_ACTIVE_MEMBER_ENTITLEMENTS: EntitlementKey[] = [
-  ENTITLEMENTS.spacesCreate,
-  ENTITLEMENTS.spacesCreateUnlimited,
   ENTITLEMENTS.devicesLoginUnlimited,
   ENTITLEMENTS.featuresMemberOnly,
   ENTITLEMENTS.supportPriority,
+];
+const FOUNDER_MEMBER_ENTITLEMENTS: EntitlementKey[] = [
+  ENTITLEMENTS.spacesCreate,
+  ENTITLEMENTS.spacesCreateUnlimited,
 ];
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
@@ -161,9 +165,11 @@ export function normalizeMembershipState(authSnapshot: unknown): MembershipState
   ];
   const founderActive = founderCandidates.some((value) => recordIsActiveFounder(asRecord(value)))
     || founderArrays.some((value) => Array.isArray(value) && value.some((item) => recordIsActiveFounder(asRecord(item))));
+  const founderPlanActive = membership.active && FOUNDER_PLANS.includes(String(membership.plan || '').trim().toLowerCase());
+  const hasFounderMembership = founderActive || founderPlanActive;
 
-  const active = membership.active || founderActive;
-  const plan = founderActive && membership.plan === 'free' ? 'founder_sponsor' : membership.plan;
+  const active = membership.active || hasFounderMembership;
+  const plan = hasFounderMembership && membership.plan === 'free' ? 'founder_sponsor' : membership.plan;
 
   if (active) {
     LEGACY_ACTIVE_MEMBER_ENTITLEMENTS.forEach((key) => {
@@ -172,9 +178,17 @@ export function normalizeMembershipState(authSnapshot: unknown): MembershipState
       }
     });
   }
+  if (hasFounderMembership) {
+    FOUNDER_MEMBER_ENTITLEMENTS.forEach((key) => {
+      if (entitlements[key] === undefined) {
+        entitlements[key] = true;
+      }
+    });
+  }
 
   return {
     active,
+    founderActive: hasFounderMembership,
     plan,
     expiresAtMs: membership.expiresAtMs,
     entitlements,
@@ -191,17 +205,20 @@ function entitlementValueIsEnabled(value: unknown): boolean {
 }
 
 export function canUseEntitlement(state: MembershipState, entitlement: EntitlementKey | string): boolean {
-  if (entitlementValueIsEnabled(state.entitlements[entitlement])) return true;
   if (entitlement === ENTITLEMENTS.spacesCreate) {
-    return entitlementValueIsEnabled(state.entitlements[ENTITLEMENTS.spacesCreateUnlimited]);
+    return state.founderActive && (
+      entitlementValueIsEnabled(state.entitlements[ENTITLEMENTS.spacesCreate])
+      || entitlementValueIsEnabled(state.entitlements[ENTITLEMENTS.spacesCreateUnlimited])
+    );
   }
+  if (entitlementValueIsEnabled(state.entitlements[entitlement])) return true;
   return false;
 }
 
 export function resolveFounderSponsorState(authSnapshot: unknown): FounderSponsorState {
   const state = normalizeMembershipState(authSnapshot);
   return {
-    active: state.active,
-    labelKey: state.active ? 'layout.founderSponsor.memberLabel' : 'layout.founderSponsor.entryLabel',
+    active: state.founderActive,
+    labelKey: state.founderActive ? 'layout.founderSponsor.memberLabel' : 'layout.founderSponsor.entryLabel',
   };
 }
