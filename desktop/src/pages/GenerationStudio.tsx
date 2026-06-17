@@ -16,6 +16,7 @@ import {
     Play,
     Plus,
     RotateCcw,
+    Search,
     Sparkles,
     Trash2,
     UserRound,
@@ -141,6 +142,7 @@ import { Chat, clearFixedSessionWarmSnapshot } from './Chat';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { parseAiPricingCatalog, type AiPricingCatalog } from '../features/settings/settingsModel';
+import { collectNestedFiles, isInternalPackageFile, type FileNode } from '../features/manuscripts/editorModel';
 
 type GenerationSubmitButtonProps = {
     onClick: () => void;
@@ -338,6 +340,55 @@ type AssetContextMenuState = {
     x: number;
     y: number;
 };
+
+type CoverManuscriptOption = {
+    path: string;
+    title: string;
+    updatedAt: number;
+};
+
+type ManuscriptReadResult = {
+    content?: string;
+    metadata?: Record<string, unknown>;
+};
+
+function manuscriptFallbackTitle(path: string): string {
+    return String(path || '').split('/').filter(Boolean).pop()?.replace(/\.md$/i, '') || '稿件';
+}
+
+function manuscriptTitleFromNode(node: FileNode): string {
+    const path = String(node.path || '').trim();
+    return String(node.title || node.name || manuscriptFallbackTitle(path)).trim() || manuscriptFallbackTitle(path);
+}
+
+function buildCoverManuscriptOptions(nodes: FileNode[]): CoverManuscriptOption[] {
+    return collectNestedFiles(nodes)
+        .filter((node) => {
+            const path = String(node.path || '').trim();
+            return path && !isInternalPackageFile(path);
+        })
+        .map((node) => ({
+            path: String(node.path || '').trim(),
+            title: manuscriptTitleFromNode(node),
+            updatedAt: Number(node.updatedAt || 0) || 0,
+        }))
+        .sort((left, right) => {
+            if (right.updatedAt !== left.updatedAt) return right.updatedAt - left.updatedAt;
+            return left.path.localeCompare(right.path, 'zh-Hans-CN');
+        });
+}
+
+function manuscriptReadContent(result: ManuscriptReadResult | unknown): string {
+    if (!result || typeof result !== 'object') return '';
+    return String((result as ManuscriptReadResult).content || '').trim();
+}
+
+function clipManuscriptForAgent(content: string): string {
+    const normalized = String(content || '').trim();
+    const maxChars = 14_000;
+    if (normalized.length <= maxChars) return normalized;
+    return `${normalized.slice(0, maxChars)}\n\n[稿件过长，已截取前 ${maxChars} 字用于封面判断]`;
+}
 
 const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1193,9 +1244,6 @@ function ReferenceStack({
 
 function requestReferenceItems(request: GenerationRequest): ReferenceItem[] {
     if (request.type === 'audio' || request.type === 'digital-human') return [];
-    if (request.type === 'cover') {
-        return [request.templateImage, request.baseImage].filter(Boolean) as ReferenceItem[];
-    }
     const items = [...request.referenceItems];
     if (request.type === 'video') {
         if (request.firstClip) items.push(request.firstClip);
@@ -1261,6 +1309,16 @@ function MetaRow({ request }: { request: GenerationRequest }) {
     );
 }
 
+function requestDisplayPrompt(request: GenerationRequest): string {
+    const prompt = request.prompt.trim();
+    if (prompt) return prompt;
+    if (request.type === 'cover' && request.manuscriptSource) {
+        return `根据稿件《${request.manuscriptSource.title}》做封面`;
+    }
+    if (request.type === 'cover') return '封面创作';
+    return '';
+}
+
 function placeholderMediaGridClass(request: GenerationRequest, itemCount: number, aspectRatio: string): string {
     if (request.type === 'audio') return 'max-w-[520px]';
     const ratio = parseAspectRatio(aspectRatio, request.type === 'video' ? '16 / 9' : '4 / 3');
@@ -1291,7 +1349,9 @@ function FeedEntryMessage({
     onOpenAssetMenu: (event: React.MouseEvent<HTMLElement>, asset: GeneratedAsset, entryId?: string) => void;
 }) {
     const [now, setNow] = useState(() => Date.now());
+    const hasMediaJob = Boolean(entry.jobId);
     const isRunning = entry.status === 'running';
+    const showMediaProgress = isRunning && hasMediaJob;
     const progress = estimateGenerationProgress(entry.request, now - entry.createdAt);
     const placeholderCount = placeholderCountForRequest(entry.request);
     const placeholderAspectRatio = placeholderAspectRatioForRequest(entry.request);
@@ -1301,10 +1361,10 @@ function FeedEntryMessage({
 
     useEffect(() => {
         setNow(Date.now());
-        if (!isActive || !isRunning) return;
+        if (!isActive || !showMediaProgress) return;
         const timer = window.setInterval(() => setNow(Date.now()), 800);
         return () => window.clearInterval(timer);
-    }, [entry.createdAt, isActive, isRunning]);
+    }, [entry.createdAt, isActive, showMediaProgress]);
 
     return (
         <article className={clsx('space-y-3', inlineWithAgent && '-mt-4 space-y-2')}>
@@ -1343,26 +1403,28 @@ function FeedEntryMessage({
                         </div>
                     </div>
 
-                    <div className="flex max-w-[680px] items-start gap-2">
-                        <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-6 text-text-primary">
-                            {entry.request.prompt}
+                    {requestDisplayPrompt(entry.request) && (
+                        <div className="flex max-w-[680px] items-start gap-2">
+                            <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-6 text-text-primary">
+                                {requestDisplayPrompt(entry.request)}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => onDelete(entry.id)}
+                                className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-brand-red/10 hover:text-brand-red"
+                                aria-label="删除创作记录"
+                                title="删除创作记录"
+                            >
+                                <Trash2 className="h-3.5 w-3.5" />
+                            </button>
                         </div>
-                        <button
-                            type="button"
-                            onClick={() => onDelete(entry.id)}
-                            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-brand-red/10 hover:text-brand-red"
-                            aria-label="删除创作记录"
-                            title="删除创作记录"
-                        >
-                            <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                    </div>
+                    )}
 
                     <ReferencePreviewStrip request={entry.request} />
                 </>
             )}
 
-            {isRunning && (
+            {showMediaProgress && (
                 <div className="max-w-[560px] space-y-2">
                     <div className="flex items-center justify-between gap-4">
                         <div className="text-[12px] font-medium text-text-secondary">
@@ -1387,7 +1449,7 @@ function FeedEntryMessage({
                 </div>
             )}
 
-            {isRunning && entry.assets.length === 0 && entry.request.type !== 'audio' && (
+            {showMediaProgress && entry.assets.length === 0 && entry.request.type !== 'audio' && (
                 <div className={clsx('grid gap-3', placeholderGridClass)}>
                     {Array.from({ length: placeholderCount }).map((_, index) => (
                         <div
@@ -1648,8 +1710,12 @@ export function GenerationStudio({
     const [coverCount, setCoverCount] = useState(1);
     const [coverModel, setCoverModel] = useState('');
     const [coverQuality, setCoverQuality] = useState('medium');
-    const [coverTemplateImage, setCoverTemplateImage] = useState<ReferenceItem | null>(null);
-    const [coverBaseImage, setCoverBaseImage] = useState<ReferenceItem | null>(null);
+    const [coverReferences, setCoverReferences] = useState<ReferenceItem[]>([]);
+    const [coverManuscriptPath, setCoverManuscriptPath] = useState('');
+    const [coverManuscripts, setCoverManuscripts] = useState<CoverManuscriptOption[]>([]);
+    const [isLoadingCoverManuscripts, setIsLoadingCoverManuscripts] = useState(false);
+    const [coverManuscriptPickerOpen, setCoverManuscriptPickerOpen] = useState(false);
+    const [coverManuscriptSearch, setCoverManuscriptSearch] = useState('');
     const [coverPromptSwitches, setCoverPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_COVER_PROMPT_SWITCHES);
     const [isReadingCoverRefs, setIsReadingCoverRefs] = useState(false);
     const [coverError, setCoverError] = useState('');
@@ -1856,6 +1922,30 @@ export function GenerationStudio({
     }, [isActive, loadContext, loadPricingCatalog]);
 
     useEffect(() => {
+        if (!isActive || studioMode !== 'cover') return;
+        let cancelled = false;
+        setIsLoadingCoverManuscripts(true);
+        void (async () => {
+            try {
+                const tree = await window.ipcRenderer.manuscripts.list<FileNode[]>();
+                if (cancelled) return;
+                setCoverManuscripts(buildCoverManuscriptOptions(Array.isArray(tree) ? tree : []));
+            } catch (error) {
+                if (!cancelled) {
+                    console.error('Failed to load cover manuscripts:', error);
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsLoadingCoverManuscripts(false);
+                }
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [isActive, studioMode]);
+
+    useEffect(() => {
         if (!isActive) return;
         const handleSettingsUpdated = () => {
             void loadContext(false);
@@ -1967,6 +2057,15 @@ export function GenerationStudio({
     }, [previewAsset]);
 
     useEffect(() => {
+        if (!coverManuscriptPickerOpen) return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setCoverManuscriptPickerOpen(false);
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [coverManuscriptPickerOpen]);
+
+    useEffect(() => {
         if (!assetContextMenu) return;
         const handlePointerDown = () => setAssetContextMenu(null);
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -2039,6 +2138,23 @@ export function GenerationStudio({
         () => imageModelOptions.find((option) => option.value === imageModel.trim()) || null,
         [imageModel, imageModelOptions],
     );
+    const selectedCoverManuscript = useMemo(() => {
+        const selectedPath = coverManuscriptPath.trim();
+        if (!selectedPath) return null;
+        return coverManuscripts.find((item) => item.path === selectedPath) || {
+            path: selectedPath,
+            title: manuscriptFallbackTitle(selectedPath),
+            updatedAt: 0,
+        };
+    }, [coverManuscriptPath, coverManuscripts]);
+    const filteredCoverManuscripts = useMemo(() => {
+        const query = coverManuscriptSearch.trim().toLowerCase();
+        if (!query) return coverManuscripts;
+        return coverManuscripts.filter((item) => (
+            item.title.toLowerCase().includes(query)
+            || item.path.toLowerCase().includes(query)
+        ));
+    }, [coverManuscriptSearch, coverManuscripts]);
     const audioLanguageOptions = useMemo<PickerOption[]>(
         () => buildAudioLanguageOptions(audioVoicesForModel),
         [audioVoicesForModel],
@@ -2625,21 +2741,23 @@ export function GenerationStudio({
             count: coverCount,
             model: coverModel,
             quality: coverQuality,
-            templateImage: coverTemplateImage,
-            baseImage: coverBaseImage,
+            referenceItems: coverReferences,
+            manuscriptSource: selectedCoverManuscript
+                ? { path: selectedCoverManuscript.path, title: selectedCoverManuscript.title }
+                : null,
             promptSwitches: coverPromptSwitches,
         }));
         if (!accepted) return;
         setCoverPrompt('');
     }, [
-        coverBaseImage,
         coverCount,
         coverModel,
         coverProjectId,
         coverPrompt,
         coverPromptSwitches,
         coverQuality,
-        coverTemplateImage,
+        coverReferences,
+        selectedCoverManuscript,
         coverTitle,
         runCoverRequest,
     ]);
@@ -2734,8 +2852,8 @@ export function GenerationStudio({
             setCoverCount(entry.request.count);
             setCoverModel(entry.request.model);
             setCoverQuality(entry.request.quality);
-            setCoverTemplateImage(entry.request.templateImage);
-            setCoverBaseImage(entry.request.baseImage);
+            setCoverReferences(entry.request.referenceItems);
+            setCoverManuscriptPath(entry.request.manuscriptSource?.path || '');
             setCoverPromptSwitches(entry.request.promptSwitches);
             return;
         }
@@ -2910,19 +3028,12 @@ export function GenerationStudio({
         }
     }, [appendImageReferenceFiles]);
 
-    const setCoverReferenceFile = useCallback(async (
-        file: File | undefined,
-        target: 'template' | 'base',
-    ) => {
-        if (!file) return;
+    const appendCoverReferenceFiles = useCallback(async (files: File[]) => {
+        if (!files.length) return;
         setIsReadingCoverRefs(true);
         try {
-            const [item] = await filesToReferenceItems([file], 1);
-            if (target === 'template') {
-                setCoverTemplateImage(item);
-            } else {
-                setCoverBaseImage(item);
-            }
+            const nextItems = await filesToReferenceItems(files, 4);
+            setCoverReferences((prev) => [...prev, ...nextItems].slice(0, 4));
             setCoverError('');
         } catch (error) {
             console.error('Failed to read cover reference:', error);
@@ -2932,16 +3043,13 @@ export function GenerationStudio({
         }
     }, []);
 
-    const handleCoverReferenceFile = useCallback(async (
-        event: React.ChangeEvent<HTMLInputElement>,
-        target: 'template' | 'base',
-    ) => {
+    const handleCoverReferenceFiles = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         try {
-            await setCoverReferenceFile(event.target.files?.[0], target);
+            await appendCoverReferenceFiles(Array.from(event.target.files || []));
         } finally {
             event.target.value = '';
         }
-    }, [setCoverReferenceFile]);
+    }, [appendCoverReferenceFiles]);
 
     const setVideoReferenceFile = useCallback(async (
         file: File | undefined,
@@ -3064,8 +3172,10 @@ export function GenerationStudio({
                 count: coverCount,
                 model: coverModel,
                 quality: coverQuality,
-                templateImage: coverTemplateImage,
-                baseImage: coverBaseImage,
+                referenceItems: coverReferences,
+                manuscriptSource: selectedCoverManuscript
+                    ? { path: selectedCoverManuscript.path, title: selectedCoverManuscript.title }
+                    : null,
                 promptSwitches: coverPromptSwitches,
             });
         }
@@ -3090,14 +3200,14 @@ export function GenerationStudio({
         audioEmotion,
         audioTitle,
         audioVoiceId,
-        coverBaseImage,
         coverCount,
         coverModel,
         coverProjectId,
         coverPrompt,
         coverPromptSwitches,
         coverQuality,
-        coverTemplateImage,
+        coverReferences,
+        selectedCoverManuscript,
         coverTitle,
         effectiveAudioModel,
         effectiveVideoModel,
@@ -3134,16 +3244,18 @@ export function GenerationStudio({
 
     const composerGridClass = studioMode === 'audio' || studioMode === 'digital-human'
         ? 'grid gap-4'
-        : studioMode === 'cover' || (studioMode === 'video' && videoMode === 'first-last-frame')
+        : (studioMode === 'video' && videoMode === 'first-last-frame')
         ? 'grid items-start gap-4 md:grid-cols-[196px_minmax(0,1fr)]'
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
+    const coverHasAgentContext = currentAgentRequest.type === 'cover'
+        && (currentAgentRequest.referenceItems.length > 0 || Boolean(currentAgentRequest.manuscriptSource));
     const canSendAgentMessage = isAgentMode
         && !isDigitalHumanMode
         && Boolean(agentSessionId)
         && !isAgentSessionLoading
         && !agentExecutionActive
-        && (currentAgentRequest.prompt.trim().length > 0 || Boolean(agentAttachment));
+        && (currentAgentRequest.prompt.trim().length > 0 || Boolean(agentAttachment) || coverHasAgentContext);
     const handleClearGenerationRecords = useCallback(async () => {
         if (feedEntries.length === 0) return;
         const confirmed = await appConfirm('只清空本页生成记录；已经入库的媒体文件会保留。', {
@@ -3230,7 +3342,9 @@ export function GenerationStudio({
     }, [agentSessionId, feedEntries, generationAgentContextId, generationJobBootstrapFilter, updateFeedEntries]);
     const handleSendAgentMessage = useCallback(async () => {
         const content = currentAgentRequest.prompt.trim();
-        if ((!content && !agentAttachment) || !agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
+        const hasCoverContext = currentAgentRequest.type === 'cover'
+            && (currentAgentRequest.referenceItems.length > 0 || Boolean(currentAgentRequest.manuscriptSource));
+        if ((!content && !agentAttachment && !hasCoverContext) || !agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
         const attachments: UploadedFileAttachment[] = [];
         const attachmentContextNotes: string[] = [];
 
@@ -3246,7 +3360,27 @@ export function GenerationStudio({
             return result.attachment;
         };
 
-        if (currentAgentRequest.type === 'image' && agentAttachment && attachmentVisualKind(agentAttachment) === 'image') {
+        if (currentAgentRequest.type === 'cover' && currentAgentRequest.manuscriptSource?.path) {
+            try {
+                const manuscript = currentAgentRequest.manuscriptSource;
+                const result = await window.ipcRenderer.manuscripts.read<ManuscriptReadResult>(manuscript.path);
+                const manuscriptContent = clipManuscriptForAgent(manuscriptReadContent(result));
+                attachmentContextNotes.push([
+                    `已选择稿件：${manuscript.title}`,
+                    `稿件路径：${manuscript.path}`,
+                    manuscriptContent
+                        ? `稿件正文：\n${manuscriptContent}`
+                        : '稿件正文为空；请主要根据用户补充要求和参考图判断封面。',
+                    '请用 social-cover-director 判断封面点击钩子、图片文字、画面策略和参考图角色；不要把整篇正文排进画面。',
+                ].join('\n'));
+            } catch (error) {
+                console.error('Failed to read cover manuscript:', error);
+                setCoverError(error instanceof Error ? error.message : '稿件读取失败');
+                return;
+            }
+        }
+
+        if ((currentAgentRequest.type === 'image' || currentAgentRequest.type === 'cover') && agentAttachment && attachmentVisualKind(agentAttachment) === 'image') {
             try {
                 const uploadedImage = await attachmentToReferenceItem(agentAttachment);
                 const combinedReferences = uploadedImage
@@ -3257,44 +3391,31 @@ export function GenerationStudio({
                 attachmentContextNotes.push(contactSheet.note);
             } catch (error) {
                 console.error('Failed to merge generation references:', error);
-                setImageError(error instanceof Error ? error.message : '参考图附件创建失败');
+                if (currentAgentRequest.type === 'cover') {
+                    setCoverError(error instanceof Error ? error.message : '参考图附件创建失败');
+                } else {
+                    setImageError(error instanceof Error ? error.message : '参考图附件创建失败');
+                }
                 return;
             }
         } else if (agentAttachment) {
             attachments.push(agentAttachment);
-            if (currentAgentRequest.type === 'image' && currentAgentRequest.referenceItems.length > 0) {
-                attachmentContextNotes.push(`当前轮次还存在 ${currentAgentRequest.referenceItems.length} 张创作参考图未随消息附带；如需让 AI 读取这些图，请移除当前文件附件，或把参考图直接通过左侧图片区发送。`);
+            if ((currentAgentRequest.type === 'image' || currentAgentRequest.type === 'cover') && currentAgentRequest.referenceItems.length > 0) {
+                attachmentContextNotes.push(`当前轮次还存在 ${currentAgentRequest.referenceItems.length} 张参考图未随消息附带；如需让 AI 读取这些图，请移除当前文件附件，或把参考图直接通过左侧图片区发送。`);
             }
-            if (currentAgentRequest.type === 'cover' && (currentAgentRequest.templateImage || currentAgentRequest.baseImage)) {
-                attachmentContextNotes.push('当前轮次还存在封面参考图或底图未随消息附带；如需让 AI 读取这些图，请移除当前文件附件。');
-            }
-        } else if (currentAgentRequest.type === 'image' && currentAgentRequest.referenceItems.length > 0) {
+        } else if ((currentAgentRequest.type === 'image' || currentAgentRequest.type === 'cover') && currentAgentRequest.referenceItems.length > 0) {
             try {
                 const contactSheet = await buildReferenceContactSheet(currentAgentRequest.referenceItems);
                 attachments.push(await createInlineAttachment({ name: contactSheet.fileName, dataUrl: contactSheet.dataUrl }, contactSheet.fileName));
-                attachmentContextNotes.push(contactSheet.note);
+                attachmentContextNotes.push(currentAgentRequest.type === 'cover' ? `封面参考图：${contactSheet.note}` : contactSheet.note);
             } catch (error) {
                 console.error('Failed to create inline agent attachment:', error);
-                setImageError(error instanceof Error ? error.message : '参考图附件创建失败');
-                return;
-            }
-        }
-        if (currentAgentRequest.type === 'cover' && !agentAttachment) {
-            const coverRefs = [currentAgentRequest.templateImage, currentAgentRequest.baseImage].filter(Boolean) as ReferenceItem[];
-            if (coverRefs.length > 0) {
-                try {
-                    const contactSheet = await buildReferenceContactSheet(coverRefs);
-                    const roleNotes = [
-                        currentAgentRequest.templateImage ? '参考封面' : '',
-                        currentAgentRequest.baseImage ? '底图' : '',
-                    ].filter(Boolean).map((role, index) => `第 ${index + 1} 张是${role}`);
-                    attachments.push(await createInlineAttachment({ name: contactSheet.fileName, dataUrl: contactSheet.dataUrl }, contactSheet.fileName));
-                    attachmentContextNotes.push(`封面素材：${contactSheet.note}。${roleNotes.join('，')}。`);
-                } catch (error) {
-                    console.error('Failed to prepare generation agent cover attachments:', error);
-                    setCoverError(error instanceof Error ? error.message : '封面素材附件创建失败');
-                    return;
+                if (currentAgentRequest.type === 'cover') {
+                    setCoverError(error instanceof Error ? error.message : '参考图附件创建失败');
+                } else {
+                    setImageError(error instanceof Error ? error.message : '参考图附件创建失败');
                 }
+                return;
             }
         }
         if (currentAgentRequest.type === 'video') {
@@ -3343,9 +3464,12 @@ export function GenerationStudio({
             audioLanguageBoost,
         });
         const messageContent = [content, runtimeContext, attachmentContextNotes.join('\n')].filter(Boolean).join('\n\n').trim();
+        const coverDisplayContent = currentAgentRequest.type === 'cover' && currentAgentRequest.manuscriptSource
+            ? `请根据稿件《${currentAgentRequest.manuscriptSource.title}》做封面`
+            : undefined;
         setAgentPendingMessage({
             content: messageContent,
-            displayContent: content || (attachments[0] ? `请处理这个附件：${attachments[0].name}` : undefined),
+            displayContent: content || coverDisplayContent || (attachments[0] ? `请处理这个附件：${attachments[0].name}` : undefined),
             attachments: attachments.length > 0 ? attachments : undefined,
         });
         if (studioMode === 'image') {
@@ -3558,24 +3682,15 @@ export function GenerationStudio({
                                                     onClear={() => setImageReferences([])}
                                                 />
                                             ) : studioMode === 'cover' ? (
-                                                <div className="grid grid-cols-2 gap-3">
-                                                    <UploadPreviewCard
-                                                        label={isReadingCoverRefs ? '读取中' : '参考'}
-                                                        accept="image/*"
-                                                        items={coverTemplateImage ? [coverTemplateImage] : []}
-                                                        onChange={(event) => void handleCoverReferenceFile(event, 'template')}
-                                                        onFiles={(files) => void setCoverReferenceFile(files[0], 'template')}
-                                                        onClear={() => setCoverTemplateImage(null)}
-                                                    />
-                                                    <UploadPreviewCard
-                                                        label={isReadingCoverRefs ? '读取中' : '底图'}
-                                                        accept="image/*"
-                                                        items={coverBaseImage ? [coverBaseImage] : []}
-                                                        onChange={(event) => void handleCoverReferenceFile(event, 'base')}
-                                                        onFiles={(files) => void setCoverReferenceFile(files[0], 'base')}
-                                                        onClear={() => setCoverBaseImage(null)}
-                                                    />
-                                                </div>
+                                                <UploadPreviewCard
+                                                    label={isReadingCoverRefs ? '读取中' : '图片'}
+                                                    accept="image/*"
+                                                    multiple
+                                                    items={coverReferences}
+                                                    onChange={handleCoverReferenceFiles}
+                                                    onFiles={appendCoverReferenceFiles}
+                                                    onClear={() => setCoverReferences([])}
+                                                />
                                             ) : videoMode === 'first-last-frame' ? (
                                                 <div className="grid grid-cols-2 gap-3">
                                                     <UploadPreviewCard
@@ -3627,21 +3742,63 @@ export function GenerationStudio({
                                                 placeholder="输入要合成的旁白、台词或口播文本..."
                                             />
                                         ) : (
-                                            <textarea
-                                                value={studioMode === 'image' ? imagePrompt : studioMode === 'cover' ? coverPrompt : studioMode === 'digital-human' ? digitalHumanPrompt : videoPrompt}
-                                                onChange={(event) => (
-                                                    studioMode === 'image'
-                                                        ? setImagePrompt(event.target.value)
-                                                        : studioMode === 'cover'
-                                                            ? setCoverPrompt(event.target.value)
-                                                        : studioMode === 'digital-human'
-                                                            ? setDigitalHumanPrompt(event.target.value)
-                                                            : setVideoPrompt(event.target.value)
+                                            <div className="relative">
+                                                {studioMode === 'cover' && (
+                                                    <div className="absolute left-0 top-0 z-10 flex max-w-full items-center gap-1.5">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setCoverManuscriptSearch('');
+                                                                setCoverManuscriptPickerOpen(true);
+                                                            }}
+                                                            className={clsx(
+                                                                'flex h-7 max-w-[260px] items-center gap-1.5 rounded-full border px-2.5 text-left transition-colors',
+                                                                selectedCoverManuscript
+                                                                    ? 'border-brand-red/35 bg-brand-red/10'
+                                                                    : 'border-border bg-surface-secondary hover:border-brand-red/30',
+                                                            )}
+                                                        >
+                                                            <FileText className={clsx(
+                                                                'h-3.5 w-3.5 shrink-0',
+                                                                selectedCoverManuscript ? 'text-brand-red' : 'text-text-tertiary',
+                                                            )} />
+                                                            <span className="min-w-0 truncate text-[12px] font-medium text-text-primary">
+                                                                {selectedCoverManuscript?.title || (isLoadingCoverManuscripts ? '加载稿件' : '选择稿件')}
+                                                            </span>
+                                                            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
+                                                        </button>
+                                                        {selectedCoverManuscript && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setCoverManuscriptPath('')}
+                                                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-surface-secondary text-text-tertiary transition-colors hover:bg-surface-primary hover:text-text-primary"
+                                                                aria-label="清除已选稿件"
+                                                            >
+                                                                <X className="h-3.5 w-3.5" />
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 )}
-                                                rows={4}
-                                                placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'cover' ? '输入封面标题，或直接描述想要的点击感...' : studioMode === 'digital-human' ? '输入角色要说的口播文案...' : '描述您想生成的视频场景、镜头、动作...'}
-                                                className="min-h-[112px] max-h-[240px] w-full resize-y overflow-y-auto bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
-                                            />
+
+                                                <textarea
+                                                    value={studioMode === 'image' ? imagePrompt : studioMode === 'cover' ? coverPrompt : studioMode === 'digital-human' ? digitalHumanPrompt : videoPrompt}
+                                                    onChange={(event) => (
+                                                        studioMode === 'image'
+                                                            ? setImagePrompt(event.target.value)
+                                                            : studioMode === 'cover'
+                                                                ? setCoverPrompt(event.target.value)
+                                                            : studioMode === 'digital-human'
+                                                                ? setDigitalHumanPrompt(event.target.value)
+                                                                : setVideoPrompt(event.target.value)
+                                                    )}
+                                                    rows={4}
+                                                    placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'cover' ? '输入封面标题，或补充想要的点击感...' : studioMode === 'digital-human' ? '输入角色要说的口播文案...' : '描述您想生成的视频场景、镜头、动作...'}
+                                                    className={clsx(
+                                                        'min-h-[112px] max-h-[240px] w-full resize-y overflow-y-auto bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary',
+                                                        studioMode === 'cover' && 'pt-9',
+                                                    )}
+                                                />
+                                            </div>
                                         )}
 
                                         {(studioMode === 'image' || studioMode === 'cover') && isAgentMode && agentAttachment && (
@@ -4007,6 +4164,131 @@ export function GenerationStudio({
                     </div>
                 </footer>
             </div>
+
+            {coverManuscriptPickerOpen && (
+                <div
+                    className="fixed inset-0 z-[1180] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[1px]"
+                    role="dialog"
+                    aria-modal="true"
+                    onMouseDown={() => setCoverManuscriptPickerOpen(false)}
+                >
+                    <div
+                        className="flex max-h-[82vh] w-full max-w-[760px] flex-col overflow-hidden rounded-[22px] border border-border bg-surface-primary shadow-[var(--ui-shadow-2)]"
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-muted text-brand-red">
+                                <FileText className="h-4.5 w-4.5" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="truncate text-[14px] font-semibold text-text-primary">选择稿件</div>
+                                <div className="mt-0.5 text-[11px] text-text-tertiary">
+                                    {coverManuscripts.length} 篇
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setCoverManuscriptPickerOpen(false)}
+                                className="flex h-8 w-8 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                aria-label="关闭"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+
+                        <div className="border-b border-border px-5 py-4">
+                            <div className="flex h-10 items-center gap-2 rounded-[14px] border border-border bg-surface-secondary px-3">
+                                <Search className="h-4 w-4 shrink-0 text-text-tertiary" />
+                                <input
+                                    autoFocus
+                                    value={coverManuscriptSearch}
+                                    onChange={(event) => setCoverManuscriptSearch(event.target.value)}
+                                    placeholder="搜索标题或路径"
+                                    className="min-w-0 flex-1 bg-transparent text-[13px] text-text-primary outline-none placeholder:text-text-tertiary"
+                                />
+                                {coverManuscriptSearch && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setCoverManuscriptSearch('')}
+                                        className="flex h-6 w-6 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+                                        aria-label="清空搜索"
+                                    >
+                                        <X className="h-3.5 w-3.5" />
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setCoverManuscriptPath('');
+                                    setCoverManuscriptPickerOpen(false);
+                                }}
+                                className={clsx(
+                                    'mb-2 flex w-full items-center gap-3 rounded-[14px] border px-3 py-3 text-left transition-colors',
+                                    !coverManuscriptPath
+                                        ? 'border-brand-red/45 bg-brand-red/10'
+                                        : 'border-transparent hover:bg-surface-secondary',
+                                )}
+                            >
+                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-secondary text-text-tertiary">
+                                    <FileText className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="truncate text-[13px] font-semibold text-text-primary">不使用稿件</div>
+                                    <div className="mt-0.5 text-[11px] text-text-tertiary">只根据输入和参考图做封面</div>
+                                </div>
+                            </button>
+
+                            {isLoadingCoverManuscripts ? (
+                                <div className="flex h-32 items-center justify-center text-[13px] text-text-tertiary">
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    加载稿件
+                                </div>
+                            ) : filteredCoverManuscripts.length === 0 ? (
+                                <div className="flex h-32 items-center justify-center text-[13px] text-text-tertiary">
+                                    没有匹配稿件
+                                </div>
+                            ) : (
+                                <div className="space-y-1">
+                                    {filteredCoverManuscripts.map((item) => {
+                                        const selected = item.path === coverManuscriptPath;
+                                        return (
+                                            <button
+                                                key={item.path}
+                                                type="button"
+                                                onClick={() => {
+                                                    setCoverManuscriptPath(item.path);
+                                                    setCoverManuscriptPickerOpen(false);
+                                                }}
+                                                className={clsx(
+                                                    'flex w-full items-center gap-3 rounded-[14px] border px-3 py-3 text-left transition-colors',
+                                                    selected
+                                                        ? 'border-brand-red/45 bg-brand-red/10'
+                                                        : 'border-transparent hover:bg-surface-secondary',
+                                                )}
+                                            >
+                                                <div className={clsx(
+                                                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
+                                                    selected ? 'bg-brand-red text-white' : 'bg-surface-secondary text-text-tertiary',
+                                                )}>
+                                                    <FileText className="h-4 w-4" />
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="truncate text-[13px] font-semibold text-text-primary">{item.title}</div>
+                                                    <div className="mt-0.5 truncate text-[11px] text-text-tertiary">{item.path}</div>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {previewAsset && (
                 <div

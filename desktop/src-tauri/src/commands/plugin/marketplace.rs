@@ -1458,12 +1458,64 @@ pub(super) fn install_thrive_plugin_from_marketplace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
 
     fn empty_index() -> ThrivePluginIndex {
         ThrivePluginIndex {
             schema_version: THRIVE_PLUGIN_SCHEMA_VERSION,
             plugins: BTreeMap::new(),
         }
+    }
+
+    fn temp_test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("redbox-{label}-{}", crate::now_i64()))
+    }
+
+    fn codex_plugin_bundle(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (path, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, *path, *body)
+                .expect("append tar entry");
+        }
+        let encoder = builder.into_inner().expect("finish tar");
+        encoder.finish().expect("finish gzip")
+    }
+
+    fn unsafe_codex_plugin_bundle(path: &str, body: &[u8]) -> Vec<u8> {
+        let mut tar_bytes = vec![0u8; 512];
+        let path_bytes = path.as_bytes();
+        tar_bytes[..path_bytes.len()].copy_from_slice(path_bytes);
+        tar_bytes[100..108].copy_from_slice(b"0000644\0");
+        tar_bytes[108..116].copy_from_slice(b"0000000\0");
+        tar_bytes[116..124].copy_from_slice(b"0000000\0");
+        let size = format!("{:011o}\0", body.len());
+        tar_bytes[124..136].copy_from_slice(size.as_bytes());
+        tar_bytes[136..148].copy_from_slice(b"00000000000\0");
+        for byte in &mut tar_bytes[148..156] {
+            *byte = b' ';
+        }
+        tar_bytes[156] = b'0';
+        tar_bytes[257..263].copy_from_slice(b"ustar\0");
+        tar_bytes[263..265].copy_from_slice(b"00");
+        let checksum: u32 = tar_bytes.iter().map(|byte| u32::from(*byte)).sum();
+        let checksum = format!("{checksum:06o}\0 ");
+        tar_bytes[148..156].copy_from_slice(checksum.as_bytes());
+        tar_bytes.extend_from_slice(body);
+        let padding = (512 - (body.len() % 512)) % 512;
+        tar_bytes.extend(std::iter::repeat_n(0, padding));
+        tar_bytes.extend(std::iter::repeat_n(0, 1024));
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&tar_bytes).expect("write gzip");
+        encoder.finish().expect("finish gzip")
     }
 
     #[test]
@@ -1554,5 +1606,82 @@ mod tests {
         assert_eq!(items[0].source_root.as_deref(), Some("/tmp/linear"));
         assert!(items[0].installable);
         assert_eq!(items[0].app_connector_ids, vec!["connector_linear"]);
+    }
+
+    #[test]
+    fn codex_bundle_download_url_requires_https() {
+        assert!(validate_codex_bundle_download_url("https://example.com/plugin.tar.gz").is_ok());
+        assert!(validate_codex_bundle_download_url("file:///tmp/plugin.tar.gz").is_err());
+        assert!(validate_codex_bundle_download_url("http://example.com/plugin.tar.gz").is_err());
+    }
+
+    #[test]
+    fn extract_codex_remote_plugin_bundle_rejects_unsafe_paths() {
+        let temp_root = temp_test_root("codex-unsafe-bundle");
+        fs::create_dir_all(&temp_root).expect("create temp root");
+        let bytes = unsafe_codex_plugin_bundle("../escape.txt", b"nope");
+
+        let error = extract_codex_remote_plugin_bundle(&bytes, &temp_root)
+            .expect_err("unsafe archive path should fail");
+
+        assert!(error.contains("unsafe path"));
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn extract_and_prepare_codex_remote_plugin_bundle() {
+        let temp_root = temp_test_root("codex-remote-bundle");
+        fs::create_dir_all(&temp_root).expect("create temp root");
+        let manifest = br#"{
+            "name": "linear",
+            "version": "0.0.1",
+            "skills": "./skills",
+            "apps": "./apps.json",
+            "permissions": { "capabilities": [] }
+        }"#;
+        let bytes = codex_plugin_bundle(&[
+            ("linear/.codex-plugin/plugin.json", manifest.as_slice()),
+            (
+                "linear/skills/linear/SKILL.md",
+                b"---\ndescription: Linear\n---\n",
+            ),
+        ]);
+
+        let plugin_root =
+            extract_codex_remote_plugin_bundle(&bytes, &temp_root).expect("extract bundle");
+        prepare_codex_remote_plugin_root(
+            &plugin_root,
+            &CodexRemotePluginRelease {
+                version: Some("1.2.3".to_string()),
+                app_manifest: Some(json!({
+                    "apps": {
+                        "Linear": {
+                            "id": "connector_linear",
+                            "category": "Productivity"
+                        }
+                    }
+                })),
+                ..CodexRemotePluginRelease::default()
+            },
+        )
+        .expect("prepare plugin root");
+
+        let manifest_value: Value = serde_json::from_str(
+            &fs::read_to_string(plugin_root.join(".codex-plugin/plugin.json"))
+                .expect("read manifest"),
+        )
+        .expect("parse manifest");
+        let app_value: Value = serde_json::from_str(
+            &fs::read_to_string(plugin_root.join("apps.json")).expect("read app manifest"),
+        )
+        .expect("parse app manifest");
+
+        assert_eq!(manifest_value.get("version"), Some(&json!("1.2.3")));
+        assert_eq!(
+            app_value.pointer("/apps/Linear/id").and_then(Value::as_str),
+            Some("connector_linear")
+        );
+
+        let _ = fs::remove_dir_all(temp_root);
     }
 }

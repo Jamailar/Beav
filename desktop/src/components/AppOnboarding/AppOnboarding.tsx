@@ -7,6 +7,8 @@ import {
   Check,
   Cpu,
   Database,
+  Download,
+  FileText,
   FolderOpen,
   Image,
   MessageSquareText,
@@ -19,7 +21,6 @@ import {
   Zap,
 } from 'lucide-react';
 import { APP_BRAND } from '../../config/brand';
-import characterDigitalAvatarCard from '../../assets/onboarding/character-digital-avatar-card.png';
 import { STEPS, markAppOnboardingSeen } from './constants';
 
 interface AppOnboardingProps {
@@ -139,13 +140,38 @@ const STEP_CONTENT: OnboardingStepContent[] = [
     },
   },
   {
-    eyebrow: '角色数字分身',
-    title: '创建人物资产，直接创作视频。',
-    desc: '把人物形象、声音、人设和内容风格沉淀成可复用资产，后续生成视频时直接调用同一个角色。',
-    image: {
-      src: characterDigitalAvatarCard,
-      alt: '角色数字分身卡片示例',
-    },
+    eyebrow: '小红书评论洞察',
+    title: '下载评论区，把真实需求变成选题。',
+    desc: '在小红书页面采集评论，保存到知识库，再让 AI 从追问、反驳和高频痛点里生成内容方向。',
+    cards: [
+      {
+        icon: Download,
+        title: '采集评论',
+        desc: '在小红书笔记页抓取评论快照，保留原始语境。',
+        meta: '浏览器插件',
+        tone: 'bg-rose-100 text-rose-600',
+      },
+      {
+        icon: FileText,
+        title: '保存数据',
+        desc: '笔记和评论分开入库，后续可检索、复用和导出。',
+        chips: [
+          { icon: Database, color: 'bg-emerald-100 text-emerald-600' },
+          { icon: FileText, color: 'bg-sky-100 text-sky-600' },
+        ],
+        tone: 'bg-sky-100 text-sky-600',
+      },
+      {
+        icon: Sparkles,
+        title: '生成洞察',
+        desc: '从追问、反驳和高频痛点里提炼内容切口。',
+        chips: [
+          { icon: MessageSquareText, color: 'bg-violet-100 text-violet-600' },
+          { icon: Sparkles, color: 'bg-amber-100 text-amber-600' },
+        ],
+        tone: 'bg-violet-100 text-violet-600',
+      },
+    ],
   },
   {
     eyebrow: '开始前的准备',
@@ -340,7 +366,7 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
 
   return (
     <div
-      className={`fixed inset-0 z-[10030] h-screen w-screen overflow-hidden bg-white text-zinc-950 ${
+      className={`app-onboarding fixed inset-0 z-[10030] h-screen w-screen overflow-hidden bg-white text-zinc-950 ${
         isVideoStep ? 'flex flex-col' : 'grid'
       }`}
       style={isVideoStep ? undefined : { display: 'grid', gridTemplateColumns: '49.6% 50.4%' }}

@@ -630,6 +630,44 @@ export function RedClaw({
         previewSidebarAnimationTimerRef.current = null;
     }, []);
 
+    const applyHistorySessionUnread = useCallback((sessionId: string | null | undefined, unread: boolean) => {
+        const safeSessionId = String(sessionId || '').trim();
+        if (!safeSessionId) return;
+        const updateItem = <T extends ContextChatSessionListItem,>(item: T): T => {
+            if (item.id !== safeSessionId) return item;
+            const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+                ? { ...(item.metadata as Record<string, unknown>) }
+                : {};
+            if (unread) {
+                metadata.unread = true;
+            } else {
+                delete metadata.unread;
+            }
+            return {
+                ...item,
+                unread,
+                metadata,
+            };
+        };
+        sessionListRef.current = sessionListRef.current.map(updateItem);
+        setSessionList((prev) => prev.map(updateItem));
+    }, []);
+
+    const setHistorySessionUnread = useCallback((sessionId: string | null | undefined, unread: boolean) => {
+        const safeSessionId = String(sessionId || '').trim();
+        if (!safeSessionId) return;
+        const currentItem = sessionListRef.current.find((item) => item.id === safeSessionId);
+        const currentMetadata = currentItem?.metadata && typeof currentItem.metadata === 'object' && !Array.isArray(currentItem.metadata)
+            ? currentItem.metadata as Record<string, unknown>
+            : null;
+        const currentUnread = Boolean(currentItem?.unread) || Boolean(currentMetadata?.unread);
+        if (currentItem && currentUnread === unread) return;
+        applyHistorySessionUnread(safeSessionId, unread);
+        void window.ipcRenderer.chat.setSessionUnread({ sessionId: safeSessionId, unread }).catch((error) => {
+            console.error('Failed to update RedClaw session unread state:', error);
+        });
+    }, [applyHistorySessionUnread]);
+
     const markSessionRunning = useCallback((sessionId: string | null | undefined) => {
         const safeSessionId = String(sessionId || '').trim();
         if (!safeSessionId) return;
@@ -641,16 +679,18 @@ export function RedClaw({
     const markSessionComplete = useCallback((sessionId: string | null | undefined) => {
         const safeSessionId = String(sessionId || '').trim();
         if (!safeSessionId) return;
+        const isCurrentlyOpen = isActiveRef.current && activeSessionIdRef.current === safeSessionId;
         setSessionActivityById((prev) => {
             const next = { ...prev };
-            if (isActiveRef.current && activeSessionIdRef.current === safeSessionId) {
+            if (isCurrentlyOpen) {
                 delete next[safeSessionId];
             } else {
                 next[safeSessionId] = 'unread-complete';
             }
             return next;
         });
-    }, []);
+        setHistorySessionUnread(safeSessionId, !isCurrentlyOpen);
+    }, [setHistorySessionUnread]);
 
     const clearSessionActivity = useCallback((sessionId: string | null | undefined) => {
         const safeSessionId = String(sessionId || '').trim();
@@ -838,8 +878,9 @@ export function RedClaw({
     useEffect(() => {
         if (isActive && activeChatSessionId) {
             clearSessionActivity(activeChatSessionId);
+            setHistorySessionUnread(activeChatSessionId, false);
         }
-    }, [activeChatSessionId, clearSessionActivity, isActive]);
+    }, [activeChatSessionId, clearSessionActivity, isActive, setHistorySessionUnread]);
     const activeMemberMention = activeAiSurface === 'advisor' && selectedAdvisor ? {
         id: selectedAdvisor.id,
         name: selectedAdvisor.name,
@@ -1440,13 +1481,14 @@ export function RedClaw({
         if (!session?.id) return;
         onOpenChatSurface?.();
         clearSessionActivity(session.id);
+        setHistorySessionUnread(session.id, false);
         if (session.surface === 'room' && session.roomId) {
             setSelectedRoomId(session.roomId);
             setActiveAiSurface('room');
             return;
         }
         switchSession(session.id);
-    }, [clearSessionActivity, onOpenChatSurface, switchSession]);
+    }, [clearSessionActivity, onOpenChatSurface, setHistorySessionUnread, switchSession]);
 
     const ensureActiveChatSessionForSend = useCallback(async (
         defaultTitle?: string,
@@ -2105,6 +2147,7 @@ export function RedClaw({
                 onSwitchRoom={switchRoom}
                 onDeleteRoom={(room) => void deleteRoomFromRedClaw(room)}
                 onSwitchSession={switchHistorySession}
+                onSetSessionUnread={setHistorySessionUnread}
                 onArchiveSession={(session) => void archiveUnifiedHistorySession(session)}
                 onRenameSession={renameUnifiedHistorySession}
                 onOpenManuscript={handleOpenManuscript}
@@ -2123,6 +2166,7 @@ export function RedClaw({
         onGlobalSidebarContentChange,
         renameUnifiedHistorySession,
         selectedRoomId,
+        setHistorySessionUnread,
         sessionActivityById,
         switchHistorySession,
         switchRoom,

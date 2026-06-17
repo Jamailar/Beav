@@ -769,6 +769,65 @@ function VideoMediaThumb({
     );
 }
 
+function MediaAssetPreviewDialog({ asset, onClose }: { asset: MediaAsset; onClose: () => void }) {
+    const sourceUrl = mediaAssetSourceUrl(asset);
+    const resolvedSourceUrl = sourceUrl ? resolveAssetUrl(sourceUrl) : '';
+    const resolvedFallbackUrl = asset.thumbnailUrl ? resolveAssetUrl(asset.thumbnailUrl) : resolvedSourceUrl;
+    const label = asset.title || asset.id;
+
+    return (
+        <div
+            className="fixed inset-0 z-[160] flex items-center justify-center bg-black/75 p-8"
+            onMouseDown={onClose}
+        >
+            <div
+                className="relative flex max-h-[78vh] max-w-[82vw] items-center justify-center"
+                onMouseDown={(event) => event.stopPropagation()}
+            >
+                <button
+                    type="button"
+                    onClick={onClose}
+                    className="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/80"
+                    aria-label="关闭预览"
+                >
+                    <X className="h-4 w-4" />
+                </button>
+                {asset.exists === false || (!resolvedSourceUrl && !resolvedFallbackUrl) ? (
+                    <div className="flex h-72 w-[min(520px,82vw)] flex-col items-center justify-center gap-3 rounded-xl bg-white text-text-tertiary shadow-2xl">
+                        <Clapperboard className="h-8 w-8" />
+                        <div className="max-w-[80%] truncate text-sm font-medium">{label}</div>
+                    </div>
+                ) : isAudioAsset(asset) && resolvedSourceUrl ? (
+                    <div className="flex w-[min(560px,82vw)] flex-col gap-4 rounded-xl bg-white p-5 shadow-2xl">
+                        <div className="flex items-center gap-3 pr-10">
+                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-primary/10 text-accent-primary">
+                                <Music2 className="h-6 w-6" />
+                            </div>
+                            <div className="min-w-0 truncate text-sm font-semibold text-text-primary">{label}</div>
+                        </div>
+                        <audio src={resolvedSourceUrl} className="w-full" controls autoPlay preload="metadata" />
+                    </div>
+                ) : isVideoAsset(asset) && resolvedSourceUrl ? (
+                    <video
+                        src={resolvedSourceUrl}
+                        className="block h-auto max-h-[78vh] w-auto max-w-[82vw] rounded-xl bg-black object-contain shadow-2xl"
+                        controls
+                        autoPlay
+                        playsInline
+                        preload="metadata"
+                    />
+                ) : (
+                    <img
+                        src={resolvedSourceUrl || resolvedFallbackUrl}
+                        alt={label}
+                        className="block h-auto max-h-[78vh] w-auto max-w-[82vw] rounded-xl bg-white object-contain shadow-2xl"
+                    />
+                )}
+            </div>
+        </div>
+    );
+}
+
 function subjectVoiceString(subject: SubjectRecord, keys: string[]): string {
     const voice = subject.voice || {};
     for (const key of keys) {
@@ -1734,6 +1793,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [retryingVoiceSubjectId, setRetryingVoiceSubjectId] = useState<string | null>(null);
     const [generatingCardSubjectId, setGeneratingCardSubjectId] = useState<string | null>(null);
     const [previewImage, setPreviewImage] = useState<SubjectImageDraft | null>(null);
+    const [previewMediaAsset, setPreviewMediaAsset] = useState<MediaAsset | null>(null);
     const [mediaContextMenu, setMediaContextMenu] = useState<MediaAssetContextMenuState>({
         visible: false,
         x: 0,
@@ -3342,6 +3402,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         });
     }, []);
 
+    const openMediaPreview = useCallback((asset: MediaAsset) => {
+        setMediaContextMenu({ visible: false, x: 0, y: 0, asset: null });
+        setPreviewMediaAsset(asset);
+    }, []);
+
     const handleShowMediaInFolder = useCallback(async (asset: MediaAsset) => {
         const source = asset.absolutePath || asset.relativePath || asset.previewUrl || '';
         if (!source) {
@@ -3970,12 +4035,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             key={asset.id}
                                             role="button"
                                             tabIndex={0}
-                                            onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
+                                            onClick={() => openMediaPreview(asset)}
                                             onContextMenu={(event) => openMediaContextMenu(event, asset)}
                                             onKeyDown={(event) => {
                                                 if (event.key !== 'Enter' && event.key !== ' ') return;
                                                 event.preventDefault();
-                                                void window.ipcRenderer.media.open({ assetId: asset.id });
+                                                openMediaPreview(asset);
                                             }}
                                             className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
                                         >
@@ -4025,7 +4090,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         <button
                                             key={asset.id}
                                             type="button"
-                                            onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
+                                            onClick={() => openMediaPreview(asset)}
                                             onContextMenu={(event) => openMediaContextMenu(event, asset)}
                                             className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
                                         >
@@ -5283,6 +5348,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         />
                     </div>
                 </div>
+            )}
+
+            {previewMediaAsset && (
+                <MediaAssetPreviewDialog
+                    asset={previewMediaAsset}
+                    onClose={() => setPreviewMediaAsset(null)}
+                />
             )}
 
             {isCategoryDialogOpen && (

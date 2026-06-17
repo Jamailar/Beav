@@ -2205,66 +2205,107 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                         {!isEmbedded && topControls}
                     </div>
 
-                    {!isEmbedded && allTags.length > 0 && (
+                    {!isEmbedded && (allTags.length > 0 || filteredKnowledgeItems.length > 0) && (
                         <div ref={allTagsDrawerRef} className="relative py-0.5">
-                            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                                <button
-                                    onClick={handleAllTagsClick}
-                                    className={clsx(
-                                        'shrink-0 px-3 py-1 text-[11px] font-bold rounded-lg transition-all border uppercase tracking-wider inline-flex items-center gap-1.5',
-                                        !selectedTag
-                                            ? 'bg-surface-secondary/80 text-text-primary border-transparent shadow-sm'
-                                            : 'bg-transparent text-text-tertiary border-transparent hover:bg-surface-secondary/70 hover:text-text-secondary'
-                                    )}
-                                >
-                                    <span>All Tags</span>
-                                    <span
-                                        className={clsx(
-                                            'inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-[9px] font-bold',
-                                            !selectedTag
-                                                ? 'bg-surface-tertiary/80 text-text-tertiary/80'
-                                                : 'bg-surface-secondary/80 text-text-tertiary/70'
+                            <div className="flex min-w-0 items-center gap-2">
+                                {filteredKnowledgeItems.length > 0 && (
+                                    <div className="flex shrink-0 items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={toggleVisibleKnowledgeSelection}
+                                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-black/[0.06] bg-white px-2.5 text-[11px] font-bold text-text-secondary shadow-sm transition-all hover:bg-black/[0.02]"
+                                            title={allVisibleKnowledgeSelected ? '取消选择当前可见' : '选择当前可见'}
+                                        >
+                                            {allVisibleKnowledgeSelected ? <CheckSquare2 className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+                                            {selectedKnowledgeItems.length > 0 ? `已选 ${selectedKnowledgeItems.length}` : '多选'}
+                                        </button>
+                                        {selectedKnowledgeItems.length > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={clearKnowledgeSelection}
+                                                className="inline-flex h-8 items-center justify-center rounded-lg border border-black/[0.06] bg-white px-2.5 text-[11px] font-bold text-text-tertiary shadow-sm transition-all hover:bg-black/[0.02]"
+                                                title="清空选择"
+                                            >
+                                                <X className="w-3.5 h-3.5" />
+                                            </button>
                                         )}
-                                    >
-                                        {allTags.length}
-                                    </span>
-                                    {hasHiddenTags && (
-                                        <ChevronRight
+                                    </div>
+                                )}
+                                {allTags.length > 0 && (
+                                    <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto no-scrollbar">
+                                        <button
+                                            onClick={handleAllTagsClick}
                                             className={clsx(
-                                                'w-3 h-3 opacity-60 transition-transform duration-200',
-                                                !selectedTag && isAllTagsDrawerOpen && 'rotate-90'
-                                            )}
-                                        />
-                                    )}
-                                </button>
-                                {inlineTagItems.map(({ tag, count }) => (
-                                    <button
-                                        key={tag}
-                                        onClick={() => handleTagSelection(tag)}
-                                        className={clsx(
-                                            'shrink-0 px-3 py-1 text-[11px] rounded-lg transition-all flex items-center gap-1.5 border font-bold',
-                                            selectedTag === tag
-                                                ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
-                                                : 'bg-surface-secondary/60 text-text-tertiary border-transparent hover:bg-surface-tertiary/70 hover:text-text-primary'
-                                        )}
-                                    >
-                                        <span className="opacity-40">#</span>
-                                        {tag}
-                                        <span
-                                            className={clsx(
-                                                'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
-                                                selectedTag === tag
-                                                    ? 'bg-white/20 text-white'
-                                                    : 'bg-surface-tertiary/70 text-text-tertiary/60'
+                                                'shrink-0 px-3 py-1 text-[11px] font-bold rounded-lg transition-all border uppercase tracking-wider inline-flex items-center gap-1.5',
+                                                !selectedTag
+                                                    ? 'bg-surface-secondary/80 text-text-primary border-transparent shadow-sm'
+                                                    : 'bg-transparent text-text-tertiary border-transparent hover:bg-surface-secondary/70 hover:text-text-secondary'
                                             )}
                                         >
-                                            {count}
-                                        </span>
+                                            <span>All Tags</span>
+                                            <span
+                                                className={clsx(
+                                                    'inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-[9px] font-bold',
+                                                    !selectedTag
+                                                        ? 'bg-surface-tertiary/80 text-text-tertiary/80'
+                                                        : 'bg-surface-secondary/80 text-text-tertiary/70'
+                                                )}
+                                            >
+                                                {allTags.length}
+                                            </span>
+                                            {hasHiddenTags && (
+                                                <ChevronRight
+                                                    className={clsx(
+                                                        'w-3 h-3 opacity-60 transition-transform duration-200',
+                                                        !selectedTag && isAllTagsDrawerOpen && 'rotate-90'
+                                                    )}
+                                                />
+                                            )}
+                                        </button>
+                                        {inlineTagItems.map(({ tag, count }) => (
+                                            <button
+                                                key={tag}
+                                                onClick={() => handleTagSelection(tag)}
+                                                className={clsx(
+                                                    'shrink-0 px-3 py-1 text-[11px] rounded-lg transition-all flex items-center gap-1.5 border font-bold',
+                                                    selectedTag === tag
+                                                        ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
+                                                        : 'bg-surface-secondary/60 text-text-tertiary border-transparent hover:bg-surface-tertiary/70 hover:text-text-primary'
+                                                )}
+                                            >
+                                                <span className="opacity-40">#</span>
+                                                {tag}
+                                                <span
+                                                    className={clsx(
+                                                        'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
+                                                        selectedTag === tag
+                                                            ? 'bg-white/20 text-white'
+                                                            : 'bg-surface-tertiary/70 text-text-tertiary/60'
+                                                    )}
+                                                >
+                                                    {count}
+                                                </span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                                {selectedKnowledgeItems.length > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleBatchDeleteKnowledge()}
+                                        disabled={isBatchDeleting}
+                                        className={clsx(
+                                            'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 text-[11px] font-bold text-red-600 shadow-sm transition-all hover:bg-red-100 disabled:opacity-60',
+                                        )}
+                                        title="批量删除"
+                                    >
+                                        {isBatchDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                        删除
                                     </button>
-                                ))}
+                                )}
                             </div>
 
-                            {!selectedTag && isAllTagsDrawerOpen && hasHiddenTags && (
+                            {allTags.length > 0 && !selectedTag && isAllTagsDrawerOpen && hasHiddenTags && (
                                 <div className="absolute left-0 right-0 top-full z-20 mt-3">
                                     <div className="rounded-2xl border border-border/80 bg-surface-elevated/95 shadow-xl shadow-black/[0.18] backdrop-blur-xl">
                                     <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
@@ -2339,44 +2380,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                             {indexStatus.failedCount > 0 && <span className="text-red-500">失败 {indexStatus.failedCount}</span>}
                             {indexStatus.lastIndexedAt && <span>最近更新 {formatTimestampDateTime(indexStatus.lastIndexedAt)}</span>}
                             {indexStatus.lastError && <span className="truncate text-red-500 max-w-[360px]">{indexStatus.lastError}</span>}
-                        </div>
-                    )}
-
-                    {!isEmbedded && filteredKnowledgeItems.length > 0 && (
-                        <div className="flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={toggleVisibleKnowledgeSelection}
-                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-black/[0.06] bg-white px-2.5 text-[11px] font-bold text-text-secondary shadow-sm transition-all hover:bg-black/[0.02]"
-                                    title={allVisibleKnowledgeSelected ? '取消选择当前可见' : '选择当前可见'}
-                                >
-                                    {allVisibleKnowledgeSelected ? <CheckSquare2 className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
-                                    {selectedKnowledgeItems.length > 0 ? `已选 ${selectedKnowledgeItems.length}` : '多选'}
-                                </button>
-                                {selectedKnowledgeItems.length > 0 && (
-                                    <button
-                                        type="button"
-                                        onClick={clearKnowledgeSelection}
-                                        className="inline-flex h-8 items-center justify-center rounded-lg border border-black/[0.06] bg-white px-2.5 text-[11px] font-bold text-text-tertiary shadow-sm transition-all hover:bg-black/[0.02]"
-                                        title="清空选择"
-                                    >
-                                        <X className="w-3.5 h-3.5" />
-                                    </button>
-                                )}
-                            </div>
-                            {selectedKnowledgeItems.length > 0 && (
-                                <button
-                                    type="button"
-                                    onClick={() => void handleBatchDeleteKnowledge()}
-                                    disabled={isBatchDeleting}
-                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 text-[11px] font-bold text-red-600 shadow-sm transition-all hover:bg-red-100 disabled:opacity-60"
-                                    title="批量删除"
-                                >
-                                    {isBatchDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                                    删除
-                                </button>
-                            )}
                         </div>
                     )}
                 </div>

@@ -88,6 +88,11 @@ export type CoverPromptSwitches = {
     replaceBackground: boolean;
 };
 
+export type CoverManuscriptSource = {
+    path: string;
+    title: string;
+};
+
 export type CoverGenerationRequest = {
     type: 'cover';
     prompt: string;
@@ -96,8 +101,8 @@ export type CoverGenerationRequest = {
     count: number;
     model: string;
     quality: string;
-    templateImage: ReferenceItem | null;
-    baseImage: ReferenceItem | null;
+    referenceItems: ReferenceItem[];
+    manuscriptSource: CoverManuscriptSource | null;
     promptSwitches: CoverPromptSwitches;
 };
 
@@ -276,8 +281,8 @@ export function buildCoverGenerationRequest(input: CoverGenerationRequestInput):
         count: input.count,
         model: input.model,
         quality: input.quality,
-        templateImage: input.templateImage,
-        baseImage: input.baseImage,
+        referenceItems: input.referenceItems.slice(0, 4),
+        manuscriptSource: input.manuscriptSource,
         promptSwitches: input.promptSwitches,
     };
 }
@@ -400,8 +405,6 @@ function serializeFeedEntries(entries: FeedEntry[]): string {
                 request: {
                     ...entry.request,
                     referenceItems: [],
-                    templateImage: entry.request.type === 'cover' ? null : undefined,
-                    baseImage: entry.request.type === 'cover' ? null : undefined,
                     firstClip: entry.request.type === 'video' ? null : undefined,
                     drivingAudio: entry.request.type === 'video' ? null : undefined,
                 },
@@ -449,6 +452,18 @@ export function normalizeReferenceItem(value: unknown): ReferenceItem | null {
     return items[0] || null;
 }
 
+export function normalizeCoverManuscriptSource(value: unknown): CoverManuscriptSource | null {
+    if (!value || typeof value !== 'object') return null;
+    const record = value as Record<string, unknown>;
+    const path = String(record.path || record.manuscriptPath || '').trim();
+    if (!path) return null;
+    const fallbackTitle = path.split('/').filter(Boolean).pop()?.replace(/\.md$/i, '') || '稿件';
+    return {
+        path,
+        title: String(record.title || record.name || fallbackTitle).trim() || fallbackTitle,
+    };
+}
+
 export function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
     if (!value || typeof value !== 'object') return null;
     const record = value as Record<string, unknown>;
@@ -467,12 +482,19 @@ export function normalizeGenerationRequest(value: unknown): GenerationRequest | 
                     ? 'audio'
                     : 'image';
     const prompt = String(record.prompt || record.userPrompt || record.input || record.text || '').trim();
-    if (!prompt) return null;
+    if (resolvedType !== 'cover' && !prompt) return null;
 
     if (resolvedType === 'cover') {
         const rawSwitches = record.promptSwitches && typeof record.promptSwitches === 'object'
             ? record.promptSwitches as Partial<CoverPromptSwitches>
             : {};
+        const referenceItems = normalizeReferenceItems(record.referenceItems);
+        const legacyReferenceItems = [
+            normalizeReferenceItem(record.templateImage),
+            normalizeReferenceItem(record.baseImage),
+        ].filter((item): item is ReferenceItem => Boolean(item));
+        const manuscriptSource = normalizeCoverManuscriptSource(record.manuscriptSource);
+        if (!prompt && referenceItems.length === 0 && legacyReferenceItems.length === 0 && !manuscriptSource) return null;
         return {
             type: 'cover',
             prompt,
@@ -481,8 +503,8 @@ export function normalizeGenerationRequest(value: unknown): GenerationRequest | 
             count: Math.max(1, Math.min(4, Number(record.count || 1) || 1)),
             model: String(record.model || '').trim(),
             quality: normalizeImageQuality(record.quality),
-            templateImage: normalizeReferenceItem(record.templateImage),
-            baseImage: normalizeReferenceItem(record.baseImage),
+            referenceItems: (referenceItems.length > 0 ? referenceItems : legacyReferenceItems).slice(0, 4),
+            manuscriptSource,
             promptSwitches: {
                 learnTypography: rawSwitches.learnTypography !== false,
                 learnColorMood: rawSwitches.learnColorMood !== false,
@@ -780,7 +802,6 @@ export function requestModeLabel(request: GenerationRequest): string {
 
 export function requestLeadingReference(request: GenerationRequest): ReferenceItem | null {
     if (request.type === 'audio' || request.type === 'digital-human') return null;
-    if (request.type === 'cover') return request.baseImage || request.templateImage || null;
     if (request.referenceItems.length > 0) return request.referenceItems[0];
     if (request.type === 'video' && request.firstClip) return request.firstClip;
     return null;

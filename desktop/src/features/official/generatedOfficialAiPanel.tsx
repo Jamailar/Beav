@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Check, Gem, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
+import { BadgeCheck, Box, Check, Crown, Gem, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
 import { useOfficialAuthState } from '../../hooks/useOfficialAuthState';
+import { useMembership } from '../membership/useMembership';
 import { extractAlipayPayQrContent } from '../../pages/settings/shared';
 
 type LoginTab = 'wechat' | 'sms';
@@ -73,10 +74,53 @@ const WECHAT_POLL_INITIAL_DELAY_MS = 0;
 const WECHAT_POLL_PENDING_INTERVAL_MS = 900;
 const WECHAT_POLL_SCANNED_INTERVAL_MS = 250;
 const WECHAT_POLL_ERROR_INTERVAL_MS = 1200;
+const FOUNDER_SPONSOR_PRODUCT_ID = '827c5de5-c7b2-44df-b5c5-2b8b53eeb6ab';
+const FOUNDER_SPONSOR_POLL_INTERVAL_MS = 3000;
+const FOUNDER_SPONSOR_MAX_POLL_ATTEMPTS = 60;
 
 const traceAuthUi = (stage: string, detail?: unknown): void => {
   console.debug(`[OfficialAiPanel] ${stage}`, detail ?? '');
 };
+
+function isLikelyMachineUserId(value: string): boolean {
+  const trimmed = value.trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
+}
+
+function resolveUserDisplayName(userData: unknown): string {
+  if (!userData || typeof userData !== 'object') return '';
+  const record = userData as Record<string, unknown>;
+  const candidates = [
+    record.displayName,
+    record.display_name,
+    record.nickname,
+    record.nickName,
+    record.name,
+    record.username,
+    record.userName,
+    record.email,
+    record.phone,
+    record.mobile,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || '').trim();
+    if (value && !isLikelyMachineUserId(value)) {
+      return value;
+    }
+  }
+  return '';
+}
+
+function orderStatusIsPaid(order: Record<string, unknown>): boolean {
+  const status = String(order.status || order.payment_status || order.paymentStatus || order.trade_status || order.tradeStatus || '').trim().toLowerCase();
+  return Boolean(order.paid || order.is_paid || order.isPaid)
+    || ['paid', 'success', 'succeeded', 'completed', 'trade_success', 'trade_finished'].includes(status);
+}
+
+function orderStatusIsFinalFailure(order: Record<string, unknown>): boolean {
+  const status = String(order.status || order.payment_status || order.paymentStatus || order.trade_status || order.tradeStatus || '').trim().toLowerCase();
+  return ['closed', 'cancelled', 'canceled', 'failed', 'expired', 'trade_closed'].includes(status);
+}
 
 const summarizeSessionForTrace = (sessionData: RedboxAuthSession | null) => {
   if (!sessionData) {
@@ -222,6 +266,7 @@ const buildWechatQrDataUrl = async (value: string): Promise<string> => {
 const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelProps) => {
   const initialPanelSnapshot = readPanelDisplaySnapshot();
   const { snapshot: authState, bootstrapped } = useOfficialAuthState();
+  const { state: membershipState } = useMembership();
   const [loginTab, setLoginTab] = useState<LoginTab>('wechat');
   const [user, setUser] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.user || null);
   const [points, setPoints] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.points || null);
@@ -233,6 +278,9 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   const [authBusy, setAuthBusy] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [founderSponsorBusy, setFounderSponsorBusy] = useState(false);
+  const [founderSponsorOrderNo, setFounderSponsorOrderNo] = useState('');
+  const [founderSponsorStatusText, setFounderSponsorStatusText] = useState('');
   const [notice, setNotice] = useState('');
   const [noticeType, setNoticeType] = useState<NoticeType>('idle');
   const [smsForm, setSmsForm] = useState({ phone: '', code: '', inviteCode: '' });
@@ -245,6 +293,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     { id: 'cn', label: '中国大陆账号', active: true },
     { id: 'global', label: '海外账号' },
   ]);
+  const isFounderSponsorMember = membershipState.active;
   const pollTimerRef = useRef<number | null>(null);
   const pollRunTokenRef = useRef(0);
   const pollRequestInFlightRef = useRef(false);
@@ -669,6 +718,8 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
       writePanelDisplaySnapshot(null);
       setRechargeOrderNo('');
       setRechargeStatusText('');
+      setFounderSponsorOrderNo('');
+      setFounderSponsorStatusText('');
       requestSettingsRefresh();
       setPanelNotice('success', '已退出登录');
     } catch (error) {
@@ -729,17 +780,131 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     }
   }, [rechargeAmount, setPanelNotice]);
 
+  const refreshFounderSponsorOrderStatus = useCallback(async (targetOrderNo: string) => {
+    const result = await timedRequest<{ success: boolean; order?: Record<string, unknown>; error?: string }>(
+      'officialAuth.getOrderStatus',
+      window.ipcRenderer.officialAuth.getOrderStatus({ outTradeNo: targetOrderNo }),
+    );
+    const order = result?.order && typeof result.order === 'object' ? result.order : null;
+    if (!result?.success || !order) {
+      throw new Error(result?.error || '查询会员订单状态失败');
+    }
+    if (orderStatusIsPaid(order)) {
+      setFounderSponsorBusy(true);
+      setFounderSponsorStatusText('支付成功，正在同步会员状态...');
+      await window.ipcRenderer.officialAuth.bootstrap({ reason: 'founder-sponsor-panel-paid' });
+      await window.ipcRenderer.auth.refreshNow().catch(() => null);
+      await loadAuthenticatedData().catch(() => []);
+      requestSettingsRefresh();
+      setFounderSponsorStatusText('创始赞助会员已开通。');
+      setFounderSponsorOrderNo('');
+      setPanelNotice('success', '创始赞助会员已开通。');
+      setFounderSponsorBusy(false);
+      return 'paid' as const;
+    }
+    if (orderStatusIsFinalFailure(order)) {
+      setFounderSponsorStatusText('订单未完成或已关闭，请重新购买。');
+      setFounderSponsorOrderNo('');
+      setFounderSponsorBusy(false);
+      return 'failed' as const;
+    }
+    setFounderSponsorStatusText('支付页面已打开，完成支付后会自动同步会员状态。');
+    return 'pending' as const;
+  }, [loadAuthenticatedData, requestSettingsRefresh, setPanelNotice]);
+
+  const handleFounderSponsorPurchase = useCallback(async () => {
+    if (isFounderSponsorMember) return;
+    setFounderSponsorBusy(true);
+    setFounderSponsorOrderNo('');
+    setFounderSponsorStatusText('');
+    try {
+      const orderResult = await timedRequest<{ success: boolean; order?: Record<string, unknown>; error?: string }>(
+        'officialAuth.createPagePayOrder',
+        window.ipcRenderer.officialAuth.createPagePayOrder({
+          productId: FOUNDER_SPONSOR_PRODUCT_ID,
+          product_id: FOUNDER_SPONSOR_PRODUCT_ID,
+          subject: '创始赞助会员',
+          pointsToDeduct: 0,
+          points_to_deduct: 0,
+        }),
+      );
+      if (!orderResult?.success || !orderResult.order) {
+        throw new Error(orderResult?.error || '创建会员订单失败');
+      }
+      const outTradeNo = String(orderResult.order.out_trade_no || orderResult.order.outTradeNo || '').trim();
+      const paymentForm = extractAlipayPayQrContent(orderResult.order)
+        || String(orderResult.order.payment_url || orderResult.order.payment_form || orderResult.order.url || '').trim();
+      if (!outTradeNo || !paymentForm) {
+        throw new Error('订单返回缺少支付信息');
+      }
+      const openResult = await timedRequest<{ success: boolean; error?: string }>(
+        'officialAuth.openPaymentForm',
+        window.ipcRenderer.officialAuth.openPaymentForm({ paymentForm }),
+      );
+      if (!openResult?.success) {
+        throw new Error(openResult?.error || '打开支付页面失败');
+      }
+      setFounderSponsorOrderNo(outTradeNo);
+      setFounderSponsorStatusText('支付页面已打开，完成支付后会自动同步会员状态。');
+      setPanelNotice('success', '创始赞助会员支付页面已打开。');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '创建会员订单失败';
+      setFounderSponsorStatusText(message);
+      setPanelNotice('error', message);
+    } finally {
+      setFounderSponsorBusy(false);
+    }
+  }, [isFounderSponsorMember, setPanelNotice]);
+
+  useEffect(() => {
+    if (isFounderSponsorMember) {
+      setFounderSponsorOrderNo('');
+      setFounderSponsorStatusText('');
+      setFounderSponsorBusy(false);
+      return;
+    }
+    if (!founderSponsorOrderNo) return;
+    let cancelled = false;
+    let timer: number | null = null;
+    let attempts = 0;
+
+    const poll = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      try {
+        const status = await refreshFounderSponsorOrderStatus(founderSponsorOrderNo);
+        if (cancelled || status !== 'pending') return;
+      } catch (error) {
+        if (cancelled) return;
+        setFounderSponsorStatusText(error instanceof Error ? error.message : '查询会员订单状态失败');
+      }
+      if (!cancelled && attempts < FOUNDER_SPONSOR_MAX_POLL_ATTEMPTS) {
+        timer = window.setTimeout(poll, FOUNDER_SPONSOR_POLL_INTERVAL_MS);
+      }
+    };
+
+    timer = window.setTimeout(poll, 1200);
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [founderSponsorOrderNo, isFounderSponsorMember, refreshFounderSponsorOrderStatus]);
+
   const userName = useMemo(() => {
+    return resolveUserDisplayName(user || session?.user);
+  }, [session?.user, user]);
+  const userAvatarUrl = useMemo(() => {
     const currentUser = user || session?.user;
     if (!currentUser || typeof currentUser !== 'object') return '';
-    return String(
-      (currentUser as Record<string, unknown>).nickname
-      || (currentUser as Record<string, unknown>).name
-      || (currentUser as Record<string, unknown>).phone
-      || (currentUser as Record<string, unknown>).id
-      || '',
-    ).trim();
+    const record = currentUser as Record<string, unknown>;
+    return String(record.avatar || record.avatarUrl || record.avatar_url || record.image || record.picture || '').trim();
   }, [session?.user, user]);
+  const userInitial = useMemo(() => {
+    const name = userName || 'RedBox';
+    return name.trim().slice(0, 1).toUpperCase();
+  }, [userName]);
 
   const pointsValue = useMemo(() => {
     if (!points || typeof points !== 'object') return 0;
@@ -991,6 +1156,68 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
         )
       ) : (
         <>
+          <section className={clsx(
+            'rounded-xl border p-4 shadow-sm',
+            isFounderSponsorMember
+              ? 'border-amber-300/60 bg-[linear-gradient(135deg,rgb(255_251_235/0.92),rgb(255_255_255/0.88))] dark:border-amber-300/20 dark:bg-[linear-gradient(135deg,rgb(146_64_14/0.18),rgb(255_255_255/0.03))]'
+              : 'border-black/[0.06] bg-white dark:border-white/[0.06] dark:bg-surface-primary'
+          )}>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3">
+                {isFounderSponsorMember ? (
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(180deg,#f8d77a,#d69222)] text-white shadow-[0_10px_20px_-14px_rgb(146_64_14/0.9)]">
+                    <Crown className="h-4 w-4" strokeWidth={2} />
+                  </span>
+                ) : null}
+                <div className="h-12 w-12 shrink-0">
+                  <div className={clsx(
+                    'flex h-full w-full items-center justify-center overflow-hidden rounded-full text-sm font-black',
+                    isFounderSponsorMember
+                      ? 'bg-amber-500/12 text-amber-700 ring-1 ring-amber-300/60 dark:text-amber-200'
+                      : 'bg-accent-primary/10 text-accent-primary'
+                  )}>
+                    {userAvatarUrl ? (
+                      <img src={userAvatarUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      userInitial
+                    )}
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-base font-black text-text-primary">
+                      {userName || '官方账号'}
+                    </span>
+                    {isFounderSponsorMember ? (
+                      <span className="inline-flex h-5 shrink-0 items-center rounded-md border border-amber-300/70 bg-amber-300/12 px-1.5 text-[11px] font-black text-amber-700 dark:text-amber-200">
+                        创始会员
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-1 truncate text-xs font-medium text-text-tertiary">
+                    {isFounderSponsorMember ? '永久有效 · 已解锁无限空间和会员专属功能' : '免费账号 · 可升级创始赞助会员'}
+                  </div>
+                </div>
+              </div>
+              <div className="hidden shrink-0 text-right sm:block">
+                <div className="text-[11px] font-bold text-text-tertiary">会员身份</div>
+                <div className={clsx(
+                  'mt-1 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-black',
+                  isFounderSponsorMember
+                    ? 'bg-amber-500/12 text-amber-700 dark:text-amber-200'
+                    : 'bg-black/[0.035] text-text-secondary dark:bg-white/[0.05]'
+                )}>
+                  {isFounderSponsorMember ? (
+                    <BadgeCheck className="h-3.5 w-3.5" strokeWidth={2} />
+                  ) : (
+                    <Crown className="h-3.5 w-3.5" strokeWidth={1.8} />
+                  )}
+                  {isFounderSponsorMember ? '创始赞助会员' : '免费用户'}
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section className="overflow-hidden rounded-[18px] bg-[linear-gradient(130deg,rgb(var(--color-accent-primary)/0.075),rgb(245_158_11/0.045)_42%,rgb(255_255_255/0.82))] p-4 shadow-[0_18px_46px_-30px_rgba(194,92,16,0.38)] dark:bg-[linear-gradient(130deg,rgb(var(--color-accent-primary)/0.13),rgb(245_158_11/0.075)_42%,rgb(255_255_255/0.02))]">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div className="min-w-0">
@@ -1018,6 +1245,42 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                 刷新余额
               </button>
             </div>
+
+            {!isFounderSponsorMember ? (
+              <div className="mb-4 rounded-xl border border-amber-300/55 bg-[linear-gradient(135deg,rgb(255_251_235/0.9),rgb(255_255_255/0.76))] p-3.5 shadow-sm dark:border-amber-300/20 dark:bg-[linear-gradient(135deg,rgb(146_64_14/0.18),rgb(255_255_255/0.035))]">
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/12 text-amber-700 dark:text-amber-200">
+                      <Crown className="h-5 w-5" strokeWidth={1.8} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-black text-text-primary">创始赞助会员</span>
+                        <span className="rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[11px] font-black text-amber-700 dark:text-amber-200">¥199 · 永久有效</span>
+                      </div>
+                      <div className="mt-1 text-xs font-medium leading-5 text-text-secondary">
+                        含 22,000 官方积分，解锁无限空间创建、无限登录设备和会员专属功能。
+                      </div>
+                      {founderSponsorStatusText || founderSponsorOrderNo ? (
+                        <div className="mt-2 truncate text-[11px] font-medium text-amber-700 dark:text-amber-200" title={founderSponsorOrderNo || founderSponsorStatusText}>
+                          {founderSponsorStatusText}
+                          {founderSponsorOrderNo ? ` · 订单 ${founderSponsorOrderNo}` : ''}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleFounderSponsorPurchase()}
+                    disabled={founderSponsorBusy || paymentBusy || refreshControlsDisabled}
+                    className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-4 text-sm font-black text-white shadow-[0_16px_34px_-18px_rgb(146_64_14/0.9)] transition-all hover:brightness-105 active:scale-[0.99] disabled:opacity-50"
+                  >
+                    <Crown className="h-4 w-4" strokeWidth={1.9} />
+                    {founderSponsorBusy ? '处理中...' : '¥199 解锁永久会员'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             <div className="rounded-xl bg-white/72 p-3.5 shadow-sm backdrop-blur dark:bg-surface-primary/64">
               <div className="mb-3.5 flex flex-wrap items-center gap-2.5">

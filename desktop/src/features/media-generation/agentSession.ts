@@ -1,14 +1,21 @@
 import { APP_BRAND } from '../../config/brand';
 import type { GenerationIntent } from '../app-shell/types';
-import { generationAgentRoleForMode, type GenerationAgentPreferredRole } from './agentContext';
+import {
+    generationAgentActiveSkillsForMode,
+    generationAgentRoleForMode,
+    SOCIAL_COVER_DIRECTOR_SKILL,
+    type GenerationAgentPreferredRole,
+} from './agentContext';
 import type { StudioMode } from './feedModel';
 
 export const GENERATION_AGENT_CONTEXT_TYPE = 'generation-agent';
 
 export type GenerationAgentSessionMetadata = {
     contextType: typeof GENERATION_AGENT_CONTEXT_TYPE;
-    intent: 'image_creation';
+    intent: 'image_creation' | 'cover_generation';
     preferredRole: GenerationAgentPreferredRole;
+    activeSkills?: string[];
+    requiredSkill?: string;
     generationTarget: StudioMode;
     executionMode: 'auto';
     requiresHumanApproval: false;
@@ -47,10 +54,13 @@ export function buildGenerationAgentSessionMetadata(
     projectId: string,
     sourceTitle?: string,
 ): GenerationAgentSessionMetadata {
+    const activeSkills = generationAgentActiveSkillsForMode(mode);
     return {
         contextType: GENERATION_AGENT_CONTEXT_TYPE,
-        intent: 'image_creation',
+        intent: mode === 'cover' ? 'cover_generation' : 'image_creation',
         preferredRole: generationAgentRoleForMode(mode),
+        activeSkills: activeSkills.length > 0 ? activeSkills : undefined,
+        requiredSkill: mode === 'cover' ? SOCIAL_COVER_DIRECTOR_SKILL : undefined,
         generationTarget: mode,
         executionMode: 'auto',
         requiresHumanApproval: false,

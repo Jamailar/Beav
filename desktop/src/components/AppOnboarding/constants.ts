@@ -1,6 +1,6 @@
 export const APP_ONBOARDING_SEEN_KEY = 'redbox:app-onboarding:v1:seen';
 
-export const STEPS = ['概览', '亮点功能', '文件拖动', '角色数字分身', '快速设置', '开始'];
+export const STEPS = ['概览', '亮点功能', '文件拖动', '评论洞察', '快速设置', '开始'];
 
 export function hasSeenAppOnboarding(): boolean {
   try {

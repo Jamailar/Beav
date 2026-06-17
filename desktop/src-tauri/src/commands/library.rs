@@ -631,6 +631,17 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
     let has_base_image = payload_string(payload, "baseImage")
         .map(|item| !item.trim().is_empty())
         .unwrap_or(false);
+    let generic_reference_count = payload_field(payload, "referenceImages")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .count()
+        })
+        .unwrap_or(0);
 
     let mut parts = vec![
         "你要生成一张适合中文内容平台信息流点击的封面图。".to_string(),
@@ -655,11 +666,20 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
             parts.push("请保留图1的核心主体、真实内容和空间关系，在此基础上补足封面级标题排版、视觉焦点和信息流点击感。".to_string());
         }
         (false, false) => {
-            parts.push(
-                "当前没有参考图，请直接根据标题、标题方向和风格要求生成一张完整中文封面。"
-                    .to_string(),
-            );
-            parts.push("画面需要有明确主体、清晰视觉焦点和适合信息流点击的封面构图。".to_string());
+            if generic_reference_count > 0 {
+                parts.push(format!(
+                    "当前提供了 {generic_reference_count} 张参考图。请把它们作为封面创作参考，综合判断哪些用于主体身份、哪些用于风格、构图、色彩或内容语境；不要默认区分“参考图/底图”两个固定角色。"
+                ));
+                parts.push("如参考图中有人物、商品、地点或关键物体，请优先保持其可识别特征；同时补足封面级标题排版、视觉焦点和信息流点击感。".to_string());
+            } else {
+                parts.push(
+                    "当前没有参考图，请直接根据标题、标题方向和风格要求生成一张完整中文封面。"
+                        .to_string(),
+                );
+                parts.push(
+                    "画面需要有明确主体、清晰视觉焦点和适合信息流点击的封面构图。".to_string(),
+                );
+            }
         }
     }
 
@@ -710,11 +730,13 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
     }
 
     let mut switch_notes: Vec<&str> = Vec::new();
-    if has_template_image && cover_prompt_switch_enabled(prompt_switches, "learnTypography", true) {
-        switch_notes.push("尽量学习模板图的标题字体、字重、描边、阴影和排版节奏");
+    let has_style_reference = has_template_image || generic_reference_count > 0;
+    if has_style_reference && cover_prompt_switch_enabled(prompt_switches, "learnTypography", true)
+    {
+        switch_notes.push("尽量学习参考图或模板图的标题字体、字重、描边、阴影和排版节奏");
     }
-    if has_template_image && cover_prompt_switch_enabled(prompt_switches, "learnColorMood", true) {
-        switch_notes.push("尽量学习模板图的主辅色与整体色彩氛围");
+    if has_style_reference && cover_prompt_switch_enabled(prompt_switches, "learnColorMood", true) {
+        switch_notes.push("尽量学习参考图或模板图的主辅色与整体色彩氛围");
     }
     if cover_prompt_switch_enabled(prompt_switches, "beautifyFace", false) {
         switch_notes.push("人物允许轻度自然美颜，但不能失真");
@@ -2503,6 +2525,23 @@ mod tests {
         assert!(prompt.contains("当前只提供了 1 张参考图：图1是需要被改造成封面的底图"));
         assert!(prompt.contains("保留图1的核心主体"));
         assert!(!prompt.contains("模板图的标题字体"));
+    }
+
+    #[test]
+    fn cover_generation_prompt_supports_generic_reference_images() {
+        let payload = json!({
+            "referenceImages": [
+                "data:image/png;base64,REF1",
+                "data:image/png;base64,REF2"
+            ],
+            "titles": [{ "type": "main", "text": "测试标题" }],
+        });
+
+        let prompt = build_cover_generation_prompt(&payload, &[]);
+        assert!(prompt.contains("当前提供了 2 张参考图"));
+        assert!(prompt.contains("不要默认区分“参考图/底图”两个固定角色"));
+        assert!(prompt.contains("参考图或模板图的标题字体"));
+        assert!(!prompt.contains("当前没有参考图"));
     }
 
     #[test]

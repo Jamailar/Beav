@@ -48,12 +48,31 @@ export interface TaskBriefContextItem {
     text: string;
 }
 
+export interface TaskBriefArticleStrategy {
+    articleStyle: string;
+    readerQuestion: string;
+    corePromise: string;
+    titleDirection: string;
+    openingDirection: string;
+    structureDirection: string;
+    avoidDirection: string[];
+}
+
+export interface TaskBriefTitleCandidate {
+    title: string;
+    style: string;
+    score: number;
+    reason: string;
+}
+
 export interface TaskBriefSeed {
     taskType: string;
     goal: string;
     currentStage: string;
     todo: TaskBriefItem[];
     importantContext: TaskBriefContextItem[];
+    articleStrategy?: TaskBriefArticleStrategy;
+    titleCandidates?: TaskBriefTitleCandidate[];
     domain?: Record<string, unknown>;
 }
 
@@ -93,9 +112,9 @@ export const AUTHORING_ALLOWED_OPERATE_ACTIONS = [
 export function buildTaskBriefPromptSection(seed: TaskBriefSeed) {
     return [
         '## 工作 Brief（长步骤任务状态）',
-        '本任务必须维护一个结构化 Task Brief。它是后续阶段的唯一工作台，用来承接 todo、关键上下文、工具结果摘要、标题决策、写作约束和最终校验。',
-        '第一步先调用 `Operate(resource="taskBrief", operation="update", input={...})` 初始化 brief；每完成调研、标题、正文自检等关键阶段后，再调用同一个操作更新 brief。',
-        '后续写作不能只依赖前文记忆，必须读取并沿用 brief 里的 `importantContext`、`toolFindings`、`decisions`、`validationRequirements` 和领域字段。',
+        '本任务必须维护一个结构化 Task Brief。它是后续阶段的唯一工作台，用来承接 todo、关键上下文、工具结果摘要、文章打法定向、标题决策、写作约束和最终校验。',
+        '第一步先调用 `Operate(resource="taskBrief", operation="update", input={...})` 初始化 brief；每完成调研、文章打法定向、标题、正文自检等关键阶段后，再调用同一个操作更新 brief。',
+        '后续标题和正文不能只依赖前文记忆，必须读取并沿用 brief 里的 `articleStrategy`、`importantContext`、`toolFindings`、`decisions`、`validationRequirements` 和领域字段。',
         '建议的初始 brief：',
         '```json',
         JSON.stringify(seed, null, 2),
@@ -111,9 +130,28 @@ export function buildTaskBriefPromptSection(seed: TaskBriefSeed) {
                 done: [{ id: 'research', text: '调研判断已完成' }],
                 importantContext: [{ kind: 'constraint', text: '正文禁止出现来源痕迹' }],
                 toolFindings: [{ source: 'web.search', summary: '搜索得到的可用事实摘要' }],
-                decisions: [{ stage: 'title', summary: '最终标题选择理由' }],
+                articleStrategy: {
+                    articleStyle: '<商业解释型 | 反常识型 | 观点型 | 避坑型 | 清单型 | 故事型>',
+                    readerQuestion: '<读者看到选题后最直接想问的问题>',
+                    corePromise: '<这篇文章承诺帮读者解决什么理解问题>',
+                    titleDirection: '<标题打法，如直接疑问 + 反常识>',
+                    openingDirection: '<开头怎么兑现这个打法>',
+                    structureDirection: '<正文结构怎么推进>',
+                    avoidDirection: ['<不要采用的标题或正文打法>'],
+                },
+                titleCandidates: [
+                    { title: '<候选标题>', style: '<直接疑问 | 反常识 | 悬念 | 数据冲击>', score: 0, reason: '<评分理由>' },
+                ],
+                decisions: [
+                    { stage: 'strategy', summary: '为什么选择这个文章打法' },
+                    { stage: 'title', summary: '最终标题选择理由' },
+                ],
                 validationRequirements: [{ id: 'no_source_trace', text: '正文不得出现原文/评论区等来源痕迹' }],
-                domain: { selectedTitle: '<最终标题>', mustUseFacts: [] },
+                domain: {
+                    selectedTitle: '<最终标题>',
+                    selectedTitleReason: '<为什么它比其它候选更贴近 articleStrategy 和 readerQuestion>',
+                    mustUseFacts: [],
+                },
             },
         }, null, 2),
         '```',

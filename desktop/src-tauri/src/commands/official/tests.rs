@@ -517,6 +517,28 @@ fn official_account_summary_separates_login_state_and_ai_key_presence() {
 }
 
 #[test]
+fn official_account_summary_uses_username_instead_of_uuid_id() {
+    let settings = json!({
+        "redbox_auth_session_json": serde_json::to_string(&json!({
+            "accessToken": "access-1",
+            "refreshToken": "refresh-1",
+            "apiKey": "rbx-live-1",
+            "user": {
+                "id": "99d23575-1f01-4f6f-bcf7-92059c680eee",
+                "username": "jam"
+            }
+        }))
+        .unwrap(),
+    });
+
+    let summary = official_account_summary_local(&settings, &[]);
+    assert_eq!(
+        summary.get("displayName").and_then(Value::as_str),
+        Some("jam")
+    );
+}
+
+#[test]
 fn clear_official_auth_state_resets_official_source_and_falls_back_default_source() {
     let official_cn_base_url = official_base_url_for_realm("cn");
     let mut settings = json!({

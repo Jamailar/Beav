@@ -9,6 +9,8 @@ import {
 
 export type GenerationAgentPreferredRole = 'image-director' | 'video-director' | 'audio-director';
 
+export const SOCIAL_COVER_DIRECTOR_SKILL = 'social-cover-director';
+
 export type GenerationAgentVoice = {
     id: string;
     name: string;
@@ -40,6 +42,10 @@ export function generationAgentRoleForMode(mode: StudioMode): GenerationAgentPre
     return 'image-director';
 }
 
+export function generationAgentActiveSkillsForMode(mode: StudioMode): string[] {
+    return mode === 'cover' ? [SOCIAL_COVER_DIRECTOR_SKILL] : [];
+}
+
 function dataUrlMimeType(dataUrl: string): string {
     const match = String(dataUrl || '').match(/^data:([^;,]+)[;,]/i);
     return String(match?.[1] || '').trim().toLowerCase();
@@ -65,8 +71,7 @@ export function sanitizeGenerationRequestForAgent(request: GenerationRequest): R
     if (request.type === 'cover') {
         return {
             ...request,
-            templateImage: request.templateImage ? summarizeGenerationReferenceItems([request.templateImage])[0] : null,
-            baseImage: request.baseImage ? summarizeGenerationReferenceItems([request.baseImage])[0] : null,
+            referenceItems: summarizeGenerationReferenceItems(request.referenceItems),
         };
     }
     if (request.type === 'video') {
@@ -150,6 +155,8 @@ export function buildGenerationAgentRuntimeContext(params: GenerationAgentRuntim
             noSecondConfirmation: true,
             currentMode: params.mode,
             preferredRole: generationAgentRoleForMode(params.mode),
+            activeSkills: generationAgentActiveSkillsForMode(params.mode),
+            requiredSkill: params.mode === 'cover' ? SOCIAL_COVER_DIRECTOR_SKILL : undefined,
             source: params.source || 'standalone',
             sourceTitle: params.sourceTitle || '',
             currentRequest: sanitizeGenerationRequestForAgent(params.request),

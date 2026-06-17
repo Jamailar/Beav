@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
-import { ChevronRight, Clock3, Edit3, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, History, Loader2, MoreHorizontal, Pin, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
+import { Archive, ChevronRight, Clock3, Edit3, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, History, Loader2, MoreHorizontal, Pin, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { REDCLAW_DISPLAY_NAME } from './config';
 import { appAlert, appConfirm } from '../../utils/appDialogs';
@@ -69,6 +69,7 @@ interface RedClawHistorySidebarSectionProps {
     onSwitchRoom?: (roomId: string) => void;
     onDeleteRoom?: (room: RedClawTeamRoom) => void | Promise<void>;
     onSwitchSession: (session: RedClawHistoryListItem) => void;
+    onSetSessionUnread?: (sessionId: string, unread: boolean) => void;
     onArchiveSession?: (session: RedClawHistoryListItem) => void | Promise<void>;
     onRenameSession?: (session: RedClawHistoryListItem, title: string) => void | Promise<void>;
     onOpenManuscript?: (filePath: string) => void;
@@ -99,6 +100,9 @@ type ManuscriptContextMenuState = {
 
 const SESSION_CONTEXT_MENU_PANEL_CLASS = 'fixed z-[150] min-w-[196px] rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-1.5 shadow-2xl';
 const SESSION_CONTEXT_MENU_ITEM_CLASS = 'flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-[rgb(var(--color-text-primary))] transition-colors hover:bg-[rgb(var(--color-surface-secondary))] disabled:cursor-not-allowed disabled:opacity-45';
+const MANUSCRIPT_CONTEXT_MENU_PANEL_CLASS = 'fixed z-[140] min-w-[168px] rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-1.5 shadow-2xl';
+const MANUSCRIPT_CONTEXT_MENU_ITEM_CLASS = 'flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-[rgb(var(--color-text-primary))] transition-colors hover:bg-[rgb(var(--color-surface-secondary))]';
+const MANUSCRIPT_CONTEXT_MENU_DANGER_ITEM_CLASS = 'flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/10';
 
 const MANUSCRIPT_DRAFT_KIND_OPTIONS: Array<{ id: ManuscriptDraftKind; label: string; extension: string; kind?: string; disabled?: boolean }> = [
     { id: 'longform', label: '长文', extension: '', kind: 'longform' },
@@ -203,6 +207,7 @@ export function RedClawHistorySidebarSection({
     onSwitchRoom,
     onDeleteRoom,
     onSwitchSession,
+    onSetSessionUnread,
     onArchiveSession,
     onRenameSession,
     onOpenManuscript,
@@ -306,8 +311,12 @@ export function RedClawHistorySidebarSection({
             .filter((session) => session.unread)
             .map((session) => session.id)
             .filter(Boolean);
-        if (nextUnreadIds.length === 0) return;
-        setUnreadSessionIds((current) => Array.from(new Set([...current, ...nextUnreadIds])));
+        setUnreadSessionIds((current) => {
+            if (current.length === nextUnreadIds.length && current.every((id, index) => id === nextUnreadIds[index])) {
+                return current;
+            }
+            return nextUnreadIds;
+        });
     }, [sessionList]);
 
     useEffect(() => {
@@ -433,6 +442,15 @@ export function RedClawHistorySidebarSection({
             parentPath,
             node,
         });
+    };
+
+    const runManuscriptMenuAction = (
+        event: MouseEvent<HTMLButtonElement>,
+        action: () => void,
+    ) => {
+        event.preventDefault();
+        event.stopPropagation();
+        action();
     };
 
     const submitManuscriptDialog = async (selectedDraftKind?: ManuscriptDraftKind) => {
@@ -780,9 +798,13 @@ export function RedClawHistorySidebarSection({
                 ? [sessionId, ...current.filter((id) => id !== sessionId)]
                 : current.filter((id) => id !== sessionId)
         ));
-        void window.ipcRenderer.chat.setSessionUnread({ sessionId, unread }).catch((error) => {
-            void appAlert(error instanceof Error ? error.message : '更新未读状态失败');
-        });
+        if (onSetSessionUnread) {
+            onSetSessionUnread(sessionId, unread);
+        } else {
+            void window.ipcRenderer.chat.setSessionUnread({ sessionId, unread }).catch((error) => {
+                void appAlert(error instanceof Error ? error.message : '更新未读状态失败');
+            });
+        }
         setMenuTarget(null);
     };
 
@@ -1127,9 +1149,6 @@ export function RedClawHistorySidebarSection({
                                     tabIndex={0}
                                     onClick={() => {
                                         setMenuTarget(null);
-                                        if (isUnread) {
-                                            setSessionUnread(session.id, false);
-                                        }
                                         onSwitchSession(session);
                                     }}
                                     onContextMenu={(event) => openSessionContextMenu(event, session)}
@@ -1141,9 +1160,6 @@ export function RedClawHistorySidebarSection({
                                     onKeyDown={(e) => {
                                         if (e.key !== 'Enter' && e.key !== ' ') return;
                                         setMenuTarget(null);
-                                        if (isUnread) {
-                                            setSessionUnread(session.id, false);
-                                        }
                                         onSwitchSession(session);
                                     }}
                                     className={clsx(
@@ -1158,25 +1174,7 @@ export function RedClawHistorySidebarSection({
                                     )}
 
                                     <div className="flex items-center justify-between gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={(event) => {
-                                                event.preventDefault();
-                                                event.stopPropagation();
-                                                togglePinnedSession(session.id, !isPinned);
-                                            }}
-                                            className={clsx(
-                                                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition hover:bg-surface-secondary hover:text-text-primary',
-                                                isPinned
-                                                    ? 'text-accent-primary opacity-100'
-                                                    : 'text-text-tertiary opacity-0 group-hover:opacity-100'
-                                            )}
-                                            title={isPinned ? '取消置顶' : '置顶'}
-                                            aria-label={isPinned ? '取消置顶' : '置顶'}
-                                        >
-                                            <Pin className="h-3.5 w-3.5" />
-                                        </button>
-                                        <div className="min-w-0 flex flex-1 items-center gap-1.5 pr-8">
+                                        <div className="min-w-0 flex flex-1 items-center gap-1.5 pr-14">
                                             <h4 className={clsx(
                                                 'min-w-0 truncate text-[13px] font-bold leading-tight transition-colors',
                                                 isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
@@ -1216,12 +1214,33 @@ export function RedClawHistorySidebarSection({
                                         >
                                             <button
                                                 type="button"
-                                                onClick={(event) => openSessionContextMenu(event, session, event.currentTarget)}
-                                                className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
-                                                title="更多"
-                                                aria-label="更多"
+                                                onClick={(event) => {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                    togglePinnedSession(session.id, !isPinned);
+                                                }}
+                                                className={clsx(
+                                                    'flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-surface-secondary hover:text-text-primary',
+                                                    isPinned ? 'text-accent-primary' : 'text-text-tertiary'
+                                                )}
+                                                title={isPinned ? '取消置顶' : '置顶'}
+                                                aria-label={isPinned ? '取消置顶' : '置顶'}
                                             >
-                                                <MoreHorizontal className="h-3.5 w-3.5" />
+                                                <Pin className="h-3.5 w-3.5" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                    setMenuTarget(null);
+                                                    void onArchiveSession?.(session);
+                                                }}
+                                                className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                                title="归档"
+                                                aria-label="归档"
+                                            >
+                                                <Archive className="h-3.5 w-3.5" />
                                             </button>
                                         </div>
                                     </div>
@@ -1318,51 +1337,53 @@ export function RedClawHistorySidebarSection({
             </div>
             {manuscriptContextMenu && (
                 <div
-                    className="fixed z-[140] min-w-[168px] rounded-xl border border-border bg-surface-primary p-1.5 shadow-2xl"
+                    className={MANUSCRIPT_CONTEXT_MENU_PANEL_CLASS}
                     style={{
                         left: Math.min(manuscriptContextMenu.x, window.innerWidth - 184),
                         top: Math.min(manuscriptContextMenu.y, window.innerHeight - (manuscriptContextMenu.node ? 188 : 94)),
                     }}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => event.stopPropagation()}
                     onClick={(event) => event.stopPropagation()}
                     onContextMenu={(event) => event.preventDefault()}
                 >
                     <button
                         type="button"
-                        onClick={() => openManuscriptDialog({ mode: 'create-file', parentPath: manuscriptContextMenu.parentPath })}
-                        className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                        onMouseDown={(event) => runManuscriptMenuAction(event, () => openManuscriptDialog({ mode: 'create-file', parentPath: manuscriptContextMenu.parentPath }))}
+                        className={MANUSCRIPT_CONTEXT_MENU_ITEM_CLASS}
                     >
                         <FilePlus2 className="h-3.5 w-3.5" />
                         <span>新建稿件</span>
                     </button>
                     <button
                         type="button"
-                        onClick={() => openManuscriptDialog({ mode: 'create-folder', parentPath: manuscriptContextMenu.parentPath })}
-                        className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                        onMouseDown={(event) => runManuscriptMenuAction(event, () => openManuscriptDialog({ mode: 'create-folder', parentPath: manuscriptContextMenu.parentPath }))}
+                        className={MANUSCRIPT_CONTEXT_MENU_ITEM_CLASS}
                     >
                         <FolderPlus className="h-3.5 w-3.5" />
                         <span>新建文件夹</span>
                     </button>
                     {manuscriptContextMenu.node ? (
                         <>
-                            <div className="my-1 h-px bg-border/70" />
+                            <div className="my-1 h-px bg-[rgb(var(--color-border))]" />
                             <button
                                 type="button"
-                                onClick={() => {
+                                onMouseDown={(event) => runManuscriptMenuAction(event, () => {
                                     const node = manuscriptContextMenu.node;
                                     if (node) openManuscriptDialog({ mode: 'rename', node });
-                                }}
-                                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                })}
+                                className={MANUSCRIPT_CONTEXT_MENU_ITEM_CLASS}
                             >
                                 <Edit3 className="h-3.5 w-3.5" />
                                 <span>重命名</span>
                             </button>
                             <button
                                 type="button"
-                                onClick={() => {
+                                onMouseDown={(event) => runManuscriptMenuAction(event, () => {
                                     const node = manuscriptContextMenu.node;
                                     if (node) void deleteManuscriptNode(node);
-                                }}
-                                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/10"
+                                })}
+                                className={MANUSCRIPT_CONTEXT_MENU_DANGER_ITEM_CLASS}
                             >
                                 <Trash2 className="h-3.5 w-3.5" />
                                 <span>删除</span>
@@ -1441,16 +1462,16 @@ export function RedClawHistorySidebarSection({
             )}
             {manuscriptDialog && (
                 <div
-                    className="fixed inset-0 z-[130] flex items-center justify-center bg-black/30 px-4"
+                    className="redclaw-manuscript-dialog-backdrop fixed inset-0 z-[130] flex items-center justify-center bg-black/30 px-4"
                     onMouseDown={closeManuscriptDialog}
                 >
                     <div
-                        className="w-full max-w-[420px] rounded-2xl border border-border bg-surface-primary p-5 shadow-2xl"
+                        className="redclaw-manuscript-dialog w-full max-w-[420px] rounded-2xl p-5"
                         onMouseDown={(event) => event.stopPropagation()}
                     >
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <h3 className="text-lg font-bold text-text-primary">
+                                <h3 className="redclaw-manuscript-dialog-title text-lg font-bold">
                                     {manuscriptDialog.mode === 'create-folder'
                                         ? '新建文件夹'
                                         : manuscriptDialog.mode === 'create-file'
@@ -1462,7 +1483,7 @@ export function RedClawHistorySidebarSection({
                                 type="button"
                                 onClick={closeManuscriptDialog}
                                 disabled={isSubmittingManuscriptDialog}
-                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                className="redclaw-manuscript-dialog-close flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50"
                                 title="关闭"
                                 aria-label="关闭"
                             >
@@ -1517,7 +1538,7 @@ export function RedClawHistorySidebarSection({
                                     }
                                 }}
                                 disabled={isSubmittingManuscriptDialog}
-                                className="mt-5 h-11 w-full rounded-xl border border-border bg-surface-secondary px-3 text-sm text-text-primary outline-none transition focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/15 disabled:opacity-60"
+                                className="redclaw-manuscript-dialog-input mt-5 h-11 w-full rounded-xl px-3 text-sm outline-none transition disabled:opacity-60"
                                 placeholder={manuscriptDialog.mode === 'create-folder' ? '文件夹名称' : '新名称'}
                                 maxLength={100}
                             />
@@ -1531,7 +1552,7 @@ export function RedClawHistorySidebarSection({
                                     type="button"
                                     onClick={closeManuscriptDialog}
                                     disabled={isSubmittingManuscriptDialog}
-                                    className="h-9 rounded-xl border border-border px-4 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                    className="redclaw-manuscript-dialog-secondary h-9 rounded-xl px-4 text-sm transition-colors disabled:opacity-50"
                                 >
                                     取消
                                 </button>
@@ -1539,7 +1560,7 @@ export function RedClawHistorySidebarSection({
                                     type="button"
                                     onClick={() => void submitManuscriptDialog()}
                                     disabled={isSubmittingManuscriptDialog || !manuscriptDialogName.trim()}
-                                    className="inline-flex h-9 items-center gap-2 rounded-xl bg-text-primary px-4 text-sm font-medium text-white transition-colors hover:bg-text-primary/90 disabled:opacity-50"
+                                    className="redclaw-manuscript-dialog-primary inline-flex h-9 items-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors disabled:opacity-50"
                                 >
                                     {isSubmittingManuscriptDialog && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                                     保存
