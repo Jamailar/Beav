@@ -174,7 +174,8 @@ export function useGlobalIntentRouter({
 
   useEffect(() => {
     const openedSessionIds = new Set<string>();
-    const handleTeamRuntimeEvent = (event: { eventType?: string; payload?: unknown }) => {
+    const handleTeamRuntimeEvent = (_event: unknown, envelope?: { eventType?: string; payload?: unknown }) => {
+      const event = envelope || {};
       if (event.eventType !== 'runtime:collab-session-changed') return;
       const payload = recordFromUnknown(event.payload);
       const session = recordFromUnknown(payload.session);

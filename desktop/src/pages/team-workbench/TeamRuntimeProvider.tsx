@@ -83,7 +83,8 @@ export function TeamRuntimeProvider({
   }, [refresh]);
 
   useEffect(() => {
-    const handleRuntimeEvent = (event: RuntimeUnifiedEvent) => {
+    const handleRuntimeEvent = (_event: unknown, envelope?: RuntimeUnifiedEvent) => {
+      const event = envelope;
       if (!event || !event.eventType) return;
       if (!String(event.eventType).startsWith('runtime:collab-')) return;
       if (eventSessionId(event) !== sessionId) return;

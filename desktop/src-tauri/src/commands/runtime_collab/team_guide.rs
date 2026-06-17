@@ -103,8 +103,13 @@ pub fn guide_create_value(
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default();
-            if let Some(responsibility) = payload_string(&member_input, "responsibility") {
+            if let Some(responsibility) = payload_string(&member_input, "responsibility")
+                .or_else(|| payload_string(&member_input, "role"))
+            {
                 member_metadata.insert("responsibility".to_string(), json!(responsibility));
+            }
+            if let Some(deliverable) = payload_string(&member_input, "deliverable") {
+                member_metadata.insert("deliverable".to_string(), json!(deliverable));
             }
             member_metadata.insert("source".to_string(), json!("team_guide"));
             let member = add_collab_member(
@@ -158,6 +163,7 @@ pub fn guide_create_value(
                 payload_string(&task_input, "memberRoleId")
                     .or_else(|| payload_string(&task_input, "roleId"))
                     .or_else(|| payload_string(&task_input, "memberName"))
+                    .or_else(|| payload_string(&task_input, "assignee"))
                     .and_then(|key| {
                         role_to_member_id
                             .get(&key)
@@ -175,6 +181,9 @@ pub fn guide_create_value(
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default();
+            if let Some(expected_output) = payload_string(&task_input, "expectedOutput") {
+                task_metadata.insert("expectedOutput".to_string(), json!(expected_output));
+            }
             task_metadata.insert("source".to_string(), json!("team_guide"));
             task_payload.insert("metadata".to_string(), Value::Object(task_metadata));
             let task = create_collab_task(store, &Value::Object(task_payload))?;
