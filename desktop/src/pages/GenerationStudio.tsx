@@ -353,6 +353,63 @@ const readBlobAsDataUrl = (blob: Blob): Promise<string> => new Promise((resolve,
     reader.readAsDataURL(blob);
 });
 
+const ACCEPT_EXTENSION_GROUPS: Record<string, string[]> = {
+    'image/*': ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'avif', 'heic', 'heif', 'jfif'],
+    'video/*': ['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv'],
+    'audio/*': ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'webm'],
+};
+
+function fileExtension(fileName: string): string {
+    const match = String(fileName || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+    return match?.[1] || '';
+}
+
+function fileMatchesAccept(file: File, accept: string): boolean {
+    const tokens = String(accept || '')
+        .split(',')
+        .map((token) => token.trim().toLowerCase())
+        .filter(Boolean);
+    if (!tokens.length) return true;
+    const mimeType = String(file.type || '').toLowerCase();
+    const ext = fileExtension(file.name);
+    return tokens.some((token) => {
+        if (token.startsWith('.')) {
+            return ext === token.slice(1);
+        }
+        if (token.endsWith('/*')) {
+            const prefix = token.slice(0, -1);
+            return (mimeType && mimeType.startsWith(prefix)) || ACCEPT_EXTENSION_GROUPS[token]?.includes(ext);
+        }
+        return mimeType === token || ACCEPT_EXTENSION_GROUPS[token]?.includes(ext);
+    });
+}
+
+function transferMayContainAcceptedFile(dataTransfer: DataTransfer, accept: string): boolean {
+    const items = Array.from(dataTransfer.items || []);
+    if (!items.length) return Array.from(dataTransfer.files || []).some((file) => fileMatchesAccept(file, accept));
+    const tokens = String(accept || '')
+        .split(',')
+        .map((token) => token.trim().toLowerCase())
+        .filter(Boolean);
+    return items.some((item) => {
+        if (item.kind !== 'file') return false;
+        const mimeType = String(item.type || '').toLowerCase();
+        if (!mimeType) return true;
+        return tokens.length === 0 || tokens.some((token) => {
+            if (token.startsWith('.')) return true;
+            if (token.endsWith('/*')) return mimeType.startsWith(token.slice(0, -1));
+            return mimeType === token;
+        });
+    });
+}
+
+async function filesToReferenceItems(files: File[], maxCount: number): Promise<ReferenceItem[]> {
+    return Promise.all(files.slice(0, maxCount).map(async (file) => ({
+        name: file.name,
+        dataUrl: await readFileAsDataUrl(file),
+    })));
+}
+
 function makeId(prefix: string): string {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -808,6 +865,7 @@ function UploadPreviewCard({
     multiple = false,
     items,
     onChange,
+    onFiles,
     onClear,
 }: {
     label: string;
@@ -815,20 +873,57 @@ function UploadPreviewCard({
     multiple?: boolean;
     items: ReferenceItem[];
     onChange: (event: React.ChangeEvent<HTMLInputElement>) => void | Promise<void>;
+    onFiles?: (files: File[]) => void | Promise<void>;
     onClear?: () => void;
 }) {
+    const [isDragActive, setIsDragActive] = useState(false);
     const lead = items[0] || null;
     const hasItems = items.length > 0;
     const leadIsVideo = isVideoReference(lead);
+    const handleDragEnter = useCallback((event: React.DragEvent<HTMLLabelElement>) => {
+        if (!onFiles || !transferMayContainAcceptedFile(event.dataTransfer, accept)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setIsDragActive(true);
+    }, [accept, onFiles]);
+    const handleDragOver = useCallback((event: React.DragEvent<HTMLLabelElement>) => {
+        if (!onFiles || !transferMayContainAcceptedFile(event.dataTransfer, accept)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = 'copy';
+        setIsDragActive(true);
+    }, [accept, onFiles]);
+    const handleDragLeave = useCallback((event: React.DragEvent<HTMLLabelElement>) => {
+        const nextTarget = event.relatedTarget;
+        if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+        setIsDragActive(false);
+    }, []);
+    const handleDrop = useCallback((event: React.DragEvent<HTMLLabelElement>) => {
+        if (!onFiles) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setIsDragActive(false);
+        const droppedFiles = Array.from(event.dataTransfer.files || [])
+            .filter((file) => fileMatchesAccept(file, accept));
+        const nextFiles = multiple ? droppedFiles : droppedFiles.slice(0, 1);
+        if (!nextFiles.length) return;
+        void onFiles(nextFiles);
+    }, [accept, multiple, onFiles]);
 
     return (
         <div className="group relative">
             <label className={clsx(
                 'relative flex h-[88px] w-[88px] cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[18px] border transition-colors',
-                hasItems
+                isDragActive
+                    ? 'border-brand-red/55 bg-brand-red/10 text-brand-red'
+                    : hasItems
                     ? 'border-border bg-surface-tertiary hover:border-border/70'
                     : 'border-border bg-surface-secondary text-text-secondary hover:bg-surface-tertiary',
             )}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
             >
                 <input
                     type="file"
@@ -2793,37 +2888,36 @@ export function GenerationStudio({
         });
     }, []);
 
-    const handleImageReferenceFiles = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const files = Array.from(event.target.files || []);
+    const appendImageReferenceFiles = useCallback(async (files: File[]) => {
         if (!files.length) return;
         setIsReadingImageRefs(true);
         try {
-            const nextItems = await Promise.all(files.slice(0, 4).map(async (file) => ({
-                name: file.name,
-                dataUrl: await readFileAsDataUrl(file),
-            })));
+            const nextItems = await filesToReferenceItems(files, 4);
             setImageReferences((prev) => [...prev, ...nextItems].slice(0, 4));
         } catch (error) {
             console.error('Failed to read image references:', error);
             setImageError('参考图读取失败，请重试');
         } finally {
             setIsReadingImageRefs(false);
-            event.target.value = '';
         }
     }, []);
 
-    const handleCoverReferenceFile = useCallback(async (
-        event: React.ChangeEvent<HTMLInputElement>,
+    const handleImageReferenceFiles = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+        try {
+            await appendImageReferenceFiles(Array.from(event.target.files || []));
+        } finally {
+            event.target.value = '';
+        }
+    }, [appendImageReferenceFiles]);
+
+    const setCoverReferenceFile = useCallback(async (
+        file: File | undefined,
         target: 'template' | 'base',
     ) => {
-        const file = event.target.files?.[0];
         if (!file) return;
         setIsReadingCoverRefs(true);
         try {
-            const item = {
-                name: file.name,
-                dataUrl: await readFileAsDataUrl(file),
-            };
+            const [item] = await filesToReferenceItems([file], 1);
             if (target === 'template') {
                 setCoverTemplateImage(item);
             } else {
@@ -2835,22 +2929,28 @@ export function GenerationStudio({
             setCoverError('封面素材读取失败，请重试');
         } finally {
             setIsReadingCoverRefs(false);
-            event.target.value = '';
         }
     }, []);
 
-    const handleVideoReferenceFile = useCallback(async (
+    const handleCoverReferenceFile = useCallback(async (
         event: React.ChangeEvent<HTMLInputElement>,
+        target: 'template' | 'base',
+    ) => {
+        try {
+            await setCoverReferenceFile(event.target.files?.[0], target);
+        } finally {
+            event.target.value = '';
+        }
+    }, [setCoverReferenceFile]);
+
+    const setVideoReferenceFile = useCallback(async (
+        file: File | undefined,
         target: number | 'first' | 'last' | 'firstClip' | 'drivingAudio',
     ) => {
-        const file = event.target.files?.[0];
         if (!file) return;
         setIsReadingVideoRefs(true);
         try {
-            const item = {
-                name: file.name,
-                dataUrl: await readFileAsDataUrl(file),
-            };
+            const [item] = await filesToReferenceItems([file], 1);
             if (typeof target === 'number') {
                 setVideoReferences((prev) => {
                     const next = [...prev];
@@ -2874,19 +2974,25 @@ export function GenerationStudio({
             setVideoError('参考素材读取失败，请重试');
         } finally {
             setIsReadingVideoRefs(false);
-            event.target.value = '';
         }
     }, [videoMode]);
 
-    const handleVideoReferenceFiles = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const files = Array.from(event.target.files || []);
+    const handleVideoReferenceFile = useCallback(async (
+        event: React.ChangeEvent<HTMLInputElement>,
+        target: number | 'first' | 'last' | 'firstClip' | 'drivingAudio',
+    ) => {
+        try {
+            await setVideoReferenceFile(event.target.files?.[0], target);
+        } finally {
+            event.target.value = '';
+        }
+    }, [setVideoReferenceFile]);
+
+    const appendVideoReferenceFiles = useCallback(async (files: File[]) => {
         if (!files.length) return;
         setIsReadingVideoRefs(true);
         try {
-            const nextItems = await Promise.all(files.slice(0, 5).map(async (file) => ({
-                name: file.name,
-                dataUrl: await readFileAsDataUrl(file),
-            })));
+            const nextItems = await filesToReferenceItems(files, 5);
             setVideoReferences((prev) => [...prev.filter(Boolean), ...nextItems].slice(0, 5));
             if (videoMode === 'text-to-video' && nextItems.length > 0) {
                 setVideoMode('reference-guided');
@@ -2896,9 +3002,16 @@ export function GenerationStudio({
             setVideoError('参考素材读取失败，请重试');
         } finally {
             setIsReadingVideoRefs(false);
-            event.target.value = '';
         }
     }, [videoMode]);
+
+    const handleVideoReferenceFiles = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+        try {
+            await appendVideoReferenceFiles(Array.from(event.target.files || []));
+        } finally {
+            event.target.value = '';
+        }
+    }, [appendVideoReferenceFiles]);
 
     const uploadedVideoRefs = useMemo(() => {
         if (videoMode === 'reference-guided') {
@@ -3441,6 +3554,7 @@ export function GenerationStudio({
                                                     multiple
                                                     items={imageReferences}
                                                     onChange={handleImageReferenceFiles}
+                                                    onFiles={appendImageReferenceFiles}
                                                     onClear={() => setImageReferences([])}
                                                 />
                                             ) : studioMode === 'cover' ? (
@@ -3450,6 +3564,7 @@ export function GenerationStudio({
                                                         accept="image/*"
                                                         items={coverTemplateImage ? [coverTemplateImage] : []}
                                                         onChange={(event) => void handleCoverReferenceFile(event, 'template')}
+                                                        onFiles={(files) => void setCoverReferenceFile(files[0], 'template')}
                                                         onClear={() => setCoverTemplateImage(null)}
                                                     />
                                                     <UploadPreviewCard
@@ -3457,6 +3572,7 @@ export function GenerationStudio({
                                                         accept="image/*"
                                                         items={coverBaseImage ? [coverBaseImage] : []}
                                                         onChange={(event) => void handleCoverReferenceFile(event, 'base')}
+                                                        onFiles={(files) => void setCoverReferenceFile(files[0], 'base')}
                                                         onClear={() => setCoverBaseImage(null)}
                                                     />
                                                 </div>
@@ -3467,6 +3583,7 @@ export function GenerationStudio({
                                                         accept="image/*"
                                                         items={videoFirstFrame ? [videoFirstFrame] : []}
                                                         onChange={(event) => void handleVideoReferenceFile(event, 'first')}
+                                                        onFiles={(files) => void setVideoReferenceFile(files[0], 'first')}
                                                         onClear={() => setVideoFirstFrame(null)}
                                                     />
                                                     <UploadPreviewCard
@@ -3474,6 +3591,7 @@ export function GenerationStudio({
                                                         accept="image/*"
                                                         items={videoLastFrame ? [videoLastFrame] : []}
                                                         onChange={(event) => void handleVideoReferenceFile(event, 'last')}
+                                                        onFiles={(files) => void setVideoReferenceFile(files[0], 'last')}
                                                         onClear={() => setVideoLastFrame(null)}
                                                     />
                                                 </div>
@@ -3483,6 +3601,7 @@ export function GenerationStudio({
                                                     accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
                                                     items={videoFirstClip ? [videoFirstClip] : []}
                                                     onChange={(event) => void handleVideoReferenceFile(event, 'firstClip')}
+                                                    onFiles={(files) => void setVideoReferenceFile(files[0], 'firstClip')}
                                                     onClear={() => setVideoFirstClip(null)}
                                                 />
                                             ) : (
@@ -3492,6 +3611,7 @@ export function GenerationStudio({
                                                     multiple
                                                     items={uploadedVideoRefs}
                                                     onChange={handleVideoReferenceFiles}
+                                                    onFiles={appendVideoReferenceFiles}
                                                     onClear={() => setVideoReferences([])}
                                                 />
                                             )}
