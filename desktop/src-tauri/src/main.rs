@@ -66,8 +66,8 @@ pub(crate) use commands::chat_state::{
 };
 pub(crate) use ffmpeg_runtime::{ffmpeg_executable, ffmpeg_program};
 pub(crate) use persistence::{
-    build_store_path, ensure_store_hydrated_for_knowledge, hydrate_store_from_workspace_files,
-    load_store, persist_store, with_store, with_store_mut,
+    build_store_path, hydrate_store_from_workspace_files, load_store, persist_store, with_store,
+    with_store_mut,
 };
 pub(crate) use runtime::{
     append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
