@@ -741,6 +741,9 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("web.fetch"),
             )
         }
+        ("web", "search" | "lookup") => {
+            app_cli_action_call("web.search", payload, Some("Operate"), Some("web.search"))
+        }
         ("asset" | "assets" | "subject" | "subjects", "search" | "list") => app_cli_action_call(
             "assets.search",
             payload,
@@ -2675,6 +2678,30 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("url")),
             Some(&json!("https://example.com"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_web_search_to_web_search() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "web",
+                "operation": "search",
+                "input": { "query": "SpaceX valuation today" }
+            }),
+        );
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("web.search"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("query")),
+            Some(&json!("SpaceX valuation today"))
         );
     }
 

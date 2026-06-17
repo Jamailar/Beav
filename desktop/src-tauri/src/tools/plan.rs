@@ -493,6 +493,7 @@ fn intent_priority_app_cli_actions(task_intent: Option<&str>) -> &'static [&'sta
 
 const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "web.fetch",
+    "web.search",
     "session.resources.list",
     "session.resources.get",
     "memory.list",
@@ -579,6 +580,7 @@ fn pinned_direct_app_cli_actions(
     if !media_intent && runtime_mode == "team" {
         &[
             "web.fetch",
+            "web.search",
             "video.analyze",
             "media.edit",
             "team.guide.create",
@@ -614,6 +616,7 @@ fn pinned_direct_app_cli_actions(
     } else if wants_host_cli || (!media_intent && matches!(runtime_mode, "redclaw" | "knowledge")) {
         &[
             "web.fetch",
+            "web.search",
             "video.analyze",
             "media.edit",
             "team.guide.create",
@@ -1090,6 +1093,7 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("media.transcribe"));
         assert!(plan.has_direct_app_cli_action("team.guide.create"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
+        assert!(plan.has_direct_app_cli_action("web.search"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
@@ -1184,6 +1188,7 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("media.transcribe"));
         assert!(plan.has_direct_app_cli_action("team.guide.create"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
+        assert!(plan.has_direct_app_cli_action("web.search"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
