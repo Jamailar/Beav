@@ -587,26 +587,11 @@ fn web_search_input_schema() -> Value {
                 integer_schema("Maximum source entries to return.", 1, 10),
             ),
             (
-                "mode",
-                json!({
-                    "type": "string",
-                    "enum": ["auto", "hosted", "local"],
-                    "description": "auto/hosted prefer provider-hosted web search when supported; local uses configured Tavily/SearXNG/DuckDuckGo fallback."
-                }),
-            ),
-            (
-                "allowFallback",
-                json!({
-                    "type": "boolean",
-                    "description": "Whether to fall back to configured local search if provider-hosted search is unavailable."
-                }),
-            ),
-            (
                 "searchContextSize",
                 json!({
                     "type": "string",
                     "enum": ["low", "medium", "high"],
-                    "description": "OpenAI Responses web_search context size hint."
+                    "description": "Responses-compatible provider-hosted web_search context size hint."
                 }),
             ),
             (
