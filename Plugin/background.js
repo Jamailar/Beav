@@ -30,10 +30,12 @@ const XHS_TASK_HISTORY_KEY = 'xhsCollectorTaskHistory';
 const XHS_TASK_QUEUE_STATE_KEY = 'xhsCollectorTaskQueueState';
 const XHS_TASK_LOG_KEY = 'xhsCollectorTaskLogs';
 const XHS_BLOGGER_PROGRESS_KEY = 'xhsBloggerCollectedNotes';
+const CAPTURE_CHECKPOINT_KEY = 'redboxCaptureCheckpoints';
 const XHS_TASK_HISTORY_LIMIT = 80;
 const XHS_TASK_LOG_LIMIT = 80;
 const XHS_BLOGGER_PROGRESS_LIMIT = 200;
 const XHS_BLOGGER_PROGRESS_NOTE_LIMIT = 5000;
+const CAPTURE_CHECKPOINT_LIMIT = 120;
 const XHS_COLLECT_INTERVAL_DEFAULT_MIN_MS = 1500;
 const XHS_COLLECT_INTERVAL_DEFAULT_MAX_MS = 3500;
 const XHS_COLLECT_INTERVAL_MIN_MS = 500;
@@ -392,6 +394,11 @@ async function handleMessage(message, sender) {
       return await getXhsTaskHistory();
     case 'xhs:clear-history':
       return await clearXhsTaskHistory();
+    case 'capture:get-checkpoints':
+      return { success: true, checkpoints: await readCaptureCheckpoints() };
+    case 'capture:clear-checkpoints':
+      await writeCaptureCheckpoints([]);
+      return { success: true, checkpoints: [] };
     case 'xhs:export-current-note-json':
       return await exportCurrentXhsNoteJson(tabId);
     case 'save-douyin':
@@ -1886,6 +1893,97 @@ async function runNextXhsTask() {
   }
 }
 
+function sanitizeCaptureCheckpoint(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const platform = normalizeText(entry.platform) || 'web';
+  const kind = normalizeText(entry.kind) || 'capture';
+  const source = normalizeText(entry.source || entry.sourceUrl);
+  const sourceId = normalizeText(entry.sourceId || entry.noteId || entry.id) || (source ? hashString(source) : '');
+  const id = normalizeText(entry.id) || `${platform}:${kind}:${sourceId || hashString(`${platform}:${kind}`)}`;
+  const diagnostics = Array.isArray(entry.diagnostics)
+    ? entry.diagnostics.slice(-12)
+    : [];
+  return {
+    id,
+    platform,
+    kind,
+    sourceId,
+    source,
+    status: normalizeText(entry.status) || 'started',
+    taskId: normalizeText(entry.taskId || xhsActiveTask?.id),
+    total: Number(entry.total || 0),
+    captured: Number(entry.captured || 0),
+    hasMore: entry.hasMore === true,
+    diagnostics,
+    error: normalizeText(entry.error),
+    createdAt: normalizeText(entry.createdAt) || new Date().toISOString(),
+    updatedAt: normalizeText(entry.updatedAt) || new Date().toISOString(),
+  };
+}
+
+async function readCaptureCheckpoints() {
+  const stored = await getStorageLocal([CAPTURE_CHECKPOINT_KEY]).catch(() => ({}));
+  return Array.isArray(stored?.[CAPTURE_CHECKPOINT_KEY])
+    ? stored[CAPTURE_CHECKPOINT_KEY].map(sanitizeCaptureCheckpoint).filter(Boolean)
+    : [];
+}
+
+async function writeCaptureCheckpoints(checkpoints) {
+  const normalized = (Array.isArray(checkpoints) ? checkpoints : [])
+    .map(sanitizeCaptureCheckpoint)
+    .filter(Boolean)
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    .slice(0, CAPTURE_CHECKPOINT_LIMIT);
+  await setStorageLocal({ [CAPTURE_CHECKPOINT_KEY]: normalized });
+  return normalized;
+}
+
+async function upsertCaptureCheckpoint(entry) {
+  const normalized = sanitizeCaptureCheckpoint(entry);
+  if (!normalized) return null;
+  const current = await readCaptureCheckpoints();
+  const existing = current.find((item) => item.id === normalized.id);
+  const merged = sanitizeCaptureCheckpoint({
+    ...(existing || {}),
+    ...normalized,
+    createdAt: normalizeText(existing?.createdAt) || normalized.createdAt,
+    updatedAt: new Date().toISOString(),
+  });
+  await writeCaptureCheckpoints([
+    merged,
+    ...current.filter((item) => item.id !== merged.id),
+  ]);
+  pluginDebug('capture-checkpoint-upsert', {
+    id: merged.id,
+    status: merged.status,
+    captured: merged.captured,
+    total: merged.total,
+  });
+  return merged;
+}
+
+function buildXhsCommentsCheckpoint(payload = {}, patch = {}) {
+  const source = normalizeText(payload?.source || patch.source);
+  const noteId = normalizeText(payload?.noteId || patch.sourceId || patch.noteId);
+  return {
+    platform: 'xiaohongshu',
+    kind: 'comments',
+    sourceId: noteId || (source ? hashString(source) : ''),
+    source,
+    total: Number(payload?.total || patch.total || 0),
+    captured: Array.isArray(payload?.comments)
+      ? payload.comments.length
+      : Number(patch.captured || 0),
+    hasMore: payload?.hasMore === true || patch.hasMore === true,
+    diagnostics: Array.isArray(payload?.captureDiagnostics)
+      ? payload.captureDiagnostics
+      : Array.isArray(patch.diagnostics)
+        ? patch.diagnostics
+        : [],
+    ...patch,
+  };
+}
+
 async function getXhsTaskHistory() {
   const stored = await getStorageLocal([XHS_TASK_HISTORY_KEY]).catch(() => ({}));
   const history = Array.isArray(stored?.[XHS_TASK_HISTORY_KEY])
@@ -2287,6 +2385,24 @@ async function postKnowledgeZhihuArticle(payload) {
     entryId: response?.entryId || '',
     duplicate: Boolean(response?.duplicate),
     updated: Boolean(response?.updated),
+  });
+  return response;
+}
+
+async function postKnowledgeXhsEntryV2(payload) {
+  const endpoint = await resolveKnowledgeApiEndpoint();
+  pluginLog('xhs-entry-v2-submit', {
+    endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/xhs/v2/entries`,
+    noteId: String(payload?.note?.noteId || payload?.source?.externalId || ''),
+    sourceLink: String(payload?.source?.sourceLink || ''),
+    commentCount: Array.isArray(payload?.comments?.items) ? payload.comments.items.length : 0,
+  });
+  const response = await postKnowledgeJson('/xhs/v2/entries', payload, 'xhs-entry-v2-submit');
+  pluginLog('xhs-entry-v2-submit-success', {
+    entryId: response?.entryId || '',
+    duplicate: Boolean(response?.duplicate),
+    updated: Boolean(response?.updated),
+    commentCount: Number(response?.comments?.captured || 0),
   });
   return response;
 }
@@ -2880,6 +2996,70 @@ function buildXhsCommentsEntry(payload) {
   };
 }
 
+function buildXhsEntryV2Request(notePayload = {}, commentsPayload = {}) {
+  const sourceUrl = normalizeText(notePayload?.source || commentsPayload?.source);
+  const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
+  const stableNoteId = normalizeText(notePayload?.noteId || commentsPayload?.noteId)
+    || `xhs-${hashString(sourceUrl)}`;
+  const noteType = normalizeText(notePayload?.noteType) || (notePayload?.videoUrl ? 'video' : 'image');
+  const imageUrls = Array.isArray(notePayload?.images)
+    ? notePayload.images.map(keepInlineAssetWithinLimit).filter(Boolean)
+    : [];
+  const videoAssetUrl = keepInlineAssetWithinLimit(notePayload?.videoDataUrl)
+    || normalizeText(notePayload?.videoUrl);
+  const comments = Array.isArray(commentsPayload?.items)
+    ? commentsPayload.items
+    : Array.isArray(commentsPayload?.comments)
+      ? commentsPayload.comments
+      : [];
+  const text = normalizeText(notePayload?.text) || normalizeText(notePayload?.content);
+  const visibleCount = Number(commentsPayload?.visibleCount || comments.length || 0);
+  const total = Number(commentsPayload?.total || visibleCount || 0);
+
+  return {
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      sourceDomain,
+      externalId: stableNoteId,
+    }),
+    note: {
+      noteId: stableNoteId,
+      noteType,
+      title: normalizeText(notePayload?.title) || '小红书内容',
+      author: {
+        userId: normalizeText(notePayload?.authorId) || undefined,
+        nickname: normalizeText(notePayload?.author) || undefined,
+        profileUrl: normalizeText(notePayload?.authorProfileUrl) || undefined,
+        avatarUrl: normalizeText(notePayload?.authorAvatarUrl) || undefined,
+      },
+      text,
+      stats: {
+        likes: Number(notePayload?.stats?.likes || 0),
+        collects: Number(notePayload?.stats?.collects || 0),
+        comments: total,
+      },
+      assets: {
+        coverUrl: keepInlineAssetWithinLimit(notePayload?.coverUrl) || imageUrls[0] || undefined,
+        imageUrls,
+        videoUrl: videoAssetUrl || undefined,
+      },
+    },
+    comments: {
+      totalText: normalizeText(commentsPayload?.totalText) || undefined,
+      total: total || undefined,
+      visibleCount: visibleCount || undefined,
+      hasMore: typeof commentsPayload?.hasMore === 'boolean' ? commentsPayload.hasMore : undefined,
+      items: comments,
+    },
+    options: {
+      dedupeKey: stableNoteId,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: noteType === 'video',
+    },
+  };
+}
+
 function buildXhsBloggerEntry(payload) {
   const sourceUrl = normalizeText(payload?.source);
   const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
@@ -3296,6 +3476,13 @@ async function runExtraction(tabId, func, options = {}) {
   }
   if (!targetTabId) {
     throw new Error('No active tab');
+  }
+  if (options.captureRuntime) {
+    await chrome.scripting.executeScript({
+      target: { tabId: targetTabId },
+      files: ['captureRuntime.js'],
+      world: options.world || 'ISOLATED',
+    });
   }
   const [result] = await chrome.scripting.executeScript({
     target: { tabId: targetTabId },
@@ -3962,12 +4149,73 @@ async function saveXhsNoteFromTab(tabId) {
   if (!payload?.title && !payload?.content && !payload?.images?.length && !payload?.videoUrl) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
-  const response = await postKnowledgeEntry(buildXhsEntry(payload));
+  await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
+    source: payload?.source,
+    noteId: payload?.noteId,
+    total: Number(payload?.stats?.comments || 0),
+  }, {
+    status: 'started',
+  })).catch((error) => {
+    pluginWarn('xhs-comments-checkpoint-start-failed', { error: describeError(error) });
+  });
+  const commentsPayload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN', captureRuntime: true })
+    .catch((error) => {
+      pluginWarn('xhs-comments-inline-extract-failed', {
+        error: describeError(error),
+      });
+      void upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
+        source: payload?.source,
+        noteId: payload?.noteId,
+        total: Number(payload?.stats?.comments || 0),
+      }, {
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      })).catch(() => {});
+      return {};
+    });
+  if (Array.isArray(commentsPayload?.captureDiagnostics)) {
+    pluginLog('xhs-comments-capture-diagnostics', {
+      count: Array.isArray(commentsPayload?.comments) ? commentsPayload.comments.length : 0,
+      total: Number(commentsPayload?.total || 0),
+      events: commentsPayload.captureDiagnostics.slice(-6),
+    });
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+      source: commentsPayload?.source || payload?.source,
+      sourceId: commentsPayload?.noteId || payload?.noteId,
+      status: 'loaded',
+    })).catch((error) => {
+      pluginWarn('xhs-comments-checkpoint-loaded-failed', { error: describeError(error) });
+    });
+  }
+  let response;
+  try {
+    response = await postKnowledgeXhsEntryV2(buildXhsEntryV2Request(payload, commentsPayload));
+    if (Array.isArray(commentsPayload?.comments) && commentsPayload.comments.length > 0) {
+      await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+        source: commentsPayload?.source || payload?.source,
+        sourceId: commentsPayload?.noteId || payload?.noteId,
+        status: 'persisted',
+      })).catch((error) => {
+        pluginWarn('xhs-comments-checkpoint-persisted-failed', { error: describeError(error) });
+      });
+    }
+  } catch (error) {
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+      source: commentsPayload?.source || payload?.source,
+      sourceId: commentsPayload?.noteId || payload?.noteId,
+      total: Number(commentsPayload?.total || payload?.stats?.comments || 0),
+      captured: Array.isArray(commentsPayload?.comments) ? commentsPayload.comments.length : 0,
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+    })).catch(() => {});
+    throw error;
+  }
   return {
     success: true,
     mode: 'xhs',
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
+    comments: Number(response?.comments?.captured || 0),
   };
 }
 
@@ -4385,12 +4633,31 @@ async function downloadXhsMediaZipFromTab(tabId) {
 }
 
 async function collectXhsCommentsFromTab(tabId) {
-  const payload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN' });
+  const payload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN', captureRuntime: true });
   const comments = Array.isArray(payload?.comments) ? payload.comments : [];
+  await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(payload, {
+    status: 'loaded',
+  })).catch((error) => {
+    pluginWarn('xhs-comments-checkpoint-loaded-failed', { error: describeError(error) });
+  });
   if (comments.length === 0) {
     throw new Error('当前页面未采集到评论，请先打开笔记详情并滚动到评论区');
   }
-  const response = await postKnowledgeEntry(buildXhsCommentsEntry(payload));
+  let response;
+  try {
+    response = await postKnowledgeEntry(buildXhsCommentsEntry(payload));
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(payload, {
+      status: 'persisted',
+    })).catch((error) => {
+      pluginWarn('xhs-comments-checkpoint-persisted-failed', { error: describeError(error) });
+    });
+  } catch (error) {
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(payload, {
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+    })).catch(() => {});
+    throw error;
+  }
   const historyItem = await appendXhsTaskHistory({
     id: `xhs-comments-${hashString(`${payload?.source || ''}-${Date.now()}`)}`,
     type: 'comments',
@@ -4402,6 +4669,7 @@ async function collectXhsCommentsFromTab(tabId) {
       source: payload?.source || '',
       noteId: payload?.noteId || '',
       entryId: response.entryId || '',
+      captureDiagnostics: Array.isArray(payload?.captureDiagnostics) ? payload.captureDiagnostics.slice(-12) : [],
     },
   });
   return {
@@ -6491,6 +6759,24 @@ async function extractXhsNotePayload() {
     return '';
   }
 
+  function getAuthorId(root) {
+    const link =
+      root.querySelector('.author a[href*="/user/"], .author-wrapper a[href*="/user/"], a[href*="/user/profile"]') ||
+      document.querySelector('.author a[href*="/user/"], .author-wrapper a[href*="/user/"], a[href*="/user/profile"]');
+    const explicit = String(link?.getAttribute?.('data-user-id') || '').trim();
+    if (explicit) return explicit;
+    const href = String(link?.getAttribute?.('href') || '').trim();
+    const match = href.match(/\/user\/profile\/([^/?#]+)/i);
+    return match?.[1] || '';
+  }
+
+  function getAuthorAvatarUrl(root) {
+    const img =
+      root.querySelector('.author img, .author-wrapper img, .avatar img, img.avatar-item') ||
+      document.querySelector('.author img, .author-wrapper img, .avatar img, img.avatar-item');
+    return toAbsoluteUrl(img?.getAttribute?.('src') || img?.getAttribute?.('data-src') || '');
+  }
+
   function getCurrentNoteImgEls(root) {
     const swiperSlides = getCurrentNoteSwiperSlides(root)
       .filter((slide) => !isDuplicateSwiperSlide(slide))
@@ -7016,33 +7302,39 @@ async function extractXhsNotePayload() {
     videoDataUrl: localizedVideoDataUrl || '',
     stats: getStats(),
     source: location.href,
+    authorId: getAuthorId(root),
     authorProfileUrl: getAuthorProfileUrl(root),
+    authorAvatarUrl: getAuthorAvatarUrl(root),
   };
 }
 
 async function extractXhsCommentsPayload() {
-  function normalizeText(value) {
-    return String(value || '').replace(/\s+/g, ' ').trim();
+  const capture = window.__REDBOX_CAPTURE_RUNTIME__;
+  if (!capture) {
+    throw new Error('RedBox capture runtime 未加载');
   }
-
-  function normalizeBlockText(value) {
-    return String(value || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
-  }
-
-  function parseCountText(value) {
-    const text = normalizeText(value).replace(/[\s,]/g, '').replace(/[^0-9.\u4e00-\u9fa5.]/g, '');
-    if (!text) return 0;
-    if (text.includes('万')) {
-      const number = parseFloat(text.replace('万', ''));
-      return Number.isNaN(number) ? 0 : Math.round(number * 10000);
-    }
-    if (text.includes('亿')) {
-      const number = parseFloat(text.replace('亿', ''));
-      return Number.isNaN(number) ? 0 : Math.round(number * 100000000);
-    }
-    const number = parseFloat(text);
-    return Number.isNaN(number) ? 0 : Math.round(number);
-  }
+  const {
+    normalizeText,
+    normalizeBlockText,
+    parseCountText,
+    collectVisibleNodes,
+    readMatchingText,
+    clickVisibleButtons,
+    scrollAndTrackContentChange,
+  } = capture;
+  const commentItemSelectors = [
+    '.comment-item',
+    '.comment-container',
+    '.list-item',
+    '[class*="comment-item"]',
+    '[class*="commentItem"]',
+  ];
+  const commentRootSelectors = [
+    '.comments-container',
+    '.comments-el',
+    '.comment-list',
+    '[class*="comments"]',
+  ];
 
   function getInitialState() {
     const scripts = document.querySelectorAll('script');
@@ -7095,26 +7387,87 @@ async function extractXhsCommentsPayload() {
     );
   }
 
-  function isVisible(el) {
-    if (!el || !(el instanceof Element)) return false;
-    const style = window.getComputedStyle(el);
-    const rect = el.getBoundingClientRect();
-    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 20 && rect.height > 10;
+  function toAbsoluteUrl(value) {
+    const raw = normalizeText(value);
+    if (!raw) return '';
+    try {
+      return new URL(raw, location.href).toString();
+    } catch {
+      return raw;
+    }
+  }
+
+  function getCommentsRoot() {
+    return document.querySelector(commentRootSelectors.join(','))
+      || null;
+  }
+
+  function collectVisibleCommentNodes() {
+    const root = getCommentsRoot();
+    let nodes = collectVisibleNodes(commentItemSelectors, { root: root || document });
+    if (nodes.length === 0 && root) {
+      nodes = collectVisibleNodes([
+        '.comments-container .comment-item',
+        '.comments-el .comment-item',
+        '.comment-list .comment-item',
+        '[class*="comments"] [class*="comment-item"]',
+        '[class*="comments"] [class*="commentItem"]',
+      ]);
+    }
+    return nodes;
+  }
+
+  function readCommentsTotalText() {
+    const direct = normalizeText(
+      document.querySelector('.comments-container .total')?.textContent ||
+      document.querySelector('.comments-el .total')?.textContent ||
+      '',
+    );
+    if (direct) return direct;
+    const totalNode = readMatchingText(
+      ['.comments-container *', '.comments-el *', '.comment-list *', '[class*="comments"] *'],
+      (text) => /^共[\d.,]+[万亿]?条评论$/.test(text) || /^共\s*[\d.,]+\s*[万亿]?\s*条评论$/.test(text),
+    );
+    if (totalNode) return totalNode;
+    const bodyMatch = normalizeText(document.body?.innerText || '').match(/共\s*[\d.,]+\s*[万亿]?\s*条评论/);
+    return bodyMatch?.[0] || '';
   }
 
   async function expandVisibleComments() {
-    const buttons = Array.from(document.querySelectorAll('button, .show-more, .more, [role="button"], span, div'))
-      .filter((el) => isVisible(el))
-      .filter((el) => /展开|更多|全部回复|条回复|查看更多/i.test(normalizeText(el.textContent)))
-      .slice(0, 18);
-    for (const button of buttons) {
-      try {
-        button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        await new Promise((resolve) => setTimeout(resolve, 90));
-      } catch {
-        // ignore protected synthetic click failures
-      }
-    }
+    const root = getCommentsRoot() || document;
+    return await clickVisibleButtons({
+      root,
+      selectors: ['button', '.show-more', '.more', '[role="button"]', 'span', 'div'],
+      pattern: /展开|全部回复|条回复|查看更多|更多回复/i,
+      limit: 18,
+      delayMs: 180,
+    });
+  }
+
+  async function loadCommentsUntilLimit() {
+    const targetTotal = parseCountText(readCommentsTotalText());
+    const targetCount = Math.min(targetTotal || 200, 200);
+    return await scrollAndTrackContentChange({
+      rootResolver: getCommentsRoot,
+      itemSelectors: commentItemSelectors,
+      targetCount,
+      maxRounds: 28,
+      stallLimit: 5,
+      waitMs: 520,
+      waitStepMs: 80,
+      finalWaitMs: 240,
+      scroll: {
+        fallbackSelectors: ['.comments-container', '.comments-el', '.comment-list', '.note-scroller', '.interaction-container', '.note-detail-mask'],
+        viewportRatio: 0.75,
+        minDistance: 420,
+      },
+      beforeRound: async () => {
+        await expandVisibleComments();
+      },
+      afterScroll: async () => {
+        await expandVisibleComments();
+      },
+    });
   }
 
   function pickCommentText(node) {
@@ -7148,51 +7501,151 @@ async function extractXhsCommentsPayload() {
     return '';
   }
 
+  function pickAuthorInfo(node) {
+    const link = node.querySelector('.author a[href*="/user/profile"], a.name[href*="/user/profile"], a[href*="/user/profile"][data-user-id]');
+    const img = node.querySelector('.avatar img, img.avatar-item, [class*="avatar"] img');
+    return {
+      userId: normalizeText(link?.getAttribute('data-user-id') || img?.getAttribute('data-user-id') || ''),
+      nickname: pickAuthor(node),
+      profileUrl: toAbsoluteUrl(link?.getAttribute('href') || ''),
+      avatarUrl: toAbsoluteUrl(img?.getAttribute('src') || img?.getAttribute('data-src') || ''),
+      isNoteAuthor: Array.from(node.querySelectorAll('.tag, [class*="tag"]'))
+        .some((el) => normalizeText(el.textContent) === '作者'),
+    };
+  }
+
+  function pickCommentContent(node) {
+    const contentNode =
+      node.querySelector('.content .note-text') ||
+      node.querySelector('.comment-content .note-text') ||
+      node.querySelector('.note-text') ||
+      node.querySelector('.content') ||
+      node;
+    const segments = [];
+    const emojiUrls = [];
+    Array.from(contentNode.childNodes || []).forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const text = normalizeText(child.textContent || '');
+        if (text) segments.push({ type: 'text', text });
+        return;
+      }
+      if (!(child instanceof Element)) return;
+      if (child.matches('img')) {
+        const url = toAbsoluteUrl(child.getAttribute('src') || child.getAttribute('data-src') || '');
+        if (url) {
+          emojiUrls.push(url);
+          segments.push({ type: 'emoji', url, alt: normalizeText(child.getAttribute('alt') || '') || undefined });
+        }
+        return;
+      }
+      const text = normalizeText(child.textContent || '');
+      if (text) segments.push({ type: 'text', text });
+      Array.from(child.querySelectorAll?.('img') || []).forEach((img) => {
+        const url = toAbsoluteUrl(img.getAttribute('src') || img.getAttribute('data-src') || '');
+        if (url && !emojiUrls.includes(url)) {
+          emojiUrls.push(url);
+          segments.push({ type: 'emoji', url, alt: normalizeText(img.getAttribute('alt') || '') || undefined });
+        }
+      });
+    });
+    const text = segments
+      .filter((segment) => segment.type === 'text')
+      .map((segment) => normalizeText(segment.text))
+      .filter(Boolean)
+      .join('');
+    return {
+      text: text || pickCommentText(node)
+        .split('\n')
+        .map((line) => normalizeText(line))
+        .filter(Boolean)
+        .filter((line) => !/^(赞|回复|展开|更多|举报)$/.test(line))
+        .join('\n'),
+      segments,
+      emojiUrls,
+    };
+  }
+
   function pickMeta(node) {
     const text = normalizeText(node.innerText || node.textContent || '');
     const createdAt = (text.match(/\d{1,2}-\d{1,2}|\d{4}-\d{1,2}-\d{1,2}|昨天|今天|刚刚|\d+\s*(分钟|小时|天)前/) || [])[0] || '';
-    const location = (text.match(/IP属地[:：]?\s*[\u4e00-\u9fa5A-Za-z]+/) || [])[0] || '';
+    const location = normalizeText(
+      node.querySelector('.date .location, [class*="location"]')?.textContent ||
+      (text.match(/IP属地[:：]?\s*[\u4e00-\u9fa5A-Za-z]+/) || [])[0] ||
+      '',
+    ).replace(/^IP属地[:：]?/, '');
     const likeText = normalizeText(
       node.querySelector('.like-wrapper .count')?.textContent ||
       node.querySelector('[class*="like"] [class*="count"]')?.textContent ||
       '',
     );
-    return { createdAt, location, likes: parseCountText(likeText) };
+    const replyText = normalizeText(
+      node.querySelector('.reply .count')?.textContent ||
+      node.querySelector('[class*="reply"] [class*="count"]')?.textContent ||
+      '',
+    );
+    return { createdAt, location, likes: parseCountText(likeText), replies: parseCountText(replyText) };
   }
 
-  await expandVisibleComments();
+  const captureRun = await loadCommentsUntilLimit();
 
-  const candidateNodes = Array.from(document.querySelectorAll(
-    '.comment-item, .comment-container, .parent-comment, .comments-el .list-item, [class*="comment-item"], [class*="commentItem"]',
-  )).filter((node) => node instanceof Element && isVisible(node));
+  const candidateNodes = collectVisibleCommentNodes();
   const seen = new Set();
   const comments = [];
   for (const node of candidateNodes) {
-    const author = pickAuthor(node);
-    const rawText = pickCommentText(node);
-    const text = rawText
-      .split('\n')
-      .map((line) => normalizeText(line))
-      .filter(Boolean)
-      .filter((line) => !/^(赞|回复|展开|更多|举报)$/.test(line))
-      .join('\n');
+    const content = pickCommentContent(node);
+    const text = normalizeBlockText(content.text);
     if (!text || text.length < 2) continue;
-    const key = `${author}\n${text}`;
+    const author = pickAuthorInfo(node);
+    const rawCommentId = normalizeText(node.getAttribute('id') || '').replace(/^comment-/, '');
+    const parentWrapper = node.closest('.parent-comment');
+    const parentItem = parentWrapper?.querySelector?.(':scope > .comment-item');
+    const parentCommentId = parentItem && parentItem !== node
+      ? normalizeText(parentItem.getAttribute('id') || '').replace(/^comment-/, '')
+      : '';
+    const key = `${rawCommentId || author.nickname}\n${text}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    const meta = pickMeta(node);
     comments.push({
+      id: rawCommentId || undefined,
+      platformCommentId: rawCommentId || undefined,
+      parentCommentId: parentCommentId || undefined,
+      rootCommentId: parentCommentId || rawCommentId || undefined,
+      level: parentCommentId ? 1 : 0,
       author,
+      content,
       text,
-      ...pickMeta(node),
+      metrics: {
+        likes: meta.likes,
+        replies: meta.replies,
+      },
+      likes: meta.likes,
+      replies: meta.replies,
+      time: {
+        display: meta.createdAt,
+      },
+      createdAt: meta.createdAt,
+      location: meta.location,
     });
     if (comments.length >= 200) break;
   }
+  const totalText = readCommentsTotalText();
+  const total = parseCountText(totalText);
+  const commentsRoot = getCommentsRoot() || document;
+  const hasMore = comments.length < total || Array.from(commentsRoot.querySelectorAll('.show-more, [class*="show-more"], button, [role="button"]'))
+    .some((el) => /展开|全部回复|查看更多|更多回复/i.test(normalizeText(el.textContent)));
 
   return {
     noteId: getCurrentNoteId(),
     title: getTitle(),
     coverUrl: getCoverUrl(),
     source: location.href,
+    totalText,
+    total: total || comments.length,
+    visibleCount: comments.length,
+    hasMore,
+    captureDiagnostics: captureRun?.diagnostics || [],
+    items: comments,
     comments,
   };
 }
