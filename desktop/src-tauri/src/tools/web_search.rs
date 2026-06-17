@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde_json::{json, Value};
 use tauri::State;
 
@@ -83,7 +85,10 @@ fn openai_responses_hosted_search(
         ));
     }
     let answer = extract_openai_response_text(&response.body);
-    let sources = extract_openai_response_sources(&response.body);
+    let mut sources = extract_openai_response_sources(&response.body);
+    if sources.is_empty() {
+        sources = extract_sources_from_answer_text(&answer);
+    }
     if answer.trim().is_empty() && sources.is_empty() {
         return Err("OpenAI hosted web search returned no usable text or sources".to_string());
     }
@@ -294,6 +299,137 @@ fn extract_openai_response_sources(response: &Value) -> Vec<Value> {
     sources
 }
 
+fn extract_sources_from_answer_text(answer: &str) -> Vec<Value> {
+    let mut sources = Vec::<Value>::new();
+    let mut seen_urls = BTreeSet::<String>::new();
+    let mut pending_title = String::new();
+    let mut last_source_index: Option<usize> = None;
+    for line in answer.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((url, before, after)) = first_url_with_context(trimmed) else {
+            if let Some(index) = last_source_index {
+                if let Some(snippet) = source_snippet_continuation(trimmed) {
+                    if let Some(source) = sources.get_mut(index) {
+                        source["snippet"] = json!(snippet);
+                    }
+                }
+            }
+            if is_source_bullet(trimmed) {
+                pending_title = clean_source_title(trimmed);
+                last_source_index = None;
+            }
+            continue;
+        };
+        if !seen_urls.insert(url.clone()) {
+            pending_title.clear();
+            continue;
+        }
+        let title = if !before.trim().is_empty() {
+            clean_source_title(before)
+        } else if !pending_title.trim().is_empty() {
+            pending_title.clone()
+        } else {
+            url_host_title(&url)
+        };
+        let snippet = clean_source_snippet(after);
+        sources.push(json!({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+        }));
+        last_source_index = sources.len().checked_sub(1);
+        pending_title.clear();
+    }
+    sources
+}
+
+fn first_url_with_context(line: &str) -> Option<(String, &str, &str)> {
+    let http_index = line.find("https://").or_else(|| line.find("http://"))?;
+    let before = &line[..http_index];
+    let rest = &line[http_index..];
+    let end = rest
+        .char_indices()
+        .find_map(|(idx, ch)| {
+            if ch.is_whitespace() || matches!(ch, ')' | ']' | '<' | '"' | '\'') {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(rest.len());
+    let raw_url = rest[..end]
+        .trim_matches(|ch: char| matches!(ch, '.' | ',' | ';'))
+        .to_string();
+    if raw_url.is_empty() {
+        return None;
+    }
+    Some((raw_url, before, &rest[end..]))
+}
+
+fn is_source_bullet(line: &str) -> bool {
+    line.starts_with("- ") || line.starts_with("* ") || line.starts_with("• ")
+}
+
+fn clean_source_title(value: &str) -> String {
+    let mut title = value
+        .trim()
+        .trim_start_matches("- ")
+        .trim_start_matches("* ")
+        .trim_start_matches("• ")
+        .trim_matches('`')
+        .trim()
+        .to_string();
+    for separator in [" — ", " - ", ": "] {
+        if let Some((prefix, suffix)) = title.rsplit_once(separator) {
+            if !suffix.trim().is_empty() && !prefix.trim().is_empty() {
+                title = prefix.trim().to_string();
+                break;
+            }
+        }
+    }
+    title
+        .trim_matches(|ch: char| matches!(ch, '-' | '—' | ':' | '"' | '“' | '”'))
+        .trim()
+        .to_string()
+}
+
+fn clean_source_snippet(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches('-')
+        .trim_start_matches('—')
+        .trim_start_matches(':')
+        .trim()
+        .to_string()
+}
+
+fn source_snippet_continuation(line: &str) -> Option<String> {
+    for prefix in [
+        "Relevance:",
+        "Reports:",
+        "Covers:",
+        "Details:",
+        "Summarizes:",
+    ] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+fn url_host_title(url: &str) -> String {
+    url.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .to_string()
+}
+
 fn collect_annotation_sources(value: &Value, sources: &mut Vec<Value>) {
     match value {
         Value::Object(map) => {
@@ -401,6 +537,65 @@ mod tests {
         let sources = extract_openai_response_sources(&response);
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0]["url"], json!("https://example.com"));
+    }
+
+    #[test]
+    fn extracts_sources_from_answer_text_sources_section() {
+        let answer = r#"
+Answer.
+
+Sources:
+- Investing.com — "SpaceX surges past Amazon"
+  https://m.in.investing.com/news/stock-market-news/spacex-surges-past-amazon-briefly-tops-microsoft-in-market-cap-5458117
+  Relevance: Reports SPCX closing at $201.80 and an implied market cap.
+
+- Axios — "SpaceX soars above Amazon" — https://www.axios.com/2026/06/16/spacex-amazon-market-cap — Covers SpaceX's market-cap surge.
+"#;
+        let sources = extract_sources_from_answer_text(answer);
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            sources[0]["url"],
+            json!("https://m.in.investing.com/news/stock-market-news/spacex-surges-past-amazon-briefly-tops-microsoft-in-market-cap-5458117")
+        );
+        assert_eq!(sources[0]["title"], json!("Investing.com"));
+        assert_eq!(
+            sources[0]["snippet"],
+            json!("Reports SPCX closing at $201.80 and an implied market cap.")
+        );
+        assert_eq!(
+            sources[1]["url"],
+            json!("https://www.axios.com/2026/06/16/spacex-amazon-market-cap")
+        );
+        assert_eq!(sources[1]["title"], json!("Axios"));
+        assert_eq!(
+            sources[1]["snippet"],
+            json!("Covers SpaceX's market-cap surge.")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_answer_text_sources_when_annotations_are_absent() {
+        let response = json!({
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": "Sources:\n- Axios — https://www.axios.com/2026/06/16/spacex-amazon-market-cap — Reports SpaceX's market value."
+                }]
+            }]
+        });
+        let answer = extract_openai_response_text(&response);
+        let mut sources = extract_openai_response_sources(&response);
+        if sources.is_empty() {
+            sources = extract_sources_from_answer_text(&answer);
+        }
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources[0]["url"],
+            json!("https://www.axios.com/2026/06/16/spacex-amazon-market-cap")
+        );
     }
 
     #[test]
