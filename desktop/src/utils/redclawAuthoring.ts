@@ -19,6 +19,10 @@ export interface AuthoringTaskHints {
     requireSourceRead?: boolean;
     requireProfileRead?: boolean;
     requireSave?: boolean;
+    requireTaskBrief?: boolean;
+    requireSkillInvocations?: string[];
+    taskBrief?: TaskBriefSeed;
+    forbiddenFinalPhrases?: string[];
     deferredDiscovery?: boolean;
     teamEscalation?: 'disabled' | 'allowed';
     saveArtifact?: 'folder';
@@ -31,6 +35,26 @@ export interface AuthoringTaskHints {
     sourceMode?: AuthoringSourceMode;
     sourceTitle?: string;
     sourceManuscriptPath?: string;
+}
+
+export interface TaskBriefItem {
+    id: string;
+    text: string;
+    status?: 'todo' | 'doing' | 'done' | 'blocked';
+}
+
+export interface TaskBriefContextItem {
+    kind: 'constraint' | 'source' | 'finding' | 'decision' | 'risk' | 'validation';
+    text: string;
+}
+
+export interface TaskBriefSeed {
+    taskType: string;
+    goal: string;
+    currentStage: string;
+    todo: TaskBriefItem[];
+    importantContext: TaskBriefContextItem[];
+    domain?: Record<string, unknown>;
 }
 
 interface BuildAuthoringMessageInput {
@@ -58,11 +82,43 @@ const TASK_LABEL: Record<AuthoringTaskType, string> = {
 export const AUTHORING_ALLOWED_TOOLS = ['resource', 'workflow'];
 
 export const AUTHORING_ALLOWED_OPERATE_ACTIONS = [
+    'taskBrief.get',
+    'taskBrief.update',
     'skills.invoke',
     'manuscripts.createProject',
     'redclaw.profile.read',
     'redclaw.profile.bundle',
 ];
+
+export function buildTaskBriefPromptSection(seed: TaskBriefSeed) {
+    return [
+        '## 工作 Brief（长步骤任务状态）',
+        '本任务必须维护一个结构化 Task Brief。它是后续阶段的唯一工作台，用来承接 todo、关键上下文、工具结果摘要、标题决策、写作约束和最终校验。',
+        '第一步先调用 `Operate(resource="taskBrief", operation="update", input={...})` 初始化 brief；每完成调研、标题、正文自检等关键阶段后，再调用同一个操作更新 brief。',
+        '后续写作不能只依赖前文记忆，必须读取并沿用 brief 里的 `importantContext`、`toolFindings`、`decisions`、`validationRequirements` 和领域字段。',
+        '建议的初始 brief：',
+        '```json',
+        JSON.stringify(seed, null, 2),
+        '```',
+        '更新时使用这个结构：',
+        '```json',
+        JSON.stringify({
+            stage: '<当前阶段>',
+            status: 'in_progress | completed | blocked',
+            brief: {
+                currentStage: '<当前阶段>',
+                todo: [{ id: 'research', text: '完成调研判断', status: 'done' }],
+                done: [{ id: 'research', text: '调研判断已完成' }],
+                importantContext: [{ kind: 'constraint', text: '正文禁止出现来源痕迹' }],
+                toolFindings: [{ source: 'web.search', summary: '搜索得到的可用事实摘要' }],
+                decisions: [{ stage: 'title', summary: '最终标题选择理由' }],
+                validationRequirements: [{ id: 'no_source_trace', text: '正文不得出现原文/评论区等来源痕迹' }],
+                domain: { selectedTitle: '<最终标题>', mustUseFacts: [] },
+            },
+        }, null, 2),
+        '```',
+    ].join('\n');
+}
 
 const PLATFORM_SAVE_RULE: Record<AuthoringPlatform, string> = {
     xiaohongshu: '如需新建稿件工程，优先用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "title": "<标题>" })` 获取规范文件夹工程路径。创建成功后，直接用 `Write(path="manuscripts://current", content="<完整正文>")` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',

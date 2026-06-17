@@ -7,8 +7,9 @@ import type { PendingChatMessage } from '../features/app-shell/types';
 import {
   AUTHORING_ALLOWED_OPERATE_ACTIONS,
   AUTHORING_ALLOWED_TOOLS,
+  buildTaskBriefPromptSection,
 } from '../utils/redclawAuthoring';
-import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
+import type { AuthoringTaskHints, TaskBriefSeed } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { uiDebug } from '../utils/uiDebug';
 import { APP_BRAND } from '../config/brand';
@@ -729,17 +730,44 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         hasTranscript: Boolean(meta.hasTranscript),
       };
     });
+    const taskBrief: TaskBriefSeed = {
+      taskType: 'wander_manuscript_creation',
+      goal: `围绕选题「${activeTopic.title}」创作一篇独立小红书文案，并保存到 wander 稿件工程。`,
+      currentStage: 'init',
+      todo: [
+        { id: 'research_decision', text: '判断是否需要外部调研；需要当前事实时调用 web.search', status: 'todo' },
+        { id: 'research_brief', text: '把素材和搜索结果压缩成可写作的事实 brief', status: 'todo' },
+        { id: 'title_skill', text: '调用 xhs-title 生成候选标题并选出最终标题', status: 'todo' },
+        { id: 'writing_skill', text: '调用 writing-style 完成正文写作和自检', status: 'todo' },
+        { id: 'save', text: '创建稿件工程并用 Write 保存最终文案', status: 'todo' },
+      ],
+      importantContext: [
+        { kind: 'constraint', text: '这是一篇围绕选题独立创作的新内容，不是评论区洞察说明或素材复盘。' },
+        { kind: 'constraint', text: '原笔记和评论只可作为后台参考数据来源，正文禁止出现“原文”“原笔记”“评论区”“评论里”“有用户评论”“大家在评论区问”等来源痕迹。' },
+        { kind: 'validation', text: '如果任务涉及当下事实、数据、平台规则、产品、价格、政策、人物或案例，必须先用 web.search 调研并把可用事实写入 brief。' },
+        { kind: 'validation', text: '最终保存前必须检查正文是否使用了 brief 中的关键事实、是否调用了 xhs-title 和 writing-style、是否没有来源痕迹。' },
+      ],
+      domain: {
+        platform: 'xiaohongshu',
+        topicTitle: activeTopic.title,
+        contentDirection: activeDirection || '',
+        referenceSourceMode: activeSourceMode === 'comments' ? 'comment_insight' : 'wander',
+        forbiddenFinalPhrases: ['原文', '原笔记', '评论区', '评论里', '有用户评论', '大家在评论区问'],
+      },
+    };
 
     const content = [
-      '请基于以下“选题中心结果”创作一篇完整的小红书文案。',
+      '请基于以下“选题中心结果”创作一篇独立的小红书文案。',
       '',
-      '核心目标是写出一篇好文章，不是证明三条素材都被使用了。',
-      '选题中心素材只是灵感池：优先继承高互动母版的表达公式；另外素材只在能提高成稿质量时借一个细节、场景、反差或词感。可以完全舍弃无助于成稿的素材。',
-      '不要把三篇内容强行关联成一个大主题；如果选题中心结果仍然偏大，请继续缩小到一个具体人群、具体状态、具体动作或具体瞬间再写。',
+      '站位：这是围绕该选题重新写一篇新的独立内容，不是为“评论区洞察”写说明，也不是复盘素材来源。',
+      '选题中心素材只是后台参考数据来源，只能用来校准事实、需求、场景、痛点和表达方向；正文中禁止出现“原文”“原笔记”“评论区”“评论里”“有用户评论”“大家在评论区问”等来源痕迹。',
+      '如果参考素材来自评论洞察，也必须把它转化为独立内容里的读者问题、场景或判断，不要把读者带回素材现场。',
       '可按需读取下方素材目录或用户档案；素材目录不是正文文件，如需读取，请优先 Read “建议读取”里的具体文件，或先 List 目录再 Read 具体文件。',
-      '本任务必须按两个连续阶段完成，不能跳过，也不能把前一阶段的技能输出当成后一阶段的完整上下文。',
-      '阶段一：标题。先确保 `xhs-title` 已激活；如果上下文里没有该技能规则，只调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "xhs-title" })`。用它为当前选题生成 3 个候选标题，并基于点击欲望、准确性和不模板化程度选出 1 个最终标题。候选标题和分析只是内部中间产物，不要写入稿件或最终回复。',
-      '阶段二：正文。拿阶段一选出的最终标题作为正文唯一标题，然后确保 `writing-style` 已激活；如果上下文里没有该技能规则，只调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`。正文阶段由 `writing-style` 主导，必须服从它的用户档案读取、语言节奏、结构禁区和自检要求。',
+      '本任务必须按四个连续阶段完成，不能跳过，也不能把前一阶段的技能输出当成后一阶段的完整上下文。',
+      '阶段一：调研判断。先调用 `taskBrief.update` 初始化工作 brief；然后判断这个选题是否涉及当下事实、产品、平台规则、价格、政策、人物、案例、数据或其它容易过期的信息；涉及就必须调用 `Operate(resource="web", operation="search", input={ "query": "<搜索词>" })` 做搜索，并把可用事实、来源和不确定点写回 Task Brief。若不需要外部调研，也要把“不需要外部调研”的判断和理由写回 Task Brief。',
+      '阶段二：标题。必须显式调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "xhs-title" })`，让日志可审计；然后基于独立选题生成 3 个候选标题，并基于点击欲望、准确性和不模板化程度选出 1 个最终标题。候选标题和分析只是内部中间产物，不要写入稿件或最终回复。',
+      '阶段三：正文。拿阶段二选出的最终标题作为正文唯一标题，然后必须显式调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`，让日志可审计；正文阶段由 `writing-style` 主导，必须服从它的用户档案读取、语言节奏、结构禁区和自检要求。',
+      '阶段四：保存。创建稿件工程并保存最终文案。',
       '如果 `writing-style` 要求读取用户档案或创作者档案，正文动笔前必须先读取；不要因为已经完成标题阶段，就省略写作风格上下文。创建稿件工程后，后续 `Write` 的 content 仍然必须是按 `writing-style` 自检后的完整正文。',
       '完稿前按 `writing-style` 自检标题、开头、结构、事实边界、语气和禁区；内容质量优先于素材覆盖率。正文不要写成报告式大纲，不要输出孤立分隔线，不要只模仿素材格式。',
       '',
@@ -747,14 +775,18 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       `标题：${activeTopic.title}`,
       `内容方向：${activeDirection || ''}`,
       '',
+      buildTaskBriefPromptSection(taskBrief),
+      '',
       '## 参考素材（来自选题中心）',
       materialText,
       '',
       '## 输出要求',
-      '1. 先用 `xhs-title` 完成标题阶段，内部选择 1 个最终标题；最终稿件和最终回复都只保留这个最终标题。',
-      '2. 再用 `writing-style` 完成正文阶段；正文必须按该技能规则写作和自检，不能只沿用标题阶段的上下文。',
-      '3. 如目标工程不存在，先调用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 创建 post 文件夹稿件工程。',
-      '4. 完成后调用 `Write(path="manuscripts://current", content="<最终标题和按 writing-style 自检后的完整正文>")` 保存；保存成功后的最终回复只给运行总结和稿件链接，不要重复全文。',
+      '1. 先完成调研判断；需要当前事实时必须搜索，不需要时不要为了形式搜索。',
+      '2. 再显式调用 `xhs-title` 完成标题阶段，内部选择 1 个最终标题；最终稿件和最终回复都只保留这个最终标题。',
+      '3. 再显式调用 `writing-style` 完成正文阶段；正文必须按该技能规则写作和自检，不能只沿用标题阶段的上下文。',
+      '4. 正文必须是一篇独立小红书内容，禁止提到参考来源来自原笔记或评论区。',
+      '5. 如目标工程不存在，先调用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 创建 post 文件夹稿件工程。',
+      '6. 完成后调用 `Write(path="manuscripts://current", content="<最终标题和按 writing-style 自检后的完整正文>")` 保存；保存成功后的最终回复只给运行总结和稿件链接，不要重复全文。',
     ].join('\n');
 
     onNavigateToRedClaw({
@@ -768,12 +800,16 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         writeTarget: 'manuscripts://current',
         requiredSkill: ['writing-style', 'xhs-title'],
         activeSkills: ['writing-style', 'xhs-title'],
-        allowedTools: AUTHORING_ALLOWED_TOOLS,
-        allowedOperateActions: AUTHORING_ALLOWED_OPERATE_ACTIONS,
+        allowedTools: [...AUTHORING_ALLOWED_TOOLS, 'web'],
+        allowedOperateActions: [...AUTHORING_ALLOWED_OPERATE_ACTIONS, 'web.search'],
         allowedWriteTargets: ['manuscripts://current'],
         requireSourceRead: false,
         requireProfileRead: false,
         requireSave: true,
+        requireTaskBrief: true,
+        requireSkillInvocations: ['xhs-title', 'writing-style'],
+        taskBrief,
+        forbiddenFinalPhrases: ['原文', '原笔记', '评论区', '评论里', '有用户评论', '大家在评论区问'],
         deferredDiscovery: false,
         teamEscalation: 'disabled',
         saveArtifact: 'folder',

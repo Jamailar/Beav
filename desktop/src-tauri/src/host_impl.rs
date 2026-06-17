@@ -1305,6 +1305,80 @@ mod tests {
     }
 
     #[test]
+    fn interactive_execution_progress_counts_task_brief_and_required_skill_invocation() {
+        let mut progress = InteractiveExecutionProgress::default();
+        let contract = InteractiveExecutionContract {
+            require_task_brief: true,
+            require_skill_invocations: vec!["xhs-title".to_string()],
+            ..Default::default()
+        };
+        interactive_execution_progress_observe_success(
+            &mut progress,
+            &contract,
+            "workflow",
+            &json!({
+                "action": "taskBrief.update",
+                "payload": {
+                    "stage": "research",
+                    "brief": {
+                        "currentStage": "research"
+                    }
+                }
+            }),
+            &json!({ "ok": true }),
+        );
+        interactive_execution_progress_observe_success(
+            &mut progress,
+            &contract,
+            "workflow",
+            &json!({
+                "action": "skills.invoke",
+                "payload": {
+                    "name": "xhs-title"
+                }
+            }),
+            &json!({ "ok": true }),
+        );
+
+        assert!(progress.task_brief_updated);
+        assert!(progress.invoked_skills.contains("xhs-title"));
+        assert!(contract.missing_steps(&progress).is_empty());
+    }
+
+    #[test]
+    fn interactive_execution_progress_rejects_saved_content_with_forbidden_source_trace() {
+        let mut progress = InteractiveExecutionProgress::default();
+        let contract = InteractiveExecutionContract {
+            require_save: true,
+            forbidden_final_phrases: vec!["评论区".to_string()],
+            ..Default::default()
+        };
+        interactive_execution_progress_observe_success(
+            &mut progress,
+            &contract,
+            "Write",
+            &json!({
+                "path": "manuscripts://current",
+                "content": "正文里提到了评论区。"
+            }),
+            &json!({
+                "ok": true,
+                "data": {
+                    "projectPath": "wander/demo",
+                    "content": "正文里提到了评论区。"
+                }
+            }),
+        );
+
+        assert!(!progress.save_completed);
+        assert!(progress
+            .final_content_validation_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("评论区"));
+    }
+
+    #[test]
     fn generation_agent_audio_metadata_requires_voice_speech() {
         assert!(metadata_requires_voice_speech(&json!({
             "contextType": "generation-agent",
@@ -1366,11 +1440,17 @@ mod tests {
         let mut metadata = json!({
             "contextType": "redclaw",
             "initialContext": "space bootstrap",
+            "taskBrief": {
+                "goal": "write"
+            },
             "taskHints": {
                 "intent": "manuscript_creation",
                 "requireSourceRead": true,
                 "requireProfileRead": true,
-                "requireSave": true
+                "requireSave": true,
+                "requireTaskBrief": true,
+                "requireSkillInvocations": ["xhs-title"],
+                "forbiddenFinalPhrases": ["评论区"]
             },
             "intent": "manuscript_creation",
             "platform": "xiaohongshu",
@@ -1388,6 +1468,9 @@ mod tests {
             "deferredDiscovery": false,
             "teamEscalation": "disabled",
             "sourceMode": "knowledge",
+            "requireTaskBrief": true,
+            "requireSkillInvocations": ["xhs-title"],
+            "forbiddenFinalPhrases": ["评论区"],
             "currentAuthoringProjectPath": "wander/demo",
             "currentAuthoringContentPath": "wander/demo/content.md"
         })
@@ -1399,6 +1482,7 @@ mod tests {
 
         for field in [
             "taskHints",
+            "taskBrief",
             "intent",
             "platform",
             "taskType",
@@ -1415,6 +1499,9 @@ mod tests {
             "deferredDiscovery",
             "teamEscalation",
             "sourceMode",
+            "requireTaskBrief",
+            "requireSkillInvocations",
+            "forbiddenFinalPhrases",
         ] {
             assert!(metadata.get(field).is_none(), "{field} should be cleared");
         }
@@ -5275,6 +5362,9 @@ pub(crate) struct InteractiveExecutionContract {
     pub(crate) require_profile_read: bool,
     pub(crate) require_save: bool,
     pub(crate) require_voice_speech: bool,
+    pub(crate) require_task_brief: bool,
+    pub(crate) require_skill_invocations: Vec<String>,
+    pub(crate) forbidden_final_phrases: Vec<String>,
     pub(crate) save_artifact: Option<String>,
 }
 
@@ -5284,21 +5374,34 @@ impl InteractiveExecutionContract {
             || self.require_profile_read
             || self.require_save
             || self.require_voice_speech
+            || self.require_task_brief
+            || !self.require_skill_invocations.is_empty()
     }
 
-    fn missing_steps(&self, progress: &InteractiveExecutionProgress) -> Vec<&'static str> {
-        let mut missing = Vec::<&'static str>::new();
+    fn missing_steps(&self, progress: &InteractiveExecutionProgress) -> Vec<String> {
+        let mut missing = Vec::<String>::new();
         if self.require_source_read && !progress.source_read_completed {
-            missing.push("读取素材真实文件");
+            missing.push("读取素材真实文件".to_string());
         }
         if self.require_profile_read && !progress.profile_read_completed {
-            missing.push("读取 AI 用户档案");
+            missing.push("读取 AI 用户档案".to_string());
+        }
+        if self.require_task_brief && !progress.task_brief_updated {
+            missing.push("调用 taskBrief.update 更新工作 Brief".to_string());
+        }
+        for skill in &self.require_skill_invocations {
+            if !progress.invoked_skills.iter().any(|item| item == skill) {
+                missing.push(format!("调用 skills.invoke 激活 {skill}"));
+            }
         }
         if self.require_save && !progress.save_completed {
-            missing.push("调用 Write(manuscripts://current) 保存稿件");
+            missing.push("调用 Write(manuscripts://current) 保存稿件".to_string());
+        }
+        if let Some(reason) = progress.final_content_validation_error.as_ref() {
+            missing.push(reason.clone());
         }
         if self.require_voice_speech && !progress.voice_speech_completed {
-            missing.push("调用 voice.speech 生成音频");
+            missing.push("调用 voice.speech 生成音频".to_string());
         }
         missing
     }
@@ -5310,6 +5413,9 @@ pub(crate) struct InteractiveExecutionProgress {
     pub(crate) profile_read_completed: bool,
     pub(crate) save_completed: bool,
     pub(crate) voice_speech_completed: bool,
+    pub(crate) task_brief_updated: bool,
+    pub(crate) invoked_skills: HashSet<String>,
+    pub(crate) final_content_validation_error: Option<String>,
     pub(crate) saved_project_path: Option<String>,
     pub(crate) saved_content: Option<String>,
 }
@@ -5409,6 +5515,42 @@ pub(crate) fn metadata_requires_voice_speech(metadata: &Value) -> bool {
     context_type == "generation-agent" && generation_target == "audio"
 }
 
+fn payload_string_list(payload: Option<&Value>, key: &str) -> Vec<String> {
+    payload
+        .and_then(|value| value.get(key))
+        .map(|value| match value {
+            Value::Array(items) => items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            Value::String(item) => {
+                let trimmed = item.trim();
+                if trimmed.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![trimmed.to_string()]
+                }
+            }
+            _ => Vec::new(),
+        })
+        .unwrap_or_default()
+}
+
+fn tool_payload_string(arguments: &Value, key: &str) -> Option<String> {
+    payload_string(arguments, key).or_else(|| {
+        arguments
+            .get("payload")
+            .and_then(|payload| payload.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
 pub(crate) fn interactive_execution_contract(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -5448,6 +5590,12 @@ pub(crate) fn interactive_execution_contract(
                 || metadata
                     .map(metadata_requires_voice_speech)
                     .unwrap_or(false),
+            require_task_brief: task_hints
+                .and_then(|value| value.get("requireTaskBrief"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            require_skill_invocations: payload_string_list(task_hints, "requireSkillInvocations"),
+            forbidden_final_phrases: payload_string_list(task_hints, "forbiddenFinalPhrases"),
             save_artifact: task_hints
                 .and_then(|value| value.get("saveArtifact"))
                 .and_then(Value::as_str)
@@ -5464,6 +5612,7 @@ pub(crate) fn clear_interactive_execution_contract_metadata(
 ) -> bool {
     let task_scoped_fields = [
         "taskHints",
+        "taskBrief",
         "intent",
         "platform",
         "taskType",
@@ -5486,6 +5635,9 @@ pub(crate) fn clear_interactive_execution_contract_metadata(
         "sourceManuscriptPath",
         "forceMultiAgent",
         "forceLongRunningTask",
+        "requireTaskBrief",
+        "requireSkillInvocations",
+        "forbiddenFinalPhrases",
     ];
     let mut changed = false;
     for field in task_scoped_fields {
@@ -5644,6 +5796,14 @@ pub(crate) fn interactive_execution_contract_instruction(
     if contract.require_profile_read {
         lines.push("必须先读取 AI 用户档案。".to_string());
     }
+    if contract.require_task_brief {
+        lines.push("必须在关键阶段调用 `Operate(resource=\"taskBrief\", operation=\"update\", input={...})` 更新工作 Brief，用它记录 todo、关键上下文、工具结果摘要、决策和校验要求。".to_string());
+    }
+    for skill in &contract.require_skill_invocations {
+        lines.push(format!(
+            "必须显式调用 `Operate(resource=\"skills\", operation=\"invoke\", input={{\"name\":\"{skill}\"}})`，不要只依赖预激活上下文。"
+        ));
+    }
     if contract.require_save {
         let save_target = contract
             .save_artifact
@@ -5694,12 +5854,24 @@ pub(crate) fn interactive_execution_progress_observe_success(
     arguments: &Value,
     result: &Value,
 ) {
+    let action = tool_action_name(arguments)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let action_key = normalized_app_cli_action_key(arguments);
+
     if contract.require_voice_speech && voice_speech_completed(tool_name, arguments, result) {
         progress.voice_speech_completed = true;
     }
+    if contract.require_task_brief && action_key == "taskbriefupdate" {
+        progress.task_brief_updated = true;
+    }
+    if !contract.require_skill_invocations.is_empty() && action_key == "skillsinvoke" {
+        if let Some(skill_name) = tool_payload_string(arguments, "name") {
+            progress.invoked_skills.insert(skill_name);
+        }
+    }
 
     if contract.require_save && manuscript_write_current_completed(tool_name, arguments, result) {
-        progress.save_completed = true;
         progress.saved_project_path = manuscript_save_result_path(result)
             .map(normalize_relative_path)
             .filter(|path| !path.is_empty())
@@ -5707,13 +5879,15 @@ pub(crate) fn interactive_execution_progress_observe_success(
         progress.saved_content = manuscript_save_result_content(result)
             .map(ToString::to_string)
             .or_else(|| progress.saved_content.clone());
+        progress.final_content_validation_error = validate_interactive_final_content(
+            progress.saved_content.as_deref(),
+            &contract.forbidden_final_phrases,
+        );
+        progress.save_completed = progress.final_content_validation_error.is_none();
     }
 
     match tool_name {
         "resource" => {
-            let action = tool_action_name(arguments)
-                .unwrap_or_default()
-                .to_ascii_lowercase();
             if contract.require_source_read
                 && matches!(
                     action.as_str(),
@@ -5731,7 +5905,6 @@ pub(crate) fn interactive_execution_progress_observe_success(
                 .unwrap_or_default()
                 .trim()
                 .to_ascii_lowercase();
-            let action_key = normalized_app_cli_action_key(arguments);
             if contract.require_profile_read
                 && (action_key == "redclawprofileread"
                     || action_key == "redclawprofilebundle"
@@ -5760,7 +5933,6 @@ pub(crate) fn interactive_execution_progress_observe_success(
                     })
                     .unwrap_or(command_matches);
                 if command_matches || result_matches {
-                    progress.save_completed = true;
                     progress.saved_project_path = manuscript_save_result_path(result)
                         .map(normalize_relative_path)
                         .filter(|path| !path.is_empty())
@@ -5768,6 +5940,11 @@ pub(crate) fn interactive_execution_progress_observe_success(
                     progress.saved_content = manuscript_save_result_content(result)
                         .map(ToString::to_string)
                         .or_else(|| progress.saved_content.clone());
+                    progress.final_content_validation_error = validate_interactive_final_content(
+                        progress.saved_content.as_deref(),
+                        &contract.forbidden_final_phrases,
+                    );
+                    progress.save_completed = progress.final_content_validation_error.is_none();
                 }
             }
         }
@@ -5805,6 +5982,21 @@ pub(crate) fn manuscript_write_current_completed(
             .unwrap_or(false);
     }
     false
+}
+
+fn validate_interactive_final_content(
+    content: Option<&str>,
+    forbidden_phrases: &[String],
+) -> Option<String> {
+    let content = content?;
+    let matched = forbidden_phrases
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .find(|phrase| content.contains(*phrase))?;
+    Some(format!(
+        "修正正文中禁用来源痕迹“{matched}”并重新调用 Write 保存"
+    ))
 }
 
 #[derive(Debug, Clone)]

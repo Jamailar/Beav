@@ -2,6 +2,7 @@ use serde_json::Value;
 
 pub(super) const TASK_SCOPED_METADATA_FIELDS: &[&str] = &[
     "taskHints",
+    "taskBrief",
     "intent",
     "platform",
     "taskType",
@@ -25,6 +26,9 @@ pub(super) const TASK_SCOPED_METADATA_FIELDS: &[&str] = &[
     "sourceManuscriptPath",
     "forceMultiAgent",
     "forceLongRunningTask",
+    "requireTaskBrief",
+    "requireSkillInvocations",
+    "forbiddenFinalPhrases",
 ];
 
 pub(in crate::commands::chat) fn clear_stale_task_hints_from_metadata(
@@ -48,11 +52,17 @@ mod tests {
         let metadata = json!({
             "contextType": "redclaw",
             "initialContext": "space bootstrap",
+            "taskBrief": {
+                "goal": "write"
+            },
             "taskHints": {
                 "intent": "manuscript_creation",
                 "requireProfileRead": true,
                 "requireSourceRead": true,
-                "requireSave": true
+                "requireSave": true,
+                "requireTaskBrief": true,
+                "requireSkillInvocations": ["xhs-title"],
+                "forbiddenFinalPhrases": ["评论区"]
             },
             "intent": "manuscript_creation",
             "platform": "xiaohongshu",
@@ -77,6 +87,9 @@ mod tests {
             "sourceManuscriptPath": "wander/source",
             "forceMultiAgent": true,
             "forceLongRunningTask": true,
+            "requireTaskBrief": true,
+            "requireSkillInvocations": ["xhs-title"],
+            "forbiddenFinalPhrases": ["评论区"],
             "currentAuthoringProjectPath": "wander/demo"
         });
 
@@ -84,6 +97,7 @@ mod tests {
 
         for field in [
             "taskHints",
+            "taskBrief",
             "intent",
             "platform",
             "taskType",
@@ -107,6 +121,9 @@ mod tests {
             "sourceManuscriptPath",
             "forceMultiAgent",
             "forceLongRunningTask",
+            "requireTaskBrief",
+            "requireSkillInvocations",
+            "forbiddenFinalPhrases",
         ] {
             assert!(cleaned.get(field).is_none(), "{field} should be cleared");
         }

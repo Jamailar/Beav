@@ -618,6 +618,46 @@ fn web_search_input_schema() -> Value {
     )
 }
 
+fn task_brief_get_input_schema() -> Value {
+    object_schema(
+        &[("sessionId", string_schema("Optional active session id."))],
+        &[],
+        Some("Read the current structured Task Brief for a long-running task."),
+    )
+}
+
+fn task_brief_update_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "stage",
+                string_schema(
+                    "Current task stage, such as research, title, draft, validation, or save.",
+                ),
+            ),
+            (
+                "status",
+                json!({
+                    "type": "string",
+                    "enum": ["in_progress", "completed", "blocked"],
+                    "description": "Status of the current stage."
+                }),
+            ),
+            (
+                "brief",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Bounded structured task state: todo, done, importantContext, toolFindings, decisions, validationRequirements, and domain fields."
+                }),
+            ),
+            ("sessionId", string_schema("Optional active session id.")),
+        ],
+        &["stage", "brief"],
+        Some("Update the structured Task Brief after a meaningful stage or tool result so later steps use the same bounded context."),
+    )
+}
+
 fn memory_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
@@ -3476,6 +3516,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "taskBrief.get",
+        namespace: "taskBrief",
+        description: "Read the current structured Task Brief for this long-running task, including todo, important context, findings, decisions, and validation requirements.",
+        input_schema: task_brief_get_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "taskBrief.update",
+        namespace: "taskBrief",
+        description: "Update the current structured Task Brief after a meaningful stage or tool result. Use it to preserve todo, key context, research findings, decisions, and validation requirements for later steps.",
+        input_schema: task_brief_update_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
