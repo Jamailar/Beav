@@ -2,8 +2,8 @@ pub(crate) use crate::document_ingest::{
     import_document_files, ingest_document_source, KnowledgeDocumentSourceIngestRequest,
 };
 use crate::persistence::{
-    apply_knowledge_hydration_snapshot, ensure_store_hydrated_for_media,
-    load_knowledge_hydration_snapshot, with_store, with_store_mut,
+    apply_knowledge_hydration_snapshot, ensure_store_hydrated_for_knowledge,
+    ensure_store_hydrated_for_media, load_knowledge_hydration_snapshot, with_store, with_store_mut,
 };
 use crate::store::{media as media_store, settings as settings_store, spaces as spaces_store};
 use crate::workspace_loaders::read_json_file;
@@ -2420,9 +2420,29 @@ pub(crate) fn knowledge_http_health(
     body_limit_bytes: usize,
     batch_limit: usize,
 ) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_knowledge(state);
     let _ = ensure_store_hydrated_for_media(state);
     let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None, false)?;
     let snapshot = with_store(state, |store| {
+        let catalog_entries = page
+            .kind_counts
+            .get("redbook-note")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let catalog_youtube_videos = page
+            .kind_counts
+            .get("youtube-video")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let catalog_document_sources = page
+            .kind_counts
+            .get("document-source")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let entries_count = catalog_entries.max(store.knowledge_notes.len() as i64);
+        let youtube_videos_count = catalog_youtube_videos.max(store.youtube_videos.len() as i64);
+        let document_sources_count =
+            catalog_document_sources.max(store.document_sources.len() as i64);
         let (active_space_id, active_space_name) = spaces_store::active_workspace_snapshot(&store);
         let account_catalog_accounts = crate::accounts::platform_accounts_for_active_space(state);
         let platform_accounts = merge_platform_accounts(
@@ -2450,9 +2470,9 @@ pub(crate) fn knowledge_http_health(
             },
             "platformAccounts": platform_accounts,
             "counts": {
-                "entries": page.kind_counts.get("redbook-note").and_then(|value| value.as_i64()).unwrap_or(0),
-                "youtubeVideos": page.kind_counts.get("youtube-video").and_then(|value| value.as_i64()).unwrap_or(0),
-                "documentSources": page.kind_counts.get("document-source").and_then(|value| value.as_i64()).unwrap_or(0),
+                "entries": entries_count,
+                "youtubeVideos": youtube_videos_count,
+                "documentSources": document_sources_count,
                 "mediaAssets": media_store::count_assets(&store),
             },
             "limits": {
