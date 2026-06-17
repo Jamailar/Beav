@@ -5,8 +5,7 @@ use crate::persistence::with_store;
 use crate::store::settings as settings_store;
 use crate::{
     normalize_base_url, payload_field, payload_string, provider_profile_from_config,
-    resolve_chat_config, run_curl_json_response, search_web_with_settings, text_snippet, AppState,
-    ResolvedChatConfig,
+    resolve_chat_config, run_curl_json_response, text_snippet, AppState, ResolvedChatConfig,
 };
 
 const DEFAULT_RESULT_LIMIT: usize = 6;
@@ -29,58 +28,8 @@ pub(crate) fn search(
         with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let config = resolve_chat_config(&settings_snapshot, model_config)
         .ok_or_else(|| "web.search failed to resolve model config".to_string())?;
-    let mode = payload_string(payload, "mode")
-        .or_else(|| payload_string(payload, "providerMode"))
-        .unwrap_or_else(|| "auto".to_string())
-        .trim()
-        .to_ascii_lowercase();
-    let prefer_hosted = mode != "local";
-    let allow_fallback =
-        payload_bool(payload, &["allowFallback", "allow_fallback"]).unwrap_or(true);
 
-    if prefer_hosted {
-        if let Some(reason) = hosted_search_skip_reason(&config) {
-            let mut result = local_search(&settings_snapshot, &query, limit).map_err(|error| {
-                format!("provider-hosted web search unavailable ({reason}); local fallback failed: {error}")
-            })?;
-            result["fallbackUsed"] = json!(true);
-            result["hostedSkipped"] = json!(reason);
-            return Ok(result);
-        }
-        match hosted_search(&config, payload, &query, limit) {
-            Ok(mut result) => {
-                result["fallbackUsed"] = json!(false);
-                return Ok(result);
-            }
-            Err(error) if allow_fallback => {
-                let mut result = local_search(&settings_snapshot, &query, limit)?;
-                result["fallbackUsed"] = json!(true);
-                result["hostedError"] = json!(text_snippet(&error, 500));
-                return Ok(result);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-
-    local_search(&settings_snapshot, &query, limit)
-}
-
-fn hosted_search_skip_reason(config: &ResolvedChatConfig) -> Option<&'static str> {
-    let profile = provider_profile_from_config(config);
-    match profile.provider_family {
-        crate::provider_compat::ProviderFamily::Anthropic => None,
-        crate::provider_compat::ProviderFamily::OpenAiCompat
-        | crate::provider_compat::ProviderFamily::MiniMax => {
-            if is_openai_official_base(&config.base_url) {
-                None
-            } else {
-                Some("provider-hosted web search is not declared for this OpenAI-compatible endpoint")
-            }
-        }
-        crate::provider_compat::ProviderFamily::Gemini => {
-            Some("provider-hosted web search is not implemented for Gemini protocol")
-        }
-    }
+    hosted_search(&config, payload, &query, limit)
 }
 
 fn hosted_search(
@@ -96,11 +45,7 @@ fn hosted_search(
         }
         crate::provider_compat::ProviderFamily::OpenAiCompat
         | crate::provider_compat::ProviderFamily::MiniMax => {
-            if is_openai_official_base(&config.base_url) {
-                openai_responses_hosted_search(config, payload, query, limit)
-            } else {
-                Err("hosted web search passthrough is only known for official OpenAI/Anthropic APIs; this OpenAI-compatible endpoint does not advertise a provider-hosted search contract".to_string())
-            }
+            openai_responses_hosted_search(config, payload, query, limit)
         }
         crate::provider_compat::ProviderFamily::Gemini => {
             Err("hosted web search passthrough is not implemented for Gemini protocol".to_string())
@@ -114,7 +59,7 @@ fn openai_responses_hosted_search(
     query: &str,
     limit: usize,
 ) -> Result<Value, String> {
-    let endpoint = format!("{}/responses", normalize_base_url(&config.base_url));
+    let endpoint = hosted_search_endpoint(config);
     let tool = openai_web_search_tool(payload);
     let response = run_curl_json_response(
         "POST",
@@ -151,6 +96,10 @@ fn openai_responses_hosted_search(
         "resultCount": sources.len(),
         "rawResultAvailable": true,
     }))
+}
+
+fn hosted_search_endpoint(config: &ResolvedChatConfig) -> String {
+    format!("{}/responses", normalize_base_url(&config.base_url))
 }
 
 fn anthropic_hosted_search(
@@ -203,18 +152,6 @@ fn anthropic_hosted_search(
         "results": sources,
         "resultCount": sources.len(),
         "rawResultAvailable": true,
-    }))
-}
-
-fn local_search(settings_snapshot: &Value, query: &str, limit: usize) -> Result<Value, String> {
-    let results = search_web_with_settings(settings_snapshot, query, limit)?;
-    Ok(json!({
-        "success": true,
-        "provider": "local.search_settings",
-        "query": query,
-        "answer": "",
-        "results": results,
-        "resultCount": results.len(),
     }))
 }
 
@@ -324,10 +261,6 @@ fn payload_bool(payload: &Value, keys: &[&str]) -> Option<bool> {
             },
             _ => None,
         })
-}
-
-fn is_openai_official_base(base_url: &str) -> bool {
-    base_url.to_ascii_lowercase().contains("api.openai.com")
 }
 
 fn extract_openai_response_text(response: &Value) -> String {
@@ -483,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn non_official_openai_compatible_search_is_skipped_before_hosted_call() {
+    fn non_official_openai_compatible_search_uses_responses_passthrough() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
             wire_api: crate::runtime::ProviderWireApi::ChatCompat,
@@ -494,13 +427,13 @@ mod tests {
         };
 
         assert_eq!(
-            hosted_search_skip_reason(&config),
-            Some("provider-hosted web search is not declared for this OpenAI-compatible endpoint")
+            hosted_search_endpoint(&config),
+            "https://api.ziz.hk/redbox/v1/responses"
         );
     }
 
     #[test]
-    fn official_openai_search_is_not_skipped() {
+    fn official_openai_search_uses_responses_passthrough() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
             wire_api: crate::runtime::ProviderWireApi::ChatCompat,
@@ -510,6 +443,9 @@ mod tests {
             reasoning_effort: None,
         };
 
-        assert_eq!(hosted_search_skip_reason(&config), None);
+        assert_eq!(
+            hosted_search_endpoint(&config),
+            "https://api.openai.com/v1/responses"
+        );
     }
 }
