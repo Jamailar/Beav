@@ -734,7 +734,8 @@ export function RedClaw({
         const handleTeamSettingsChanged = () => {
             void loadTeamData();
         };
-        const handleTeamRuntimeEvent = (event: { eventType?: string }) => {
+        const handleTeamRuntimeEvent = (_event: unknown, envelope?: { eventType?: string }) => {
+            const event = envelope || {};
             if (!String(event?.eventType || '').startsWith('runtime:collab-')) return;
             void loadTeamData();
         };

@@ -83,7 +83,8 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
   }, []);
 
   useEffect(() => {
-    const handleRuntimeEvent = (event: { eventType?: string }) => {
+    const handleRuntimeEvent = (_event: unknown, envelope?: { eventType?: string }) => {
+      const event = envelope || {};
       if (!String(event?.eventType || '').startsWith('runtime:collab-')) return;
       window.ipcRenderer.teamRuntime.listSessions()
         .then((sessions) => setCollabSessions(Array.isArray(sessions) ? visibleCollabSessions(sessions as TeamWorkbenchSession[]) : []))

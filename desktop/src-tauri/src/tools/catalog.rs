@@ -1618,11 +1618,17 @@ fn team_guide_create_input_schema() -> Value {
                         "type": "object",
                         "properties": {
                             "displayName": { "type": "string" },
+                            "name": { "type": "string" },
                             "roleId": { "type": "string" },
                             "responsibility": { "type": "string" },
+                            "role": { "type": "string" },
+                            "deliverable": { "type": "string" },
                             "capabilities": { "type": "array", "items": { "type": "string" } }
                         },
-                        "required": ["displayName"]
+                        "anyOf": [
+                            { "required": ["displayName"] },
+                            { "required": ["name"] }
+                        ]
                     }
                 }),
             ),
@@ -1635,8 +1641,11 @@ fn team_guide_create_input_schema() -> Value {
                         "properties": {
                             "title": { "type": "string" },
                             "memberRoleId": { "type": "string" },
+                            "memberName": { "type": "string" },
+                            "assignee": { "type": "string" },
                             "description": { "type": "string" },
-                            "objective": { "type": "string" }
+                            "objective": { "type": "string" },
+                            "expectedOutput": { "type": "string" }
                         },
                         "required": ["title"]
                     }
