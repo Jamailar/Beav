@@ -721,7 +721,7 @@ function GeneralSettingsSectionInner({
                             type="text"
                             value={formData.workspace_dir}
                             onChange={(e) => setFormData((d: any) => ({ ...d, workspace_dir: e.target.value }))}
-                            placeholder="~/.redconvert"
+                            placeholder="~/.redbox"
                             className="w-full bg-surface-secondary/30 rounded border border-border pl-10 pr-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
                         />
                     </div>
