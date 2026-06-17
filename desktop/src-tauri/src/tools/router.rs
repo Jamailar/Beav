@@ -542,6 +542,36 @@ mod tests {
     }
 
     #[test]
+    fn router_prepares_direct_web_search_operate() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "web",
+                    "operation": "search",
+                    "input": { "query": "SpaceX valuation today" }
+                }),
+            )
+            .expect("web search should prepare");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(prepared.arguments.get("action"), Some(&json!("web.search")));
+        assert_eq!(
+            prepared
+                .arguments
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("query")),
+            Some(&json!("SpaceX valuation today"))
+        );
+    }
+
+    #[test]
     fn router_normalizes_voice_speech_operate_to_completed_audio_job() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",
