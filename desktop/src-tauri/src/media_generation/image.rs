@@ -778,20 +778,46 @@ pub(crate) fn run_form_json(
         reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| error.to_string())?;
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(10))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(
+            IMAGE_REQUEST_TIMEOUT_SECONDS,
+        ))
         .build()
         .map_err(|error| error.to_string())?;
     let mut form = reqwest::blocking::multipart::Form::new();
     for (name, value) in fields {
         form = form.text(name.clone(), value.clone());
     }
+    let mut file_summaries = Vec::<String>::new();
     for (name, file_path) in file_fields {
-        let bytes = fs::read(file_path).map_err(|error| error.to_string())?;
+        let bytes = fs::read(file_path).map_err(|error| {
+            format!(
+                "Failed to read multipart file field={} path={} error={}",
+                name,
+                file_path.display(),
+                error
+            )
+        })?;
+        if bytes.is_empty() {
+            return Err(format!(
+                "Multipart file is empty field={} path={}",
+                name,
+                file_path.display()
+            ));
+        }
         let file_name = file_path
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("image")
             .to_string();
         let mime_type = infer_mime_type_from_path(&file_path.to_string_lossy());
+        file_summaries.push(format!(
+            "{}:{}:{}B:{}",
+            name,
+            mime_type,
+            bytes.len(),
+            file_name
+        ));
         let part = reqwest::blocking::multipart::Part::bytes(bytes)
             .file_name(file_name)
             .mime_str(mime_type)
@@ -805,9 +831,47 @@ pub(crate) fn run_form_json(
     for (header, value) in extra_headers {
         request = request.header(*header, value.as_str());
     }
-    let response = request.send().map_err(|error| error.to_string())?;
+    let trace_line = format!(
+        "[image-http] multipart_request method={} url={} fields={} files={}",
+        method_name,
+        url,
+        fields
+            .iter()
+            .map(|(name, _value)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
+        file_summaries.join(",")
+    );
+    eprintln!("{trace_line}");
+    crate::append_debug_trace_global(trace_line);
+    let response = request.send().map_err(|error| {
+        let line = format!(
+            "[image-http] multipart_transport_error stage=send method={} url={} files={} error={}",
+            method_name,
+            url,
+            file_summaries.join(","),
+            error
+        );
+        eprintln!("{line}");
+        crate::append_debug_trace_global(line);
+        format!(
+            "Image multipart request failed during send: {} (method={} url={})",
+            error, method_name, url
+        )
+    })?;
     let status = response.status().as_u16();
-    let body_text = response.text().map_err(|error| error.to_string())?;
+    let body_text = response.text().map_err(|error| {
+        let line = format!(
+            "[image-http] multipart_transport_error stage=read_body method={} url={} status={} error={}",
+            method_name, url, status, error
+        );
+        eprintln!("{line}");
+        crate::append_debug_trace_global(line);
+        format!(
+            "Image multipart response body read failed: {} (method={} url={} status={})",
+            error, method_name, url, status
+        )
+    })?;
     let normalized_body = body_text.trim();
     if normalized_body.is_empty() {
         if !(200..300).contains(&status) {
@@ -1060,82 +1124,82 @@ pub(crate) fn run_openai_image_request(
             .iter()
             .map(|item| materialize_transport_value_to_temp_file(item, "image-ref"))
             .collect::<Result<Vec<_>, _>>()?;
+        let result = (|| {
+            let primary_files = build_openai_edit_file_fields(&materialized_images);
 
-        let primary_files = build_openai_edit_file_fields(&materialized_images);
+            let fallback_files = materialized_images
+                .iter()
+                .map(|path| ("image".to_string(), path.clone()))
+                .collect::<Vec<_>>();
 
-        let fallback_files = materialized_images
-            .iter()
-            .map(|path| ("image".to_string(), path.clone()))
-            .collect::<Vec<_>>();
-
-        let primary_fields = build_openai_edit_form_fields(
-            &request_model,
-            &prompt,
-            count,
-            Some(aspect_ratio.as_str()),
-            size.as_deref(),
-            Some(quality.as_str()),
-        );
-        let fallback_fields = build_rootflow_edit_form_fields(
-            &request_model,
-            &prompt,
-            count,
-            Some(aspect_ratio.as_str()),
-            size.as_deref(),
-            Some(quality.as_str()),
-        );
-        let request_url = normalize_image_edit_url(endpoint);
-
-        let primary_response = run_form_json(
-            "POST",
-            &request_url,
-            api_key,
-            &[],
-            &primary_fields,
-            &primary_files,
-        )?;
-
-        let final_response = if (500..600).contains(&primary_response.status) {
-            log_image_http_body_preview(
-                "reference-fallback-primary",
-                "openai-images.edit",
-                "POST",
-                &request_url,
-                primary_response.status,
-                &primary_response.body,
+            let primary_fields = build_openai_edit_form_fields(
+                &request_model,
+                &prompt,
+                count,
+                Some(aspect_ratio.as_str()),
+                size.as_deref(),
+                Some(quality.as_str()),
             );
-            let fallback_response = run_form_json(
+            let fallback_fields = build_rootflow_edit_form_fields(
+                &request_model,
+                &prompt,
+                count,
+                Some(aspect_ratio.as_str()),
+                size.as_deref(),
+                Some(quality.as_str()),
+            );
+            let request_url = normalize_image_edit_url(endpoint);
+
+            let primary_response = run_form_json(
                 "POST",
                 &request_url,
                 api_key,
                 &[],
-                &fallback_fields,
-                &fallback_files,
+                &primary_fields,
+                &primary_files,
             )?;
-            log_image_http_body_preview(
-                "reference-fallback-secondary",
+
+            let final_response = if (500..600).contains(&primary_response.status) {
+                log_image_http_body_preview(
+                    "reference-fallback-primary",
+                    "openai-images.edit",
+                    "POST",
+                    &request_url,
+                    primary_response.status,
+                    &primary_response.body,
+                );
+                let fallback_response = run_form_json(
+                    "POST",
+                    &request_url,
+                    api_key,
+                    &[],
+                    &fallback_fields,
+                    &fallback_files,
+                )?;
+                log_image_http_body_preview(
+                    "reference-fallback-secondary",
+                    "openai-images.edit",
+                    "POST",
+                    &request_url,
+                    fallback_response.status,
+                    &fallback_response.body,
+                );
+                fallback_response
+            } else {
+                primary_response
+            };
+
+            ensure_successful_image_response(
                 "openai-images.edit",
                 "POST",
                 &request_url,
-                fallback_response.status,
-                &fallback_response.body,
-            );
-            fallback_response
-        } else {
-            primary_response
-        };
+                final_response,
+            )
+        })();
 
         for path in materialized_images {
             let _ = fs::remove_file(path);
         }
-
-        let result = ensure_successful_image_response(
-            "openai-images.edit",
-            "POST",
-            &request_url,
-            final_response,
-        );
-
         return result;
     }
     let request_url = normalize_image_generation_url(endpoint);
