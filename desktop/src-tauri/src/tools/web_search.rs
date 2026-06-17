@@ -39,6 +39,14 @@ pub(crate) fn search(
         payload_bool(payload, &["allowFallback", "allow_fallback"]).unwrap_or(true);
 
     if prefer_hosted {
+        if let Some(reason) = hosted_search_skip_reason(&config) {
+            let mut result = local_search(&settings_snapshot, &query, limit).map_err(|error| {
+                format!("provider-hosted web search unavailable ({reason}); local fallback failed: {error}")
+            })?;
+            result["fallbackUsed"] = json!(true);
+            result["hostedSkipped"] = json!(reason);
+            return Ok(result);
+        }
         match hosted_search(&config, payload, &query, limit) {
             Ok(mut result) => {
                 result["fallbackUsed"] = json!(false);
@@ -55,6 +63,24 @@ pub(crate) fn search(
     }
 
     local_search(&settings_snapshot, &query, limit)
+}
+
+fn hosted_search_skip_reason(config: &ResolvedChatConfig) -> Option<&'static str> {
+    let profile = provider_profile_from_config(config);
+    match profile.provider_family {
+        crate::provider_compat::ProviderFamily::Anthropic => None,
+        crate::provider_compat::ProviderFamily::OpenAiCompat
+        | crate::provider_compat::ProviderFamily::MiniMax => {
+            if is_openai_official_base(&config.base_url) {
+                None
+            } else {
+                Some("provider-hosted web search is not declared for this OpenAI-compatible endpoint")
+            }
+        }
+        crate::provider_compat::ProviderFamily::Gemini => {
+            Some("provider-hosted web search is not implemented for Gemini protocol")
+        }
+    }
 }
 
 fn hosted_search(
@@ -454,5 +480,36 @@ mod tests {
             filters["allowed_domains"],
             json!(["example.com", "docs.example.com"])
         );
+    }
+
+    #[test]
+    fn non_official_openai_compatible_search_is_skipped_before_hosted_call() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
+            base_url: "https://api.ziz.hk/redbox/v1".to_string(),
+            api_key: None,
+            model_name: "qwen3.5-plus".to_string(),
+            reasoning_effort: None,
+        };
+
+        assert_eq!(
+            hosted_search_skip_reason(&config),
+            Some("provider-hosted web search is not declared for this OpenAI-compatible endpoint")
+        );
+    }
+
+    #[test]
+    fn official_openai_search_is_not_skipped() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+            model_name: "gpt-4.1".to_string(),
+            reasoning_effort: None,
+        };
+
+        assert_eq!(hosted_search_skip_reason(&config), None);
     }
 }

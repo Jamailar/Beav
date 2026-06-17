@@ -87,6 +87,12 @@ pub(crate) fn parse_duckduckgo_results(html: &str, count: usize) -> Vec<Value> {
     results
 }
 
+pub(crate) fn duckduckgo_requires_human_challenge(html: &str) -> bool {
+    html.contains("anomaly-modal")
+        || html.contains("Unfortunately, bots use DuckDuckGo too")
+        || html.contains("/anomaly.js")
+}
+
 pub(crate) fn search_web_with_settings(
     settings: &Value,
     query: &str,
@@ -161,7 +167,39 @@ pub(crate) fn search_web_with_settings(
                 )],
                 None,
             )?;
+            if duckduckgo_requires_human_challenge(&html) {
+                return Err("DuckDuckGo 搜索被人机验证拦截；请配置 Tavily API Key 或 SearXNG endpoint 作为本地搜索后端".to_string());
+            }
             Ok(parse_duckduckgo_results(&html, count))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duckduckgo_human_challenge_is_detected() {
+        let html = r#"
+            <form action="//duckduckgo.com/anomaly.js">
+              <div class="anomaly-modal__title">
+                Unfortunately, bots use DuckDuckGo too.
+              </div>
+            </form>
+        "#;
+
+        assert!(duckduckgo_requires_human_challenge(html));
+    }
+
+    #[test]
+    fn duckduckgo_regular_results_are_not_challenge() {
+        let html = r#"
+            <a rel="nofollow" class="result__a" href="https://example.com">Example</a>
+            <a class="result__snippet">Snippet</a>
+        "#;
+
+        assert!(!duckduckgo_requires_human_challenge(html));
+        assert_eq!(parse_duckduckgo_results(html, 1).len(), 1);
     }
 }
