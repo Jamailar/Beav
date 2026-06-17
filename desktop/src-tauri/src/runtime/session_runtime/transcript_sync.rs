@@ -62,17 +62,32 @@ pub(super) fn rebuild_messages_after_last_compaction(
     (messages, summary_prompt, preserved_ids)
 }
 
+fn matched_bundle_message_prefix_len(
+    existing_messages: &[(String, Value)],
+    bundle_messages: &[Value],
+) -> usize {
+    let mut existing_index = 0usize;
+    let mut matched = 0usize;
+    for bundle_message in bundle_messages {
+        let Some(next_existing_offset) = existing_messages[existing_index..]
+            .iter()
+            .position(|(_, existing_message)| existing_message == bundle_message)
+        else {
+            break;
+        };
+        existing_index += next_existing_offset + 1;
+        matched += 1;
+    }
+    matched
+}
+
 pub(super) fn sync_transcript_from_bundle(
     state: &State<'_, AppState>,
     bundle: &SessionRuntimeBundle,
 ) -> Result<(), String> {
     let existing_entries = load_transcript_entries(state, &bundle.session_id)?;
     let existing_messages = transcript_message_entries(&existing_entries);
-    let prefix_len = existing_messages
-        .iter()
-        .zip(bundle.messages.iter())
-        .take_while(|((_, left), right)| left == *right)
-        .count();
+    let prefix_len = matched_bundle_message_prefix_len(&existing_messages, &bundle.messages);
     for message in bundle.messages.iter().skip(prefix_len) {
         append_transcript_entry(
             state,
@@ -116,4 +131,30 @@ pub(super) fn sync_transcript_from_bundle(
         .iter()
         .any(|entry| matches!(entry, SessionTranscriptFileEntry::CompactBoundary { .. }));
     update_session_transcript_index(state, meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::matched_bundle_message_prefix_len;
+
+    #[test]
+    fn bundle_prefix_matching_tolerates_tool_messages_in_transcript() {
+        let user = json!({ "role": "user", "content": "start" });
+        let assistant_one = json!({ "role": "assistant", "content": "step one" });
+        let tool = json!({ "role": "tool", "content": "tool result" });
+        let assistant_two = json!({ "role": "assistant", "content": "step two" });
+        let next_user = json!({ "role": "user", "content": "next" });
+
+        let existing = vec![
+            ("entry-1".to_string(), user.clone()),
+            ("entry-2".to_string(), assistant_one.clone()),
+            ("entry-3".to_string(), tool),
+            ("entry-4".to_string(), assistant_two.clone()),
+        ];
+        let bundle = vec![user, assistant_one, assistant_two, next_user];
+
+        assert_eq!(matched_bundle_message_prefix_len(&existing, &bundle), 3);
+    }
 }
