@@ -69,7 +69,6 @@ interface RedClawHistorySidebarSectionProps {
     onSwitchRoom?: (roomId: string) => void;
     onDeleteRoom?: (room: RedClawTeamRoom) => void | Promise<void>;
     onSwitchSession: (session: RedClawHistoryListItem) => void;
-    onDeleteSession: (session: RedClawHistoryListItem) => void | Promise<void>;
     onArchiveSession?: (session: RedClawHistoryListItem) => void | Promise<void>;
     onRenameSession?: (session: RedClawHistoryListItem, title: string) => void | Promise<void>;
     onOpenManuscript?: (filePath: string) => void;
@@ -97,6 +96,9 @@ type ManuscriptContextMenuState = {
     parentPath: string;
     node?: RedClawManuscriptNode;
 };
+
+const SESSION_CONTEXT_MENU_PANEL_CLASS = 'fixed z-[150] min-w-[196px] rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-1.5 shadow-2xl';
+const SESSION_CONTEXT_MENU_ITEM_CLASS = 'flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-[rgb(var(--color-text-primary))] transition-colors hover:bg-[rgb(var(--color-surface-secondary))] disabled:cursor-not-allowed disabled:opacity-45';
 
 const MANUSCRIPT_DRAFT_KIND_OPTIONS: Array<{ id: ManuscriptDraftKind; label: string; extension: string; kind?: string; disabled?: boolean }> = [
     { id: 'longform', label: '长文', extension: '', kind: 'longform' },
@@ -201,7 +203,6 @@ export function RedClawHistorySidebarSection({
     onSwitchRoom,
     onDeleteRoom,
     onSwitchSession,
-    onDeleteSession,
     onArchiveSession,
     onRenameSession,
     onOpenManuscript,
@@ -810,10 +811,6 @@ export function RedClawHistorySidebarSection({
         return String(metadata?.workingDirectory || '').trim();
     };
 
-    const sessionDeepLink = (session: RedClawHistoryListItem): string => (
-        `redbox://session/${encodeURIComponent(session.id)}`
-    );
-
     const openSessionContextMenu = (
         event: MouseEvent<HTMLElement>,
         session: RedClawHistoryListItem,
@@ -828,6 +825,15 @@ export function RedClawHistorySidebarSection({
             x: rect ? rect.right - 8 : event.clientX,
             y: rect ? rect.bottom + 4 : event.clientY,
         });
+    };
+
+    const runSessionMenuAction = (
+        event: MouseEvent<HTMLButtonElement>,
+        action: () => void,
+    ) => {
+        event.preventDefault();
+        event.stopPropagation();
+        action();
     };
 
     const openRenameDialog = (session: RedClawHistoryListItem) => {
@@ -1221,89 +1227,84 @@ export function RedClawHistorySidebarSection({
                                     </div>
                                     {menuOpen && typeof menuTarget.x === 'number' && typeof menuTarget.y === 'number' && (
                                         <div
-                                            className="fixed z-[150] min-w-[196px] rounded-xl border border-border bg-surface-primary p-1.5 shadow-2xl"
+                                            className={SESSION_CONTEXT_MENU_PANEL_CLASS}
                                             style={{
                                                 left: Math.min(menuTarget.x, window.innerWidth - 212),
                                                 top: Math.min(menuTarget.y, window.innerHeight - 274),
                                             }}
+                                            onMouseDown={(event) => event.stopPropagation()}
+                                            onPointerDown={(event) => event.stopPropagation()}
                                             onClick={(event) => event.stopPropagation()}
                                             onContextMenu={(event) => event.preventDefault()}
                                         >
                                             <button
                                                 type="button"
-                                                onClick={() => setPinnedSession(session.id, !isPinned)}
-                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                                onMouseDown={(event) => runSessionMenuAction(event, () => setPinnedSession(session.id, !isPinned))}
+                                                className={SESSION_CONTEXT_MENU_ITEM_CLASS}
                                             >
                                                 {isPinned ? '取消置顶' : '置顶对话'}
                                             </button>
                                             <button
                                                 type="button"
-                                                onClick={() => openRenameDialog(session)}
-                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                                onMouseDown={(event) => runSessionMenuAction(event, () => openRenameDialog(session))}
+                                                className={SESSION_CONTEXT_MENU_ITEM_CLASS}
                                             >
                                                 重命名对话
                                             </button>
                                             <button
                                                 type="button"
-                                                onClick={() => {
+                                                onMouseDown={(event) => runSessionMenuAction(event, () => {
                                                     setMenuTarget(null);
-                                                    void (onArchiveSession || onDeleteSession)(session);
-                                                }}
-                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                                    void onArchiveSession?.(session);
+                                                })}
+                                                className={SESSION_CONTEXT_MENU_ITEM_CLASS}
                                             >
                                                 归档对话
                                             </button>
                                             <button
                                                 type="button"
-                                                onClick={() => setSessionUnread(session.id, true)}
-                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                                onMouseDown={(event) => runSessionMenuAction(event, () => setSessionUnread(session.id, true))}
+                                                className={SESSION_CONTEXT_MENU_ITEM_CLASS}
                                             >
                                                 标记为未读
                                             </button>
-                                            <div className="my-1 h-px bg-border/70" />
+                                            {canUseWorkingDirectory && (
+                                                <>
+                                                    <div className="my-1 h-px bg-[rgb(var(--color-border))]" />
+                                                    <button
+                                                        type="button"
+                                                        onMouseDown={(event) => runSessionMenuAction(event, () => {
+                                                            setMenuTarget(null);
+                                                            void window.ipcRenderer.files.showInFolder({ source: workingDirectory }).catch((error) => {
+                                                                void appAlert(error instanceof Error ? error.message : '打开目录失败');
+                                                            });
+                                                        })}
+                                                        className={SESSION_CONTEXT_MENU_ITEM_CLASS}
+                                                    >
+                                                        {platformLabel}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onMouseDown={(event) => runSessionMenuAction(event, () => {
+                                                            setMenuTarget(null);
+                                                            void copyText(workingDirectory, '复制工作目录失败');
+                                                        })}
+                                                        className={SESSION_CONTEXT_MENU_ITEM_CLASS}
+                                                    >
+                                                        复制工作目录
+                                                    </button>
+                                                </>
+                                            )}
+                                            <div className="my-1 h-px bg-[rgb(var(--color-border))]" />
                                             <button
                                                 type="button"
-                                                disabled={!canUseWorkingDirectory}
-                                                onClick={() => {
-                                                    setMenuTarget(null);
-                                                    void window.ipcRenderer.files.showInFolder({ source: workingDirectory }).catch((error) => {
-                                                        void appAlert(error instanceof Error ? error.message : '打开目录失败');
-                                                    });
-                                                }}
-                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-45"
-                                            >
-                                                {platformLabel}
-                                            </button>
-                                            <button
-                                                type="button"
-                                                disabled={!canUseWorkingDirectory}
-                                                onClick={() => {
-                                                    setMenuTarget(null);
-                                                    void copyText(workingDirectory, '复制工作目录失败');
-                                                }}
-                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-45"
-                                            >
-                                                复制工作目录
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => {
+                                                onMouseDown={(event) => runSessionMenuAction(event, () => {
                                                     setMenuTarget(null);
                                                     void copyText(session.id, '复制会话 ID 失败');
-                                                }}
-                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                                })}
+                                                className={SESSION_CONTEXT_MENU_ITEM_CLASS}
                                             >
                                                 复制会话 ID
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setMenuTarget(null);
-                                                    void copyText(sessionDeepLink(session), '复制深度链接失败');
-                                                }}
-                                                className="flex h-8 w-full items-center rounded-lg px-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                                            >
-                                                复制深度链接
                                             </button>
                                         </div>
                                     )}

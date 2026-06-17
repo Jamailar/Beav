@@ -1606,64 +1606,6 @@ export function RedClaw({
         }
     }, [advisors, onOpenChatSurface, roomCreateAdvisorIds, roomCreateName]);
 
-    const deleteHistorySession = useCallback(async (targetSessionId: string) => {
-        if (!targetSessionId) return;
-        const nextActiveSpaceId = activeSpaceId || 'default';
-        const nextSpaceName = activeSpaceName || nextActiveSpaceId;
-        setHistoryLoading(true);
-        try {
-            await window.ipcRenderer.chat.deleteSession(targetSessionId);
-            if (typeof window !== 'undefined' && readRedClawLastSessionId(nextActiveSpaceId) === targetSessionId) {
-                localStorage.removeItem(redClawLastSessionStorageKey(nextActiveSpaceId));
-            }
-            const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
-            sessionListRef.current = remaining;
-            setSessionList(remaining);
-
-            if (activeSessionIdRef.current !== targetSessionId) {
-                return;
-            }
-
-            if (remaining.length > 0) {
-                activeSessionIdRef.current = remaining[0].id;
-                setActiveSessionId(remaining[0].id);
-                return;
-            }
-
-            const created = await uiMeasure('redclaw', 'sessions:create_after_delete', async () => (
-                window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
-                    contextId: buildRedClawContextId(nextActiveSpaceId),
-                    contextType: REDCLAW_CONTEXT_TYPE,
-                    title: buildRedClawSessionTitle(nextSpaceName),
-                    initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
-                    metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
-                })
-            ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
-            if (!created) {
-                throw new Error('create context session timed out');
-            }
-            const nextItem = createContextSessionListItem(created);
-            sessionListRef.current = [nextItem];
-            setSessionList([nextItem]);
-            activeSessionIdRef.current = created.id;
-            setActiveSessionId(created.id);
-        } catch (error) {
-            console.error('Failed to delete RedClaw session:', error);
-            setChatActionMessage('删除对话失败，请稍后重试');
-            void loadContextSessions(nextActiveSpaceId, nextSpaceName, { createIfEmpty: true, silent: true });
-        } finally {
-            setHistoryLoading(false);
-        }
-    }, [activeSpaceId, activeSpaceName, loadContextSessions]);
-
-    const deleteUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem) => {
-        if (!session?.id) return;
-        if (session.surface === 'redclaw') {
-            await deleteHistorySession(session.id);
-            return;
-        }
-    }, [deleteHistorySession]);
-
     const archiveUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem) => {
         const targetSessionId = String(session?.id || '').trim();
         if (!targetSessionId || session.surface !== 'redclaw') return;
@@ -2162,7 +2104,6 @@ export function RedClaw({
                 onSwitchRoom={switchRoom}
                 onDeleteRoom={(room) => void deleteRoomFromRedClaw(room)}
                 onSwitchSession={switchHistorySession}
-                onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
                 onArchiveSession={(session) => void archiveUnifiedHistorySession(session)}
                 onRenameSession={renameUnifiedHistorySession}
                 onOpenManuscript={handleOpenManuscript}
@@ -2175,7 +2116,6 @@ export function RedClaw({
         archiveUnifiedHistorySession,
         createRoomFromRedClaw,
         deleteRoomFromRedClaw,
-        deleteUnifiedHistorySession,
         historyLoading,
         handleOpenManuscript,
         activeManuscriptPath,
