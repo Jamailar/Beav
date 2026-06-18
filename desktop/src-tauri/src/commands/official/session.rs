@@ -40,7 +40,9 @@ fn session_refresh_deadline(settings: &Value) -> Option<i64> {
 }
 
 fn official_session_recoverable(settings: &Value) -> bool {
-    session_refresh_token(settings).is_some()
+    official_settings_session(settings)
+        .as_ref()
+        .is_some_and(|session| auth::session_refresh_token_is_current(Some(session)))
 }
 
 pub(super) fn official_session_logged_in(settings: &Value) -> bool {
@@ -96,7 +98,10 @@ fn value_is_missing(value: Option<&Value>) -> bool {
     }
 }
 
-fn merge_missing_user_membership_fields(existing_user: Option<&Value>, next_user: Option<&mut Value>) {
+fn merge_missing_user_membership_fields(
+    existing_user: Option<&Value>,
+    next_user: Option<&mut Value>,
+) {
     let Some(existing_user) = existing_user.and_then(Value::as_object) else {
         return;
     };
@@ -198,11 +203,13 @@ mod tests {
         merge_session_with_existing(Some(&existing), &mut next);
 
         assert_eq!(
-            next.pointer("/user/membership_type").and_then(Value::as_str),
+            next.pointer("/user/membership_type")
+                .and_then(Value::as_str),
             Some("PREMIUM")
         );
         assert_eq!(
-            next.pointer("/user/membership_expires_at").and_then(Value::as_str),
+            next.pointer("/user/membership_expires_at")
+                .and_then(Value::as_str),
             Some("2126-05-24T07:07:15.586Z")
         );
         assert_eq!(
@@ -229,8 +236,28 @@ mod tests {
         merge_session_with_existing(Some(&existing), &mut next);
 
         assert_eq!(
-            next.pointer("/user/membership_type").and_then(Value::as_str),
+            next.pointer("/user/membership_type")
+                .and_then(Value::as_str),
             Some("FREE")
         );
+    }
+
+    #[test]
+    fn expired_refresh_token_is_not_recoverable_login_state() {
+        use base64::Engine;
+
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+        let expired_payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"exp":1}"#);
+        let settings = json!({
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "refreshToken": format!("{header}.{expired_payload}.signature"),
+            }))
+            .unwrap(),
+        });
+
+        assert!(!official_session_logged_in(&settings));
+        assert!(!official_session_needs_refresh(&settings));
     }
 }
