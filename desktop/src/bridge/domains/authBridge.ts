@@ -7,7 +7,7 @@ export function createAuthBridge(core: BridgeCore) {
         'redbox-auth:bootstrap',
         payload || {},
         {
-          timeoutMs: 8000,
+          timeoutMs: 20000,
           fallback: { success: false, error: '官方账号恢复超时' },
         },
       ),
