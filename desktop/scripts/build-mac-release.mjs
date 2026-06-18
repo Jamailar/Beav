@@ -26,6 +26,8 @@ import {
 
 const DEFAULT_NOTARY_RETRIES = 3;
 const DEFAULT_NOTARY_RETRY_DELAY_MS = 5000;
+const DEFAULT_STAPLER_RETRIES = 6;
+const DEFAULT_STAPLER_RETRY_DELAY_MS = 10_000;
 const DEFAULT_MAC_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
 
 function dedupe(values) {
@@ -137,6 +139,19 @@ function isTransientNotaryFailure(output) {
   ].some((token) => normalized.includes(token));
 }
 
+function isTransientStaplerFailure(output) {
+  const normalized = String(output || '').toLowerCase();
+  return [
+    'record not found',
+    'could not find base64 encoded ticket',
+    'cloudkit query',
+    'temporarily unavailable',
+    'network connection was lost',
+    'timed out',
+    'timeout',
+  ].some((token) => normalized.includes(token));
+}
+
 async function submitForNotarization({ dmgPath, cliArgs, retries, retryDelayMs }) {
   let lastError = null;
 
@@ -181,6 +196,48 @@ async function submitForNotarization({ dmgPath, cliArgs, retries, retryDelayMs }
   }
 
   throw lastError || new Error('Notarization submission failed.');
+}
+
+async function stapleNotarizationTicket({ dmgPath, retries, retryDelayMs }) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    logStep(`Stapling notarization ticket to dmg (attempt ${attempt}/${retries})`);
+    const result = await captureCommand('xcrun', ['stapler', 'staple', dmgPath], {
+      cwd: repoRoot,
+      allowFailure: true,
+    });
+
+    if (result.stdout) {
+      process.stdout.write(result.stdout);
+      if (!result.stdout.endsWith('\n')) {
+        process.stdout.write('\n');
+      }
+    }
+
+    if (result.stderr) {
+      process.stderr.write(result.stderr);
+      if (!result.stderr.endsWith('\n')) {
+        process.stderr.write('\n');
+      }
+    }
+
+    if (result.code === 0) {
+      return;
+    }
+
+    const combinedOutput = `${result.stdout}\n${result.stderr}`.trim();
+    lastError = new Error(combinedOutput || `Command failed: xcrun stapler staple ${dmgPath}`);
+
+    if (attempt >= retries || !isTransientStaplerFailure(combinedOutput)) {
+      throw lastError;
+    }
+
+    logStep(`Stapler ticket lookup is not ready. Retrying in ${retryDelayMs}ms`);
+    await sleep(retryDelayMs);
+  }
+
+  throw lastError || new Error('Stapling notarization ticket failed.');
 }
 
 async function resolveArtifacts({ productName, version, target }) {
@@ -254,8 +311,11 @@ async function buildTarget({
           : DEFAULT_NOTARY_RETRY_DELAY_MS,
     });
 
-    logStep(`Stapling notarization ticket to dmg for ${target}`);
-    await runCommand('xcrun', ['stapler', 'staple', dmgPath], { cwd: repoRoot });
+    await stapleNotarizationTicket({
+      dmgPath,
+      retries: DEFAULT_STAPLER_RETRIES,
+      retryDelayMs: DEFAULT_STAPLER_RETRY_DELAY_MS,
+    });
 
     logStep(`Validating stapled dmg for ${target}`);
     await runCommand('xcrun', ['stapler', 'validate', dmgPath], { cwd: repoRoot });
