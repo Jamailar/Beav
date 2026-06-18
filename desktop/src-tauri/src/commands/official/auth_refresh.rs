@@ -184,7 +184,11 @@ pub(super) fn refresh_official_auth_session_in_settings(
             Ok(response) => {
                 if !(200..300).contains(&response.status) {
                     let error = response_error_message(&response.body);
-                    if auth::classify_auth_error(&error) == auth::AuthErrorKind::ReauthRequired {
+                    let kind = auth::classify_auth_error(&error);
+                    if kind == auth::AuthErrorKind::ReauthRequired
+                        || kind == auth::AuthErrorKind::NetworkTransient
+                        || kind == auth::AuthErrorKind::ServerTransient
+                    {
                         return Err(error);
                     }
                     last_error = Some(error);
@@ -208,7 +212,11 @@ pub(super) fn refresh_official_auth_session_in_settings(
                 }
             }
             Err(error) => {
-                if auth::classify_auth_error(&error) == auth::AuthErrorKind::ReauthRequired {
+                let kind = auth::classify_auth_error(&error);
+                if kind == auth::AuthErrorKind::ReauthRequired
+                    || kind == auth::AuthErrorKind::NetworkTransient
+                    || kind == auth::AuthErrorKind::ServerTransient
+                {
                     return Err(error);
                 }
                 last_error = Some(error);
@@ -219,7 +227,7 @@ pub(super) fn refresh_official_auth_session_in_settings(
     Err(last_error.unwrap_or_else(|| "刷新登录态失败".to_string()))
 }
 
-fn should_suppress_refresh_error(error: &str) -> bool {
+fn should_force_reauth_after_exhausted_refresh(error: &str) -> bool {
     let normalized = error.trim().to_lowercase();
     normalized.contains("登录结果缺少 access_token")
         || normalized.contains("missing access_token")
@@ -239,7 +247,9 @@ fn mark_refresh_failure(
         "refresh-failed",
         format!("kind={kind:?} error={error}"),
     );
-    if kind == auth::AuthErrorKind::ReauthRequired {
+    if kind == auth::AuthErrorKind::ReauthRequired
+        || should_force_reauth_after_exhausted_refresh(&error)
+    {
         if !auth_generation_is_current(state, expected_generation, "refresh-reauth-stale-skipped") {
             return;
         }
@@ -259,9 +269,6 @@ fn mark_refresh_failure(
         ) {
             let _ = auth::mark_auth_reauth_required(app, state, error);
         }
-        return;
-    }
-    if should_suppress_refresh_error(&error) {
         return;
     }
     let _ = auth::mark_auth_degraded(app, state, error, kind);
@@ -352,5 +359,23 @@ pub(super) fn refresh_official_auth_session_with_lock(
             mark_refresh_failure(app, state, settings, expected_generation, error.clone());
             Err(error)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_force_reauth_after_exhausted_refresh;
+
+    #[test]
+    fn exhausted_refresh_missing_access_token_requires_reauth() {
+        assert!(should_force_reauth_after_exhausted_refresh(
+            "登录结果缺少 access_token"
+        ));
+        assert!(should_force_reauth_after_exhausted_refresh(
+            "missing access token"
+        ));
+        assert!(!should_force_reauth_after_exhausted_refresh(
+            "network timeout while refreshing token"
+        ));
     }
 }
