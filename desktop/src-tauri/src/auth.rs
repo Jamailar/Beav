@@ -196,6 +196,16 @@ fn session_refresh_token(session: Option<&Value>) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+pub(crate) fn session_refresh_token_is_current(session: Option<&Value>) -> bool {
+    let Some(token) = session_refresh_token(session) else {
+        return false;
+    };
+    match jwt_expiration_ms(&token) {
+        Some(expires_at) => expires_at > now_ms() as i64,
+        None => true,
+    }
+}
+
 fn session_expires_at_ms(session: Option<&Value>) -> Option<i64> {
     session.and_then(|value| {
         payload_field(value, "expiresAt")
@@ -671,12 +681,24 @@ pub(crate) fn sync_auth_runtime_from_settings(
 ) -> Result<AuthStateSnapshot, String> {
     let cache = cache_record_from_settings(settings);
     let session = session_from_settings(settings);
+    let access_token_current = session_access_token_is_current(session.as_ref());
+    let refresh_token_current = session_refresh_token_is_current(session.as_ref());
+    let has_expired_refresh_token =
+        session_refresh_token(session.as_ref()).is_some() && !refresh_token_current;
     let secrets = AuthSecretBundle {
-        refresh_token: session_refresh_token(session.as_ref()),
+        refresh_token: if refresh_token_current {
+            session_refresh_token(session.as_ref())
+        } else {
+            None
+        },
         token_family_id: None,
         device_secret: None,
     };
-    let runtime_session = projected_session(session.as_ref(), &secrets, true);
+    let runtime_session = if access_token_current || refresh_token_current {
+        projected_session(session.as_ref(), &secrets, true)
+    } else {
+        None
+    };
     let (snapshot, changed) = with_auth_runtime_mut(state, |runtime| {
         let previous_snapshot = auth_state_snapshot_from_runtime(runtime);
         runtime.session = runtime_session.clone();
@@ -694,10 +716,14 @@ pub(crate) fn sync_auth_runtime_from_settings(
         runtime.last_error = None;
         runtime.last_error_kind = None;
         runtime.unknown_expiry_refresh_attempted = false;
-        runtime.status = if session_access_token_is_current(session.as_ref()) {
+        runtime.status = if access_token_current {
             AuthStatus::Authenticated
-        } else if secrets.refresh_token.is_some() {
+        } else if refresh_token_current {
             AuthStatus::Restoring
+        } else if has_expired_refresh_token {
+            runtime.last_error = Some("refresh token expired".to_string());
+            runtime.last_error_kind = Some(AuthErrorKind::ReauthRequired);
+            AuthStatus::ReauthRequired
         } else if runtime.session.is_some() {
             AuthStatus::Degraded
         } else {
@@ -859,11 +885,23 @@ pub(crate) fn initialize_auth_runtime(
     }
 
     let secrets = AuthSecretBundle {
-        refresh_token: session_refresh_token(cache.session.as_ref()),
+        refresh_token: if session_refresh_token_is_current(cache.session.as_ref()) {
+            session_refresh_token(cache.session.as_ref())
+        } else {
+            None
+        },
         token_family_id: None,
         device_secret: None,
     };
-    let cache_session = projected_session(cache.session.as_ref(), &secrets, true);
+    let access_token_current = session_access_token_is_current(cache.session.as_ref());
+    let refresh_token_current = secrets.refresh_token.is_some();
+    let has_expired_refresh_token =
+        session_refresh_token(cache.session.as_ref()).is_some() && !refresh_token_current;
+    let cache_session = if access_token_current || refresh_token_current {
+        projected_session(cache.session.as_ref(), &secrets, true)
+    } else {
+        None
+    };
     crate::persistence::with_store_mut(state, |store| {
         settings_store::update_settings(store, |settings| {
             write_cache_data_to_settings(settings, &cache);
@@ -889,10 +927,14 @@ pub(crate) fn initialize_auth_runtime(
         };
         runtime.next_refresh_at_ms = session_expires_at_ms(cache.session.as_ref())
             .map(|expires_at| expires_at.saturating_sub(5 * 60 * 1000));
-        runtime.status = if session_access_token_is_current(cache.session.as_ref()) {
+        runtime.status = if access_token_current {
             AuthStatus::Authenticated
-        } else if secrets.refresh_token.is_some() {
+        } else if refresh_token_current {
             AuthStatus::Restoring
+        } else if has_expired_refresh_token {
+            runtime.last_error = Some("refresh token expired".to_string());
+            runtime.last_error_kind = Some(AuthErrorKind::ReauthRequired);
+            AuthStatus::ReauthRequired
         } else if cache.session.is_some() {
             AuthStatus::Degraded
         } else {
@@ -1000,6 +1042,18 @@ mod tests {
 
         assert!(!session_access_token_is_current(Some(&expired)));
         assert!(session_access_token_is_current(Some(&future)));
+    }
+
+    #[test]
+    fn session_refresh_token_is_current_rejects_expired_jwt() {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+        let expired_payload = URL_SAFE_NO_PAD.encode(r#"{"exp":1}"#);
+        let future_payload = URL_SAFE_NO_PAD.encode(r#"{"exp":4102444800}"#);
+        let expired = json!({ "refreshToken": format!("{header}.{expired_payload}.signature") });
+        let future = json!({ "refreshToken": format!("{header}.{future_payload}.signature") });
+
+        assert!(!session_refresh_token_is_current(Some(&expired)));
+        assert!(session_refresh_token_is_current(Some(&future)));
     }
 
     #[test]
