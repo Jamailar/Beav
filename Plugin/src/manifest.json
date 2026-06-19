@@ -12,14 +12,29 @@
   "permissions": [
     "activeTab",
     "alarms",
+    "bookmarks",
     "contextMenus",
+    "clipboardRead",
+    "clipboardWrite",
+    "debugger",
     "downloads",
+    "downloads.ui",
+    "favicon",
+    "history",
+    "nativeMessaging",
+    "notifications",
+    "readingList",
     "scripting",
+    "sessions",
     "sidePanel",
     "storage",
-    "tabs"
+    "tabGroups",
+    "tabs",
+    "topSites",
+    "webNavigation"
   ],
   "host_permissions": [
+    "<all_urls>",
     "http://127.0.0.1:*/*",
     "http://localhost:*/*",
     "http://127.0.0.1:31937/*",
@@ -78,10 +93,22 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["pageRouteBridge.js"],
+      "resources": ["pageRouteBridge.js", "images/cursor-chat.png"],
       "matches": ["<all_urls>"]
     }
   ],
+  "commands": {
+    "open-redbox-side-panel": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Open RedBox browser control side panel"
+    },
+    "open-codex-side-panel": {
+      "description": "Open Codex-compatible browser control side panel"
+    }
+  },
   "action": {
     "default_title": "RedBox Capture",
     "default_icon": {

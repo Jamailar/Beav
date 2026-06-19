@@ -4,10 +4,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST_DIR="$SCRIPT_DIR/dist"
-MANIFEST_PATH="$SCRIPT_DIR/manifest.json"
+BUILD_DIR="$DIST_DIR/extension"
+MANIFEST_PATH="$SCRIPT_DIR/src/manifest.json"
 
 if [[ ! -f "$MANIFEST_PATH" ]]; then
   echo "未找到 manifest.json: $MANIFEST_PATH" >&2
+  exit 1
+fi
+
+pnpm --dir "$SCRIPT_DIR" build
+
+if [[ ! -d "$BUILD_DIR" ]]; then
+  echo "未找到构建输出目录: $BUILD_DIR" >&2
   exit 1
 fi
 
@@ -37,9 +45,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cd "$SCRIPT_DIR"
+cd "$BUILD_DIR"
 zip -r "$TMP_ARCHIVE" . \
-  -x 'dist/*' \
   -x '.git/*' \
   -x 'node_modules/*' \
   -x '__MACOSX/*'

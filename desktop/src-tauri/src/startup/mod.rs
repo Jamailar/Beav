@@ -149,6 +149,7 @@ pub(crate) fn prepare_startup_state() -> StartupPreparedState {
         );
     }
     let startup_migration_status = probe_startup_migration(&store, &store_path);
+    crate::browser_control_mcp::ensure_builtin_browser_control_mcp(&mut store);
     sync_redclaw_job_definitions(&mut store);
     if let Err(error) = persist_store(&store_path, &store) {
         logging::emit_legacy_line(

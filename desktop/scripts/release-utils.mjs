@@ -12,22 +12,36 @@ const __dirname = path.dirname(__filename);
 export const repoRoot = path.resolve(__dirname, '..');
 export const workspaceRoot = path.resolve(repoRoot, '..');
 export const artifactsRoot = path.join(repoRoot, 'artifacts');
-export const browserPluginSourceDir = path.join(workspaceRoot, 'Plugin');
-export const bundledBrowserPluginResource = '../../Plugin';
+export const browserPluginProjectDir = path.join(workspaceRoot, 'Plugin');
+export const browserPluginSourceDir = path.join(browserPluginProjectDir, 'dist', 'extension');
+export const bundledBrowserPluginResource = '../../Plugin/dist/extension';
+export const browserControlMcpConfigResource = '../../Plugin/.mcp.json';
+export const browserControlMcpServerResource = '../../Plugin/mcp-server.mjs';
+export const browserControlAgentClientResource = '../../Plugin/agent-client.mjs';
+export const browserControlNativeHostInstallerResource = '../../Plugin/install-native-host.mjs';
+export const browserControlNativeHostResource = '../../Plugin/native-host';
 export const browserPluginSummaryPath = path.join(artifactsRoot, 'release', 'browser-plugin-summary.json');
 export const requiredBundledReleaseResources = [
   'resources/knowledge-api-guide.html',
   'resources/richpost-theme-guide.html',
+  browserControlMcpConfigResource,
   bundledBrowserPluginResource,
+  browserControlMcpServerResource,
+  browserControlAgentClientResource,
+  browserControlNativeHostInstallerResource,
+  browserControlNativeHostResource,
 ];
 export const requiredBrowserPluginFiles = [
   'manifest.json',
   'background.js',
+  'browserControlContent.js',
+  'images/cursor-chat.png',
   'pageObserver.js',
   'sidepanel.html',
   'sidepanel.js',
   'sidepanel.css',
 ];
+let browserPluginBuildPromise = null;
 
 export function parseArgs(argv) {
   const args = { _: [] };
@@ -189,13 +203,41 @@ async function hashDirectory(rootDir) {
   };
 }
 
+async function hasRequiredBrowserPluginFiles(sourceDir) {
+  for (const relativePath of requiredBrowserPluginFiles) {
+    if (!(await pathExists(path.join(sourceDir, relativePath)))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export async function ensureBrowserPluginBuilt() {
+  if (!browserPluginBuildPromise) {
+    browserPluginBuildPromise = (async () => {
+      await ensureCommandExists('pnpm', 'pnpm is required to build the browser plugin.');
+      logStep('Building browser plugin');
+      await runCommand('pnpm', ['build'], { cwd: browserPluginProjectDir });
+    })();
+  }
+  return browserPluginBuildPromise;
+}
+
+async function ensureBrowserPluginSourceReady(sourceDir) {
+  if (path.resolve(sourceDir) === path.resolve(browserPluginSourceDir)) {
+    await ensureBrowserPluginBuilt();
+  }
+}
+
 export async function readBrowserPluginManifest(sourceDir = browserPluginSourceDir) {
+  await ensureBrowserPluginSourceReady(sourceDir);
   const manifestPath = path.join(sourceDir, 'manifest.json');
   const raw = await fs.readFile(manifestPath, 'utf8');
   return JSON.parse(raw);
 }
 
 export async function getBrowserPluginInfo(sourceDir = browserPluginSourceDir) {
+  await ensureBrowserPluginSourceReady(sourceDir);
   if (!(await pathExists(sourceDir))) {
     throw new Error(`Browser plugin source directory is missing: ${sourceDir}`);
   }
@@ -226,47 +268,41 @@ export async function getBrowserPluginInfo(sourceDir = browserPluginSourceDir) {
 
 export async function findBundledBrowserPluginDir(appPath) {
   const resourcesDir = path.join(appPath, 'Contents', 'Resources');
-  const candidates = [
-    path.join(resourcesDir, '_up_', '_up_', 'Plugin'),
-    path.join(resourcesDir, '_up_', 'Plugin'),
-    path.join(resourcesDir, 'Plugin'),
-  ];
-
-  for (const candidate of candidates) {
-    if (await pathExists(path.join(candidate, 'manifest.json'))) {
-      return candidate;
-    }
-  }
-
-  const files = await listFilesRecursive(resourcesDir);
-  const manifestPath = files.find((filePath) => {
-    const normalized = filePath.split(path.sep).join('/');
-    return normalized.endsWith('/Plugin/manifest.json');
-  });
-
-  return manifestPath ? path.dirname(manifestPath) : null;
+  return findBrowserPluginDirUnder(resourcesDir);
 }
 
-export async function findBrowserPluginDirUnder(rootDir) {
-  const candidates = [
+function browserPluginDirCandidates(rootDir) {
+  return [
+    path.join(rootDir, '_up_', '_up_', 'Plugin', 'dist', 'extension'),
+    path.join(rootDir, '_up_', 'Plugin', 'dist', 'extension'),
+    path.join(rootDir, 'Plugin', 'dist', 'extension'),
+    path.join(rootDir, '_up_', '_up_', 'extension'),
+    path.join(rootDir, '_up_', 'extension'),
+    path.join(rootDir, 'extension'),
     path.join(rootDir, '_up_', '_up_', 'Plugin'),
     path.join(rootDir, '_up_', 'Plugin'),
     path.join(rootDir, 'Plugin'),
   ];
+}
 
+export async function findBrowserPluginDirUnder(rootDir) {
+  const candidates = browserPluginDirCandidates(rootDir);
   for (const candidate of candidates) {
-    if (await pathExists(path.join(candidate, 'manifest.json'))) {
+    if (await pathExists(path.join(candidate, 'manifest.json')) && await hasRequiredBrowserPluginFiles(candidate)) {
       return candidate;
     }
   }
 
   const files = await listFilesRecursive(rootDir);
-  const manifestPath = files.find((filePath) => {
-    const normalized = filePath.split(path.sep).join('/');
-    return normalized.endsWith('/Plugin/manifest.json');
-  });
+  const manifestPaths = files.filter((filePath) => path.basename(filePath) === 'manifest.json');
+  for (const manifestPath of manifestPaths) {
+    const candidate = path.dirname(manifestPath);
+    if (await hasRequiredBrowserPluginFiles(candidate)) {
+      return candidate;
+    }
+  }
 
-  return manifestPath ? path.dirname(manifestPath) : null;
+  return null;
 }
 
 export async function assertDirectoryIncludesBrowserPlugin(rootDir, expectedInfo, label = 'bundle output') {

@@ -5,7 +5,13 @@ use super::*;
 
 pub fn mcp_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
     let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
-    let servers = with_store(state, |store| Ok(mcp_tools_store::list_servers(&store)))?;
+    let (servers, builtin_synced) = with_store_mut(state, |store| {
+        let builtin_synced = crate::browser_control_mcp::ensure_builtin_browser_control_mcp(store);
+        Ok((mcp_tools_store::list_servers(&store), builtin_synced))
+    })?;
+    if builtin_synced {
+        state.mcp_manager.sync_servers(&servers)?;
+    }
     let sessions = state.mcp_manager.sessions()?;
     let items = servers
         .iter()

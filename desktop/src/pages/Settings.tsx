@@ -2016,11 +2016,17 @@ export function Settings({
   const loadMcpRuntimeData = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.mcp.list();
-      if (!result?.success) return;
+      if (!result?.success) return null;
+      const servers = Array.isArray(result.servers) ? (result.servers as McpServerConfig[]) : [];
+      setMcpServers((prev) => (
+        JSON.stringify(prev) === JSON.stringify(servers) ? prev : servers
+      ));
       setMcpLiveSessions(Array.isArray(result.sessions) ? (result.sessions as McpSessionState[]) : []);
       setMcpRuntimeItems(Array.isArray(result.items) ? (result.items as McpServerRuntimeItem[]) : []);
+      return servers;
     } catch (error) {
       console.error('Failed to load MCP runtime state:', error);
+      return null;
     }
   }, []);
 
@@ -3804,7 +3810,10 @@ export function Settings({
           return normalizedDefaultId;
         });
         setDetectedAiProtocol((resolvedDefaultSource?.protocol || findAiPresetById(resolvedDefaultSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
-        setMcpServers(parseMcpServers(settings.mcp_servers_json));
+        const registryMcpServers = await loadMcpRuntimeData();
+        if (!registryMcpServers) {
+          setMcpServers(parseMcpServers(settings.mcp_servers_json));
+        }
         setCliRuntimeExecutionMode(loadedCliRuntimeExecutionMode);
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
         setEmbeddingSourceId(resolvedEmbeddingSourceId);
@@ -3952,7 +3961,7 @@ export function Settings({
       if (requestId !== settingsLoadRequestRef.current) return;
       console.error("Failed to load settings", e);
     }
-  }, [clearAiSourceDraftDirty, isDeprecatedEmptyOpenAiSource, persistDeveloperModeState, setCurrentSpaceState]);
+  }, [clearAiSourceDraftDirty, isDeprecatedEmptyOpenAiSource, loadMcpRuntimeData, persistDeveloperModeState, setCurrentSpaceState]);
 
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
