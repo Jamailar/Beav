@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ExitStatus, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use portable_pty::{Child as PtyChild, MasterPty};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime, State};
 
@@ -19,8 +20,8 @@ use crate::cli_runtime::{
     prepare_cli_launch, resolve_cli_environment, run_cli_verification, sandbox_metadata,
     spawn_cli_terminal, upsert_cli_execution_record, write_execution_logs,
     CliEnvironmentResolveRequest, CliEscalationRequestRecord, CliExecuteRequest, CliExecutionMode,
-    CliExecutionRecord, CliExecutionSnapshot, CliExecutionStatus, CliVerificationStatus,
-    CliVerifyRule,
+    CliExecutionRecord, CliExecutionSnapshot, CliExecutionStatus, CliTerminalHandle,
+    CliTerminalSize, CliVerificationStatus, CliVerifyRule,
 };
 use crate::process_utils::background_command;
 use crate::store::settings as settings_store;
@@ -119,9 +120,116 @@ struct LocalCliCommandOutput {
     stderr: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BackgroundExitStatus {
+    exit_code: Option<i32>,
+    success: bool,
+}
+
+impl From<std::process::ExitStatus> for BackgroundExitStatus {
+    fn from(status: std::process::ExitStatus) -> Self {
+        Self {
+            exit_code: status.code(),
+            success: status.success(),
+        }
+    }
+}
+
+impl From<portable_pty::ExitStatus> for BackgroundExitStatus {
+    fn from(status: portable_pty::ExitStatus) -> Self {
+        Self {
+            exit_code: Some(status.exit_code() as i32),
+            success: status.success(),
+        }
+    }
+}
+
+enum BackgroundProcess {
+    Pipes(Mutex<Child>),
+    Pty(Mutex<Box<dyn PtyChild + Send + Sync>>),
+}
+
+impl BackgroundProcess {
+    fn try_wait(&self) -> Result<Option<BackgroundExitStatus>, String> {
+        match self {
+            Self::Pipes(child) => {
+                let mut child = child
+                    .lock()
+                    .map_err(|_| "cli execution process lock is poisoned".to_string())?;
+                child
+                    .try_wait()
+                    .map(|status| status.map(BackgroundExitStatus::from))
+                    .map_err(|error| error.to_string())
+            }
+            Self::Pty(child) => {
+                let mut child = child
+                    .lock()
+                    .map_err(|_| "cli execution process lock is poisoned".to_string())?;
+                child
+                    .try_wait()
+                    .map(|status| status.map(BackgroundExitStatus::from))
+                    .map_err(|error| error.to_string())
+            }
+        }
+    }
+
+    fn kill(&self) -> Result<(), String> {
+        match self {
+            Self::Pipes(child) => {
+                let mut child = child
+                    .lock()
+                    .map_err(|_| "cli execution process lock is poisoned".to_string())?;
+                if let Err(error) = child.kill() {
+                    let still_running = child
+                        .try_wait()
+                        .map_err(|wait_error| wait_error.to_string())?
+                        .is_none();
+                    if still_running {
+                        return Err(error.to_string());
+                    }
+                }
+                Ok(())
+            }
+            Self::Pty(child) => {
+                let mut child = child
+                    .lock()
+                    .map_err(|_| "cli execution process lock is poisoned".to_string())?;
+                if let Err(error) = child.kill() {
+                    let still_running = child
+                        .try_wait()
+                        .map_err(|wait_error| wait_error.to_string())?
+                        .is_none();
+                    if still_running {
+                        return Err(error.to_string());
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn kill_and_wait(&self) {
+        match self {
+            Self::Pipes(child) => {
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+            Self::Pty(child) => {
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+    }
+}
+
 struct BackgroundCliExecution {
-    child: Mutex<Child>,
-    stdin: Mutex<Option<ChildStdin>>,
+    process: BackgroundProcess,
+    stdin: Mutex<Option<Box<dyn Write + Send>>>,
+    pty_master: Option<Mutex<Box<dyn MasterPty + Send>>>,
     cancellation_requested: AtomicBool,
     verification_rules: Vec<CliVerifyRule>,
     stdout_reader: Mutex<Option<JoinHandle<()>>>,
@@ -242,7 +350,7 @@ fn finalize_background_execution<RT: Runtime>(
     app: &AppHandle<RT>,
     execution_id: &str,
     runtime: Arc<BackgroundCliExecution>,
-    exit_status: ExitStatus,
+    exit_status: BackgroundExitStatus,
 ) -> Result<Option<CliExecutionRecord>, String> {
     join_background_readers(&runtime);
     let state = app.state::<AppState>();
@@ -251,13 +359,13 @@ fn finalize_background_execution<RT: Runtime>(
     };
     let cancelled = runtime.cancellation_requested.load(Ordering::SeqCst)
         || record.status == CliExecutionStatus::Cancelled;
-    record.exit_code = exit_status.code();
+    record.exit_code = exit_status.exit_code;
     if record.finished_at.is_none() {
         record.finished_at = Some(now_i64());
     }
     record.status = if cancelled {
         CliExecutionStatus::Cancelled
-    } else if exit_status.success() {
+    } else if exit_status.success {
         CliExecutionStatus::Completed
     } else {
         CliExecutionStatus::Failed
@@ -337,42 +445,67 @@ fn launch_background_execution<RT: Runtime>(
     stderr_path: &Path,
 ) -> Result<(), String> {
     initialize_execution_logs(stdout_path, stderr_path)?;
-    let terminal = spawn_cli_terminal(&request.argv, Path::new(cwd), env, sandbox)?;
-    let mut child = terminal.child;
-    let stdin_writer = child.stdin.take();
-    let stdout_reader = child
-        .stdout
-        .take()
-        .ok_or_else(|| "cli background execution missing stdout pipe".to_string())?;
-    let stderr_reader = child
-        .stderr
-        .take()
-        .ok_or_else(|| "cli background execution missing stderr pipe".to_string())?;
-    let runtime = Arc::new(BackgroundCliExecution {
-        child: Mutex::new(child),
-        stdin: Mutex::new(stdin_writer),
-        cancellation_requested: AtomicBool::new(false),
-        verification_rules: request.verification_rules.clone(),
-        stdout_reader: Mutex::new(Some(spawn_execution_log_reader(
-            app.clone(),
-            record.clone(),
-            "stdout",
-            stdout_path.to_path_buf(),
-            stdout_reader,
-        ))),
-        stderr_reader: Mutex::new(Some(spawn_execution_log_reader(
-            app.clone(),
-            record.clone(),
-            "stderr",
-            stderr_path.to_path_buf(),
-            stderr_reader,
-        ))),
-    });
-    if let Err(error) = register_background_execution(record.id.clone(), Arc::clone(&runtime)) {
-        if let Ok(mut child) = runtime.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+    let terminal =
+        spawn_cli_terminal(&request.argv, Path::new(cwd), env, sandbox, request.use_pty)?;
+    let runtime = match terminal {
+        CliTerminalHandle::Pipes { mut child } => {
+            let stdin_writer = child
+                .stdin
+                .take()
+                .map(|writer| Box::new(writer) as Box<dyn Write + Send>);
+            let stdout_reader = child
+                .stdout
+                .take()
+                .ok_or_else(|| "cli background execution missing stdout pipe".to_string())?;
+            let stderr_reader = child
+                .stderr
+                .take()
+                .ok_or_else(|| "cli background execution missing stderr pipe".to_string())?;
+            Arc::new(BackgroundCliExecution {
+                process: BackgroundProcess::Pipes(Mutex::new(child)),
+                stdin: Mutex::new(stdin_writer),
+                pty_master: None,
+                cancellation_requested: AtomicBool::new(false),
+                verification_rules: request.verification_rules.clone(),
+                stdout_reader: Mutex::new(Some(spawn_execution_log_reader(
+                    app.clone(),
+                    record.clone(),
+                    "stdout",
+                    stdout_path.to_path_buf(),
+                    stdout_reader,
+                ))),
+                stderr_reader: Mutex::new(Some(spawn_execution_log_reader(
+                    app.clone(),
+                    record.clone(),
+                    "stderr",
+                    stderr_path.to_path_buf(),
+                    stderr_reader,
+                ))),
+            })
         }
+        CliTerminalHandle::Pty {
+            child,
+            master,
+            reader,
+            writer,
+        } => Arc::new(BackgroundCliExecution {
+            process: BackgroundProcess::Pty(Mutex::new(child)),
+            stdin: Mutex::new(Some(writer)),
+            pty_master: Some(Mutex::new(master)),
+            cancellation_requested: AtomicBool::new(false),
+            verification_rules: request.verification_rules.clone(),
+            stdout_reader: Mutex::new(Some(spawn_execution_log_reader(
+                app.clone(),
+                record.clone(),
+                "stdout",
+                stdout_path.to_path_buf(),
+                reader,
+            ))),
+            stderr_reader: Mutex::new(None),
+        }),
+    };
+    if let Err(error) = register_background_execution(record.id.clone(), Arc::clone(&runtime)) {
+        runtime.process.kill_and_wait();
         join_background_readers(&runtime);
         return Err(error);
     }
@@ -438,13 +571,7 @@ pub fn refresh_cli_execution<RT: Runtime>(
     let Some(runtime) = get_background_execution(execution_id)? else {
         return Ok(None);
     };
-    let exit_status = {
-        let mut child = runtime
-            .child
-            .lock()
-            .map_err(|_| "cli execution process lock is poisoned".to_string())?;
-        child.try_wait().map_err(|error| error.to_string())?
-    };
+    let exit_status = runtime.process.try_wait()?;
     let Some(exit_status) = exit_status else {
         return Ok(None);
     };
@@ -481,21 +608,7 @@ pub fn cancel_cli_execution<RT: Runtime>(
                 );
             };
             runtime.cancellation_requested.store(true, Ordering::SeqCst);
-            {
-                let mut child = runtime
-                    .child
-                    .lock()
-                    .map_err(|_| "cli execution process lock is poisoned".to_string())?;
-                if let Err(error) = child.kill() {
-                    let still_running = child
-                        .try_wait()
-                        .map_err(|wait_error| wait_error.to_string())?
-                        .is_none();
-                    if still_running {
-                        return Err(error.to_string());
-                    }
-                }
-            }
+            runtime.process.kill()?;
             record.status = CliExecutionStatus::Cancelled;
             record.finished_at = Some(now_i64());
             if !runtime.verification_rules.is_empty() {
@@ -508,6 +621,44 @@ pub fn cancel_cli_execution<RT: Runtime>(
                 .ok_or_else(|| format!("cli execution not found: {execution_id}"))
         }
     }
+}
+
+pub fn resize_cli_execution_pty<RT: Runtime>(
+    app: &AppHandle<RT>,
+    state: &State<'_, AppState>,
+    execution_id: &str,
+    rows: u16,
+    cols: u16,
+) -> Result<CliExecutionRecord, String> {
+    if rows == 0 || cols == 0 {
+        return Err("pty resize requires positive rows and cols".to_string());
+    }
+    let Some(record) = find_cli_execution_by_id(state, execution_id)? else {
+        return Err(format!("cli execution not found: {execution_id}"));
+    };
+    if record.status != CliExecutionStatus::Running {
+        return Err(format!(
+            "cli execution {execution_id} is not running; current status is {:?}",
+            record.status
+        ));
+    }
+    let Some(runtime) = get_background_execution(execution_id)? else {
+        return Err("cli execution is not registered as a background task".to_string());
+    };
+    let master = runtime
+        .pty_master
+        .as_ref()
+        .ok_or_else(|| "cli execution is not backed by a PTY".to_string())?;
+    {
+        let master = master
+            .lock()
+            .map_err(|_| "cli execution pty lock is poisoned".to_string())?;
+        master
+            .resize(CliTerminalSize { rows, cols }.into())
+            .map_err(|error| error.to_string())?;
+    }
+    emit_cli_execution_status(app, &record, Some("pty resized"));
+    Ok(refresh_cli_execution(app, execution_id)?.unwrap_or(record))
 }
 
 pub fn execute_cli_command<RT: Runtime>(
@@ -1038,6 +1189,44 @@ mod tests {
             .expect("snapshot should exist");
         assert_eq!(snapshot.execution.status, CliExecutionStatus::Completed);
         assert!(snapshot.stdout_tail.contains("done"));
+    }
+
+    #[test]
+    fn resize_cli_execution_pty_accepts_running_pty_process() {
+        let _guard = executor_test_lock()
+            .lock()
+            .expect("executor test lock should not be poisoned");
+        let app = build_test_app();
+        let app_handle = app.handle().clone();
+        let state = app.state::<crate::AppState>();
+        let environment = crate::cli_runtime::ensure_app_global_environment(&state)
+            .expect("app environment should exist");
+        let cwd =
+            std::env::temp_dir().join(format!("redbox-cli-runtime-resize-{}", crate::now_i64()));
+        fs::create_dir_all(&cwd).expect("cwd should exist");
+
+        let execution = execute_cli_command(
+            &app_handle,
+            &state,
+            CliExecuteRequest {
+                environment_id: Some(environment.id),
+                argv: cancellable_background_command(),
+                cwd: Some(cwd.to_string_lossy().to_string()),
+                use_pty: true,
+                ..CliExecuteRequest::default()
+            },
+        )
+        .expect("background execution should start");
+        assert_eq!(execution.status, CliExecutionStatus::Running);
+
+        let resized = resize_cli_execution_pty(&app_handle, &state, &execution.id, 40, 120)
+            .expect("pty resize should work");
+        assert_eq!(resized.id, execution.id);
+        assert_eq!(resized.status, CliExecutionStatus::Running);
+
+        let cancelled =
+            cancel_cli_execution(&app_handle, &state, &execution.id).expect("cancel should work");
+        assert_eq!(cancelled.status, CliExecutionStatus::Cancelled);
     }
 
     #[test]

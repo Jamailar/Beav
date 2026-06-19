@@ -113,6 +113,11 @@ pub(crate) fn handle_channel(
         return result;
     }
     if let Some(result) =
+        commands::command_execution::handle_command_execution_channel(app, state, channel, &payload)
+    {
+        return result;
+    }
+    if let Some(result) =
         commands::cli_runtime::handle_cli_runtime_channel(app, state, channel, &payload)
     {
         return result;

@@ -72,6 +72,7 @@ impl<'a> InteractiveToolExecutor<'a> {
         match prepared.name.as_str() {
             "workflow" => Some(self.execute_app_cli(&prepared.arguments)),
             "shell" => Some(self.execute_shell(&prepared.arguments)),
+            "write_stdin" => Some(self.write_stdin(&prepared.arguments)),
             _ => None,
         }
     }
@@ -486,5 +487,9 @@ impl<'a> InteractiveToolExecutor<'a> {
             self.session_id,
             self.tool_call_id,
         )
+    }
+
+    fn write_stdin(&self, arguments: &Value) -> Result<Value, String> {
+        crate::tools::shell::write_stdin(arguments, self.app, self.state)
     }
 }

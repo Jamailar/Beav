@@ -5418,7 +5418,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.execution.writeStdin",
@@ -5429,7 +5429,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.verify",
@@ -5451,7 +5451,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.escalation.deny",
@@ -5462,7 +5462,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.list",
@@ -6298,7 +6298,15 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "shell" => Some(ToolDescriptor {
             name: "shell",
-            description: "Execute one host command inside a sandboxed environment with policy-controlled access. The command string is parsed into argv and is not interpreted by a shell, so pipes, redirects, command substitution, process substitution, glob expansion, and command chaining are not supported here. Prefer structured Operate actions such as media.edit for supported app workflows; use this only when a direct CLI command is needed. Commands that need network access, write outside the workspace, or elevated privileges will trigger an approval flow.",
+            description: "Run a real shell command in the user's environment with policy-controlled access. Supports shell syntax such as pipes, redirects, command substitution, glob expansion, and command chaining. Prefer structured Operate actions such as media.edit for supported app workflows; use shell for broad host command work and local tools.",
+            kind: ToolKind::Shell,
+            requires_approval: false,
+            concurrency_safe: false,
+            output_budget_chars: 40_000,
+        }),
+        "write_stdin" => Some(ToolDescriptor {
+            name: "write_stdin",
+            description: "Write characters to a running shell execution or poll recent output without writing. Use only with an executionId returned by shell.",
             kind: ToolKind::Shell,
             requires_approval: false,
             concurrency_safe: false,
@@ -6480,17 +6488,49 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "shell",
-                "description": "Execute one host command inside a sandboxed environment with policy-controlled access. The command string is parsed into argv and is not interpreted by a shell, so pipes, redirects, command substitution, process substitution, glob expansion, and command chaining are not supported here. Prefer structured Operate actions such as media.edit for supported app workflows; use this only when a direct CLI command is needed. Commands that need network access, write outside the workspace, or elevated privileges will trigger an approval flow.",
+                "description": "Run a shell command and return its output or an execution id for polling. Supports shell syntax such as pipes, redirects, command substitution, glob expansion, and command chaining. Prefer structured Operate actions such as media.edit for video/audio editing workflows.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": { "type": "string", "description": "Single command line parsed into argv. Shell metacharacters such as pipes, redirects, &&, $(...), <(...), and globs are not interpreted." },
+                        "command": { "type": "string", "description": "Shell command to execute in the user's default shell." },
                         "cwd": { "type": "string", "description": "Working directory for the command." },
+                        "workdir": { "type": "string", "description": "Codex-style alias for cwd." },
                         "maxChars": { "type": "integer", "minimum": 200, "maximum": 40000, "description": "Maximum output characters." },
-                        "usePty": { "type": "boolean", "description": "Use PTY for interactive or long-running commands." },
+                        "max_output_tokens": { "type": "integer", "minimum": 200, "maximum": 40000, "description": "Codex-style output budget alias. Interpreted as a character cap by this runtime." },
+                        "usePty": { "type": "boolean", "description": "Use interactive background execution for long-running commands." },
+                        "tty": { "type": "boolean", "description": "Codex-style alias for usePty." },
+                        "login": { "type": "boolean", "description": "Run with login shell semantics. Defaults to true." },
+                        "executionMode": { "type": "string", "enum": ["managed", "host_compatible", "unrestricted"], "description": "Optional execution safety mode. Use unrestricted only after explicit user approval." },
+                        "env": {
+                            "type": "object",
+                            "additionalProperties": { "type": "string" },
+                            "description": "Optional environment variables for this command."
+                        },
                         "executionId": { "type": "string", "description": "Poll a previous async execution by its ID instead of running a new command." }
                     },
-                    "required": ["command"],
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "write_stdin" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "write_stdin",
+                "description": "Write characters to an existing shell execution and return recent output. Passing empty chars polls without writing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "executionId": { "type": "string", "description": "Execution id returned by shell." },
+                        "session_id": { "type": "string", "description": "Codex-style alias for executionId." },
+                        "chars": { "type": "string", "description": "Bytes/text to write to stdin. Omit or pass empty string to poll." },
+                        "text": { "type": "string", "description": "Compatibility alias for chars." },
+                        "appendNewline": { "type": "boolean", "description": "Append one newline after chars." },
+                        "closeStdin": { "type": "boolean", "description": "Close stdin after writing." },
+                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 40000, "description": "Maximum output characters." },
+                        "max_output_tokens": { "type": "integer", "minimum": 200, "maximum": 40000, "description": "Codex-style output budget alias. Interpreted as a character cap by this runtime." }
+                    },
+                    "required": [],
                     "additionalProperties": false
                 }
             }
@@ -6801,7 +6841,7 @@ mod tests {
         assert!(actions.contains(&"taskBrief.goal"));
         assert!(!actions.contains(&"cli_runtime.detect"));
         assert!(!actions.contains(&"cli_runtime.discover"));
-        assert!(actions.contains(&"cli_runtime.execution.get"));
+        assert!(!actions.contains(&"cli_runtime.execution.get"));
         assert!(actions.contains(&"mcp.inspect"));
         assert!(actions.contains(&"mcp.manage"));
         assert!(actions.contains(&"runner.manage"));
@@ -6819,6 +6859,36 @@ mod tests {
         assert!(!actions.contains(&"mcp.tools"));
         assert!(!actions.contains(&"mcp.listResourceTemplates"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
+    }
+
+    #[test]
+    fn shell_schema_exposes_broad_shell_and_stdin_control() {
+        let shell = schema_for_tool_for_runtime_mode("shell", Some("team"))
+            .expect("shell schema should exist");
+        let description = shell
+            .pointer("/function/description")
+            .and_then(Value::as_str)
+            .expect("shell description");
+        assert!(description.contains("pipes"));
+        assert!(description.contains("media.edit"));
+        assert!(shell
+            .pointer("/function/parameters/properties/workdir")
+            .is_some());
+        assert!(shell
+            .pointer("/function/parameters/properties/max_output_tokens")
+            .is_some());
+
+        let write_stdin = schema_for_tool_for_runtime_mode("write_stdin", Some("team"))
+            .expect("write_stdin schema should exist");
+        assert_eq!(
+            write_stdin
+                .pointer("/function/name")
+                .and_then(Value::as_str),
+            Some("write_stdin")
+        );
+        assert!(write_stdin
+            .pointer("/function/parameters/properties/session_id")
+            .is_some());
     }
 
     #[test]
@@ -7154,19 +7224,14 @@ mod tests {
     }
 
     #[test]
-    fn redclaw_schema_exposes_web_fetch_and_core_cli_runtime_actions() {
+    fn redclaw_schema_exposes_web_fetch_and_mcp_inspect_actions() {
         let schema = schema_for_tool_for_runtime_mode("workflow", Some("redclaw"))
             .expect("workflow schema should exist");
         let actions = schema
             .pointer("/function/parameters/properties/action/enum")
             .and_then(Value::as_array)
             .expect("action enum should exist");
-        for action in [
-            "web.fetch",
-            "cli_runtime.execution.get",
-            "mcp.inspect",
-            "mcp.manage",
-        ] {
+        for action in ["web.fetch", "mcp.inspect", "mcp.manage"] {
             assert!(actions.iter().any(|item| item == action), "{action}");
         }
         for action in [
@@ -7185,6 +7250,8 @@ mod tests {
             "cli_runtime.discover",
             "cli_runtime.install",
             "cli_runtime.execute",
+            "cli_runtime.execution.get",
+            "cli_runtime.execution.writeStdin",
         ] {
             assert!(
                 !actions.iter().any(|item| item == action),

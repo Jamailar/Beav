@@ -15,6 +15,7 @@ mod chat_binding;
 mod chat_helpers;
 mod chat_title;
 mod cli_runtime;
+mod command_execution;
 mod commands;
 mod desktop_io;
 mod diagnostics;

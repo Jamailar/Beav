@@ -1055,6 +1055,74 @@ fn model_name_disallows_chat_list(model_id: &str) -> bool {
     model_id.trim().to_ascii_lowercase().contains("omni")
 }
 
+fn forced_model_capabilities_by_name(model_id: &str) -> Option<Vec<String>> {
+    let normalized = model_id.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.contains("asr") || normalized == "nova-3" {
+        return Some(vec!["transcription".to_string()]);
+    }
+    None
+}
+
+fn normalize_model_capability_name(value: &str) -> Option<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    let capability = match normalized.as_str() {
+        "stt" => "transcription",
+        "chat" | "image" | "video" | "audio" | "tts" | "voice_clone" | "transcription"
+        | "embedding" => normalized.as_str(),
+        _ => return None,
+    };
+    Some(capability.to_string())
+}
+
+fn official_model_capabilities(item: &Value) -> Vec<String> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if let Some(capabilities) = forced_model_capabilities_by_name(id) {
+        return capabilities;
+    }
+
+    let mut capabilities = Vec::<String>::new();
+    if let Some(items) = item.get("capabilities").and_then(Value::as_array) {
+        for value in items {
+            if let Some(capability) = value.as_str().and_then(normalize_model_capability_name) {
+                if !capabilities.iter().any(|item| item == &capability) {
+                    capabilities.push(capability);
+                }
+            }
+        }
+    }
+    if let Some(capability) = item
+        .get("capability")
+        .and_then(Value::as_str)
+        .and_then(normalize_model_capability_name)
+    {
+        if !capabilities.iter().any(|item| item == &capability) {
+            capabilities.push(capability);
+        }
+    }
+    capabilities
+}
+
+fn official_model_meta_value(item: &Value) -> Value {
+    let mut meta = item.clone();
+    let capabilities = official_model_capabilities(item);
+    if !capabilities.is_empty() {
+        if let Some(object) = meta.as_object_mut() {
+            object.insert("capabilities".to_string(), json!(capabilities));
+        }
+    }
+    meta
+}
+
 fn official_model_is_chat_list_candidate(item: &Value) -> bool {
     let Some(id) = item.get("id").and_then(Value::as_str).map(str::trim) else {
         return false;
@@ -1062,15 +1130,9 @@ fn official_model_is_chat_list_candidate(item: &Value) -> bool {
     if id.is_empty() || model_name_disallows_chat_list(id) {
         return false;
     }
-    item.get("capabilities")
-        .and_then(|value| value.as_array())
-        .map(|items| items.iter().any(|cap| cap.as_str() == Some("chat")))
-        .or_else(|| {
-            item.get("capability")
-                .and_then(|value| value.as_str())
-                .map(|value| value == "chat")
-        })
-        .unwrap_or(false)
+    official_model_capabilities(item)
+        .iter()
+        .any(|capability| capability == "chat")
 }
 
 pub(crate) fn model_defaults_initialized(settings: &Value) -> bool {
@@ -1168,13 +1230,13 @@ pub(crate) fn official_sync_source_into_settings(
     let mut seen_meta_ids = std::collections::HashSet::new();
     let merged_models_meta = models
         .iter()
-        .cloned()
         .filter(|item| {
             let Some(id) = item.get("id").and_then(Value::as_str).map(str::trim) else {
                 return false;
             };
             !id.is_empty() && seen_meta_ids.insert(id.to_string())
         })
+        .map(official_model_meta_value)
         .collect::<Vec<_>>();
     let source = json!({
         "id": "redbox_official_auto",
@@ -1593,6 +1655,36 @@ mod tests {
                 "qwen3.5-plus",
             ),
             "qwen3.5-plus"
+        );
+    }
+
+    #[test]
+    fn official_chat_candidates_exclude_asr_name_models() {
+        let models = vec![
+            json!({ "id": "qwen3-asr-flash-filetrans", "capabilities": ["chat"] }),
+            json!({ "id": "nova-3", "capabilities": ["chat"] }),
+            json!({ "id": "qwen3.5-flash", "capabilities": ["chat"] }),
+        ];
+        let available_chat_models = models
+            .iter()
+            .filter(|item| official_model_is_chat_list_candidate(item))
+            .filter_map(|item| {
+                item.get("id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(available_chat_models, vec!["qwen3.5-flash"]);
+        assert_eq!(
+            official_model_capabilities(
+                &json!({ "id": "qwen3-asr-flash-filetrans", "capabilities": ["chat"] })
+            ),
+            vec!["transcription".to_string()]
+        );
+        assert_eq!(
+            official_model_capabilities(&json!({ "id": "nova-3", "capability": "chat" })),
+            vec!["transcription".to_string()]
         );
     }
 
@@ -2071,6 +2163,40 @@ mod tests {
         official_sync_source_into_settings(&mut settings, &official_models_fixture(), false);
 
         assert_eq!(payload_string(&settings, "video_model"), None);
+    }
+
+    #[test]
+    fn official_model_catalog_sync_marks_asr_name_models_as_transcription() {
+        let mut settings = json!({
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
+        });
+        let models = vec![
+            json!({ "id": "qwen3-asr-flash-filetrans", "capabilities": ["chat"] }),
+            json!({ "id": "nova-3", "capabilities": ["chat"] }),
+            json!({ "id": "qwen3.5-flash", "capabilities": ["chat"] }),
+        ];
+
+        official_sync_source_into_settings(&mut settings, &models, false);
+
+        let sources = payload_string(&settings, "ai_sources_json")
+            .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+            .unwrap_or_default();
+        let official_source = sources
+            .iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some("redbox_official_auto"))
+            .expect("official source should be synced");
+        let models_meta = official_source
+            .get("modelsMeta")
+            .and_then(Value::as_array)
+            .expect("official source should include modelsMeta");
+
+        for model_id in ["qwen3-asr-flash-filetrans", "nova-3"] {
+            let meta = models_meta
+                .iter()
+                .find(|item| item.get("id").and_then(Value::as_str) == Some(model_id))
+                .expect("ASR model meta should exist");
+            assert_eq!(meta.get("capabilities"), Some(&json!(["transcription"])));
+        }
     }
 }
 

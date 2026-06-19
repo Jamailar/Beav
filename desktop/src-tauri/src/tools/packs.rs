@@ -42,18 +42,18 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["resource"],
         ToolPack::ManuscriptEditor => &["workflow"],
-        ToolPack::Team => &["shell", "resource", "workflow"],
-        ToolPack::ImageGeneration => &["shell", "resource", "workflow"],
-        ToolPack::Knowledge => &["shell", "resource", "workflow"],
+        ToolPack::Team => &["shell", "write_stdin", "resource", "workflow"],
+        ToolPack::ImageGeneration => &["shell", "write_stdin", "resource", "workflow"],
+        ToolPack::Knowledge => &["shell", "write_stdin", "resource", "workflow"],
         ToolPack::Redclaw => {
             if cfg!(target_os = "windows") {
                 &["resource", "workflow"]
             } else {
-                &["shell", "resource", "workflow"]
+                &["shell", "write_stdin", "resource", "workflow"]
             }
         }
-        ToolPack::BackgroundMaintenance => &["shell", "workflow"],
-        ToolPack::Diagnostics => &["shell", "resource", "workflow"],
+        ToolPack::BackgroundMaintenance => &["shell", "write_stdin", "workflow"],
+        ToolPack::Diagnostics => &["shell", "write_stdin", "resource", "workflow"],
     }
 }
 
@@ -61,18 +61,44 @@ pub fn visible_tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["Read", "List", "Search"],
         ToolPack::ManuscriptEditor => &["Write"],
-        ToolPack::Team => &["Read", "List", "Search", "Write", "Operate", "shell"],
-        ToolPack::ImageGeneration => &["Read", "List", "Search", "Operate", "shell"],
-        ToolPack::Knowledge => &["Read", "List", "Search", "Operate", "shell"],
+        ToolPack::Team => &[
+            "Read",
+            "List",
+            "Search",
+            "Write",
+            "Operate",
+            "shell",
+            "write_stdin",
+        ],
+        ToolPack::ImageGeneration => &["Read", "List", "Search", "Operate", "shell", "write_stdin"],
+        ToolPack::Knowledge => &["Read", "List", "Search", "Operate", "shell", "write_stdin"],
         ToolPack::Redclaw => {
             if cfg!(target_os = "windows") {
                 &["Read", "List", "Search", "Write", "Operate"]
             } else {
-                &["Read", "List", "Search", "Write", "Operate", "shell"]
+                &[
+                    "Read",
+                    "List",
+                    "Search",
+                    "Write",
+                    "Operate",
+                    "shell",
+                    "write_stdin",
+                ]
             }
         }
-        ToolPack::BackgroundMaintenance => &["Read", "List", "Search", "Operate", "shell"],
-        ToolPack::Diagnostics => &["Read", "List", "Search", "Write", "Operate", "shell"],
+        ToolPack::BackgroundMaintenance => {
+            &["Read", "List", "Search", "Operate", "shell", "write_stdin"]
+        }
+        ToolPack::Diagnostics => &[
+            "Read",
+            "List",
+            "Search",
+            "Write",
+            "Operate",
+            "shell",
+            "write_stdin",
+        ],
     }
 }
 

@@ -1,4 +1,5 @@
-use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
+use crate::cli_runtime::CliVerifyRule;
+use crate::command_execution::{run_app_managed_argv, AppManagedArgvRequest};
 use crate::{ffmpeg_program, now_ms, AppState};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
@@ -53,10 +54,10 @@ pub(super) fn run_ffmpeg_args(
     let argv = std::iter::once(ffmpeg_program(Some(app))?)
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
-    run_managed_cli_command(
+    run_app_managed_argv(
         app,
         state,
-        CliExecuteRequest {
+        AppManagedArgvRequest {
             session_id: session_id.map(ToString::to_string),
             runtime_id: Some("media-edit".to_string()),
             tool_id: Some("ffmpeg".to_string()),
@@ -68,7 +69,7 @@ pub(super) fn run_ffmpeg_args(
                     path: output_path.to_string_lossy().to_string(),
                 },
             ],
-            ..CliExecuteRequest::default()
+            ..AppManagedArgvRequest::default()
         },
         8_000,
     )
