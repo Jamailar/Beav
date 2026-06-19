@@ -20,9 +20,9 @@ use crate::cli_runtime::{
     emit_cli_verification_finished, ensure_app_global_environment, ensure_workspace_environment,
     ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_execution_by_id,
     list_cli_environments, load_cli_execution_snapshot, refresh_cli_execution,
-    run_cli_verification, CliApproveEscalationRequest, CliCreateEnvironmentRequest,
-    CliDenyEscalationRequest, CliEnvironmentScope, CliExecuteRequest, CliVerifyExecutionRequest,
-    CliVerifyResult,
+    run_cli_verification, write_cli_execution_stdin, CliApproveEscalationRequest,
+    CliCreateEnvironmentRequest, CliDenyEscalationRequest, CliEnvironmentScope, CliExecuteRequest,
+    CliVerifyExecutionRequest, CliVerifyResult,
 };
 use crate::{payload_string, AppState};
 
@@ -147,6 +147,43 @@ fn cancel_execution_value(
     }))
 }
 
+fn write_stdin_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let execution_id = payload_string(payload, "executionId")
+        .or_else(|| payload_string(payload, "id"))
+        .ok_or_else(|| "executionId is required".to_string())?;
+    let text = payload_string(payload, "text")
+        .or_else(|| payload_string(payload, "input"))
+        .unwrap_or_default();
+    let append_newline = payload
+        .get("appendNewline")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let close_stdin = payload
+        .get("closeStdin")
+        .or_else(|| payload.get("close"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let execution = write_cli_execution_stdin(
+        app,
+        state,
+        &execution_id,
+        &text,
+        append_newline,
+        close_stdin,
+    )?;
+    Ok(json!({
+        "success": true,
+        "supported": true,
+        "executionId": execution_id,
+        "status": execution_status_label(&execution.status),
+        "execution": execution,
+    }))
+}
+
 fn approve_escalation_value(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -214,6 +251,7 @@ pub fn handle_cli_runtime_channel(
         "cli-runtime:get-execution" => poll_execution_value(app, state, payload),
         "cli-runtime:poll-execution" => poll_execution_value(app, state, payload),
         "cli-runtime:cancel-execution" => cancel_execution_value(app, state, payload),
+        "cli-runtime:write-stdin" => write_stdin_value(app, state, payload),
         "cli-runtime:verify" => verify_execution_value(app, state, payload),
         "cli-runtime:approve-escalation" => approve_escalation_value(app, state, payload),
         "cli-runtime:deny-escalation" => deny_escalation_value(app, state, payload),

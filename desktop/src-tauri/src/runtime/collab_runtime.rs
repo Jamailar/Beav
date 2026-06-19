@@ -32,7 +32,8 @@ pub use mailbox_reports::{
     submit_collab_report,
 };
 pub use member_management::{
-    add_collab_member, list_collab_members, rename_collab_member, shutdown_collab_member,
+    add_collab_member, list_collab_members, rename_collab_member, resume_collab_member,
+    shutdown_collab_member,
 };
 use member_profile::{build_member_agent_card, member_metadata_from_payload};
 pub use member_workload::match_collab_members_for_task;

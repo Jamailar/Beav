@@ -18,6 +18,7 @@ use crate::runtime::{
 use crate::store::{settings as settings_store, subjects as subject_store};
 use crate::*;
 use base64::Engine;
+use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -740,24 +741,25 @@ pub(crate) fn ensure_video_thumbnail_for_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        append_generated_media_markdown, append_session_transcript, asset_preview_url_from_result,
-        authoring_saved_final_summary, build_interactive_user_turn_messages,
-        build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
-        copy_file_into_dir, decode_command_json_stdout, guess_mime_and_kind,
-        interactive_attachment_inline_data_url, interactive_base64_payload_size,
-        interactive_execution_contract_instruction, interactive_execution_progress_observe_success,
-        interactive_history_attachment_note, interactive_model_supports_direct_attachment,
-        interactive_skill_activation_continuation, interactive_skill_activations,
-        interactive_tool_panic_message, is_authoring_project_link_target, json_value_to_path_list,
+        append_generated_media_markdown, append_session_transcript, apply_workspace_patch_edits,
+        apply_workspace_patch_file, asset_preview_url_from_result, authoring_saved_final_summary,
+        build_interactive_user_turn_messages, build_subject_record_for_workspace,
+        clear_interactive_execution_contract_metadata, copy_file_into_dir,
+        decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
+        interactive_base64_payload_size, interactive_execution_contract_instruction,
+        interactive_execution_progress_observe_success, interactive_history_attachment_note,
+        interactive_model_supports_direct_attachment, interactive_skill_activation_continuation,
+        interactive_skill_activations, interactive_tool_panic_message,
+        is_authoring_project_link_target, json_value_to_path_list,
         looks_like_authoring_status_summary, manuscript_save_result_path,
         message_is_successful_manuscript_write_tool_result, metadata_requires_voice_speech,
         normalized_structured_payload_arguments, now_ms, persist_subjects_workspace,
         redbox_fs_profile_read_completed, resolve_local_path, sanitize_copy_file_name,
         structured_tool_error_code, validate_runtime_tool_message_sequence,
-        workspace_read_directory_response, GeneratedMediaPreview, InteractiveExecutionContract,
-        InteractiveExecutionProgress, SubjectAttribute, SubjectCategory, SubjectMediaInput,
-        SubjectMutationInput, SubjectRecord, SubjectSku, SubjectVoiceInput,
-        COPY_TARGET_FILE_NAME_MAX_CHARS,
+        workspace_inspect_image_response, workspace_read_directory_response, GeneratedMediaPreview,
+        InteractiveExecutionContract, InteractiveExecutionProgress, SubjectAttribute,
+        SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord, SubjectSku,
+        SubjectVoiceInput, COPY_TARGET_FILE_NAME_MAX_CHARS,
     };
     use serde_json::{json, Value};
     use std::fs;
@@ -966,6 +968,186 @@ mod tests {
         assert!(content.contains("meta.json"));
         assert!(content.contains("transcript.txt"));
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workspace_inspect_image_response_reads_dimensions_and_data_url() {
+        let root = std::env::temp_dir().join(format!("redbox-inspect-image-{}", crate::now_ms()));
+        fs::create_dir_all(&root).expect("create temp directory");
+        let path = root.join("sample.png");
+        let image = image::RgbImage::from_pixel(3, 2, image::Rgb([10, 20, 30]));
+        image.save(&path).expect("write sample image");
+
+        let response =
+            workspace_inspect_image_response(&path, true, 200_000).expect("image should inspect");
+
+        assert_eq!(
+            response.get("mimeType").and_then(Value::as_str),
+            Some("image/png")
+        );
+        assert_eq!(response.get("width").and_then(Value::as_u64), Some(3));
+        assert_eq!(response.get("height").and_then(Value::as_u64), Some(2));
+        assert!(response
+            .get("dataUrl")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .starts_with("data:image/png;base64,"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn apply_workspace_patch_edits_replaces_exact_text_once() {
+        let (patched, edits) = apply_workspace_patch_edits(
+            "alpha\nbeta\ngamma\n",
+            &json!({
+                "edits": [{
+                    "oldText": "beta",
+                    "newText": "BETA"
+                }]
+            }),
+        )
+        .expect("patch should apply");
+
+        assert_eq!(patched, "alpha\nBETA\ngamma\n");
+        assert_eq!(
+            edits
+                .first()
+                .and_then(|item| item.get("replacements"))
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn apply_workspace_patch_edits_rejects_ambiguous_single_replace() {
+        let error = apply_workspace_patch_edits(
+            "same same",
+            &json!({
+                "edits": [{
+                    "oldText": "same",
+                    "newText": "other"
+                }]
+            }),
+        )
+        .expect_err("ambiguous patch should fail");
+
+        assert!(error.contains("matched 2 times"));
+    }
+
+    #[test]
+    fn apply_workspace_patch_edits_supports_replace_all() {
+        let (patched, edits) = apply_workspace_patch_edits(
+            "same same",
+            &json!({
+                "edits": [{
+                    "oldText": "same",
+                    "newText": "other",
+                    "replaceAll": true
+                }]
+            }),
+        )
+        .expect("replace all should apply");
+
+        assert_eq!(patched, "other other");
+        assert_eq!(
+            edits
+                .first()
+                .and_then(|item| item.get("replacements"))
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn apply_workspace_patch_edits_rejects_missing_old_text() {
+        let error = apply_workspace_patch_edits(
+            "alpha",
+            &json!({
+                "edits": [{
+                    "oldText": "beta",
+                    "newText": "BETA"
+                }]
+            }),
+        )
+        .expect_err("missing oldText should fail");
+
+        assert!(error.contains("did not match"));
+    }
+
+    #[test]
+    fn apply_workspace_patch_file_creates_new_utf8_file() {
+        let root =
+            std::env::temp_dir().join(format!("redbox-workspace-patch-create-{}", crate::now_ms()));
+        let path = root.join("nested").join("created.txt");
+        let response = apply_workspace_patch_file(
+            &path,
+            None,
+            &json!({
+                "operation": "create",
+                "content": "created\n"
+            }),
+        )
+        .expect("create patch should work");
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "created\n");
+        assert_eq!(
+            response.get("operation").and_then(Value::as_str),
+            Some("create")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn apply_workspace_patch_file_deletes_existing_file() {
+        let root =
+            std::env::temp_dir().join(format!("redbox-workspace-patch-delete-{}", crate::now_ms()));
+        fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("delete.txt");
+        fs::write(&path, "delete me").expect("write temp file");
+
+        let response = apply_workspace_patch_file(
+            &path,
+            None,
+            &json!({
+                "operation": "delete"
+            }),
+        )
+        .expect("delete patch should work");
+
+        assert!(!path.exists());
+        assert_eq!(
+            response.get("operation").and_then(Value::as_str),
+            Some("delete")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn apply_workspace_patch_file_moves_existing_file() {
+        let root =
+            std::env::temp_dir().join(format!("redbox-workspace-patch-move-{}", crate::now_ms()));
+        fs::create_dir_all(&root).expect("create temp root");
+        let source = root.join("source.txt");
+        let destination = root.join("nested").join("destination.txt");
+        fs::write(&source, "move me").expect("write temp file");
+
+        let response = apply_workspace_patch_file(
+            &source,
+            Some(&destination),
+            &json!({
+                "operation": "move"
+            }),
+        )
+        .expect("move patch should work");
+
+        assert!(!source.exists());
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "move me");
+        assert_eq!(
+            response.get("operation").and_then(Value::as_str),
+            Some("move")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2875,6 +3057,172 @@ pub(crate) fn reject_parent_directory_traversal(raw_path: &str) -> Result<(), St
     Ok(())
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+pub(crate) fn apply_workspace_patch_edits(
+    original: &str,
+    payload: &Value,
+) -> Result<(String, Vec<Value>), String> {
+    let edits = payload_field(payload, "edits")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "workspace.patch requires non-empty edits array".to_string())?;
+    if edits.is_empty() {
+        return Err("workspace.patch requires non-empty edits array".to_string());
+    }
+    let mut next = original.to_string();
+    let mut applied = Vec::new();
+    for (index, edit) in edits.iter().enumerate() {
+        let old_text = payload_string(edit, "oldText")
+            .ok_or_else(|| format!("workspace.patch edit {index} requires oldText"))?;
+        if old_text.is_empty() {
+            return Err(format!(
+                "workspace.patch edit {index} oldText must not be empty"
+            ));
+        }
+        let new_text = payload_string(edit, "newText")
+            .ok_or_else(|| format!("workspace.patch edit {index} requires newText"))?;
+        let replace_all = payload_field(edit, "replaceAll")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let matches = next.matches(&old_text).count();
+        if matches == 0 {
+            return Err(format!(
+                "workspace.patch edit {index} did not match oldText"
+            ));
+        }
+        if !replace_all && matches > 1 {
+            return Err(format!(
+                "workspace.patch edit {index} matched {matches} times; set replaceAll=true or make oldText more specific"
+            ));
+        }
+        next = if replace_all {
+            next.replace(&old_text, &new_text)
+        } else {
+            next.replacen(&old_text, &new_text, 1)
+        };
+        applied.push(json!({
+            "index": index,
+            "replacements": if replace_all { matches } else { 1 }
+        }));
+    }
+    Ok((next, applied))
+}
+
+pub(crate) fn apply_workspace_patch_file(
+    resolved: &Path,
+    to_path: Option<&Path>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let operation = payload_string(payload, "operation")
+        .unwrap_or_else(|| "edit".to_string())
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-'], ".");
+    match operation.as_str() {
+        "edit" | "patch" | "" => {
+            if resolved.exists() && resolved.is_dir() {
+                return Err(format!("cannot patch directory: {}", resolved.display()));
+            }
+            if !resolved.is_file() {
+                return Err(format!("not a file: {}", resolved.display()));
+            }
+            let original = fs::read_to_string(resolved).map_err(|error| error.to_string())?;
+            let before_hash = sha256_hex(original.as_bytes());
+            let (patched, edits) = apply_workspace_patch_edits(&original, payload)?;
+            let after_hash = sha256_hex(patched.as_bytes());
+            if before_hash != after_hash {
+                fs::write(resolved, patched.as_bytes()).map_err(|error| error.to_string())?;
+            }
+            Ok(json!({
+                "success": true,
+                "operation": "edit",
+                "path": resolved.display().to_string(),
+                "edits": edits,
+                "changed": before_hash != after_hash,
+                "beforeSha256": before_hash,
+                "afterSha256": after_hash,
+                "bytes": patched.len()
+            }))
+        }
+        "create" | "add" => {
+            if resolved.exists() {
+                return Err(format!("file already exists: {}", resolved.display()));
+            }
+            let content = payload_field(payload, "content")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .ok_or_else(|| "workspace.patch create requires content".to_string())?;
+            if let Some(parent) = resolved.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            fs::write(resolved, content.as_bytes()).map_err(|error| error.to_string())?;
+            Ok(json!({
+                "success": true,
+                "operation": "create",
+                "path": resolved.display().to_string(),
+                "changed": true,
+                "beforeSha256": Value::Null,
+                "afterSha256": sha256_hex(content.as_bytes()),
+                "bytes": content.len()
+            }))
+        }
+        "delete" | "remove" => {
+            if resolved.exists() && resolved.is_dir() {
+                return Err(format!("cannot delete directory: {}", resolved.display()));
+            }
+            if !resolved.is_file() {
+                return Err(format!("not a file: {}", resolved.display()));
+            }
+            let original = fs::read(resolved).map_err(|error| error.to_string())?;
+            let before_hash = sha256_hex(&original);
+            fs::remove_file(resolved).map_err(|error| error.to_string())?;
+            Ok(json!({
+                "success": true,
+                "operation": "delete",
+                "path": resolved.display().to_string(),
+                "changed": true,
+                "beforeSha256": before_hash,
+                "afterSha256": Value::Null,
+                "bytes": original.len()
+            }))
+        }
+        "move" | "rename" => {
+            let destination =
+                to_path.ok_or_else(|| "workspace.patch move requires toPath".to_string())?;
+            if resolved.exists() && resolved.is_dir() {
+                return Err(format!("cannot move directory: {}", resolved.display()));
+            }
+            if !resolved.is_file() {
+                return Err(format!("not a file: {}", resolved.display()));
+            }
+            if destination.exists() {
+                return Err(format!(
+                    "destination already exists: {}",
+                    destination.display()
+                ));
+            }
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            fs::rename(resolved, destination).map_err(|error| error.to_string())?;
+            Ok(json!({
+                "success": true,
+                "operation": "move",
+                "path": resolved.display().to_string(),
+                "toPath": destination.display().to_string(),
+                "changed": true
+            }))
+        }
+        _ => Err(format!(
+            "unsupported workspace.patch operation: {operation}"
+        )),
+    }
+}
+
 pub(crate) fn workspace_read_directory_response(
     path: &Path,
     limit: usize,
@@ -2909,6 +3257,82 @@ pub(crate) fn workspace_read_directory_response(
         "entries": entries,
         "content": content
     }))
+}
+
+pub(crate) fn workspace_inspect_image_response(
+    path: &Path,
+    include_data_url: bool,
+    max_bytes: usize,
+) -> Result<Value, String> {
+    if path.exists() && path.is_dir() {
+        return Err(format!(
+            "cannot inspect image directory: {}",
+            path.display()
+        ));
+    }
+    if !path.is_file() {
+        return Err(format!("not a file: {}", path.display()));
+    }
+    let (mime_type, kind, _) = guess_mime_and_kind(path);
+    if kind != "image" {
+        return Err(format!("not an image file: {}", path.display()));
+    }
+    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    let image = image::open(path).map_err(|error| format!("failed to decode image: {error}"))?;
+    let (width, height) = image.dimensions();
+    let bytes = if include_data_url || metadata.len() <= 16 * 1024 * 1024 {
+        Some(fs::read(path).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+    let sha256 = match bytes.as_ref() {
+        Some(bytes) => sha256_hex(bytes),
+        None => {
+            let mut file = File::open(path).map_err(|error| error.to_string())?;
+            let mut hasher = Sha256::new();
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+            format!("{:x}", hasher.finalize())
+        }
+    };
+    let mut response = json!({
+        "success": true,
+        "path": path.display().to_string(),
+        "kind": "image",
+        "mimeType": mime_type,
+        "bytes": metadata.len(),
+        "width": width,
+        "height": height,
+        "sha256": sha256
+    });
+    if include_data_url {
+        let max_bytes = max_bytes.max(1);
+        if metadata.len() as usize > max_bytes {
+            return Err(format!(
+                "image is {} bytes, above includeDataUrl maxBytes {}",
+                metadata.len(),
+                max_bytes
+            ));
+        }
+        let bytes = bytes.ok_or_else(|| "image bytes were not loaded".to_string())?;
+        if let Some(object) = response.as_object_mut() {
+            object.insert(
+                "dataUrl".to_string(),
+                json!(format!(
+                    "data:{};base64,{}",
+                    mime_type,
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                )),
+            );
+        }
+    }
+    Ok(response)
 }
 
 pub(crate) fn interactive_runtime_tools_for_mode(
@@ -3980,6 +4404,23 @@ pub(crate) fn execute_interactive_tool_call(
                             }))
                         }
                     }
+                    "workspace.inspectImage" => {
+                        if raw_path.trim().is_empty() {
+                            return Err("path is required for workspace.inspectImage".to_string());
+                        }
+                        reject_parent_directory_traversal(&raw_path)?;
+                        let resolved =
+                            interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                                state, session_id, &raw_path,
+                            )?;
+                        let include_data_url = normalized_arguments
+                            .get("includeDataUrl")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let max_bytes =
+                            parse_usize_arg(&normalized_arguments, "maxBytes", 200_000, 2_000_000);
+                        workspace_inspect_image_response(&resolved, include_data_url, max_bytes)
+                    }
                     "workspace.createDirectory" => {
                         if raw_path.trim().is_empty() {
                             return Err(
@@ -4025,6 +4466,33 @@ pub(crate) fn execute_interactive_tool_call(
                             "path": resolved.display().to_string(),
                             "bytes": content.len()
                         }))
+                    }
+                    "workspace.patch" => {
+                        if raw_path.trim().is_empty() {
+                            return Err("path is required for workspace.patch".to_string());
+                        }
+                        reject_parent_directory_traversal(&raw_path)?;
+                        let resolved =
+                            interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                                state, session_id, &raw_path,
+                            )?;
+                        let to_path = payload_string(&normalized_arguments, "toPath");
+                        let resolved_to_path = to_path
+                            .as_deref()
+                            .map(|raw_to_path| {
+                                reject_parent_directory_traversal(raw_to_path)?;
+                                interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                                    state,
+                                    session_id,
+                                    raw_to_path,
+                                )
+                            })
+                            .transpose()?;
+                        apply_workspace_patch_file(
+                            &resolved,
+                            resolved_to_path.as_deref(),
+                            &normalized_arguments,
+                        )
                     }
                     _ => Err(format!("unsupported fs action: {action}")),
                 }

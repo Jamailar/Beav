@@ -325,6 +325,39 @@ fn plugins_discover_local_input_schema() -> Value {
     )
 }
 
+fn plugins_discover_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "source",
+                json!({
+                    "type": "string",
+                    "enum": ["installed", "marketplace", "codex", "local"],
+                    "description": "Discovery source. Use installed for enabled plugins, marketplace for registry, codex for local Codex cache, and local for a filesystem path."
+                }),
+            ),
+            (
+                "url",
+                string_schema("Optional GitHub-hosted marketplace registry URL."),
+            ),
+            (
+                "path",
+                string_schema("Local plugin directory, parent directory, Codex checkout, or Codex marketplace/cache root."),
+            ),
+            (
+                "sourceRoot",
+                string_schema("Alias for path when source=local."),
+            ),
+            (
+                "codexRoot",
+                string_schema("Optional Codex home/cache root when source=codex."),
+            ),
+        ],
+        &[],
+        Some("Discover installed plugins or installable plugin candidates from a marketplace, Codex cache, or local path."),
+    )
+}
+
 fn plugins_request_install_input_schema() -> Value {
     object_schema(
         &[
@@ -428,8 +461,16 @@ fn memory_search_input_schema() -> Value {
     object_schema(
         &[
             (
+                "mode",
+                json!({
+                    "type": "string",
+                    "enum": ["search", "list", "recall"],
+                    "description": "Memory read mode. Use search for query results, list to browse recent entries, and recall for compact runtime context."
+                }),
+            ),
+            (
                 "query",
-                string_schema("Free-text search query for durable memory."),
+                string_schema("Free-text search query for durable memory. Required for mode=search or mode=recall."),
             ),
             (
                 "limit",
@@ -451,8 +492,8 @@ fn memory_search_input_schema() -> Value {
                 bool_schema("Whether archived memories should be included."),
             ),
         ],
-        &["query"],
-        None,
+        &[],
+        Some("Unified durable memory read action. Use mode=list, mode=search, or mode=recall instead of separate memory.list or memory.recall actions."),
     )
 }
 
@@ -557,6 +598,46 @@ fn memory_diagnostics_input_schema() -> Value {
     no_payload_schema()
 }
 
+fn memory_manage_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": ["update", "archive", "rebuildIndex", "diagnostics"],
+                    "description": "Memory management operation."
+                }),
+            ),
+            ("id", string_schema("Memory id to update or archive.")),
+            (
+                "content",
+                string_schema("Updated memory text when operation=update."),
+            ),
+            ("type", string_schema("Updated memory type.")),
+            ("scope", string_schema("Updated memory scope.")),
+            (
+                "tags",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "entities",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "confidence",
+                json!({ "type": "number", "minimum": 0.0, "maximum": 1.0 }),
+            ),
+            (
+                "reason",
+                string_schema("Optional update or archive reason."),
+            ),
+        ],
+        &["operation"],
+        Some("Update/archive one memory entry or run explicit memory maintenance such as diagnostics/rebuildIndex."),
+    )
+}
+
 fn web_fetch_input_schema() -> Value {
     object_schema(
         &[
@@ -658,6 +739,82 @@ fn task_brief_update_input_schema() -> Value {
     )
 }
 
+fn task_brief_goal_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "Goal lifecycle operation.",
+                    "enum": ["get", "create", "update"]
+                }),
+            ),
+            (
+                "objective",
+                string_schema("Concrete goal objective when operation=create."),
+            ),
+            (
+                "status",
+                json!({
+                    "type": "string",
+                    "enum": ["active", "complete", "blocked", "cancelled"],
+                    "description": "Goal lifecycle status when operation=update."
+                }),
+            ),
+            (
+                "tokenBudget",
+                integer_schema("Optional positive token budget for this goal.", 1, i64::MAX),
+            ),
+            (
+                "tokenUsage",
+                integer_schema(
+                    "Optional consumed token count reported by the runtime.",
+                    0,
+                    i64::MAX,
+                ),
+            ),
+            ("reason", string_schema("Reason for status change.")),
+            ("sessionId", string_schema("Optional active session id.")),
+            (
+                "goal",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Operation-specific bounded goal patch. Top-level fields are also accepted."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some("Read, create, or update the active Task Brief goal lifecycle state."),
+    )
+}
+
+fn task_brief_context_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "Context-window operation.",
+                    "enum": ["get", "compact"]
+                }),
+            ),
+            (
+                "force",
+                json!({
+                    "type": "boolean",
+                    "description": "When true with operation=compact, force manual compaction when enough history exists."
+                }),
+            ),
+            ("sessionId", string_schema("Optional active session id.")),
+        ],
+        &["operation"],
+        Some("Read estimated session context usage or compact old history into a bounded summary."),
+    )
+}
+
 fn memory_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
@@ -685,6 +842,21 @@ fn redclaw_profile_read_input_schema() -> Value {
         )],
         &["docType"],
         None,
+    )
+}
+
+fn profile_read_input_schema() -> Value {
+    object_schema(
+        &[(
+            "docType",
+            json!({
+                "type": "string",
+                "enum": ["agent", "soul", "user", "creator_profile"],
+                "description": "Optional profile document to read. Omit to read the full profile bundle."
+            }),
+        )],
+        &[],
+        Some("Read the RedClaw profile bundle or one profile document."),
     )
 }
 
@@ -751,6 +923,43 @@ fn redclaw_profile_complete_style_definition_input_schema() -> Value {
     )
 }
 
+fn profile_manage_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "Profile management operation.",
+                    "enum": ["update", "completeStyleDefinition"]
+                }),
+            ),
+            (
+                "docType",
+                json!({
+                    "type": "string",
+                    "enum": ["agent", "soul", "user", "creator_profile"],
+                    "description": "Profile document type for update operations."
+                }),
+            ),
+            ("markdown", string_schema("Replacement Markdown content.")),
+            ("reason", string_schema("Optional update rationale.")),
+            (
+                "payload",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Operation-specific structured payload. Top-level fields are also accepted."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some(
+            "Run one atomic profile management operation. Prefer this consolidated action over redclaw.profile.* compatibility actions.",
+        ),
+    )
+}
+
 fn redclaw_profile_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
@@ -778,6 +987,39 @@ fn redclaw_runner_mutation_input_schema() -> Value {
             }),
         )],
         &[],
+        None,
+    )
+}
+
+fn runner_manage_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "Runner lifecycle operation.",
+                    "enum": ["status", "start", "stop", "setConfig", "runNow"]
+                }),
+            ),
+            (
+                "config",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Runner config patch when operation=setConfig."
+                }),
+            ),
+            (
+                "payload",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Operation-specific structured payload. Top-level fields are also accepted."
+                }),
+            ),
+        ],
+        &["operation"],
         None,
     )
 }
@@ -917,6 +1159,101 @@ fn redclaw_task_cancel_input_schema() -> Value {
     )
 }
 
+fn task_manage_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "Task management operation.",
+                    "enum": ["create", "confirm", "update", "cancel"]
+                }),
+            ),
+            (
+                "previewToken",
+                string_schema("Preview token returned by task.preview."),
+            ),
+            ("draftId", string_schema("Draft id returned by task.manage create.")),
+            (
+                "jobDefinitionId",
+                string_schema("Target job definition id for update/cancel."),
+            ),
+            ("confirm", bool_schema("Whether to activate a pending draft.")),
+            (
+                "patch",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                }),
+            ),
+            ("reason", string_schema("Reason for update/cancel.")),
+            (
+                "deleteSource",
+                bool_schema("Set true only when the user explicitly asks to delete the task."),
+            ),
+            (
+                "payload",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Operation-specific structured payload. Top-level fields are also accepted."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some(
+            "Run one atomic RedClaw task management operation after preview or explicit user request. Prefer this consolidated action over redclaw.task.* compatibility actions.",
+        ),
+    )
+}
+
+fn task_read_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "Task read operation.",
+                    "enum": ["preview", "list", "stats"]
+                }),
+            ),
+            ("ownerScope", string_schema("Optional owner scope filter.")),
+            (
+                "includeDrafts",
+                bool_schema("Whether to include pending drafts."),
+            ),
+            ("stats", bool_schema("Alias for operation=stats when true.")),
+            (
+                "kind",
+                string_schema("Preview task kind: scheduled or long_cycle."),
+            ),
+            (
+                "taskType",
+                string_schema(
+                    "Preview task type alias, such as scheduled, long_cycle, or reminder.",
+                ),
+            ),
+            ("title", string_schema("Preview task title.")),
+            ("goal", string_schema("Preview task goal.")),
+            ("prompt", string_schema("Preview task prompt.")),
+            ("cron", string_schema("Preview cron expression.")),
+            ("timezone", string_schema("Preview timezone.")),
+            (
+                "payload",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Operation-specific structured payload. Top-level fields are also accepted."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some("Read RedClaw task state with operation=preview|list|stats."),
+    )
+}
+
 fn redclaw_task_list_input_schema() -> Value {
     object_schema(
         &[
@@ -928,6 +1265,29 @@ fn redclaw_task_list_input_schema() -> Value {
         ],
         &[],
         None,
+    )
+}
+
+fn task_list_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": ["list", "stats"],
+                    "description": "Use list for task definitions and stats for task counters."
+                }),
+            ),
+            ("ownerScope", string_schema("Optional owner scope filter.")),
+            (
+                "includeDrafts",
+                bool_schema("Whether to include pending drafts."),
+            ),
+            ("stats", bool_schema("Alias for operation=stats when true.")),
+        ],
+        &[],
+        Some("List RedClaw task definitions or task counters."),
     )
 }
 
@@ -1128,6 +1488,44 @@ fn assets_category_create_input_schema() -> Value {
         &[("name", string_schema("Category name."))],
         &["name"],
         None,
+    )
+}
+
+fn assets_manage_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": ["create", "update", "delete", "category.create"],
+                    "description": "One asset management operation to perform."
+                }),
+            ),
+            ("id", string_schema("Asset id for update/delete.")),
+            ("assetId", string_schema("Compatibility alias for id.")),
+            ("subjectId", string_schema("Compatibility alias for id.")),
+            ("name", string_schema("Asset or category display name.")),
+            (
+                "kind",
+                string_schema("Optional typed asset kind, such as character, product, scene, prop, brand, model, or voice."),
+            ),
+            ("categoryId", string_schema("Optional existing asset category id.")),
+            (
+                "categoryName",
+                string_schema("Optional category name. The host resolves or creates it before writing the asset."),
+            ),
+            ("description", string_schema("Reusable asset description.")),
+            (
+                "tags",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            ("attributes", asset_attributes_schema()),
+            ("images", asset_images_schema()),
+            ("voice", asset_voice_schema()),
+        ],
+        &["operation"],
+        Some("Perform one low-frequency asset mutation. Use assets.search/get/categories.list for reads and assets.generateCharacterCard for image generation."),
     )
 }
 
@@ -2013,6 +2411,71 @@ fn team_report_submit_input_schema() -> Value {
     )
 }
 
+fn team_control_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "Team control operation.",
+                    "enum": [
+                        "session.create",
+                        "member.spawn",
+                        "member.match",
+                        "member.rename",
+                        "member.shutdown",
+                        "member.interrupt",
+                        "member.resume",
+                        "member.wait",
+                        "task.create",
+                        "task.update",
+                        "message.send",
+                        "report.request",
+                        "report.submit",
+                        "artifact.attach",
+                        "blocker.raise"
+                    ]
+                }),
+            ),
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("memberId", string_schema("Target or reporting member id.")),
+            ("taskId", string_schema("Target task id.")),
+            ("displayName", string_schema("Visible team member name.")),
+            ("roleId", string_schema("Stable internal role id.")),
+            ("title", string_schema("Task or session title.")),
+            ("objective", string_schema("Concrete objective.")),
+            ("description", string_schema("Detailed instructions.")),
+            ("status", string_schema("Member, task, or report status.")),
+            ("summary", string_schema("Progress, artifact, or blocker summary.")),
+            ("body", string_schema("Message or report request body.")),
+            (
+                "timeoutMs",
+                integer_schema("Maximum wait time in milliseconds for member.wait.", 0, 30000),
+            ),
+            (
+                "payload",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Operation-specific structured payload. Top-level fields are also accepted."
+                }),
+            ),
+            (
+                "userConfirmedTeamPlan",
+                json!({
+                    "type": "boolean",
+                    "description": "Required only for operations that create sessions or members after the user confirms the team plan."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some(
+            "Run one atomic Team Workboard control operation. Prefer this consolidated entrypoint over individual team.* compatibility actions.",
+        ),
+    )
+}
+
 fn cli_runtime_detect_input_schema() -> Value {
     object_schema(
         &[
@@ -2282,6 +2745,30 @@ fn cli_runtime_execution_get_input_schema() -> Value {
     )
 }
 
+fn cli_runtime_execution_write_stdin_input_schema() -> Value {
+    object_schema(
+        &[
+            ("executionId", string_schema("Running CLI execution id.")),
+            ("id", string_schema("Compatibility alias for executionId.")),
+            ("text", string_schema("Text bytes to write to stdin.")),
+            ("input", string_schema("Compatibility alias for text.")),
+            (
+                "appendNewline",
+                bool_schema("Append one newline after text before flushing stdin."),
+            ),
+            (
+                "closeStdin",
+                bool_schema(
+                    "Close stdin after writing, allowing programs waiting for EOF to continue.",
+                ),
+            ),
+            ("close", bool_schema("Compatibility alias for closeStdin.")),
+        ],
+        &[],
+        None,
+    )
+}
+
 fn cli_runtime_verify_input_schema() -> Value {
     object_schema(
         &[
@@ -2351,6 +2838,37 @@ fn mcp_server_target_input_schema() -> Value {
         ],
         &[],
         None,
+    )
+}
+
+fn mcp_inspect_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": ["list", "sessions", "get", "tools", "resources", "resourceTemplates"],
+                    "description": "MCP read operation."
+                }),
+            ),
+            ("serverId", string_schema("Target MCP server id.")),
+            ("id", string_schema("Alias for serverId.")),
+            (
+                "name",
+                string_schema("Alias for serverId using the configured MCP server name."),
+            ),
+            (
+                "server",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Inline MCP server record when it is not saved yet."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some("Read MCP config, sessions, tools, resources, or resource templates through one consolidated entrypoint."),
     )
 }
 
@@ -2432,6 +2950,77 @@ fn mcp_save_input_schema() -> Value {
     )
 }
 
+fn mcp_manage_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "MCP management operation.",
+                    "enum": [
+                        "add",
+                        "remove",
+                        "enable",
+                        "disable",
+                        "save",
+                        "test",
+                        "disconnect",
+                        "disconnectAll",
+                        "discoverLocal",
+                        "importLocal",
+                        "oauthStatus"
+                    ]
+                }),
+            ),
+            ("serverId", string_schema("Target MCP server id.")),
+            ("id", string_schema("Alias for serverId.")),
+            ("name", string_schema("MCP server name.")),
+            ("url", string_schema("Streamable HTTP or SSE MCP endpoint URL.")),
+            ("command", string_schema("Stdio MCP server command.")),
+            (
+                "args",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Arguments passed to a stdio MCP command."
+                }),
+            ),
+            (
+                "env",
+                json!({
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Environment variables passed to a stdio MCP command."
+                }),
+            ),
+            ("cwd", string_schema("Optional working directory for stdio MCP.")),
+            ("transport", string_schema("Optional transport override.")),
+            ("enabled", bool_schema("Whether the server is enabled after saving.")),
+            (
+                "server",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Inline MCP server record."
+                }),
+            ),
+            (
+                "servers",
+                json!({
+                    "type": "array",
+                    "items": { "type": "object", "additionalProperties": true },
+                    "description": "Complete MCP server records to save."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some(
+            "Run one atomic MCP management operation. Prefer this consolidated entrypoint over individual mcp.* compatibility actions.",
+        ),
+    )
+}
+
 fn mcp_call_input_schema() -> Value {
     object_schema(
         &[
@@ -2464,6 +3053,33 @@ fn skills_invoke_input_schema() -> Value {
         &[("name", string_schema("Skill name to activate."))],
         &["name"],
         None,
+    )
+}
+
+fn skills_read_input_schema() -> Value {
+    object_schema(
+        &[("name", string_schema("Skill name to read."))],
+        &["name"],
+        Some("Read one skill's full instructions and metadata without activating it."),
+    )
+}
+
+fn skills_inspect_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": ["list", "read"],
+                    "description": "Skill read operation."
+                }),
+            ),
+            ("name", string_schema("Skill name when operation=read.")),
+            ("id", string_schema("Alias for name.")),
+        ],
+        &["operation"],
+        Some("List visible skills or read one skill's full instructions without activating it."),
     )
 }
 
@@ -2525,6 +3141,62 @@ fn skills_uninstall_input_schema() -> Value {
         ],
         &["name"],
         Some("Uninstall a user or workspace skill by deleting its managed skill directory."),
+    )
+}
+
+fn skills_manage_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "description": "Skill management operation.",
+                    "enum": ["installFromRepo", "uninstall"]
+                }),
+            ),
+            (
+                "source",
+                string_schema(
+                    "Repository URL, git URL, owner/repo shorthand, or local repository path when operation=installFromRepo.",
+                ),
+            ),
+            (
+                "ref",
+                string_schema("Optional branch, tag, or commit to install from."),
+            ),
+            (
+                "path",
+                string_schema("Optional repository-relative skill directory or bundle subdirectory."),
+            ),
+            (
+                "paths",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional list of repository-relative skill directories or bundle subdirectories.",
+                }),
+            ),
+            ("name", string_schema("Skill name when operation=uninstall.")),
+            (
+                "scope",
+                json!({
+                    "type": "string",
+                    "enum": ["user", "workspace"],
+                    "description": "Install/uninstall scope.",
+                }),
+            ),
+            (
+                "payload",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Operation-specific structured payload. Top-level fields are also accepted."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some("Run one explicit skill management operation."),
     )
 }
 
@@ -2921,6 +3593,31 @@ fn fs_workspace_read_input_schema() -> Value {
     )
 }
 
+fn fs_workspace_inspect_image_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema("Workspace-relative local image file path to inspect."),
+            ),
+            (
+                "includeDataUrl",
+                bool_schema("Whether to include a base64 data URL for small images."),
+            ),
+            (
+                "maxBytes",
+                integer_schema(
+                    "Maximum file bytes allowed when includeDataUrl is true.",
+                    1,
+                    2_000_000,
+                ),
+            ),
+        ],
+        &["path"],
+        Some("Inspect one local workspace image without invoking the model vision path."),
+    )
+}
+
 fn fs_workspace_create_directory_input_schema() -> Value {
     object_schema(
         &[(
@@ -2950,6 +3647,63 @@ fn fs_workspace_write_input_schema() -> Value {
         ],
         &["path", "content"],
         None,
+    )
+}
+
+fn fs_workspace_patch_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": ["edit", "create", "delete", "move"],
+                    "description": "Patch operation. Defaults to edit when omitted."
+                }),
+            ),
+            (
+                "path",
+                string_schema("Workspace-relative UTF-8 file path to patch, create, delete, or move."),
+            ),
+            (
+                "toPath",
+                string_schema("Workspace-relative destination file path for operation=move."),
+            ),
+            (
+                "content",
+                string_schema("Complete UTF-8 text content for operation=create."),
+            ),
+            (
+                "edits",
+                json!({
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "oldText": {
+                                "type": "string",
+                                "description": "Exact text to replace. Must match once unless replaceAll is true."
+                            },
+                            "newText": {
+                                "type": "string",
+                                "description": "Replacement text."
+                            },
+                            "replaceAll": {
+                                "type": "boolean",
+                                "description": "When true, replace every occurrence of oldText."
+                            }
+                        },
+                        "required": ["oldText", "newText"],
+                        "additionalProperties": false
+                    }
+                }),
+            ),
+        ],
+        &["path"],
+        Some(
+            "Apply one structured workspace patch operation. Supports exact replacements for existing UTF-8 files plus create/delete/move.",
+        ),
     )
 }
 
@@ -3337,10 +4091,13 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "skills" => Some("skill"),
         "mcp" => Some("mcp"),
         "plugins" => Some("plugins"),
+        "profile" => Some("profile"),
+        "task" => Some("task"),
         "runtime" | "team" => Some("runtime"),
         "cli_runtime" => Some("cli_runtime"),
         "redclaw" if action.starts_with("redclaw.profile.") => Some("profile"),
         "redclaw" if action.starts_with("redclaw.task.") => Some("task"),
+        "redclaw" if action.starts_with("redclaw.runner.") => Some("runtime"),
         _ => None,
     }
 }
@@ -3350,16 +4107,16 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
     match verb {
         "list" | "marketplace" => Some("list"),
         "search" => Some("search"),
-        "get" | "read" | "fetch" | "readCurrent" | "bundle" | "stats" | "query"
+        "get" | "read" | "fetch" | "readCurrent" | "bundle" | "stats" | "status" | "query"
         | "getCheckpoints" | "getToolResults" | "getEvents" | "sessions" | "oauthStatus" => {
             Some("get")
         }
-        "create" | "createProject" | "preview" | "add" | "spawn" | "send" | "request" => {
+        "create" | "createProject" | "preview" | "add" | "spawn" | "send" | "request" | "start" => {
             Some("create")
         }
         "requestInstall" => Some("request"),
-        "update" | "writeCurrent" | "submit" => Some("update"),
-        "delete" | "disconnect" | "disconnectAll" | "deny" => Some("delete"),
+        "update" | "writeCurrent" | "submit" | "setConfig" => Some("update"),
+        "delete" | "disconnect" | "disconnectAll" | "deny" | "stop" => Some("delete"),
         "cancel" => Some("cancel"),
         "resume" => Some("resume"),
         "confirm" | "approve" => Some("confirm"),
@@ -3371,7 +4128,7 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
         "verify" | "diagnose" | "inspect" | "detect" | "discover" | "discoverLocal" | "test" => {
             Some("verify")
         }
-        "listTools" | "listResources" | "listResourceTemplates" => Some("list"),
+        "tools" | "listTools" | "listResources" | "listResourceTemplates" => Some("list"),
         _ => None,
     }
 }
@@ -3542,6 +4299,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "taskBrief.goal",
+        namespace: "taskBrief",
+        description: "Read, create, or update the current Task Brief goal lifecycle state, including objective, status, token budget, token usage, and completion/blocker reason.",
+        input_schema: task_brief_goal_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "taskBrief.context",
+        namespace: "taskBrief",
+        description: "Read estimated current-session context usage or compact old history into a bounded summary. This is the RedConvert equivalent of Codex context budget utilities.",
+        input_schema: task_brief_context_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "session.resources.list",
         namespace: "session.resources",
         description: "List files and media resources visible in the current session, including user attachments and prior tool-generated assets. Use this when a later tool call needs an exact reference path from the current conversation.",
@@ -3572,7 +4351,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "plugins.connectors",
@@ -3582,6 +4361,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "plugins.discover",
+        namespace: "plugins",
+        description: "Discover installed plugins or installable Codex-compatible plugin candidates from the marketplace, local Codex cache, or a filesystem path.",
+        input_schema: plugins_discover_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -3594,7 +4384,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "plugins.codexMarketplace",
@@ -3605,7 +4395,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "plugins.discoverLocal",
@@ -3616,7 +4406,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "plugins.install",
@@ -3638,7 +4428,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "plugins.requestInstall",
@@ -3649,7 +4439,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "memory.list",
@@ -3660,12 +4450,12 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "memory.search",
         namespace: "memory",
-        description: "Search durable memory entries by text query.",
+        description: "Read durable memory entries with mode=list, mode=search, or mode=recall. Use this consolidated action instead of memory.list or memory.recall compatibility actions.",
         input_schema: memory_search_input_schema,
         output_schema: memory_output_schema,
         mutating: false,
@@ -3682,12 +4472,23 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "memory.add",
         namespace: "memory",
         description: "Persist a durable memory entry.",
+        input_schema: memory_add_input_schema,
+        output_schema: memory_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "memory.note",
+        namespace: "memory",
+        description: "Append one durable memory note after the user explicitly asks to remember or record a fact.",
         input_schema: memory_add_input_schema,
         output_schema: memory_output_schema,
         mutating: true,
@@ -3704,7 +4505,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "memory.archive",
@@ -3715,6 +4516,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "memory.manage",
+        namespace: "memory",
+        description: "Update, archive, rebuild, or inspect durable memory state after an explicit user request.",
+        input_schema: memory_manage_input_schema,
+        output_schema: memory_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -3725,8 +4537,8 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: memory_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "memory.diagnostics",
@@ -3736,8 +4548,8 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: memory_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.profile.bundle",
@@ -3748,7 +4560,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.profile.read",
@@ -3758,6 +4570,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: redclaw_profile_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "profile.read",
+        namespace: "profile",
+        description: "Read the RedClaw profile bundle or one durable profile document.",
+        input_schema: profile_read_input_schema,
+        output_schema: redclaw_profile_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "profile.manage",
+        namespace: "profile",
+        description: "Run one atomic RedClaw profile management operation such as updating a profile document or completing the style-definition flow. Use this consolidated action instead of redclaw.profile.* compatibility actions.",
+        input_schema: profile_manage_input_schema,
+        output_schema: redclaw_profile_output_schema,
+        mutating: true,
+        concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -3770,7 +4604,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.profile.completeStyleDefinition",
@@ -3781,7 +4615,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.runner.status",
@@ -3791,7 +4625,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
         visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
@@ -3802,7 +4636,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
         visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
@@ -3813,7 +4647,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
         visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
@@ -3824,8 +4658,19 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
         visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "runner.manage",
+        namespace: "redclaw.runner",
+        description: "Run one atomic RedClaw automation runner lifecycle operation such as start, stop, run now, or update config. Use this consolidated action instead of redclaw.runner.* compatibility actions.",
+        input_schema: runner_manage_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "redclaw.task.preview",
@@ -3835,6 +4680,39 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "task.read",
+        namespace: "task",
+        description: "Read RedClaw task state with operation=preview, list, or stats. Use this consolidated action instead of task.preview or task.list compatibility actions.",
+        input_schema: task_read_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "task.preview",
+        namespace: "task",
+        description: "Preview a user-facing RedClaw task definition before creation.",
+        input_schema: redclaw_task_preview_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "task.manage",
+        namespace: "task",
+        description: "Run one atomic RedClaw task management operation after preview or explicit user request. Use this consolidated action instead of redclaw.task.* compatibility actions.",
+        input_schema: task_manage_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -3847,7 +4725,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.task.confirm",
@@ -3858,7 +4736,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.task.update",
@@ -3869,7 +4747,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.task.cancel",
@@ -3880,7 +4758,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.task.list",
@@ -3891,7 +4769,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.task.stats",
@@ -3902,7 +4780,18 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "task.list",
+        namespace: "task",
+        description: "List RedClaw task definitions or task counters.",
+        input_schema: task_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "manuscripts.list",
@@ -3968,7 +4857,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "assets.update",
@@ -3979,7 +4868,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "assets.delete",
@@ -3990,7 +4879,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "assets.categories.list",
@@ -4008,6 +4897,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "assets",
         description: "Create an asset library category.",
         input_schema: assets_category_create_input_schema,
+        output_schema: subjects_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "assets.manage",
+        namespace: "assets",
+        description: "Perform one low-frequency asset mutation: create/update/delete an asset or create an asset category.",
+        input_schema: assets_manage_input_schema,
         output_schema: subjects_output_schema,
         mutating: true,
         concurrency_safe: false,
@@ -4232,7 +5132,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.session.list",
@@ -4265,7 +5165,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.member.match",
@@ -4276,7 +5176,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.member.rename",
@@ -4287,7 +5187,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.member.shutdown",
@@ -4298,7 +5198,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.members.list",
@@ -4320,7 +5220,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.task.update",
@@ -4331,7 +5231,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.task.list",
@@ -4353,7 +5253,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.report.request",
@@ -4364,7 +5264,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.report.submit",
@@ -4375,7 +5275,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.artifact.attach",
@@ -4386,13 +5286,24 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "team.blocker.raise",
         namespace: "team.blocker",
         description: "Raise a structured blocker report for one team task.",
         input_schema: team_blocker_raise_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "team.control",
+        namespace: "team",
+        description: "Run one atomic Team Workboard control operation such as create task, send message, request report, attach artifact, or raise blocker. Use this consolidated action instead of individual team.* compatibility actions.",
+        input_schema: team_control_input_schema,
         output_schema: runtime_output_schema,
         mutating: true,
         concurrency_safe: false,
@@ -4510,6 +5421,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "cli_runtime.execution.writeStdin",
+        namespace: "cli_runtime.execution",
+        description: "Write explicit text to stdin of one running background CLI execution. Use only after launching a command with usePty=true and an executionId.",
+        input_schema: cli_runtime_execution_write_stdin_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "cli_runtime.verify",
         namespace: "cli_runtime",
         description: "Run structured verification rules against one finished CLI execution.",
@@ -4551,6 +5473,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "mcp.manage",
+        namespace: "mcp",
+        description: "Run one atomic MCP management operation such as add, remove, enable, disable, save, test, disconnect, import local config, or read OAuth status. Use this consolidated action instead of individual mcp.* compatibility actions.",
+        input_schema: mcp_manage_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -4562,7 +5495,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.get",
@@ -4573,7 +5506,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.remove",
@@ -4584,7 +5517,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.enable",
@@ -4595,7 +5528,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.disable",
@@ -4606,13 +5539,24 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.sessions",
         namespace: "mcp",
         description: "List active MCP transport sessions.",
         input_schema: mcp_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "mcp.inspect",
+        namespace: "mcp",
+        description: "Read MCP config, sessions, tools, resources, or resource templates with operation=list, sessions, get, tools, resources, or resourceTemplates.",
+        input_schema: mcp_inspect_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
@@ -4628,7 +5572,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.importLocal",
@@ -4639,7 +5583,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.save",
@@ -4650,7 +5594,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.test",
@@ -4661,7 +5605,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.call",
@@ -4683,7 +5627,18 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "mcp.tools",
+        namespace: "mcp",
+        description: "List tools exposed by one MCP server.",
+        input_schema: mcp_server_target_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.listResources",
@@ -4694,7 +5649,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.listResourceTemplates",
@@ -4705,7 +5660,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.disconnect",
@@ -4716,7 +5671,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.disconnectAll",
@@ -4727,7 +5682,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "mcp.oauthStatus",
@@ -4738,13 +5693,35 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "skills.list",
         namespace: "skills",
         description: "List visible skills in the current runtime.",
         input_schema: skills_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "skills.read",
+        namespace: "skills",
+        description: "Read one skill's full instructions and metadata without activating it.",
+        input_schema: skills_read_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "skills.inspect",
+        namespace: "skills",
+        description: "List visible skills or read one skill's full instructions without activating it.",
+        input_schema: skills_inspect_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
@@ -4771,13 +5748,24 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "skills.uninstall",
         namespace: "skills",
         description: "Uninstall a user or workspace skill by deleting its managed skill directory. Built-in skills are refused.",
         input_schema: skills_uninstall_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "skills.manage",
+        namespace: "skills",
+        description: "Run one explicit skill management operation such as installing skills from a repository or uninstalling a managed skill. Use this consolidated action instead of skills.installFromRepo or skills.uninstall compatibility actions.",
+        input_schema: skills_manage_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
@@ -4898,6 +5886,17 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "workspace.inspectImage",
+        namespace: "workspace",
+        description: "Inspect one workspace-relative local image file and return dimensions, mime type, byte size, hash, and optionally a small data URL.",
+        input_schema: fs_workspace_inspect_image_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "workspace.createDirectory",
         namespace: "workspace",
         description: "Create one workspace-relative directory, including missing parents. Use for project folders and other long-lived workspace artifacts.",
@@ -4913,6 +5912,17 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
         namespace: "workspace",
         description: "Write one UTF-8 text file inside the workspace, creating parent directories as needed. Use for project manifests, drafts, plans, transcripts, and indexes that should live as user-managed project files.",
         input_schema: fs_workspace_write_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "workspace.patch",
+        namespace: "workspace",
+        description: "Patch one existing UTF-8 workspace file using exact oldText/newText replacements. Each edit must match exactly once unless replaceAll is true.",
+        input_schema: fs_workspace_patch_input_schema,
         output_schema: file_system_output_schema,
         mutating: true,
         concurrency_safe: false,
@@ -5312,7 +6322,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "resource" => Some(ToolDescriptor {
             name: "resource",
-            description: "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            description: "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -5536,7 +6546,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
         })),
         "resource" => Some(build_action_tool_schema(
             "resource",
-            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             &action_descriptors_for_tool("resource", runtime_mode, ActionVisibility::Model),
         )),
         "knowledge_glob" => Some(json!({
@@ -5743,7 +6753,7 @@ pub fn schema_for_tool_from_action_descriptors(
         )),
         "resource" => Some(build_action_tool_schema(
             "resource",
-            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             descriptors,
         )),
         "editor" => Some(build_action_tool_schema(
@@ -5788,18 +6798,26 @@ mod tests {
             .expect("action enum");
         let actions = actions.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         assert!(actions.contains(&"runtime.query"));
+        assert!(actions.contains(&"taskBrief.goal"));
         assert!(!actions.contains(&"cli_runtime.detect"));
         assert!(!actions.contains(&"cli_runtime.discover"));
         assert!(actions.contains(&"cli_runtime.execution.get"));
-        assert!(actions.contains(&"mcp.list"));
-        assert!(actions.contains(&"mcp.add"));
-        assert!(actions.contains(&"mcp.get"));
-        assert!(actions.contains(&"mcp.remove"));
-        assert!(actions.contains(&"mcp.discoverLocal"));
-        assert!(actions.contains(&"mcp.importLocal"));
-        assert!(actions.contains(&"mcp.save"));
-        assert!(actions.contains(&"mcp.test"));
-        assert!(actions.contains(&"mcp.listResourceTemplates"));
+        assert!(actions.contains(&"mcp.inspect"));
+        assert!(actions.contains(&"mcp.manage"));
+        assert!(actions.contains(&"runner.manage"));
+        assert!(!actions.contains(&"redclaw.runner.status"));
+        assert!(!actions.contains(&"redclaw.runner.start"));
+        assert!(!actions.contains(&"redclaw.runner.stop"));
+        assert!(!actions.contains(&"redclaw.runner.setConfig"));
+        assert!(!actions.contains(&"mcp.get"));
+        assert!(!actions.contains(&"mcp.add"));
+        assert!(!actions.contains(&"mcp.remove"));
+        assert!(!actions.contains(&"mcp.discoverLocal"));
+        assert!(!actions.contains(&"mcp.importLocal"));
+        assert!(!actions.contains(&"mcp.save"));
+        assert!(!actions.contains(&"mcp.test"));
+        assert!(!actions.contains(&"mcp.tools"));
+        assert!(!actions.contains(&"mcp.listResourceTemplates"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
     }
 
@@ -5814,10 +6832,18 @@ mod tests {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
 
+        for action in ["mcp.inspect", "mcp.manage"] {
+            assert!(actions.contains(&action), "{action}");
+        }
         for action in [
             "mcp.list",
-            "mcp.add",
             "mcp.get",
+            "mcp.sessions",
+            "mcp.listTools",
+            "mcp.tools",
+            "mcp.listResources",
+            "mcp.listResourceTemplates",
+            "mcp.add",
             "mcp.remove",
             "mcp.enable",
             "mcp.disable",
@@ -5825,13 +6851,9 @@ mod tests {
             "mcp.importLocal",
             "mcp.save",
             "mcp.test",
-            "mcp.listTools",
-            "mcp.listResources",
-            "mcp.listResourceTemplates",
-            "mcp.sessions",
             "mcp.oauthStatus",
         ] {
-            assert!(actions.contains(&action), "{action}");
+            assert!(!actions.contains(&action), "{action}");
         }
     }
 
@@ -5846,17 +6868,27 @@ mod tests {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
 
+        for action in ["plugins.discover", "plugins.install"] {
+            assert!(actions.contains(&action), "{action}");
+        }
+        assert!(!actions.contains(&"plugins.list"));
+        for action in ["skills.inspect", "skills.invoke"] {
+            assert!(actions.contains(&action), "{action}");
+        }
+        assert!(actions.contains(&"skills.manage"));
         for action in [
-            "plugins.list",
             "plugins.connectors",
             "plugins.marketplace",
             "plugins.codexMarketplace",
             "plugins.discoverLocal",
-            "plugins.install",
             "plugins.installCodex",
             "plugins.requestInstall",
+            "skills.installFromRepo",
+            "skills.uninstall",
+            "skills.list",
+            "skills.read",
         ] {
-            assert!(actions.contains(&action), "{action}");
+            assert!(!actions.contains(&action), "{action}");
         }
 
         let operate = schema_for_tool_for_runtime_mode("Operate", Some("team"))
@@ -5871,7 +6903,7 @@ mod tests {
             .and_then(Value::as_array)
             .expect("operation enum");
         assert!(operations.contains(&json!("install")));
-        assert!(operations.contains(&json!("request")));
+        assert!(operations.contains(&json!("verify")));
     }
 
     #[test]
@@ -5907,8 +6939,11 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
-        assert!(actions.contains(&"redclaw.task.preview"));
-        assert!(actions.contains(&"redclaw.task.list"));
+        assert!(actions.contains(&"task.read"));
+        assert!(!actions.contains(&"task.preview"));
+        assert!(!actions.contains(&"task.list"));
+        assert!(!actions.contains(&"redclaw.task.preview"));
+        assert!(!actions.contains(&"redclaw.task.list"));
         assert!(!actions.contains(&"cli_runtime.inspect"));
         assert!(!actions.contains(&"runtime.tasks.list"));
         assert!(!actions.contains(&"cli_runtime.detect"));
@@ -5926,8 +6961,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(actions.contains(&"workspace.list"));
         assert!(actions.contains(&"workspace.read"));
+        assert!(actions.contains(&"workspace.inspectImage"));
         assert!(actions.contains(&"workspace.createDirectory"));
         assert!(actions.contains(&"workspace.write"));
+        assert!(actions.contains(&"workspace.patch"));
         assert!(actions.contains(&"workspace.search"));
         assert!(actions.contains(&"knowledge.list"));
         assert!(actions.contains(&"knowledge.read"));
@@ -6042,28 +7079,69 @@ mod tests {
 
         assert!(actions.contains(&"assets.search"));
         assert!(actions.contains(&"assets.get"));
-        assert!(actions.contains(&"assets.create"));
-        assert!(actions.contains(&"assets.update"));
+        assert!(actions.contains(&"assets.manage"));
+        assert!(!actions.contains(&"assets.create"));
+        assert!(!actions.contains(&"assets.update"));
         assert!(actions.contains(&"assets.generateCharacterCard"));
-        assert!(actions.contains(&"assets.categories.create"));
+        assert!(!actions.contains(&"assets.categories.create"));
         assert!(!actions.contains(&"subjects.search"));
         assert!(!actions.contains(&"subjects.get"));
     }
 
     #[test]
-    fn app_cli_schema_exposes_team_coordinator_actions() {
+    fn app_cli_full_catalog_keeps_high_noise_groups_compressed() {
+        let model_actions = APP_CLI_ACTIONS
+            .iter()
+            .copied()
+            .filter(|descriptor| descriptor.visibility == ActionVisibility::Model)
+            .collect::<Vec<_>>();
+        let plugin_skill_mcp = model_actions
+            .iter()
+            .filter(|descriptor| {
+                descriptor.action.starts_with("plugins.")
+                    || descriptor.action.starts_with("skills.")
+                    || descriptor.action.starts_with("mcp.")
+            })
+            .count();
+        let memory_redclaw = model_actions
+            .iter()
+            .filter(|descriptor| {
+                descriptor.action.starts_with("memory.")
+                    || descriptor.action.starts_with("profile.")
+                    || descriptor.action.starts_with("task.")
+                    || descriptor.action.starts_with("runner.")
+                    || descriptor.action.starts_with("redclaw.profile.")
+                    || descriptor.action.starts_with("redclaw.task.")
+                    || descriptor.action.starts_with("redclaw.runner.")
+            })
+            .count();
+
+        assert!(
+            plugin_skill_mcp <= 8,
+            "Plugins/Skills/MCP full catalog grew to {plugin_skill_mcp}"
+        );
+        assert!(
+            memory_redclaw <= 8,
+            "Memory/RedClaw full catalog grew to {memory_redclaw}"
+        );
+    }
+
+    #[test]
+    fn app_cli_schema_exposes_consolidated_team_control_action() {
         let schema = schema_for_tool_for_runtime_mode("workflow", Some("redclaw"))
             .expect("workflow schema should exist");
         let actions = schema
             .pointer("/function/parameters/properties/action/enum")
             .and_then(Value::as_array)
             .expect("action enum should exist");
+        assert!(actions.iter().any(|item| item == "team.control"));
         for action in [
             "team.session.create",
             "team.member.spawn",
             "team.member.match",
             "team.member.rename",
             "team.member.shutdown",
+            "team.member.interrupt",
             "team.task.create",
             "team.message.send",
             "team.report.request",
@@ -6071,7 +7149,7 @@ mod tests {
             "team.artifact.attach",
             "team.blocker.raise",
         ] {
-            assert!(actions.iter().any(|item| item == action), "{action}");
+            assert!(!actions.iter().any(|item| item == action), "{action}");
         }
     }
 
@@ -6086,14 +7164,20 @@ mod tests {
         for action in [
             "web.fetch",
             "cli_runtime.execution.get",
-            "mcp.list",
-            "mcp.discoverLocal",
-            "mcp.add",
-            "mcp.get",
-            "mcp.remove",
-            "mcp.listTools",
+            "mcp.inspect",
+            "mcp.manage",
         ] {
             assert!(actions.iter().any(|item| item == action), "{action}");
+        }
+        for action in [
+            "mcp.list",
+            "mcp.get",
+            "mcp.listTools",
+            "mcp.tools",
+            "mcp.add",
+            "mcp.remove",
+        ] {
+            assert!(!actions.iter().any(|item| item == action), "{action}");
         }
         for action in [
             "cli_runtime.inspect",

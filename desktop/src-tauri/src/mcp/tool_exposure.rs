@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 
 use super::tool_inventory::{McpToolAvailability, McpToolInfo, McpToolInventorySnapshot};
 
-pub const DEFAULT_MAX_DIRECT_MCP_TOOLS: usize = 24;
+pub const DEFAULT_MAX_DIRECT_MCP_TOOLS: usize = 0;
+pub const DEFAULT_PINNED_DIRECT_MCP_TOOLS: usize = 8;
 pub const DEFAULT_DEFER_SERVER_TOOL_COUNT: usize = 12;
 
 #[derive(Debug, Clone, Default)]
@@ -24,14 +25,21 @@ pub fn build_mcp_tool_exposure(
     if snapshot.tools.is_empty() {
         return McpToolExposure::default();
     }
-    let max_direct = metadata
+    let explicit_direct_budget = metadata
         .and_then(|value| value.get("maxDirectMcpTools"))
-        .and_then(Value::as_u64)
-        .map(|value| value.clamp(1, 128) as usize)
-        .unwrap_or(DEFAULT_MAX_DIRECT_MCP_TOOLS);
+        .and_then(Value::as_u64);
     let pinned = metadata_string_list(metadata, "directMcpTools")
         .into_iter()
         .collect::<BTreeSet<_>>();
+    let max_direct = explicit_direct_budget
+        .map(|value| value.clamp(0, 128) as usize)
+        .unwrap_or_else(|| {
+            if pinned.is_empty() {
+                DEFAULT_MAX_DIRECT_MCP_TOOLS
+            } else {
+                DEFAULT_PINNED_DIRECT_MCP_TOOLS
+            }
+        });
     let enabled_servers = metadata_string_list(metadata, "enabledMcpServers")
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -44,13 +52,13 @@ pub fn build_mcp_tool_exposure(
     if candidates.is_empty() {
         return McpToolExposure::default();
     }
-    let defer_large = candidates.len() > max_direct
+    let exceeds_direct_budget = candidates.len() > max_direct
         || server_tool_counts(&candidates)
             .into_iter()
             .any(|(_, count)| count > DEFAULT_DEFER_SERVER_TOOL_COUNT);
     let mut direct = Vec::<McpToolInfo>::new();
     let mut deferred = Vec::<McpToolInfo>::new();
-    if !defer_large {
+    if explicit_direct_budget.is_some() && pinned.is_empty() && !exceeds_direct_budget {
         direct = candidates;
     } else {
         for tool in candidates {
@@ -77,15 +85,17 @@ pub fn build_mcp_tool_exposure(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
+    let mode = match (direct.is_empty(), deferred.is_empty()) {
+        (false, true) => "direct",
+        (true, false) => "deferred",
+        (false, false) => "mixed",
+        (true, true) => "empty",
+    };
     McpToolExposure {
         direct_tools: direct,
         deferred_tools: deferred,
         namespaces,
-        mode: if defer_large {
-            "deferred".to_string()
-        } else {
-            "direct".to_string()
-        },
+        mode: mode.to_string(),
     }
 }
 
@@ -130,12 +140,25 @@ mod tests {
     }
 
     #[test]
-    fn small_tool_set_is_direct() {
+    fn small_tool_set_is_deferred_by_default() {
         let snapshot = McpToolInventorySnapshot {
             tools: vec![tool("read"), tool("write")],
             fingerprint: "a".to_string(),
         };
         let exposure = build_mcp_tool_exposure(Some(&snapshot), None);
+        assert!(exposure.direct_tools.is_empty());
+        assert_eq!(exposure.deferred_tools.len(), 2);
+        assert_eq!(exposure.mode, "deferred");
+    }
+
+    #[test]
+    fn explicit_direct_budget_can_expose_small_tool_set() {
+        let snapshot = McpToolInventorySnapshot {
+            tools: vec![tool("read"), tool("write")],
+            fingerprint: "a".to_string(),
+        };
+        let metadata = json!({ "maxDirectMcpTools": 4 });
+        let exposure = build_mcp_tool_exposure(Some(&snapshot), Some(&metadata));
         assert_eq!(exposure.direct_tools.len(), 2);
         assert!(exposure.deferred_tools.is_empty());
         assert_eq!(exposure.mode, "direct");
@@ -152,6 +175,6 @@ mod tests {
         assert_eq!(exposure.direct_tools.len(), 1);
         assert_eq!(exposure.direct_tools[0].callable_name, "mcp__demo__t1");
         assert_eq!(exposure.deferred_tools.len(), 29);
-        assert_eq!(exposure.mode, "deferred");
+        assert_eq!(exposure.mode, "mixed");
     }
 }

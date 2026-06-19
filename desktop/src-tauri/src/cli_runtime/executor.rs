@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -121,6 +121,7 @@ struct LocalCliCommandOutput {
 
 struct BackgroundCliExecution {
     child: Mutex<Child>,
+    stdin: Mutex<Option<ChildStdin>>,
     cancellation_requested: AtomicBool,
     verification_rules: Vec<CliVerifyRule>,
     stdout_reader: Mutex<Option<JoinHandle<()>>>,
@@ -338,6 +339,7 @@ fn launch_background_execution<RT: Runtime>(
     initialize_execution_logs(stdout_path, stderr_path)?;
     let terminal = spawn_cli_terminal(&request.argv, Path::new(cwd), env, sandbox)?;
     let mut child = terminal.child;
+    let stdin_writer = child.stdin.take();
     let stdout_reader = child
         .stdout
         .take()
@@ -348,6 +350,7 @@ fn launch_background_execution<RT: Runtime>(
         .ok_or_else(|| "cli background execution missing stderr pipe".to_string())?;
     let runtime = Arc::new(BackgroundCliExecution {
         child: Mutex::new(child),
+        stdin: Mutex::new(stdin_writer),
         cancellation_requested: AtomicBool::new(false),
         verification_rules: request.verification_rules.clone(),
         stdout_reader: Mutex::new(Some(spawn_execution_log_reader(
@@ -376,6 +379,56 @@ fn launch_background_execution<RT: Runtime>(
     emit_cli_execution_status(app, record, Some("process running in background"));
     spawn_background_reaper(app.clone(), record.id.clone());
     Ok(())
+}
+
+pub fn write_cli_execution_stdin<RT: Runtime>(
+    app: &AppHandle<RT>,
+    state: &State<'_, AppState>,
+    execution_id: &str,
+    text: &str,
+    append_newline: bool,
+    close_stdin: bool,
+) -> Result<CliExecutionRecord, String> {
+    let Some(record) = find_cli_execution_by_id(state, execution_id)? else {
+        return Err(format!("cli execution not found: {execution_id}"));
+    };
+    if record.status != CliExecutionStatus::Running {
+        return Err(format!(
+            "cli execution {execution_id} is not running; current status is {:?}",
+            record.status
+        ));
+    }
+    if text.is_empty() && !close_stdin {
+        return Err("stdin write requires non-empty text or closeStdin=true".to_string());
+    }
+    let Some(runtime) = get_background_execution(execution_id)? else {
+        return Err(
+            "cli execution is not registered as an interactive background task".to_string(),
+        );
+    };
+    {
+        let mut stdin = runtime
+            .stdin
+            .lock()
+            .map_err(|_| "cli execution stdin lock is poisoned".to_string())?;
+        let writer = stdin
+            .as_mut()
+            .ok_or_else(|| "cli execution stdin is already closed".to_string())?;
+        if !text.is_empty() {
+            writer
+                .write_all(text.as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
+        if append_newline {
+            writer.write_all(b"\n").map_err(|error| error.to_string())?;
+        }
+        writer.flush().map_err(|error| error.to_string())?;
+        if close_stdin {
+            stdin.take();
+        }
+    }
+    emit_cli_execution_status(app, &record, Some("stdin written to running process"));
+    Ok(refresh_cli_execution(app, execution_id)?.unwrap_or(record))
 }
 
 pub fn refresh_cli_execution<RT: Runtime>(
@@ -885,6 +938,25 @@ mod tests {
         ]
     }
 
+    #[cfg(not(target_os = "windows"))]
+    fn stdin_background_command() -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "read line; printf 'input:%s\\n' \"$line\"".to_string(),
+        ]
+    }
+
+    #[cfg(target_os = "windows")]
+    fn stdin_background_command() -> Vec<String> {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "$line = [Console]::In.ReadLine(); Write-Output \"input:$line\"".to_string(),
+        ]
+    }
+
     fn wait_for_status<RT: Runtime>(
         app: &AppHandle<RT>,
         execution_id: &str,
@@ -1009,6 +1081,54 @@ mod tests {
             .expect("snapshot should exist");
         assert_eq!(snapshot.execution.status, CliExecutionStatus::Cancelled);
         assert!(snapshot.execution.finished_at.is_some());
+    }
+
+    #[test]
+    fn write_cli_execution_stdin_unblocks_background_process() {
+        let _guard = executor_test_lock()
+            .lock()
+            .expect("executor test lock should not be poisoned");
+        let app = build_test_app();
+        let app_handle = app.handle().clone();
+        let state = app.state::<crate::AppState>();
+        let environment = crate::cli_runtime::ensure_app_global_environment(&state)
+            .expect("app environment should exist");
+        let cwd =
+            std::env::temp_dir().join(format!("redbox-cli-runtime-stdin-{}", crate::now_i64()));
+        fs::create_dir_all(&cwd).expect("cwd should exist");
+
+        let execution = execute_cli_command(
+            &app_handle,
+            &state,
+            CliExecuteRequest {
+                environment_id: Some(environment.id),
+                argv: stdin_background_command(),
+                cwd: Some(cwd.to_string_lossy().to_string()),
+                use_pty: true,
+                ..CliExecuteRequest::default()
+            },
+        )
+        .expect("background execution should start");
+        assert_eq!(execution.status, CliExecutionStatus::Running);
+
+        let written = write_cli_execution_stdin(
+            &app_handle,
+            &state,
+            &execution.id,
+            "hello-stdin",
+            true,
+            true,
+        )
+        .expect("stdin write should work");
+        assert_eq!(written.id, execution.id);
+
+        let record = wait_for_status(&app_handle, &execution.id, CliExecutionStatus::Completed);
+        assert_eq!(record.exit_code, Some(0));
+
+        let snapshot = crate::cli_runtime::load_cli_execution_snapshot(&state, &execution.id, 200)
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+        assert!(snapshot.stdout_tail.contains("input:hello-stdin"));
     }
 
     #[test]

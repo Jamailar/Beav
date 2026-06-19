@@ -26,7 +26,7 @@ pub fn spawn_cli_terminal(
     command.args(&launch.args);
     command.current_dir(cwd);
     command.envs(&launch.env);
-    command.stdin(Stdio::null());
+    command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     let child = command.spawn().map_err(|error| error.to_string())?;

@@ -203,6 +203,29 @@ pub(super) fn handle(
                             .or_else(|| payload_field(payload, "maxChars").and_then(Value::as_i64)),
                     }),
                 ),
+                "write-stdin" | "writeStdin" | "input" => executor.call_channel(
+                    "cli-runtime:write-stdin",
+                    json!({
+                        "executionId": nested_args
+                            .string(&["execution-id", "executionId", "id"])
+                            .or_else(|| payload_string(payload, "executionId"))
+                            .or_else(|| payload_string(payload, "id"))
+                            .ok_or_else(|| "cli_runtime execution.writeStdin requires --execution-id".to_string())?,
+                        "text": nested_args
+                            .string(&["text", "input"])
+                            .or_else(|| payload_string(payload, "text"))
+                            .or_else(|| payload_string(payload, "input"))
+                            .unwrap_or_default(),
+                        "appendNewline": payload_field(payload, "appendNewline")
+                            .cloned()
+                            .or_else(|| payload_field(payload, "append_newline").cloned())
+                            .unwrap_or_else(|| json!(false)),
+                        "closeStdin": payload_field(payload, "closeStdin")
+                            .cloned()
+                            .or_else(|| payload_field(payload, "close").cloned())
+                            .unwrap_or_else(|| json!(false)),
+                    }),
+                ),
                 _ => Err(format!("unsupported cli_runtime execution action: {sub}")),
             }
         }
