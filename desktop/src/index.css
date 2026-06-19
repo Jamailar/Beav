@@ -230,8 +230,15 @@ select {
 [data-theme='dark'] .bg-white\/80,
 [data-theme='dark'] .bg-white\/70,
 [data-theme='dark'] .bg-white\/60,
-[data-theme='dark'] .bg-white\/50 {
-  background-color: rgb(var(--color-surface-primary) / 1) !important;
+[data-theme='dark'] .bg-white\/50,
+[data-theme='dark'] .bg-white\/40,
+[data-theme='dark'] .bg-white\/30,
+[data-theme='dark'] .bg-white\/20 {
+  background-color: rgb(var(--color-surface-primary) / 0.85) !important;
+}
+
+[data-theme='dark'] .bg-white\/95 {
+  background-color: rgb(var(--color-surface-primary) / 0.95) !important;
 }
 
 [data-theme='dark'] .bg-gray-50,
@@ -239,7 +246,9 @@ select {
 [data-theme='dark'] .bg-slate-50,
 [data-theme='dark'] .bg-slate-100,
 [data-theme='dark'] .bg-zinc-50,
-[data-theme='dark'] .bg-zinc-100 {
+[data-theme='dark'] .bg-zinc-100,
+[data-theme='dark'] .bg-neutral-50,
+[data-theme='dark'] .bg-neutral-100 {
   background-color: rgb(var(--color-surface-secondary) / 1) !important;
 }
 
@@ -248,7 +257,9 @@ select {
 [data-theme='dark'] .bg-slate-800,
 [data-theme='dark'] .bg-slate-900,
 [data-theme='dark'] .bg-zinc-800,
-[data-theme='dark'] .bg-zinc-900 {
+[data-theme='dark'] .bg-zinc-900,
+[data-theme='dark'] .bg-neutral-800,
+[data-theme='dark'] .bg-neutral-900 {
   background-color: rgb(var(--color-surface-elevated) / 1) !important;
 }
 
@@ -258,8 +269,16 @@ select {
 [data-theme='dark'] .border-slate-200,
 [data-theme='dark'] .border-slate-300,
 [data-theme='dark'] .border-zinc-200,
-[data-theme='dark'] .border-zinc-300 {
+[data-theme='dark'] .border-zinc-300,
+[data-theme='dark'] .border-neutral-200,
+[data-theme='dark'] .border-neutral-300 {
   border-color: rgb(var(--color-border) / 1) !important;
+}
+
+[data-theme='dark'] .border-white\/20,
+[data-theme='dark'] .border-white\/30,
+[data-theme='dark'] .border-white\/60 {
+  border-color: rgb(var(--color-border) / 0.6) !important;
 }
 
 [data-theme='dark'] .text-gray-900,
@@ -267,7 +286,10 @@ select {
 [data-theme='dark'] .text-slate-900,
 [data-theme='dark'] .text-slate-800,
 [data-theme='dark'] .text-zinc-900,
-[data-theme='dark'] .text-zinc-800 {
+[data-theme='dark'] .text-zinc-800,
+[data-theme='dark'] .text-neutral-900,
+[data-theme='dark'] .text-neutral-800,
+[data-theme='dark'] .text-black {
   color: rgb(var(--color-text-primary) / 1) !important;
 }
 
@@ -279,8 +301,58 @@ select {
 [data-theme='dark'] .text-slate-500,
 [data-theme='dark'] .text-zinc-700,
 [data-theme='dark'] .text-zinc-600,
-[data-theme='dark'] .text-zinc-500 {
+[data-theme='dark'] .text-zinc-500,
+[data-theme='dark'] .text-neutral-700,
+[data-theme='dark'] .text-neutral-600,
+[data-theme='dark'] .text-neutral-500 {
   color: rgb(var(--color-text-secondary) / 1) !important;
+}
+
+/* Dark mode: override hardcoded hex colors used in Workboard/Advisors/Knowledge */
+[data-theme='dark'] .border-black\/\[0\.02\],
+[data-theme='dark'] .border-black\/\[0\.03\],
+[data-theme='dark'] .border-black\/\[0\.04\],
+[data-theme='dark'] .border-black\/\[0\.05\],
+[data-theme='dark'] .border-black\/\[0\.06\],
+[data-theme='dark'] .border-black\/10 {
+  border-color: rgb(var(--color-border) / 0.6) !important;
+}
+
+[data-theme='dark'] .bg-black\/\[0\.02\] {
+  background-color: transparent !important;
+}
+
+[data-theme='dark'] .bg-rose-50 {
+  background-color: rgba(245, 95, 95, 0.12) !important;
+}
+
+[data-theme='dark'] .border-rose-200,
+[data-theme='dark'] .border-rose-200\/80 {
+  border-color: rgba(245, 95, 95, 0.3) !important;
+}
+
+[data-theme='dark'] .text-rose-700 {
+  color: rgb(255 178 178 / 1) !important;
+}
+
+[data-theme='dark'] .hover\:bg-rose-50:hover {
+  background-color: rgba(245, 95, 95, 0.18) !important;
+}
+
+[data-theme='dark'] .bg-amber-50 {
+  background-color: rgba(255, 154, 46, 0.12) !important;
+}
+
+[data-theme='dark'] .border-amber-200 {
+  border-color: rgba(255, 154, 46, 0.3) !important;
+}
+
+[data-theme='dark'] .text-amber-700 {
+  color: rgba(255, 154, 46, 0.9) !important;
+}
+
+[data-theme='dark'] .hover\:bg-amber-50:hover {
+  background-color: rgba(255, 154, 46, 0.18) !important;
 }
 
 /* Scrollbar styling for minimalism */

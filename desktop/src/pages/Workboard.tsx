@@ -26,9 +26,9 @@ function lifecycleLabel(item: TaskListItem): string {
 }
 
 function lifecycleTone(item: TaskListItem): string {
-    if (item.requiresConfirmation) return 'bg-[#f7ead7] text-[#8c6a3c]';
-    if (item.cooldown?.state === 'active') return 'bg-[#f8dfdf] text-[#94545c]';
-    return item.enabled ? 'bg-[#dff2ee] text-[#4b7f76]' : 'bg-[#edf0f4] text-[#6f7682]';
+    if (item.requiresConfirmation) return 'bg-accent-muted text-accent-primary';
+    if (item.cooldown?.state === 'active') return 'bg-status-error/10 text-status-error';
+    return item.enabled ? 'bg-status-success/10 text-status-success' : 'bg-surface-tertiary text-text-tertiary';
 }
 
 function policyLabel(value?: string | null): string {
@@ -193,9 +193,9 @@ function StatCard({
     value: number;
 }) {
     return (
-        <div className="inline-flex min-w-fit items-center gap-2.5 rounded-full border border-[#ece4d8] bg-white px-3.5 py-2">
-            <div className="whitespace-nowrap text-[10px] uppercase tracking-[0.16em] text-[#a09789]">{label}</div>
-            <div className="text-[18px] font-semibold leading-none text-[#1d1b18]">{value}</div>
+        <div className="inline-flex min-w-fit items-center gap-2.5 rounded-full border border-border bg-surface-primary px-3.5 py-2">
+            <div className="whitespace-nowrap text-[10px] uppercase tracking-[0.16em] text-text-tertiary">{label}</div>
+            <div className="text-[18px] font-semibold leading-none text-text-primary">{value}</div>
         </div>
     );
 }
@@ -208,9 +208,9 @@ function DetailRow({
     value: string;
 }) {
     return (
-        <div className="rounded-[18px] border border-[#eee7dc] bg-[#fcfbf9] px-3.5 py-2.5">
-            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">{label}</div>
-            <div className="mt-1 text-[13px] leading-5 text-[#201d1a] break-words">{value}</div>
+        <div className="rounded-[18px] border border-border bg-surface-secondary px-3.5 py-2.5">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">{label}</div>
+            <div className="mt-1 text-[13px] leading-5 text-text-primary break-words">{value}</div>
         </div>
     );
 }
@@ -330,22 +330,22 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
     }, [load]);
 
     return (
-        <div className="h-full min-h-0 bg-[#fbfaf7] text-[#191919]">
+        <div className="h-full min-h-0 bg-background text-text-primary">
             <div className="flex h-full min-h-0 flex-col gap-4 px-6 py-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <div className="inline-flex items-center gap-1.5 rounded-full border border-[#ece3d5] bg-white px-2.5 py-1 text-[11px] text-[#7c7468]">
+                        <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-primary px-2.5 py-1 text-[11px] text-text-secondary">
                             <ListTodo className="h-3 w-3" />
                             RedClaw 任务中心
                         </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                        <div className="rounded-full border border-[#ece5da] bg-white px-2.5 py-1 text-[11px] text-[#7d766a]">
+                        <div className="rounded-full border border-border bg-surface-primary px-2.5 py-1 text-[11px] text-text-secondary">
                             更新于 {formatDateTime(lastUpdatedAt)}
                         </div>
                         <button
                             onClick={() => void load()}
-                            className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#e7e0d4] bg-white px-3 text-[11px] text-[#7d766a] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f5f1e9]"
+                            className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-border bg-surface-primary px-3 text-[11px] text-text-secondary shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-surface-secondary"
                         >
                             <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
                             刷新
@@ -371,8 +371,8 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                             onClick={() => setFilter(option.key)}
                             className={`rounded-full border px-3 py-1.5 text-[12px] transition ${
                                 filter === option.key
-                                    ? 'border-[#c8b08b] bg-[#efe3d0] text-[#5c4630]'
-                                    : 'border-[#e8dfd2] bg-white text-[#736b60] hover:bg-[#f6f2ea]'
+                                    ? 'border-accent-primary bg-accent-muted text-accent-primary'
+                                    : 'border-border bg-surface-primary text-text-secondary hover:bg-surface-secondary'
                             }`}
                         >
                             {option.label}
@@ -390,23 +390,23 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
 
                 <div className="min-h-0 flex-1 overflow-hidden">
                     <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[minmax(320px,400px)_minmax(0,1fr)]">
-                        <div className="min-h-0 overflow-hidden rounded-[24px] border border-[#ece4d8] bg-white">
-                            <div className="flex items-center justify-between border-b border-[#f0e9de] px-4 py-3">
+                        <div className="min-h-0 overflow-hidden rounded-[24px] border border-border bg-surface-primary">
+                            <div className="flex items-center justify-between border-b border-border px-4 py-3">
                                 <div>
-                                    <div className="text-[13px] font-medium text-[#1d1b18]">任务列表</div>
-                                    <div className="mt-0.5 text-[11px] text-[#8b8378]">按当前筛选展示统一任务定义</div>
+                                    <div className="text-[13px] font-medium text-text-primary">任务列表</div>
+                                    <div className="mt-0.5 text-[11px] text-text-tertiary">按当前筛选展示统一任务定义</div>
                                 </div>
-                                <div className="text-[11px] text-[#9a9184]">{filteredItems.length} 项</div>
+                                <div className="text-[11px] text-text-tertiary">{filteredItems.length} 项</div>
                             </div>
 
                             <div className="h-[calc(100%-61px)] overflow-y-auto px-2.5 py-2.5">
                                 {loading && items.length === 0 ? (
-                                    <div className="flex h-full min-h-[240px] items-center justify-center text-[13px] text-[#7b7469]">
+                                    <div className="flex h-full min-h-[240px] items-center justify-center text-[13px] text-text-secondary">
                                         <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                                         正在加载任务列表
                                     </div>
                                 ) : filteredItems.length === 0 ? (
-                                    <div className="flex h-full min-h-[240px] items-center justify-center px-5 text-center text-[13px] leading-6 text-[#7b7469]">
+                                    <div className="flex h-full min-h-[240px] items-center justify-center px-5 text-center text-[13px] leading-6 text-text-secondary">
                                         当前筛选下没有任务。你可以切换筛选查看其他任务状态。
                                     </div>
                                 ) : (
@@ -420,16 +420,16 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                     onClick={() => setSelectedId(item.definitionId)}
                                                     className={`w-full rounded-[18px] border px-3 py-2.5 text-left transition ${
                                                         active
-                                                            ? 'border-[#d5b68b] bg-[#fbf2e6] shadow-[0_10px_24px_rgba(95,70,35,0.06)]'
-                                                            : 'border-[#eee7dc] bg-[#fdfcf9] hover:border-[#e1d4c2] hover:bg-white'
+                                                            ? 'border-accent-primary bg-accent-muted shadow-[0_10px_24px_rgba(95,70,35,0.06)]'
+                                                            : 'border-border bg-surface-secondary hover:border-accent-primary/40 hover:bg-surface-primary'
                                                     }`}
                                                 >
                                                     <div className="flex flex-wrap items-center gap-1.5">
-                                                        <span className="rounded-full bg-[#efe5d6] px-2 py-0.5 text-[10px] font-medium text-[#6d553a]">
+                                                        <span className="rounded-full bg-accent-muted px-2 py-0.5 text-[10px] font-medium text-accent-primary">
                                                             {kindLabel(item.kind)}
                                                         </span>
                                                         {actionType && (
-                                                            <span className="rounded-full bg-[#eef1f5] px-2 py-0.5 text-[10px] font-medium text-[#687180]">
+                                                            <span className="rounded-full bg-surface-tertiary px-2 py-0.5 text-[10px] font-medium text-text-tertiary">
                                                                 {actionType}
                                                             </span>
                                                         )}
@@ -438,11 +438,11 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                         </span>
                                                     </div>
 
-                                                    <div className="mt-2 truncate text-[13px] font-semibold text-[#1d1b18]">
+                                                    <div className="mt-2 truncate text-[13px] font-semibold text-text-primary">
                                                         {item.title}
                                                     </div>
 
-                                                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-[#877f73]">
+                                                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-text-secondary">
                                                         <span className="inline-flex items-center gap-1.5">
                                                             <Clock3 className="h-3 w-3" />
                                                             {triggerLabel(item)}
@@ -455,7 +455,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                     </div>
 
                                                     {item.cooldown?.state === 'active' && (
-                                                        <div className="mt-1.5 rounded-[14px] border border-[#f0d5d8] bg-[#fff4f5] px-2.5 py-1.5 text-[10px] leading-4 text-[#9a525c]">
+                                                        <div className="mt-1.5 rounded-[14px] border border-status-error/30 bg-status-error/10 px-2.5 py-1.5 text-[10px] leading-4 text-status-error">
                                                             冷却中：连续失败 {Number(item.cooldown.consecutiveFailures || 0)} 次。
                                                         </div>
                                                     )}
@@ -467,9 +467,9 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                             </div>
                         </div>
 
-                        <div className="min-h-0 overflow-y-auto rounded-[24px] border border-[#ece4d8] bg-white px-5 py-5">
+                        <div className="min-h-0 overflow-y-auto rounded-[24px] border border-border bg-surface-primary px-5 py-5">
                             {!selectedItem ? (
-                                <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-[13px] leading-6 text-[#7b7469]">
+                                <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-[13px] leading-6 text-text-secondary">
                                     选择左侧任务后，这里会显示调度规则、策略信息和最近执行状态。
                                 </div>
                             ) : (
@@ -477,11 +477,11 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                     <div className="flex flex-wrap items-start justify-between gap-3">
                                         <div>
                                             <div className="flex flex-wrap items-center gap-1.5">
-                                                <span className="rounded-full bg-[#efe5d6] px-2.5 py-0.5 text-[11px] font-medium text-[#6d553a]">
+                                                <span className="rounded-full bg-accent-muted px-2.5 py-0.5 text-[11px] font-medium text-accent-primary">
                                                     {kindLabel(selectedItem.kind)}
                                                 </span>
                                                 {selectedItem.actionType && (
-                                                    <span className="rounded-full bg-[#eef1f5] px-2.5 py-0.5 text-[11px] font-medium text-[#687180]">
+                                                    <span className="rounded-full bg-surface-tertiary px-2.5 py-0.5 text-[11px] font-medium text-text-tertiary">
                                                         {actionTypeLabel(selectedItem.actionType)}
                                                     </span>
                                                 )}
@@ -489,10 +489,10 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                     {lifecycleLabel(selectedItem)}
                                                 </span>
                                             </div>
-                                            <h2 className="mt-2.5 text-[21px] font-semibold tracking-[-0.03em] text-[#1d1b18]">
+                                            <h2 className="mt-2.5 text-[21px] font-semibold tracking-[-0.03em] text-text-primary">
                                                 {selectedItem.title}
                                             </h2>
-                                            <p className="mt-1.5 max-w-[680px] text-[13px] leading-6 text-[#70695d]">
+                                            <p className="mt-1.5 max-w-[680px] text-[13px] leading-6 text-text-secondary">
                                                 {taskContent(selectedItem)}
                                             </p>
                                         </div>
@@ -507,7 +507,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                                 confirm: true,
                                                             });
                                                         })}
-                                                        className="rounded-full border border-[#d2b690] bg-[#efe1ca] px-3.5 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9]"
+                                                        className="rounded-full border border-accent-primary bg-accent-muted px-3.5 py-1.5 text-[12px] text-accent-primary hover:bg-accent-primary/20"
                                                     >
                                                         {actionState?.id === selectedItem.definitionId && actionState.action === 'confirm'
                                                             ? '确认中...'
@@ -520,7 +520,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                                 confirm: false,
                                                             });
                                                         })}
-                                                        className="rounded-full border border-[#eadfce] bg-white px-3.5 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
+                                                        className="rounded-full border border-border bg-surface-primary px-3.5 py-1.5 text-[12px] text-text-secondary hover:bg-surface-secondary"
                                                     >
                                                         {actionState?.id === selectedItem.definitionId && actionState.action === 'discard'
                                                             ? '处理中...'
@@ -532,7 +532,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                             {!selectedItem.requiresConfirmation && (
                                                 <button
                                                     onClick={() => void executeAction(selectedItem, 'run-now', () => runTaskNow(selectedItem))}
-                                                    className="inline-flex items-center rounded-full border border-[#d2b690] bg-[#efe1ca] px-3.5 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9]"
+                                                    className="inline-flex items-center rounded-full border border-accent-primary bg-accent-muted px-3.5 py-1.5 text-[12px] text-accent-primary hover:bg-accent-primary/20"
                                                 >
                                                     <Play className="mr-1.5 h-3.5 w-3.5" />
                                                     {actionState?.id === selectedItem.definitionId && actionState.action === 'run-now'
@@ -544,7 +544,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                             {!selectedItem.requiresConfirmation && selectedItem.enabled && (
                                                 <button
                                                     onClick={() => void executeAction(selectedItem, 'pause', () => setTaskEnabled(selectedItem, false))}
-                                                    className="rounded-full border border-[#eadfce] bg-white px-3.5 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
+                                                    className="rounded-full border border-border bg-surface-primary px-3.5 py-1.5 text-[12px] text-text-secondary hover:bg-surface-secondary"
                                                 >
                                                     {actionState?.id === selectedItem.definitionId && actionState.action === 'pause'
                                                         ? '处理中...'
@@ -555,7 +555,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                             {!selectedItem.requiresConfirmation && !selectedItem.enabled && (
                                                 <button
                                                     onClick={() => void executeAction(selectedItem, 'resume', () => setTaskEnabled(selectedItem, true))}
-                                                    className="rounded-full border border-[#eadfce] bg-white px-3.5 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
+                                                    className="rounded-full border border-border bg-surface-primary px-3.5 py-1.5 text-[12px] text-text-secondary hover:bg-surface-secondary"
                                                 >
                                                     {actionState?.id === selectedItem.definitionId && actionState.action === 'resume'
                                                         ? '处理中...'
@@ -576,30 +576,30 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
 
                                     <div className="grid gap-3 xl:grid-cols-[minmax(0,1.3fr)_minmax(260px,0.9fr)]">
                                         <div className="space-y-3">
-                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
-                                                <div className="text-[13px] font-medium text-[#1d1b18]">任务内容</div>
-                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
+                                            <section className="rounded-[20px] border border-border bg-surface-secondary px-4 py-4">
+                                                <div className="text-[13px] font-medium text-text-primary">任务内容</div>
+                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-text-secondary">
                                                     {selectedItem.goal && (
                                                         <div>
-                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Goal</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Goal</div>
                                                             <div className="mt-1">{selectedItem.goal}</div>
                                                         </div>
                                                     )}
                                                     {selectedItem.prompt && (
                                                         <div>
-                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Prompt</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Prompt</div>
                                                             <div className="mt-1">{selectedItem.prompt}</div>
                                                         </div>
                                                     )}
                                                     {selectedItem.objective && (
                                                         <div>
-                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Objective</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Objective</div>
                                                             <div className="mt-1">{selectedItem.objective}</div>
                                                         </div>
                                                     )}
                                                     {selectedItem.stepPrompt && (
                                                         <div>
-                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Step Prompt</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Step Prompt</div>
                                                             <div className="mt-1">{selectedItem.stepPrompt}</div>
                                                         </div>
                                                     )}
@@ -609,13 +609,13 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                 </div>
                                             </section>
 
-                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
-                                                <div className="text-[13px] font-medium text-[#1d1b18]">策略与风险</div>
-                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
+                                            <section className="rounded-[20px] border border-border bg-surface-secondary px-4 py-4">
+                                                <div className="text-[13px] font-medium text-text-primary">策略与风险</div>
+                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-text-secondary">
                                                     <div>策略结论：{policyLabel(selectedItem.policyDecision)}</div>
                                                     {Array.isArray(selectedItem.policyWarnings) && selectedItem.policyWarnings.length > 0 && (
                                                         <div>
-                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Warnings</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Warnings</div>
                                                                 <div className="mt-1 space-y-1">
                                                                     {selectedItem.policyWarnings.map((warning, index) => (
                                                                         <div key={`${selectedItem.definitionId}-warning-${index}`}>- {warning}</div>
@@ -625,13 +625,13 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                     )}
                                                     {selectedItem.riskRationale && (
                                                         <div>
-                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Risk Rationale</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Risk Rationale</div>
                                                             <div className="mt-1">{selectedItem.riskRationale}</div>
                                                         </div>
                                                     )}
                                                     {selectedItem.lastUpdatedReason && (
                                                         <div>
-                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Last Updated Reason</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Last Updated Reason</div>
                                                             <div className="mt-1">{selectedItem.lastUpdatedReason}</div>
                                                         </div>
                                                     )}
@@ -640,9 +640,9 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                         </div>
 
                                         <div className="space-y-3">
-                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
-                                                <div className="text-[13px] font-medium text-[#1d1b18]">调度信息</div>
-                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
+                                            <section className="rounded-[20px] border border-border bg-surface-secondary px-4 py-4">
+                                                <div className="text-[13px] font-medium text-text-primary">调度信息</div>
+                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-text-secondary">
                                                     <div>{scheduleSummary(selectedItem)}</div>
                                                     <div>创建于 {formatDateTime(selectedItem.createdAt)}</div>
                                                     <div>更新于 {formatDateTime(selectedItem.updatedAt)}</div>
@@ -654,9 +654,9 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                 </div>
                                             </section>
 
-                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
-                                                <div className="text-[13px] font-medium text-[#1d1b18]">最近执行</div>
-                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
+                                            <section className="rounded-[20px] border border-border bg-surface-secondary px-4 py-4">
+                                                <div className="text-[13px] font-medium text-text-primary">最近执行</div>
+                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-text-secondary">
                                                     {selectedItem.latestExecution ? (
                                                         <>
                                                             <div>状态：{executionStatusLabel(selectedItem.latestExecution.status)}</div>
@@ -664,7 +664,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                             <div>最近心跳：{formatDateTime(selectedItem.latestExecution.lastHeartbeatAt)}</div>
                                                             <div>尝试次数：{Number(selectedItem.latestExecution.attemptNo || 0)}</div>
                                                             {selectedItem.latestExecution.lastError && (
-                                                                <div className="rounded-[16px] border border-[#f0d5d8] bg-[#fff4f5] px-3 py-2 text-[11px] leading-5 text-[#9a525c]">
+                                                                <div className="rounded-[16px] border border-status-error/30 bg-status-error/10 px-3 py-2 text-[11px] leading-5 text-status-error">
                                                                     {selectedItem.latestExecution.lastError}
                                                                 </div>
                                                             )}
@@ -675,9 +675,9 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                 </div>
                                             </section>
 
-                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
-                                                <div className="text-[13px] font-medium text-[#1d1b18]">冷却状态</div>
-                                                <div className="mt-3 text-[13px] leading-6 text-[#595247]">
+                                            <section className="rounded-[20px] border border-border bg-surface-secondary px-4 py-4">
+                                                <div className="text-[13px] font-medium text-text-primary">冷却状态</div>
+                                                <div className="mt-3 text-[13px] leading-6 text-text-secondary">
                                                     {selectedItem.cooldown?.state === 'active' ? (
                                                         <div>
                                                             连续失败 {Number(selectedItem.cooldown.consecutiveFailures || 0)} 次，
