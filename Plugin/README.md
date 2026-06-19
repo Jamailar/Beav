@@ -1,6 +1,6 @@
 # RedBox Chrome 插件
 
-这个目录提供一个可直接加载的 Chrome / Edge 扩展，用来把外部网页内容采集到 RedBox 桌面端知识库和素材库。
+这个目录提供 RedBox Capture 的工程化构建源码，用来把外部网页内容采集到 RedBox 桌面端知识库和素材库。
 
 ## 当前支持
 
@@ -25,8 +25,19 @@
 - 任意网页链接收藏
 - 任意网页选中文字摘录（右键菜单）
 - 自动检查插件更新
+- AI 浏览器控制：tab/session、DOM snapshot、selector 查询、点击、输入、滚动、截图、CDP、下载状态、页面资产读取
+- MCP / native host 控制面：`App AI -> MCP server -> native-host socket -> Chrome extension -> page`
 
 ## 加载方式
+
+先构建扩展产物：
+
+```bash
+cd /Users/Jam/LocalDev/GitHub/RedConvert/Plugin
+pnpm install
+pnpm build
+pnpm verify
+```
 
 1. 打开 Chrome 或 Edge。
 2. 进入扩展管理页：
@@ -34,7 +45,61 @@
    - Edge: `edge://extensions`
 3. 打开“开发者模式”。
 4. 点击“加载已解压的扩展程序”。
-5. 选择当前仓库里的 [Plugin](/Users/Jam/LocalDev/GitHub/RedConvert/Plugin) 目录。
+5. 选择当前仓库里的 [Plugin/dist/extension](/Users/Jam/LocalDev/GitHub/RedConvert/Plugin/dist/extension) 目录。
+
+源码在 [src](/Users/Jam/LocalDev/GitHub/RedConvert/Plugin/src) 目录。`dist/extension` 是构建产物，不要手改。
+
+## AI / MCP 控制面
+
+浏览器控制层是叠加能力，不替换现有结构化采集：
+
+- 现有采集：`pageObserver.js`、`xhsBridge.js`、`captureRuntime.js` 保持 content script 常驻，用于小红书、多平台识别、右键保存和网页浮动面板。
+- AI 控制：`browserControlContent.js` 只在 AI 调用浏览器工具时动态注入。
+- native host：`native-host/host.mjs` 通过 Chrome native messaging 连接扩展，并在本机暴露 newline JSON-RPC socket。
+- App 内置 MCP：桌面端启动时会自动注册 `RedBox Browser Control` MCP server，stdio command 指向 RedBox App 自身的隐藏 `--redbox-browser-control-mcp` 模式，不要求用户手动导入 MCP 配置。
+- 开发 MCP server：`mcp-server.mjs` 保留给插件目录独立调试，负责把 `tools/list` / `tools/call` 转发到 native-host socket。
+
+安装 native host：
+
+```bash
+cd /Users/Jam/LocalDev/GitHub/RedConvert/Plugin
+pnpm install:native-host -- --extension-id <chrome-extension-id>
+```
+
+App 安装包内置 MCP 配置由桌面端自动写入，不需要用户选择目录或手动配置。独立开发调试时可使用：
+
+```json
+{
+  "command": "node",
+  "args": ["/Users/Jam/LocalDev/GitHub/RedConvert/Plugin/mcp-server.mjs"]
+}
+```
+
+插件根目录也提供 [Plugin/.mcp.json](/Users/Jam/LocalDev/GitHub/RedConvert/Plugin/.mcp.json)，用于开发态本地发现或外部 MCP 客户端导入 `browser-control` server；正式 App 运行时优先使用内置 MCP。
+
+调试 socket：
+
+```bash
+pnpm agent:call -- --method host.getInfo
+pnpm agent:call -- --method tools/list
+```
+
+## 开发命令
+
+```bash
+pnpm build
+pnpm verify
+pnpm check
+pnpm install:native-host -- --extension-id <chrome-extension-id>
+pnpm mcp:server
+pnpm package
+```
+
+- `pnpm build`：把 `src` 里的 manifest、HTML、CSS、图片和脚本构建到 `dist/extension`。
+- `pnpm verify`：检查 manifest、HTML 引用、动态注入脚本和关键 content script 合同。
+- `pnpm install:native-host`：安装 Chrome native messaging host manifest。
+- `pnpm mcp:server`：启动开发态 RedBox browser-control stdio MCP server；正式 App 使用内置 Rust MCP 入口。
+- `pnpm package`：先构建，再生成 `dist/RedBox-Capture-<version>.zip`。
 
 ## 使用前提
 
@@ -60,7 +125,7 @@
 
 ## 备注
 
-- 插件只负责采集、下载、导出和提交结构化数据，不承载桌面端 AI 工作流。
+- 插件负责采集、下载、导出、提交结构化数据，以及为桌面端 AI 暴露浏览器控制 MCP 工具；AI 编排和业务决策仍在桌面端完成。
 - `captureRuntime.js` 是平台无关的页面采集底座；平台逻辑应只提供根节点、列表项、字段解析和分页策略，不要把滚动等待、DOM 稳定判断、验证页识别重复写进各个平台 extractor。采集 checkpoint 存在 `redboxCaptureCheckpoints`，用于排查页面刷新、断网或站点限流导致的中断。
 - 知识整理、漫步、RedClaw 创作仍在桌面端完成。
 - 自动更新检查会在插件安装、浏览器启动和后台定时任务中执行；更新源固定为 `https://redbox.ziz.hk/api/updates/plugin`。

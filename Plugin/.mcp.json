@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "browser-control": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./mcp-server.mjs"],
+      "enabled": true,
+      "startupTimeoutMs": 15000,
+      "toolTimeoutMs": 60000,
+      "supportsParallelToolCalls": false,
+      "defaultToolsApprovalMode": "destructive",
+      "enabledTools": [
+        "browser.capabilities",
+        "tabs.list",
+        "tab.claim",
+        "tab.create",
+        "tab.navigate",
+        "page.domSnapshot",
+        "page.queryElements",
+        "page.click",
+        "page.type",
+        "page.assets",
+        "page.screenshot",
+        "cdp.send"
+      ],
+      "perTool": {
+        "browser.capabilities": { "approvalMode": "never" },
+        "tabs.list": { "approvalMode": "never" },
+        "page.domSnapshot": { "approvalMode": "never" },
+        "page.queryElements": { "approvalMode": "never" },
+        "page.assets": { "approvalMode": "never" },
+        "page.screenshot": { "approvalMode": "never" }
+      }
+    }
+  }
+}

@@ -26,7 +26,7 @@ const manifest: ReleaseManifest = {
         contentType: 'application/zip',
         ossKey: 'plugins/v1.10.4/redbox-browser-plugin-v1.10.4.zip',
         publicUrl: 'https://downloads.example.com/plugins/v1.10.4/redbox-browser-plugin-v1.10.4.zip',
-        sourcePath: 'Plugin',
+        sourcePath: 'Plugin/dist/extension',
         sourceRef: 'v1.10.4',
     },
 };

@@ -48,11 +48,19 @@ scope: repository
 
 ### 3.1 内容采集链路
 
-1. 用户在浏览器内触发 `Plugin/` popup 或右键菜单。
-2. `Plugin/background.js` 负责识别页面类型、拼装采集 payload，并写入桌面端本地 HTTP 接口。
+1. 用户在浏览器内触发 `Plugin/` side panel、页面按钮或右键菜单。
+2. `Plugin/src/background.js` 负责识别页面类型、拼装采集 payload，并写入桌面端本地 HTTP 接口。
 3. 桌面端宿主接收后进入知识库 / 媒体库写入链路。
 4. `desktop/src-tauri/src/persistence/` 与 `desktop/src-tauri/src/knowledge_index/` 负责落盘、索引、重建、监听。
 5. `desktop/src/pages/Knowledge.tsx`、`Wander.tsx`、`ManuscriptEditorHost.tsx`、`RedClaw.tsx` 消费这些内容做二次创作。
+
+浏览器 AI 控制链路与采集链路并行，不替代结构化采集：
+
+1. 桌面端启动时自动注册内置 `RedBox Browser Control` MCP server，stdio command 指向 RedBox App 自身的 `--redbox-browser-control-mcp` 模式。
+2. 内置 MCP 通过本机 JSON-RPC socket 调用 `Plugin/native-host/host.mjs`；`Plugin/mcp-server.mjs` / `Plugin/.mcp.json` 仅作为开发态或外部 MCP 客户端入口。
+3. native host 经 Chrome native messaging 转发到扩展 background。
+4. `Plugin/src/browserControlBackground.js` 负责 tab/session、DOM snapshot、selector 操作、截图、CDP、页面资产读取等通用浏览器能力。
+5. `Plugin/src/browserControlContent.js` 仅在 AI 调用浏览器工具时动态注入；现有 `Plugin/src/pageObserver.js` 和 `Plugin/src/xhsBridge.js` 继续承担结构化采集。
 
 ### 3.2 AI 创作链路
 
@@ -567,11 +575,15 @@ scope: repository
 
 | 模块 | 文件 | 职责 | 关键实现 |
 | --- | --- | --- | --- |
-| MV3 清单 | `Plugin/manifest.json` | 声明权限、service worker、content script、popup | 允许本地 HTTP、上下文菜单、更新检查 |
-| 后台服务 | `Plugin/background.js` | 页面识别、保存动作、更新检查、右键菜单、本地服务健康检查 | 统一消息分发与采集执行 |
-| 内容脚本 | `Plugin/pageObserver.js` | 对小红书、YouTube、公众号、抖音等页面做 DOM / 路由观察 | 抽取页面元信息和拖拽图片 payload |
-| 路由桥 | `Plugin/pageRouteBridge.js` | 监听 SPA 路由变化 | patch `pushState` / `replaceState` 并发事件 |
-| 弹窗 UI | `Plugin/popup.html`、`Plugin/popup.js`、`Plugin/popup.css` | 当前页状态展示、主保存按钮、更新提示 | 持续轮询当前页信息和桌面端健康状态 |
+| MV3 清单 | `Plugin/src/manifest.json` | 声明权限、service worker、content script、popup | 允许本地 HTTP、上下文菜单、更新检查 |
+| 后台服务 | `Plugin/src/background.js` | 页面识别、保存动作、更新检查、右键菜单、本地服务健康检查 | 统一消息分发与采集执行 |
+| 浏览器控制后台 | `Plugin/src/browserControlBackground.js` | MCP/native host 命令路由、tab/session、DOM、截图、CDP、下载状态 | 叠加到 background，消息类型加前缀，避免抢答既有采集消息 |
+| 浏览器控制内容脚本 | `Plugin/src/browserControlContent.js` | AI 控制时的 DOM snapshot、selector 查询、点击、输入、资产读取 | 通过 `chrome.scripting.executeScript` 动态注入 |
+| MCP 入口 | `desktop/src-tauri/src/browser_control_mcp.rs`、`Plugin/mcp-server.mjs`、`Plugin/.mcp.json` | 向桌面端 AI 暴露 browser-control stdio MCP server | App 内置 Rust MCP 入口自动注册；JS MCP 入口用于开发调试和外部客户端 |
+| Native host | `Plugin/native-host/host.mjs` | Chrome native messaging 与本机 JSON-RPC socket 桥接 | host 方法本地处理，浏览器方法转发给扩展 |
+| 内容脚本 | `Plugin/src/pageObserver.js` | 对小红书、YouTube、公众号、抖音等页面做 DOM / 路由观察 | 抽取页面元信息和拖拽图片 payload |
+| 路由桥 | `Plugin/src/pageRouteBridge.js` | 监听 SPA 路由变化 | patch `pushState` / `replaceState` 并发事件 |
+| 弹窗 UI | `Plugin/src/popup.html`、`Plugin/src/popup.js`、`Plugin/src/popup.css` | 当前页状态展示、主保存按钮、更新提示 | 持续轮询当前页信息和桌面端健康状态 |
 
 ### 6.2 功能模块
 
@@ -796,7 +808,7 @@ scope: repository
 - `desktop/src/pages/Settings.tsx`
 - `desktop/src-tauri/src/commands/manuscripts.rs`
 - `desktop/src-tauri/src/main.rs`
-- `Plugin/pageObserver.js`
+- `Plugin/src/pageObserver.js`
 
 这些位置不是不能继续演进，而是每次改动都必须把“首屏、增量更新、事件隔离、异步边界”当成第一优先级。
 

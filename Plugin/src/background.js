@@ -1,3 +1,5 @@
+import './browserControlBackground.js';
+
 const KNOWLEDGE_API_CANDIDATES = [
   {
     baseUrl: 'http://127.0.0.1:31937',

@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: in_progress
-last_updated: 2026-04-27
+last_updated: 2026-06-18
 ---
 
 # RedBox 插件小红书采集工作台升级方案
@@ -24,11 +24,11 @@ last_updated: 2026-04-27
 
 | 文件 | 当前职责 | 升级影响 |
 | --- | --- | --- |
-| `Plugin/manifest.json` | popup、右键菜单、content script、RedBox 本地服务权限 | 改为 side panel 主入口，新增下载、cookie、站点权限和必要的 DNR 能力 |
-| `Plugin/background.js` | 消息路由、右键菜单、更新检查、页面提取、写入知识库 | 需要拆分成消息路由、RedBox API、下载器、任务队列、采集执行器 |
-| `Plugin/pageObserver.js` | 页面检测、小红书/抖音/YouTube 识别、图片拖拽保存 | 继续负责页面状态检测，新增小红书 DOM 注入入口 |
-| `Plugin/pageRouteBridge.js` | 监听 SPA 路由变化 | 保留，作为页面状态刷新触发器 |
-| `Plugin/popup.*` | popup UI | 迁移为 `sidepanel.*`，popup 可移除或仅做兼容跳转 |
+| `Plugin/src/manifest.json` | popup、右键菜单、content script、RedBox 本地服务权限 | 改为 side panel 主入口，新增下载、cookie、站点权限和必要的 DNR 能力 |
+| `Plugin/src/background.js` | 消息路由、右键菜单、更新检查、页面提取、写入知识库 | 需要拆分成消息路由、RedBox API、下载器、任务队列、采集执行器 |
+| `Plugin/src/pageObserver.js` | 页面检测、小红书/抖音/YouTube 识别、图片拖拽保存 | 继续负责页面状态检测，新增小红书 DOM 注入入口 |
+| `Plugin/src/pageRouteBridge.js` | 监听 SPA 路由变化 | 保留，作为页面状态刷新触发器 |
+| `Plugin/src/popup.*` | popup UI | 迁移为 `sidepanel.*`，popup 可移除或仅做兼容跳转 |
 
 当前已具备的小红书能力：
 
@@ -84,8 +84,8 @@ flowchart LR
 
 | 模块 | 目标文件 | 责任 |
 | --- | --- | --- |
-| Manifest | `Plugin/manifest.json` | 权限、side panel、content scripts、host permissions |
-| Background router | `Plugin/background.js` 或 `Plugin/background/router.js` | 消息分发、旧入口兼容、错误归一化 |
+| Manifest | `Plugin/src/manifest.json` | 权限、side panel、content scripts、host permissions |
+| Background router | `Plugin/src/background.js` 或 `Plugin/src/background/router.js` | 消息分发、旧入口兼容、错误归一化 |
 | RedBox API | `Plugin/background/redboxApi.js` | healthcheck、知识库写入、素材写入、后续创作动作 |
 | Download manager | `Plugin/background/downloads.js` | Chrome downloads、命名规则、并发、失败重试 |
 | Task queue | `Plugin/background/taskQueue.js` | 批量任务、暂停继续、断点、历史 |
@@ -96,7 +96,7 @@ flowchart LR
 | XHS schema | `Plugin/xhs/schema.js` | 字段定义、导出字段、RedBox 映射 |
 | Main bridge | `Plugin/content/xhsMainBridge.js` | main world hook `fetch/XHR`、读取页面全局变量 |
 | Overlay | `Plugin/content/xhsOverlay.js` | DOM 注入按钮、状态提示、页面内快捷动作 |
-| Side panel | `Plugin/sidepanel.html`、`sidepanel.js`、`sidepanel.css` | 工作台 UI |
+| Side panel | `Plugin/src/sidepanel.html`、`sidepanel.js`、`sidepanel.css` | 工作台 UI |
 | Storage | `Plugin/storage/index.js` | `chrome.storage.local` + IndexedDB 统一封装 |
 | Export | `Plugin/export/xlsx.js`、`csv.js` | Excel/CSV/JSON 导出 |
 

@@ -17,7 +17,7 @@ import type {
 
 const ALLOWED_EXTENSIONS = new Set(['.dmg', '.zip', '.exe']);
 const IGNORED_FILENAMES = new Set(['latest.yml', 'latest-mac.yml']);
-const PLUGIN_SOURCE_PATH = 'Plugin';
+const PLUGIN_SOURCE_PATH = 'Plugin/dist/extension';
 const PLUGIN_CONTENT_TYPE = 'application/zip';
 
 function getAssetExtension(filename: string) {
@@ -58,6 +58,31 @@ function parsePlatform(asset: GithubReleaseAsset) {
     }
 
     return null;
+}
+
+function parseBrowserPluginReleaseAsset(release: GithubRelease, publicBaseUrl: string) {
+    const asset = release.assets.find((item) => {
+        const filename = item.name.toLowerCase();
+        if (!filename.endsWith('.zip')) return false;
+        return filename.includes('browser-plugin')
+            || filename.includes('browser_extension')
+            || filename.includes('browser-extension')
+            || filename.includes('redbox-capture');
+    });
+    if (!asset) return null;
+
+    const filename = getPluginFilename(release.tag_name);
+    const ossKey = `plugins/${release.tag_name}/${filename}`;
+    return {
+        filename,
+        size: asset.size,
+        contentType: inferContentType(asset.name, asset.content_type),
+        ossKey,
+        publicUrl: buildPublicUrl(publicBaseUrl, ossKey),
+        sourcePath: `release-asset:${asset.name}`,
+        sourceRef: release.tag_name,
+        downloadUrl: asset.browser_download_url,
+    };
 }
 
 export function parseReleaseAssets(release: GithubRelease, publicBaseUrl: string): ParsedReleaseAsset[] {
@@ -169,6 +194,31 @@ function createStoredZip(files: GithubSourceFile[]) {
     return Buffer.concat([...localParts, centralDirectory, endRecord]);
 }
 
+function toPluginArchivePath(sourcePath: string) {
+    const normalized = normalizeZipPath(sourcePath);
+    const sourcePrefix = `${PLUGIN_SOURCE_PATH}/`;
+    if (normalized.startsWith(sourcePrefix)) {
+        return normalized.slice(sourcePrefix.length);
+    }
+
+    const builtPrefix = 'Plugin/dist/extension/';
+    if (normalized.startsWith(builtPrefix)) {
+        return normalized.slice(builtPrefix.length);
+    }
+
+    const sourceLegacyPrefix = 'Plugin/src/';
+    if (normalized.startsWith(sourceLegacyPrefix)) {
+        return normalized.slice(sourceLegacyPrefix.length);
+    }
+
+    const legacyPrefix = 'Plugin/';
+    if (normalized.startsWith(legacyPrefix)) {
+        return normalized.slice(legacyPrefix.length);
+    }
+
+    return normalized;
+}
+
 function getPluginFilename(tag: string) {
     const safeTag = tag.replace(/[^a-zA-Z0-9._-]+/g, '-');
     return `redbox-browser-plugin-${safeTag}.zip`;
@@ -183,7 +233,11 @@ export function buildBrowserPluginAsset(
         throw new Error(`No plugin files found for ${release.tag_name}`);
     }
 
-    const zipBody = createStoredZip(files);
+    const zipFiles = files.map((file) => ({
+        ...file,
+        path: toPluginArchivePath(file.path),
+    }));
+    const zipBody = createStoredZip(zipFiles);
     const filename = getPluginFilename(release.tag_name);
     const ossKey = `plugins/${release.tag_name}/${filename}`;
 
@@ -283,10 +337,17 @@ export async function syncLatestReleaseWithDependencies(deps: ReleaseSyncDepende
 
     let plugin = latestTagChanged ? null : currentManifest?.plugin || null;
     if (latestTagChanged || pluginMissing) {
-        const pluginFiles = await deps.fetchPluginFiles(release.tag_name);
-        const packagedPlugin = buildBrowserPluginAsset(release, pluginFiles, deps.buildPublicUrl(''));
-        await deps.uploadBufferAsset(packagedPlugin.ossKey, packagedPlugin.body, packagedPlugin.contentType);
-        plugin = packagedPlugin;
+        const releasePlugin = parseBrowserPluginReleaseAsset(release, deps.buildPublicUrl(''));
+        if (releasePlugin) {
+            await deps.uploadRemoteAsset(releasePlugin.ossKey, releasePlugin.downloadUrl, releasePlugin.contentType);
+            const { downloadUrl: _downloadUrl, ...manifestPlugin } = releasePlugin;
+            plugin = manifestPlugin;
+        } else {
+            const pluginFiles = await deps.fetchPluginFiles(release.tag_name);
+            const packagedPlugin = buildBrowserPluginAsset(release, pluginFiles, deps.buildPublicUrl(''));
+            await deps.uploadBufferAsset(packagedPlugin.ossKey, packagedPlugin.body, packagedPlugin.contentType);
+            plugin = packagedPlugin;
+        }
     }
 
     const nextManifest = buildManifest(release, parsedAssets, releaseNotes, plugin);

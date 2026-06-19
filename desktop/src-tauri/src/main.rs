@@ -9,6 +9,7 @@ mod app_shared;
 mod app_state;
 mod assistant_core;
 mod auth;
+mod browser_control_mcp;
 mod channel_router;
 mod chat_binding;
 mod chat_helpers;
@@ -110,6 +111,9 @@ pub(crate) use store::types::*;
 pub(crate) use workspace::paths::*;
 
 fn main() {
+    if browser_control_mcp::maybe_run_from_args() {
+        return;
+    }
     let startup::StartupPreparedState {
         store_path,
         store,

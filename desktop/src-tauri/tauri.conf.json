@@ -62,7 +62,12 @@
     "resources": [
       "resources/knowledge-api-guide.html",
       "resources/richpost-theme-guide.html",
-      "../../Plugin",
+      "../../Plugin/.mcp.json",
+      "../../Plugin/dist/extension",
+      "../../Plugin/mcp-server.mjs",
+      "../../Plugin/agent-client.mjs",
+      "../../Plugin/install-native-host.mjs",
+      "../../Plugin/native-host",
       "../prompts/library",
       "../builtin-skills"
     ],

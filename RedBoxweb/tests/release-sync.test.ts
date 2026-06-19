@@ -85,11 +85,11 @@ const releaseNotes = [
 
 const pluginFiles = [
     {
-        path: 'Plugin/manifest.json',
+        path: 'Plugin/dist/extension/manifest.json',
         body: Buffer.from('{"manifest_version":3}', 'utf8'),
     },
     {
-        path: 'Plugin/background.js',
+        path: 'Plugin/dist/extension/background.js',
         body: Buffer.from('console.log("redbox")', 'utf8'),
     },
 ];
@@ -100,7 +100,7 @@ const plugin = {
     contentType: 'application/zip',
     ossKey: 'plugins/v1.9.0/redbox-browser-plugin-v1.9.0.zip',
     publicUrl: 'https://downloads.example.com/plugins/v1.9.0/redbox-browser-plugin-v1.9.0.zip',
-    sourcePath: 'Plugin',
+    sourcePath: 'Plugin/dist/extension',
     sourceRef: 'v1.9.0',
 };
 
@@ -135,11 +135,12 @@ describe('buildBrowserPluginAsset', () => {
             contentType: 'application/zip',
             ossKey: 'plugins/v1.9.0/redbox-browser-plugin-v1.9.0.zip',
             publicUrl: 'https://downloads.example.com/plugins/v1.9.0/redbox-browser-plugin-v1.9.0.zip',
-            sourcePath: 'Plugin',
+            sourcePath: 'Plugin/dist/extension',
             sourceRef: 'v1.9.0',
         });
         expect(asset.body.subarray(0, 4).toString('hex')).toBe('504b0304');
-        expect(asset.body.includes(Buffer.from('Plugin/manifest.json'))).toBe(true);
+        expect(asset.body.includes(Buffer.from('manifest.json'))).toBe(true);
+        expect(asset.body.includes(Buffer.from('Plugin/dist/extension/manifest.json'))).toBe(false);
     });
 });
 
@@ -262,6 +263,50 @@ describe('syncLatestReleaseWithDependencies', () => {
         expect(uploadRemoteAsset).not.toHaveBeenCalled();
         expect(uploadBufferAsset).toHaveBeenCalledTimes(1);
         expect(uploadManifest).toHaveBeenCalledTimes(1);
+    });
+
+    it('prefers a built browser plugin release asset over directory packaging', async () => {
+        const releaseWithPluginAsset: GithubRelease = {
+            ...release,
+            assets: [
+                ...release.assets,
+                {
+                    id: 7,
+                    name: 'RedBox_Browser_Extension_2.3.1.zip',
+                    size: 12345,
+                    content_type: 'application/zip',
+                    browser_download_url: 'https://github.com/browser-extension.zip',
+                },
+            ],
+        };
+        const fetchPluginFiles = vi.fn(async () => pluginFiles);
+        const uploadRemoteAsset = vi.fn(async () => undefined);
+        const uploadBufferAsset = vi.fn(async () => undefined);
+        const uploadManifest = vi.fn(async () => undefined);
+
+        const result = await syncLatestReleaseWithDependencies({
+            fetchLatestRelease: async () => releaseWithPluginAsset,
+            fetchReleaseNotes: async () => [releaseWithPluginAsset, previousRelease],
+            fetchPluginFiles,
+            readCurrentManifest: async () => null,
+            uploadRemoteAsset,
+            uploadBufferAsset,
+            uploadManifest,
+            buildPublicUrl: (key) => `https://downloads.example.com/${key}`,
+        });
+
+        expect(result.status).toBe('synced');
+        expect(fetchPluginFiles).not.toHaveBeenCalled();
+        expect(uploadBufferAsset).not.toHaveBeenCalled();
+        expect(uploadRemoteAsset).toHaveBeenCalledWith(
+            'plugins/v1.9.0/redbox-browser-plugin-v1.9.0.zip',
+            'https://github.com/browser-extension.zip',
+            'application/zip',
+        );
+        expect(result.manifest.plugin).toMatchObject({
+            size: 12345,
+            sourcePath: 'release-asset:RedBox_Browser_Extension_2.3.1.zip',
+        });
     });
 
     it('does not write manifest if an asset upload fails', async () => {
