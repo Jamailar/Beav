@@ -54,7 +54,6 @@ pub fn default_direct_namespaces(
             runtime::NAMESPACE,
             runtime::TASKS_NAMESPACE,
             redclaw::TASK_NAMESPACE,
-            cli_runtime::EXECUTION_NAMESPACE,
             "settings",
         ],
         "team" => vec![

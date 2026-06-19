@@ -592,7 +592,6 @@ fn pinned_direct_app_cli_actions(
             "media.transcribe",
             "image.generate",
             "skills.invoke",
-            "cli_runtime.execution.get",
             "mcp.inspect",
         ]
     } else if wants_host_cli || (!media_intent && matches!(runtime_mode, "redclaw" | "knowledge")) {
@@ -605,7 +604,6 @@ fn pinned_direct_app_cli_actions(
             "media.transcribe",
             "image.generate",
             "skills.invoke",
-            "cli_runtime.execution.get",
             "mcp.inspect",
         ]
     } else {
@@ -1209,7 +1207,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_family_expands_to_runtime_cli_and_mcp_namespaces() {
+    fn diagnostics_family_expands_to_runtime_and_mcp_namespaces() {
         let metadata = json!({
             "directActionFamilies": ["diagnostics"],
             "maxDirectActions": 64
@@ -1226,24 +1224,18 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("runner.manage"));
         assert!(!plan.has_direct_app_cli_action("memory.diagnostics"));
         assert!(!plan.has_direct_app_cli_action("redclaw.runner.status"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.execution.get"));
         assert!(plan.has_direct_app_cli_action("mcp.manage"));
         assert!(plan.direct_app_cli_actions.iter().all(|descriptor| {
             matches!(
                 descriptor.namespace,
-                "memory"
-                    | "runtime"
-                    | "runtime.tasks"
-                    | "cli_runtime"
-                    | "cli_runtime.execution"
-                    | "redclaw.runner"
-                    | "mcp"
+                "memory" | "runtime" | "runtime.tasks" | "redclaw.runner" | "mcp"
             )
         }));
     }
 
     #[test]
-    fn redclaw_runtime_pins_core_cli_runtime_actions() {
+    fn redclaw_runtime_pins_media_and_web_actions_without_cli_runtime() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",
             ..ToolRegistryPlanParams::default()
@@ -1260,7 +1252,7 @@ mod tests {
         assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.install"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.execution.get"));
         assert!(plan.has_direct_app_cli_action("image.generate"));
     }
 
@@ -1339,7 +1331,7 @@ mod tests {
     }
 
     #[test]
-    fn team_runtime_pins_web_and_core_cli_runtime_actions() {
+    fn team_runtime_pins_web_and_media_actions_without_cli_runtime() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "team",
             ..ToolRegistryPlanParams::default()
@@ -1356,7 +1348,7 @@ mod tests {
         assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.install"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.execution.get"));
     }
 
     #[test]

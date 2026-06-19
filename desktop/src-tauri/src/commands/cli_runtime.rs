@@ -20,9 +20,9 @@ use crate::cli_runtime::{
     emit_cli_verification_finished, ensure_app_global_environment, ensure_workspace_environment,
     ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_execution_by_id,
     list_cli_environments, load_cli_execution_snapshot, refresh_cli_execution,
-    run_cli_verification, write_cli_execution_stdin, CliApproveEscalationRequest,
-    CliCreateEnvironmentRequest, CliDenyEscalationRequest, CliEnvironmentScope, CliExecuteRequest,
-    CliVerifyExecutionRequest, CliVerifyResult,
+    resize_cli_execution_pty, run_cli_verification, write_cli_execution_stdin,
+    CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
+    CliEnvironmentScope, CliExecuteRequest, CliVerifyExecutionRequest, CliVerifyResult,
 };
 use crate::{payload_string, AppState};
 
@@ -109,6 +109,17 @@ fn poll_execution_value(
     }
 }
 
+fn terminal_dimension(payload: &Value, key: &str, alternate: &str) -> Result<u16, String> {
+    let value = payload
+        .get(key)
+        .or_else(|| payload.get(alternate))
+        .or_else(|| payload.get("size").and_then(|size| size.get(key)))
+        .or_else(|| payload.get("size").and_then(|size| size.get(alternate)))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{key} is required"))?;
+    u16::try_from(value).map_err(|_| format!("{key} is too large"))
+}
+
 fn verify_execution_value(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -175,6 +186,26 @@ fn write_stdin_value(
         append_newline,
         close_stdin,
     )?;
+    Ok(json!({
+        "success": true,
+        "supported": true,
+        "executionId": execution_id,
+        "status": execution_status_label(&execution.status),
+        "execution": execution,
+    }))
+}
+
+fn resize_pty_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let execution_id = payload_string(payload, "executionId")
+        .or_else(|| payload_string(payload, "id"))
+        .ok_or_else(|| "executionId is required".to_string())?;
+    let rows = terminal_dimension(payload, "rows", "height")?;
+    let cols = terminal_dimension(payload, "cols", "columns")?;
+    let execution = resize_cli_execution_pty(app, state, &execution_id, rows, cols)?;
     Ok(json!({
         "success": true,
         "supported": true,
@@ -252,6 +283,7 @@ pub fn handle_cli_runtime_channel(
         "cli-runtime:poll-execution" => poll_execution_value(app, state, payload),
         "cli-runtime:cancel-execution" => cancel_execution_value(app, state, payload),
         "cli-runtime:write-stdin" => write_stdin_value(app, state, payload),
+        "cli-runtime:resize-pty" | "cli-runtime:resize" => resize_pty_value(app, state, payload),
         "cli-runtime:verify" => verify_execution_value(app, state, payload),
         "cli-runtime:approve-escalation" => approve_escalation_value(app, state, payload),
         "cli-runtime:deny-escalation" => deny_escalation_value(app, state, payload),

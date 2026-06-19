@@ -62,7 +62,7 @@ export interface ModelProfileRule {
 
 const CAPABILITY_RULES: Array<{ capability: ModelCapability; patterns: RegExp[] }> = [
     { capability: 'embedding', patterns: [/\bembedding\b/i, /\bembed\b/i] },
-    { capability: 'transcription', patterns: [/\basr\b/i, /\bwhisper\b/i] },
+    { capability: 'transcription', patterns: [/asr/i, /\bwhisper\b/i, /\bnova-3\b/i] },
     { capability: 'voice_clone', patterns: [/clone/i] },
     { capability: 'tts', patterns: [/voice/i, /\btts\b/i, /\bspeech\b/i] },
     { capability: 'video', patterns: [/video/i, /\bveo\b/i, /\bseedance\b/i, /\bkling\b/i, /\bvidu\b/i, /\bluma\b/i, /\bsora\b/i] },
@@ -72,6 +72,8 @@ const CAPABILITY_RULES: Array<{ capability: ModelCapability; patterns: RegExp[] 
 const inferForcedNameCapabilities = (modelId: string): ModelCapability[] => {
     const normalized = String(modelId || '').trim().toLowerCase();
     if (!normalized) return [];
+    if (normalized.includes('asr')) return ['transcription'];
+    if (normalized === 'nova-3') return ['transcription'];
     if (normalized.includes('tts')) return ['tts'];
     if (normalized.includes('clone')) return ['voice_clone'];
     if (normalized.includes('voice')) return ['tts'];

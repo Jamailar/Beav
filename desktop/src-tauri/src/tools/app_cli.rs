@@ -1812,6 +1812,11 @@ impl<'a> AppCliExecutor<'a> {
         {
             return result;
         }
+        if let Some(result) = commands::command_execution::handle_command_execution_channel(
+            self.app, self.state, channel, &payload,
+        ) {
+            return result;
+        }
         if let Some(result) = commands::cli_runtime::handle_cli_runtime_channel(
             self.app, self.state, channel, &payload,
         ) {

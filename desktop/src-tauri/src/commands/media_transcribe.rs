@@ -1,4 +1,5 @@
-use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
+use crate::cli_runtime::CliVerifyRule;
+use crate::command_execution::{run_app_managed_argv, AppManagedArgvRequest};
 use crate::desktop_io::{resolve_transcription_settings, run_curl_transcription_with_parse_format};
 use crate::store::settings as settings_store;
 use crate::{ffmpeg_program, make_id, now_ms, payload_string, workspace_root, AppState};
@@ -133,10 +134,10 @@ fn extract_audio_for_transcription(
     let argv = std::iter::once(ffmpeg_program(Some(app))?)
         .chain(args)
         .collect::<Vec<_>>();
-    run_managed_cli_command(
+    run_app_managed_argv(
         app,
         state,
-        CliExecuteRequest {
+        AppManagedArgvRequest {
             session_id: session_id.map(ToString::to_string),
             runtime_id: Some("media-transcribe".to_string()),
             tool_id: Some("ffmpeg".to_string()),
@@ -148,7 +149,7 @@ fn extract_audio_for_transcription(
                     path: audio_path.to_string_lossy().to_string(),
                 },
             ],
-            ..CliExecuteRequest::default()
+            ..AppManagedArgvRequest::default()
         },
         8_000,
     )
