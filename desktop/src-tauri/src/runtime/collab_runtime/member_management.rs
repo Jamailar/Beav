@@ -159,3 +159,39 @@ pub fn shutdown_collab_member(
     touch_session(store, &session_id, now);
     Ok(updated)
 }
+
+pub fn resume_collab_member(
+    store: &mut AppStore,
+    payload: &Value,
+) -> Result<CollabMemberRecord, String> {
+    let session_id =
+        value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
+    let member_id = value_string(payload, "memberId").ok_or_else(|| "缺少 memberId".to_string())?;
+    validate_session(store, &session_id)?;
+    let now = now_i64();
+    let member = store
+        .collab_members
+        .iter_mut()
+        .find(|member| member.session_id == session_id && member.id == member_id)
+        .ok_or_else(|| "协作成员不存在或不属于该会话".to_string())?;
+    member.status = value_string(payload, "status").unwrap_or_else(|| "idle".to_string());
+    member.last_error = None;
+    member.updated_at = now;
+    member.last_activity_at = Some(now);
+    let mut metadata = member
+        .metadata
+        .take()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    metadata.insert(
+        "resume".to_string(),
+        json!({
+            "at": now,
+            "reason": value_string(payload, "reason")
+        }),
+    );
+    member.metadata = Some(Value::Object(metadata));
+    let updated = member.clone();
+    touch_session(store, &session_id, now);
+    Ok(updated)
+}

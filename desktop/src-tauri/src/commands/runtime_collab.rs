@@ -43,8 +43,8 @@ use crate::session_manager::create_session;
 use crate::store::redclaw as redclaw_store;
 use crate::{now_i64, parse_timestamp_ms, payload_string, AppState};
 pub use member_values::{
-    add_member_value, list_members_value, rename_member_value, set_session_coordinator_value,
-    shutdown_member_value,
+    add_member_value, interrupt_member_value, list_members_value, rename_member_value,
+    resume_member_value, set_session_coordinator_value, shutdown_member_value, wait_member_value,
 };
 pub use message_report_values::{
     list_messages_value, list_reports_value, post_message_value, read_mailbox_value,
@@ -73,7 +73,7 @@ pub use team_tools::{
 };
 #[cfg(test)]
 use team_wake::non_coordinator_members_settled;
-use team_wake::schedule_message_target_wake;
+use team_wake::{schedule_message_target_wake, schedule_team_member_wake};
 
 fn payload_limit(payload: &Value, key: &str) -> Option<usize> {
     payload

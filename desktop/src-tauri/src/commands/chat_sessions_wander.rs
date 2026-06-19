@@ -3687,9 +3687,7 @@ pub fn handle_chat_sessions_wander_channel(
                 let mut history = store
                     .wander_history
                     .iter()
-                    .filter(|item| {
-                        include_abandoned || item.status.as_deref() != Some("abandoned")
-                    })
+                    .filter(|item| include_abandoned || item.status.as_deref() != Some("abandoned"))
                     .cloned()
                     .collect::<Vec<_>>();
                 history.sort_by(|a, b| b.created_at.cmp(&a.created_at));

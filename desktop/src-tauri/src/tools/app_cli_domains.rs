@@ -1,5 +1,6 @@
 use super::*;
 use crate::store::settings as settings_store;
+use crate::store::types::AppStore;
 
 const TASK_BRIEF_MAX_STRING_CHARS: usize = 4_000;
 const TASK_BRIEF_MAX_ARRAY_ITEMS: usize = 40;
@@ -28,6 +29,24 @@ impl<'a> AppCliExecutor<'a> {
         match action {
             "get" | "read" => self.handle_task_brief_get(payload),
             "update" | "save" => self.handle_task_brief_update(payload),
+            "context" => {
+                let mut next_payload = payload.as_object().cloned().unwrap_or_default();
+                if !next_payload.contains_key("operation") {
+                    if let Some(operation) = tokens.get(1).map(String::as_str) {
+                        next_payload.insert("operation".to_string(), json!(operation));
+                    }
+                }
+                self.handle_task_brief_context(&Value::Object(next_payload))
+            }
+            "goal" => {
+                let mut next_payload = payload.as_object().cloned().unwrap_or_default();
+                if !next_payload.contains_key("operation") {
+                    if let Some(operation) = tokens.get(1).map(String::as_str) {
+                        next_payload.insert("operation".to_string(), json!(operation));
+                    }
+                }
+                self.handle_task_brief_goal(&Value::Object(next_payload))
+            }
             other => Err(format!("unsupported taskBrief action: {other}")),
         }
     }
@@ -110,6 +129,258 @@ impl<'a> AppCliExecutor<'a> {
                 "success": true,
                 "sessionId": session_id,
                 "taskBrief": task_brief
+            }))
+        })
+    }
+
+    pub(super) fn handle_task_brief_context(&self, payload: &Value) -> Result<Value, String> {
+        let payload_session_id = payload_string(payload, "sessionId");
+        let Some(session_id) = self.session_id.or(payload_session_id.as_deref()) else {
+            return Err("taskBrief.context requires an active session".to_string());
+        };
+        let operation = payload_string(payload, "operation")
+            .unwrap_or_else(|| "get".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        match operation.as_str() {
+            "get" | "read" | "usage" => with_store(self.state, |store| {
+                Ok(task_brief_context_usage_response(&store, session_id))
+            }),
+            "compact" | "new" | "new_context" | "new-context" => {
+                let force = payload_bool(payload, &["force"]).unwrap_or(true);
+                let result = with_store_mut(self.state, |store| {
+                    let total_messages =
+                        crate::runtime::session_message_count_for_session(store, session_id);
+                    let snapshot = crate::runtime::update_session_context_record(
+                        store, session_id, "manual", force,
+                    );
+                    Ok(match snapshot {
+                        Some(record) => json!({
+                            "success": true,
+                            "sessionId": session_id,
+                            "operation": "compact",
+                            "compacted": true,
+                            "message": format!(
+                                "已归档 {} 条历史消息，保留最近 {} 条用于继续对话",
+                                record.compacted_message_count,
+                                record.tail_message_count
+                            ),
+                            "context": crate::runtime::session_context_value_for_session(store, session_id),
+                            "usage": task_brief_context_usage_response(&store, session_id),
+                            "totalMessages": total_messages,
+                        }),
+                        None => {
+                            let usage = task_brief_context_usage_response(&store, session_id);
+                            let threshold = usage
+                                .get("context")
+                                .and_then(|value| value.get("compactThreshold"))
+                                .and_then(Value::as_i64)
+                                .unwrap_or(crate::runtime::DEFAULT_SESSION_COMPACT_TARGET_TOKENS);
+                            let effective = usage
+                                .get("context")
+                                .and_then(|value| value.get("estimatedEffectiveTokens"))
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0);
+                            json!({
+                                "success": true,
+                                "sessionId": session_id,
+                                "operation": "compact",
+                                "compacted": false,
+                                "message": if total_messages <= crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES as i64 {
+                                    format!(
+                                        "当前仅有 {} 条消息，至少需要超过 {} 条消息才有可归档内容",
+                                        total_messages,
+                                        crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES
+                                    )
+                                } else {
+                                    format!(
+                                        "当前有效上下文约 {} tokens，尚未超过自动 compact 阈值 {}，且没有新的可归档历史",
+                                        effective,
+                                        threshold
+                                    )
+                                },
+                                "usage": usage,
+                                "totalMessages": total_messages,
+                            })
+                        }
+                    })
+                })?;
+                if result
+                    .get("compacted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    let summary = result
+                        .get("context")
+                        .and_then(|value| value.get("summary"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let _ = with_store(self.state, |store| {
+                        crate::runtime::append_compact_boundary_entry(
+                            self.state, &store, session_id, summary,
+                        )
+                    });
+                }
+                Ok(result)
+            }
+            other => Err(format!(
+                "taskBrief.context unsupported operation: {other}; expected get or compact"
+            )),
+        }
+    }
+
+    pub(super) fn handle_task_brief_goal(&self, payload: &Value) -> Result<Value, String> {
+        let payload_session_id = payload_string(payload, "sessionId");
+        let Some(session_id) = self.session_id.or(payload_session_id.as_deref()) else {
+            return Err("taskBrief.goal requires an active session".to_string());
+        };
+        let operation = payload_string(payload, "operation")
+            .unwrap_or_else(|| "get".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        let now = now_iso();
+        with_store_mut(self.state, |store| {
+            let session = store
+                .chat_sessions
+                .iter_mut()
+                .find(|item| item.id == session_id)
+                .ok_or_else(|| "taskBrief.goal could not find the active session".to_string())?;
+            let mut metadata_object = session
+                .metadata
+                .clone()
+                .and_then(|metadata| metadata.as_object().cloned())
+                .unwrap_or_default();
+            let mut next_brief = metadata_object
+                .get("taskBrief")
+                .cloned()
+                .or_else(|| {
+                    metadata_object
+                        .get("taskHints")
+                        .and_then(|task_hints| task_hints.get("taskBrief"))
+                        .cloned()
+                })
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            let current_goal = next_brief
+                .get("goal")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if matches!(operation.as_str(), "get" | "read") {
+                return Ok(json!({
+                    "success": true,
+                    "sessionId": session_id,
+                    "goal": Value::Object(current_goal),
+                    "taskBrief": Value::Object(next_brief),
+                }));
+            }
+
+            let mut goal = current_goal.clone();
+            match operation.as_str() {
+                "create" => {
+                    if !goal_is_finished(&goal)
+                        && goal
+                            .get("objective")
+                            .and_then(Value::as_str)
+                            .is_some_and(|value| !value.trim().is_empty())
+                    {
+                        return Err(
+                            "taskBrief.goal create refused because an unfinished goal already exists"
+                                .to_string(),
+                        );
+                    }
+                    let objective = payload_string(payload, "objective")
+                        .or_else(|| {
+                            payload
+                                .get("goal")
+                                .and_then(|value| value.get("objective"))
+                                .and_then(Value::as_str)
+                                .map(ToString::to_string)
+                        })
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| "taskBrief.goal create requires objective".to_string())?;
+                    goal = Map::new();
+                    goal.insert("objective".to_string(), json!(objective));
+                    goal.insert("status".to_string(), json!("active"));
+                    goal.insert("createdAt".to_string(), json!(now.clone()));
+                    goal.insert("updatedAt".to_string(), json!(now.clone()));
+                    if let Some(token_budget) = payload_field(payload, "tokenBudget")
+                        .or_else(|| {
+                            payload
+                                .get("goal")
+                                .and_then(|value| value.get("tokenBudget"))
+                        })
+                        .and_then(Value::as_i64)
+                        .filter(|value| *value > 0)
+                    {
+                        goal.insert("tokenBudget".to_string(), json!(token_budget));
+                    }
+                }
+                "update" | "complete" | "block" | "blocked" | "cancel" | "cancelled" => {
+                    if goal.is_empty() {
+                        return Err("taskBrief.goal update requires an existing goal".to_string());
+                    }
+                    let mut patch = payload
+                        .get("goal")
+                        .and_then(Value::as_object)
+                        .cloned()
+                        .unwrap_or_default();
+                    for key in ["objective", "status", "tokenBudget", "tokenUsage", "reason"] {
+                        if let Some(value) = payload.get(key) {
+                            patch.insert(key.to_string(), value.clone());
+                        }
+                    }
+                    if matches!(operation.as_str(), "complete") {
+                        patch.insert("status".to_string(), json!("complete"));
+                    } else if matches!(operation.as_str(), "block" | "blocked") {
+                        patch.insert("status".to_string(), json!("blocked"));
+                    } else if matches!(operation.as_str(), "cancel" | "cancelled") {
+                        patch.insert("status".to_string(), json!("cancelled"));
+                    }
+                    patch.remove("operation");
+                    patch.remove("sessionId");
+                    let sanitized = sanitize_task_brief_value(&Value::Object(patch), 0);
+                    if let Some(patch_object) = sanitized.as_object() {
+                        merge_task_brief_object(&mut goal, patch_object);
+                    }
+                    goal.insert("updatedAt".to_string(), json!(now.clone()));
+                    match goal.get("status").and_then(Value::as_str) {
+                        Some("complete") => {
+                            goal.insert("completedAt".to_string(), json!(now.clone()));
+                        }
+                        Some("blocked") => {
+                            goal.insert("blockedAt".to_string(), json!(now.clone()));
+                        }
+                        Some("cancelled") => {
+                            goal.insert("cancelledAt".to_string(), json!(now.clone()));
+                        }
+                        _ => {}
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "taskBrief.goal unsupported operation: {other}; expected get, create, or update"
+                    ));
+                }
+            }
+
+            next_brief.insert("goal".to_string(), Value::Object(goal.clone()));
+            next_brief.insert("lastUpdatedAt".to_string(), json!(now.clone()));
+            let previous_revision = next_brief
+                .get("revision")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            next_brief.insert("revision".to_string(), json!(previous_revision + 1));
+            let task_brief = Value::Object(next_brief);
+            metadata_object.insert("taskBrief".to_string(), task_brief.clone());
+            session.metadata = Some(Value::Object(metadata_object));
+            session.updated_at = now_iso();
+            Ok(json!({
+                "success": true,
+                "sessionId": session_id,
+                "goal": Value::Object(goal),
+                "taskBrief": task_brief,
             }))
         })
     }
@@ -1634,6 +1905,13 @@ impl<'a> AppCliExecutor<'a> {
         let args = parse_cli_args(&tokens[1..])?;
         match action {
             "list" => self.call_channel("skills:list", json!({ "includeBody": false })),
+            "read" | "get" => self.call_channel(
+                "skills:read",
+                json!({
+                    "name": skill_name_from_args_or_payload(&args, payload)
+                        .ok_or_else(|| "skills read requires --name".to_string())?
+                }),
+            ),
             "invoke" => self.call_channel(
                 "skills:invoke",
                 json!({
@@ -3088,6 +3366,44 @@ fn build_task_brief_patch(payload: &Value, now: &str) -> Value {
     }
     patch.insert("lastUpdatedAt".to_string(), json!(now));
     sanitize_task_brief_value(&Value::Object(patch), 0)
+}
+
+fn task_brief_context_usage_response(store: &AppStore, session_id: &str) -> Value {
+    let usage = crate::runtime::session_context_usage_value(store, session_id);
+    let compact_threshold = usage
+        .get("compactThreshold")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let estimated_effective_tokens = usage
+        .get("estimatedEffectiveTokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let estimated_remaining_tokens = if compact_threshold > 0 {
+        Some(compact_threshold.saturating_sub(estimated_effective_tokens))
+    } else {
+        None
+    };
+    json!({
+        "success": true,
+        "sessionId": session_id,
+        "operation": "get",
+        "context": usage,
+        "estimatedRemainingTokens": estimated_remaining_tokens,
+        "remainingRatio": if compact_threshold <= 0 {
+            Value::Null
+        } else {
+            json!(estimated_remaining_tokens.unwrap_or(0) as f64 / compact_threshold as f64)
+        },
+        "isEstimate": true,
+        "basis": "session message character estimate and configured compact threshold"
+    })
+}
+
+fn goal_is_finished(goal: &Map<String, Value>) -> bool {
+    matches!(
+        goal.get("status").and_then(Value::as_str),
+        Some("complete" | "blocked" | "cancelled")
+    )
 }
 
 fn merge_task_brief_object(target: &mut Map<String, Value>, patch: &Map<String, Value>) {

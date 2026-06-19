@@ -205,6 +205,15 @@ pub(super) fn handle(
                     require_confirmed_team_plan("team.member.spawn", &payload)?;
                     executor.call_channel("team-runtime:add-member", payload)
                 }
+                "rename-member" => executor.call_channel("team-runtime:rename-member", merged()),
+                "shutdown-member" => {
+                    executor.call_channel("team-runtime:shutdown-member", merged())
+                }
+                "interrupt-member" => {
+                    executor.call_channel("team-runtime:interrupt-member", merged())
+                }
+                "resume-member" => executor.call_channel("team-runtime:resume-member", merged()),
+                "wait-member" => executor.call_channel("team-runtime:wait-member", merged()),
                 "list-tasks" | "tasks" => {
                     executor.call_channel("team-runtime:list-tasks", session_payload())
                 }

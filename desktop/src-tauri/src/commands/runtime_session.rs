@@ -56,6 +56,11 @@ pub fn handle_runtime_session_channel(
         "team-runtime:shutdown-member" => {
             runtime_collab::shutdown_member_value(app, state, payload)
         }
+        "team-runtime:interrupt-member" => {
+            runtime_collab::interrupt_member_value(app, state, payload)
+        }
+        "team-runtime:resume-member" => runtime_collab::resume_member_value(app, state, payload),
+        "team-runtime:wait-member" => runtime_collab::wait_member_value(state, payload),
         "team-runtime:create-task" | "collab:tasks:create" => {
             runtime_collab::create_task_value(app, state, payload)
         }

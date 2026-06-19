@@ -409,7 +409,11 @@ fn select_direct_app_cli_actions(
         direct_namespaces_from_metadata(metadata).filter(|items| !items.is_empty());
     let uses_explicit_direct_namespaces = explicit_direct_namespaces.is_some();
     let preferred_namespaces = explicit_direct_namespaces.unwrap_or(preferred_namespaces);
-    let pinned_actions = pinned_direct_app_cli_actions(runtime_mode, task_intent);
+    let pinned_actions = if uses_explicit_direct_namespaces {
+        &[]
+    } else {
+        pinned_direct_app_cli_actions(runtime_mode, task_intent)
+    };
     let max_direct_actions = if uses_explicit_direct_namespaces {
         max_direct_actions
     } else {
@@ -496,26 +500,19 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "web.search",
     "taskBrief.get",
     "taskBrief.update",
+    "taskBrief.context",
     "session.resources.list",
     "session.resources.get",
-    "memory.list",
     "memory.search",
-    "memory.recall",
-    "memory.diagnostics",
-    "redclaw.profile.bundle",
-    "redclaw.profile.read",
-    "redclaw.task.preview",
-    "redclaw.task.list",
-    "redclaw.task.stats",
+    "profile.read",
+    "task.read",
     "manuscripts.list",
     "assets.search",
     "assets.get",
     "assets.categories.list",
     "generation.job.list",
     "generation.job.get",
-    "assets.categories.create",
-    "assets.create",
-    "assets.update",
+    "assets.manage",
     "assets.generateCharacterCard",
     "voice.speech",
     "voice.list",
@@ -525,8 +522,9 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "team.session.get",
     "team.members.list",
     "team.task.list",
+    "team.control",
     "approval.request",
-    "skills.list",
+    "skills.inspect",
     "skills.invoke",
     "image.generate",
     "video.generate",
@@ -586,34 +584,16 @@ fn pinned_direct_app_cli_actions(
             "video.analyze",
             "media.edit",
             "team.guide.create",
-            "team.session.create",
+            "team.control",
             "team.session.get",
             "team.session.list",
             "team.members.list",
-            "team.member.spawn",
-            "team.member.match",
-            "team.member.rename",
-            "team.member.shutdown",
-            "team.task.create",
-            "team.task.update",
             "team.task.list",
-            "team.message.send",
-            "team.report.request",
-            "team.report.submit",
-            "team.artifact.attach",
-            "team.blocker.raise",
             "media.transcribe",
             "image.generate",
             "skills.invoke",
-            "skills.installFromRepo",
-            "skills.uninstall",
             "cli_runtime.execution.get",
-            "mcp.list",
-            "mcp.discoverLocal",
-            "mcp.add",
-            "mcp.get",
-            "mcp.remove",
-            "mcp.listTools",
+            "mcp.inspect",
         ]
     } else if wants_host_cli || (!media_intent && matches!(runtime_mode, "redclaw" | "knowledge")) {
         &[
@@ -625,15 +605,8 @@ fn pinned_direct_app_cli_actions(
             "media.transcribe",
             "image.generate",
             "skills.invoke",
-            "skills.installFromRepo",
-            "skills.uninstall",
             "cli_runtime.execution.get",
-            "mcp.list",
-            "mcp.discoverLocal",
-            "mcp.add",
-            "mcp.get",
-            "mcp.remove",
-            "mcp.listTools",
+            "mcp.inspect",
         ]
     } else {
         &[]
@@ -657,7 +630,49 @@ fn direct_namespaces_from_metadata(metadata: Option<&Value>) -> Option<Vec<Strin
     if families.is_empty() {
         return None;
     }
-    Some(families)
+    let mut namespaces = Vec::<String>::new();
+    for family in families {
+        for namespace in namespaces_for_direct_action_family(&family) {
+            if !namespaces.iter().any(|item| item == &namespace) {
+                namespaces.push(namespace);
+            }
+        }
+    }
+    Some(namespaces)
+}
+
+fn namespaces_for_direct_action_family(family: &str) -> Vec<String> {
+    match family.trim() {
+        "management" => vec!["plugins", "mcp", "skills"]
+            .into_iter()
+            .map(ToString::to_string)
+            .collect(),
+        "diagnostics" => vec![
+            families::memory::NAMESPACE,
+            families::runtime::NAMESPACE,
+            families::runtime::TASKS_NAMESPACE,
+            families::cli_runtime::NAMESPACE,
+            families::cli_runtime::EXECUTION_NAMESPACE,
+            "redclaw.runner",
+            "mcp",
+        ]
+        .into_iter()
+        .map(ToString::to_string)
+        .collect(),
+        "plugins" => vec!["plugins".to_string()],
+        "mcp" => vec!["mcp".to_string()],
+        "skills" => vec!["skills".to_string()],
+        "memory" => vec![families::memory::NAMESPACE.to_string()],
+        "profile" => vec!["profile".to_string()],
+        "task" => vec!["task".to_string()],
+        "redclaw.task" => vec![families::redclaw::TASK_NAMESPACE.to_string()],
+        "redclaw.profile" => vec![families::redclaw::PROFILE_NAMESPACE.to_string()],
+        "runtime" => vec![families::runtime::NAMESPACE.to_string()],
+        "runtime.tasks" => vec![families::runtime::TASKS_NAMESPACE.to_string()],
+        "cli_runtime" => vec![families::cli_runtime::NAMESPACE.to_string()],
+        "cli_runtime.execution" => vec![families::cli_runtime::EXECUTION_NAMESPACE.to_string()],
+        namespace => vec![namespace.to_string()],
+    }
 }
 
 fn max_direct_actions_from_metadata(metadata: Option<&Value>) -> Option<usize> {
@@ -684,6 +699,7 @@ fn deferred_action_entry(descriptor: &ActionDescriptor) -> DeferredActionEntry {
 
 fn is_team_escalation_action(action: &str) -> bool {
     (action.starts_with("team.") && action != "team.guide.create")
+        || action == "task.manage"
         || action.starts_with("redclaw.task.")
 }
 
@@ -866,7 +882,91 @@ mod tests {
             .visible_tools
             .iter()
             .any(|tool| tool.name == "tool_search"));
-        assert!(plan.has_direct_app_cli_action("memory.add"));
+        assert!(plan.has_direct_app_cli_action("memory.search"));
+        assert!(!plan.has_direct_app_cli_action("memory.add"));
+        assert!(plan.has_deferred_app_cli_action("memory.note"));
+    }
+
+    #[test]
+    fn default_modes_keep_only_memory_search_direct() {
+        for runtime_mode in ["redclaw", "team", "knowledge", "image-generation"] {
+            let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+                runtime_mode,
+                ..ToolRegistryPlanParams::default()
+            });
+
+            assert!(
+                plan.has_direct_app_cli_action("memory.search"),
+                "{runtime_mode}"
+            );
+            for action in [
+                "memory.list",
+                "memory.recall",
+                "memory.add",
+                "memory.update",
+                "memory.archive",
+            ] {
+                assert!(
+                    !plan.has_direct_app_cli_action(action),
+                    "{runtime_mode}: {action}"
+                );
+            }
+            assert!(plan.has_deferred_app_cli_action("memory.note"));
+            assert!(plan.has_deferred_app_cli_action("memory.manage"));
+            for action in ["memory.rebuildIndex", "memory.diagnostics"] {
+                assert!(
+                    !plan.has_direct_app_cli_action(action),
+                    "{runtime_mode}: {action}"
+                );
+                assert!(
+                    !plan.has_deferred_app_cli_action(action),
+                    "{runtime_mode}: {action}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_high_noise_groups_stay_within_target_counts() {
+        for runtime_mode in ["redclaw", "team", "knowledge", "image-generation"] {
+            let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+                runtime_mode,
+                ..ToolRegistryPlanParams::default()
+            });
+            let plugin_skill_mcp = plan
+                .direct_app_cli_actions
+                .iter()
+                .filter(|descriptor| {
+                    descriptor.action.starts_with("plugins.")
+                        || descriptor.action.starts_with("skills.")
+                        || descriptor.action.starts_with("mcp.")
+                })
+                .map(|descriptor| descriptor.action)
+                .collect::<Vec<_>>();
+            let memory_redclaw = plan
+                .direct_app_cli_actions
+                .iter()
+                .filter(|descriptor| {
+                    descriptor.action.starts_with("memory.")
+                        || descriptor.action.starts_with("profile.")
+                        || descriptor.action.starts_with("task.")
+                        || descriptor.action.starts_with("redclaw.profile.")
+                        || descriptor.action.starts_with("redclaw.task.")
+                        || descriptor.action.starts_with("redclaw.runner.")
+                        || descriptor.action.starts_with("runner.")
+                })
+                .map(|descriptor| descriptor.action)
+                .collect::<Vec<_>>();
+
+            assert!(
+                plugin_skill_mcp.len() <= 9,
+                "{runtime_mode}: {plugin_skill_mcp:?}"
+            );
+            assert!(
+                memory_redclaw.len() <= 8,
+                "{runtime_mode}: {memory_redclaw:?}"
+            );
+        }
     }
 
     #[test]
@@ -876,8 +976,14 @@ mod tests {
             ..ToolRegistryPlanParams::default()
         });
 
+        assert!(plan.has_direct_app_cli_action("skills.inspect"));
         assert!(plan.has_direct_app_cli_action("skills.invoke"));
         assert!(!plan.has_deferred_app_cli_action("skills.invoke"));
+        assert!(!plan.has_direct_app_cli_action("skills.installFromRepo"));
+        assert!(!plan.has_direct_app_cli_action("skills.uninstall"));
+        assert!(plan.has_deferred_app_cli_action("skills.manage"));
+        assert!(!plan.has_deferred_app_cli_action("skills.installFromRepo"));
+        assert!(!plan.has_deferred_app_cli_action("skills.uninstall"));
     }
 
     #[test]
@@ -926,6 +1032,7 @@ mod tests {
             ]
         );
         assert!(!plan.has_deferred_app_cli_action("redclaw.task.create"));
+        assert!(!plan.has_deferred_app_cli_action("task.manage"));
         assert!(!plan
             .visible_tools
             .iter()
@@ -941,8 +1048,7 @@ mod tests {
             "allowedOperateActions": [
                 "skills.invoke",
                 "manuscripts.createProject",
-                "redclaw.profile.read",
-                "redclaw.profile.bundle"
+                "profile.read"
             ],
             "allowedWriteTargets": ["manuscripts://current"],
             "deferredDiscovery": false,
@@ -970,12 +1076,11 @@ mod tests {
             "team.guide.create",
             "skills.invoke",
             "manuscripts.createProject",
-            "redclaw.profile.read",
-            "redclaw.profile.bundle",
+            "profile.read",
         ] {
             assert!(actions.contains(&action), "{action} should be direct");
         }
-        assert_eq!(actions.len(), 5);
+        assert_eq!(actions.len(), 4);
         assert!(!plan.has_direct_app_cli_action("manuscripts.writeCurrent"));
         assert!(!visible.contains(&"tool_search"));
         assert!(!visible.contains(&"shell"));
@@ -989,10 +1094,8 @@ mod tests {
         let metadata = json!({
             "activeSkills": ["redclaw-style-definition"],
             "allowedOperateActions": [
-                "redclaw.profile.bundle",
-                "redclaw.profile.read",
-                "redclaw.profile.update",
-                "redclaw.profile.completeStyleDefinition"
+                "profile.read",
+                "profile.manage"
             ]
         });
 
@@ -1002,10 +1105,10 @@ mod tests {
             ..ToolRegistryPlanParams::default()
         });
 
-        assert!(plan.has_direct_app_cli_action("redclaw.profile.bundle"));
-        assert!(plan.has_direct_app_cli_action("redclaw.profile.read"));
-        assert!(plan.has_direct_app_cli_action("redclaw.profile.update"));
-        assert!(plan.has_direct_app_cli_action("redclaw.profile.completeStyleDefinition"));
+        assert!(plan.has_direct_app_cli_action("profile.read"));
+        assert!(plan.has_direct_app_cli_action("profile.manage"));
+        assert!(!plan.has_direct_app_cli_action("redclaw.profile.update"));
+        assert!(!plan.has_direct_app_cli_action("redclaw.profile.completeStyleDefinition"));
         assert!(!plan.has_direct_app_cli_action("video.analyze"));
         assert!(!plan.has_deferred_app_cli_action("video.analyze"));
         assert!(plan.deferred_app_cli_actions.is_empty());
@@ -1084,6 +1187,62 @@ mod tests {
     }
 
     #[test]
+    fn management_family_expands_to_plugin_mcp_and_skill_namespaces() {
+        let metadata = json!({
+            "directActionFamilies": ["management"],
+            "maxDirectActions": 64
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "team",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("plugins.discover"));
+        assert!(plan.has_direct_app_cli_action("plugins.install"));
+        assert!(plan.has_direct_app_cli_action("mcp.manage"));
+        assert!(plan.has_direct_app_cli_action("skills.manage"));
+        assert!(plan
+            .direct_app_cli_actions
+            .iter()
+            .all(|descriptor| { matches!(descriptor.namespace, "plugins" | "mcp" | "skills") }));
+    }
+
+    #[test]
+    fn diagnostics_family_expands_to_runtime_cli_and_mcp_namespaces() {
+        let metadata = json!({
+            "directActionFamilies": ["diagnostics"],
+            "maxDirectActions": 64
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "diagnostics",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("runtime.query"));
+        assert!(plan.has_direct_app_cli_action("runtime.tasks.list"));
+        assert!(plan.has_direct_app_cli_action("memory.manage"));
+        assert!(plan.has_direct_app_cli_action("runner.manage"));
+        assert!(!plan.has_direct_app_cli_action("memory.diagnostics"));
+        assert!(!plan.has_direct_app_cli_action("redclaw.runner.status"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(plan.has_direct_app_cli_action("mcp.manage"));
+        assert!(plan.direct_app_cli_actions.iter().all(|descriptor| {
+            matches!(
+                descriptor.namespace,
+                "memory"
+                    | "runtime"
+                    | "runtime.tasks"
+                    | "cli_runtime"
+                    | "cli_runtime.execution"
+                    | "redclaw.runner"
+                    | "mcp"
+            )
+        }));
+    }
+
+    #[test]
     fn redclaw_runtime_pins_core_cli_runtime_actions() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",
@@ -1106,12 +1265,13 @@ mod tests {
     }
 
     #[test]
-    fn team_runtime_exposes_coordination_actions_directly() {
+    fn team_runtime_exposes_consolidated_coordination_action_directly() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "team",
             ..ToolRegistryPlanParams::default()
         });
 
+        assert!(plan.has_direct_app_cli_action("team.control"));
         for action in [
             "team.session.create",
             "team.member.spawn",
@@ -1123,7 +1283,7 @@ mod tests {
             "team.artifact.attach",
             "team.blocker.raise",
         ] {
-            assert!(plan.has_direct_app_cli_action(action), "{action}");
+            assert!(!plan.has_direct_app_cli_action(action), "{action}");
         }
     }
 
@@ -1200,18 +1360,65 @@ mod tests {
     }
 
     #[test]
-    fn team_runtime_pins_mcp_setup_actions() {
+    fn team_runtime_keeps_only_mcp_read_actions_direct() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "team",
             ..ToolRegistryPlanParams::default()
         });
 
-        assert!(plan.has_direct_app_cli_action("mcp.list"));
-        assert!(plan.has_direct_app_cli_action("mcp.discoverLocal"));
-        assert!(plan.has_direct_app_cli_action("mcp.add"));
-        assert!(plan.has_direct_app_cli_action("mcp.get"));
-        assert!(plan.has_direct_app_cli_action("mcp.remove"));
-        assert!(plan.has_direct_app_cli_action("mcp.listTools"));
+        assert!(plan.has_direct_app_cli_action("mcp.inspect"));
+        assert!(!plan.has_direct_app_cli_action("mcp.manage"));
+        assert!(plan.has_deferred_app_cli_action("mcp.manage"));
+        assert!(!plan.has_direct_app_cli_action("mcp.list"));
+        assert!(!plan.has_direct_app_cli_action("mcp.tools"));
+        assert!(!plan.has_direct_app_cli_action("mcp.listTools"));
+        for action in [
+            "mcp.discoverLocal",
+            "mcp.add",
+            "mcp.remove",
+            "mcp.enable",
+            "mcp.disable",
+            "mcp.importLocal",
+            "mcp.save",
+            "mcp.test",
+            "mcp.disconnect",
+            "mcp.disconnectAll",
+            "mcp.oauthStatus",
+        ] {
+            assert!(!plan.has_direct_app_cli_action(action), "{action}");
+            assert!(!plan.has_deferred_app_cli_action(action), "{action}");
+        }
+    }
+
+    #[test]
+    fn redclaw_task_mutations_are_deferred_by_default() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            task_intent: Some("scheduled-task"),
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("task.read"));
+        assert!(!plan.has_direct_app_cli_action("task.preview"));
+        assert!(!plan.has_direct_app_cli_action("task.list"));
+        assert!(!plan.has_direct_app_cli_action("task.manage"));
+        assert!(plan.has_deferred_app_cli_action("task.manage"));
+        for action in [
+            "redclaw.task.preview",
+            "redclaw.task.list",
+            "redclaw.task.stats",
+        ] {
+            assert!(!plan.has_direct_app_cli_action(action), "{action}");
+        }
+        for action in [
+            "redclaw.task.create",
+            "redclaw.task.confirm",
+            "redclaw.task.update",
+            "redclaw.task.cancel",
+        ] {
+            assert!(!plan.has_direct_app_cli_action(action), "{action}");
+            assert!(!plan.has_deferred_app_cli_action(action), "{action}");
+        }
     }
 
     #[test]

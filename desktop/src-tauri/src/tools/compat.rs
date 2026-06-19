@@ -422,7 +422,12 @@ fn normalize_list_call(arguments: &Value) -> NormalizedToolCall {
             Some("List"),
             Some(path),
         ),
-        "memory" => app_cli_action_call("memory.list", json!({}), Some("List"), Some(path)),
+        "memory" => app_cli_action_call(
+            "memory.search",
+            payload_with_mode(json!({}), "list"),
+            Some("List"),
+            Some(path),
+        ),
         _ => universal_fs_call("workspace.list", resource_path, &object, Some("List")),
     }
 }
@@ -502,11 +507,14 @@ fn normalize_write_call(arguments: &Value) -> NormalizedToolCall {
             }
         }
         "profiles" | "profile" => app_cli_action_call(
-            "redclaw.profile.update",
-            json!({
+            "profile.manage",
+            payload_with_operation(
+                json!({
                 "docType": profile_doc_type(&resource_path),
                 "markdown": content
-            }),
+                }),
+                "update",
+            ),
             Some("Write"),
             Some(path),
         ),
@@ -635,8 +643,8 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             "profile" | "profiles" | "redclaw.profile" | "redclaw_profiles" | "redclaw-profiles",
             "update",
         ) => app_cli_action_call(
-            "redclaw.profile.update",
-            payload,
+            "profile.manage",
+            payload_with_operation(payload, "update"),
             Some("Operate"),
             Some("profile.update"),
         ),
@@ -644,20 +652,125 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             "profile" | "profiles" | "redclaw.profile" | "redclaw_profiles" | "redclaw-profiles",
             "complete" | "complete-style-definition" | "completestyledefinition",
         ) => app_cli_action_call(
-            "redclaw.profile.completeStyleDefinition",
-            payload,
+            "profile.manage",
+            payload_with_operation(payload, "completeStyleDefinition"),
             Some("Operate"),
             Some("profile.completeStyleDefinition"),
         ),
-        ("memory", "list") => {
-            app_cli_action_call("memory.list", payload, Some("Operate"), Some("memory.list"))
+        ("runner" | "redclaw.runner" | "redclaw_runner" | "redclaw-runner", "status") => {
+            app_cli_action_call(
+                "runner.manage",
+                payload_with_operation(payload, "status"),
+                Some("Operate"),
+                Some("runner.status"),
+            )
         }
-        ("memory", "search" | "get") => app_cli_action_call(
+        ("runner" | "redclaw.runner" | "redclaw_runner" | "redclaw-runner", "start") => {
+            app_cli_action_call(
+                "runner.manage",
+                payload_with_operation(payload, "start"),
+                Some("Operate"),
+                Some("runner.start"),
+            )
+        }
+        ("runner" | "redclaw.runner" | "redclaw_runner" | "redclaw-runner", "stop") => {
+            app_cli_action_call(
+                "runner.manage",
+                payload_with_operation(payload, "stop"),
+                Some("Operate"),
+                Some("runner.stop"),
+            )
+        }
+        (
+            "runner" | "redclaw.runner" | "redclaw_runner" | "redclaw-runner",
+            "setconfig" | "set-config" | "config" | "update",
+        ) => app_cli_action_call(
+            "runner.manage",
+            payload_with_operation(payload, "setConfig"),
+            Some("Operate"),
+            Some("runner.setConfig"),
+        ),
+        (
+            "runner" | "redclaw.runner" | "redclaw_runner" | "redclaw-runner",
+            "runnow" | "run-now" | "run",
+        ) => app_cli_action_call(
+            "runner.manage",
+            payload_with_operation(payload, "runNow"),
+            Some("Operate"),
+            Some("runner.runNow"),
+        ),
+        ("memory", "list" | "read") => app_cli_action_call(
             "memory.search",
-            payload,
+            payload_with_mode(payload, "list"),
+            Some("Operate"),
+            Some("memory.list"),
+        ),
+        ("memory", "search" | "get" | "lookup") => app_cli_action_call(
+            "memory.search",
+            payload_with_mode(payload, "search"),
             Some("Operate"),
             Some("memory.search"),
         ),
+        ("memory", "recall") => app_cli_action_call(
+            "memory.search",
+            payload_with_mode(payload, "recall"),
+            Some("Operate"),
+            Some("memory.recall"),
+        ),
+        ("memory", "create" | "add") => {
+            app_cli_action_call("memory.note", payload, Some("Operate"), Some("memory.add"))
+        }
+        (
+            "memory",
+            "update" | "archive" | "rebuild" | "rebuild-index" | "reindex" | "diagnostics",
+        ) => {
+            let operation = operation.as_str();
+            let operation = match operation {
+                "rebuild" | "rebuild-index" | "reindex" => "rebuildIndex",
+                "diagnostics" => "diagnostics",
+                other => other,
+            };
+            app_cli_action_call(
+                "memory.manage",
+                payload_with_operation(payload, operation),
+                Some("Operate"),
+                Some("memory.manage"),
+            )
+        }
+        ("redclaw.task" | "redclaw_task" | "redclaw-task", "preview" | "draft") => {
+            app_cli_action_call(
+                "task.read",
+                payload_with_operation(payload, "preview"),
+                Some("Operate"),
+                Some("redclaw.task.preview"),
+            )
+        }
+        ("redclaw.task" | "redclaw_task" | "redclaw-task", "list" | "read") => app_cli_action_call(
+            "task.read",
+            payload_with_operation(payload, "list"),
+            Some("Operate"),
+            Some("redclaw.task.list"),
+        ),
+        ("redclaw.task" | "redclaw_task" | "redclaw-task", "stats" | "statistics") => {
+            app_cli_action_call(
+                "task.read",
+                payload_with_operation(payload, "stats"),
+                Some("Operate"),
+                Some("redclaw.task.stats"),
+            )
+        }
+        (
+            "redclaw.task" | "redclaw_task" | "redclaw-task",
+            "create" | "confirm" | "update" | "cancel",
+        ) => {
+            let operation = operation.as_str();
+            app_cli_action_call(
+                "task.manage",
+                payload_with_operation(payload, operation),
+                Some("Operate"),
+                Some("redclaw.task.manage"),
+            )
+        }
         ("session" | "session.resources" | "session_resources", "list" | "search") => {
             app_cli_action_call(
                 "session.resources.list",
@@ -674,12 +787,16 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("session.resources.get"),
             )
         }
-        ("plugin" | "plugins", "list" | "search") => app_cli_action_call(
-            "plugins.list",
-            payload,
-            Some("Operate"),
-            Some("plugins.list"),
-        ),
+        ("plugin" | "plugins", "list" | "search") => {
+            let mut map = payload.as_object().cloned().unwrap_or_default();
+            map.insert("source".to_string(), json!("installed"));
+            app_cli_action_call(
+                "plugins.discover",
+                Value::Object(map),
+                Some("Operate"),
+                Some("plugins.list"),
+            )
+        }
         ("plugin" | "plugins", "connectors" | "connector" | "apps" | "appinfo") => {
             app_cli_action_call(
                 "plugins.connectors",
@@ -688,26 +805,36 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("plugins.connectors"),
             )
         }
-        ("plugin" | "plugins", "marketplace" | "registry") => app_cli_action_call(
-            "plugins.marketplace",
-            payload,
-            Some("Operate"),
-            Some("plugins.marketplace"),
-        ),
-        ("plugin" | "plugins", "codexmarketplace" | "codex-marketplace" | "codex") => {
+        ("plugin" | "plugins", "marketplace" | "registry") => {
+            let mut map = payload.as_object().cloned().unwrap_or_default();
+            map.insert("source".to_string(), json!("marketplace"));
             app_cli_action_call(
-                "plugins.codexMarketplace",
-                payload,
+                "plugins.discover",
+                Value::Object(map),
+                Some("Operate"),
+                Some("plugins.marketplace"),
+            )
+        }
+        ("plugin" | "plugins", "codexmarketplace" | "codex-marketplace" | "codex") => {
+            let mut map = payload.as_object().cloned().unwrap_or_default();
+            map.insert("source".to_string(), json!("codex"));
+            app_cli_action_call(
+                "plugins.discover",
+                Value::Object(map),
                 Some("Operate"),
                 Some("plugins.codexMarketplace"),
             )
         }
-        ("plugin" | "plugins", "discover" | "discoverlocal" | "inspect") => app_cli_action_call(
-            "plugins.discoverLocal",
-            payload,
-            Some("Operate"),
-            Some("plugins.discoverLocal"),
-        ),
+        ("plugin" | "plugins", "discover" | "discoverlocal" | "inspect") => {
+            let mut map = payload.as_object().cloned().unwrap_or_default();
+            map.entry("source".to_string()).or_insert(json!("local"));
+            app_cli_action_call(
+                "plugins.discover",
+                Value::Object(map),
+                Some("Operate"),
+                Some("plugins.discoverLocal"),
+            )
+        }
         ("plugin" | "plugins", "installcodex" | "install-codex") => app_cli_action_call(
             "plugins.installCodex",
             payload,
@@ -726,9 +853,6 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("plugins.requestInstall"),
         ),
-        ("memory", "create" | "update") => {
-            app_cli_action_call("memory.add", payload, Some("Operate"), Some("memory.add"))
-        }
         ("web", "get" | "read" | "fetch") => {
             let mut map = payload.as_object().cloned().unwrap_or_default();
             if let Some(id) = map.remove("id") {
@@ -756,6 +880,50 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("taskBrief.update"),
         ),
+        (
+            "taskbrief" | "task-brief" | "task_brief" | "context",
+            "context" | "getcontext" | "get-context" | "compactcontext" | "compact-context" | "get"
+            | "read" | "usage" | "compact",
+        ) => {
+            let operation = match operation.as_str() {
+                "compactcontext" | "compact-context" | "compact" => "compact",
+                _ => "get",
+            };
+            app_cli_action_call(
+                "taskBrief.context",
+                payload_with_operation(payload, operation),
+                Some("Operate"),
+                Some("taskBrief.context"),
+            )
+        }
+        (
+            "taskbrief" | "task-brief" | "task_brief" | "goal",
+            "goal" | "getgoal" | "get-goal" | "creategoal" | "create-goal" | "updategoal"
+            | "update-goal" | "completegoal" | "complete-goal" | "blockgoal" | "block-goal",
+        ) => {
+            let operation = match operation.as_str() {
+                "creategoal" | "create-goal" => "create",
+                "updategoal" | "update-goal" => "update",
+                "completegoal" | "complete-goal" => "complete",
+                "blockgoal" | "block-goal" => "blocked",
+                "getgoal" | "get-goal" | "goal" => "get",
+                _ => "get",
+            };
+            app_cli_action_call(
+                "taskBrief.goal",
+                payload_with_operation(payload, operation),
+                Some("Operate"),
+                Some("taskBrief.goal"),
+            )
+        }
+        ("goal", "get" | "read" | "create" | "update" | "complete" | "block" | "blocked") => {
+            app_cli_action_call(
+                "taskBrief.goal",
+                payload_with_operation(payload, operation.as_str()),
+                Some("Operate"),
+                Some("goal"),
+            )
+        }
         ("asset" | "assets" | "subject" | "subjects", "search" | "list") => app_cli_action_call(
             "assets.search",
             payload,
@@ -767,22 +935,22 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             app_cli_action_call("assets.get", payload, Some("Operate"), Some("assets.get"))
         }
         ("asset" | "assets" | "subject" | "subjects", "create" | "add") => app_cli_action_call(
-            "assets.create",
-            payload,
+            "assets.manage",
+            payload_with_operation(payload, "create"),
             Some("Operate"),
             Some("assets.create"),
         ),
         ("asset" | "assets" | "subject" | "subjects", "update") => app_cli_action_call(
-            "assets.update",
-            payload,
+            "assets.manage",
+            payload_with_operation(payload, "update"),
             Some("Operate"),
             Some("assets.update"),
         ),
         ("asset" | "assets" | "subject" | "subjects", "delete") => {
             let payload = normalize_id_payload(payload, "id");
             app_cli_action_call(
-                "assets.delete",
-                payload,
+                "assets.manage",
+                payload_with_operation(payload, "delete"),
                 Some("Operate"),
                 Some("assets.delete"),
             )
@@ -832,8 +1000,26 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("video.analyze"),
         ),
-        ("skill" | "skills", "list") => {
-            app_cli_action_call("skills.list", payload, Some("Operate"), Some("skill.list"))
+        ("skill" | "skills", "list") => app_cli_action_call(
+            "skills.inspect",
+            payload_with_operation(payload, "list"),
+            Some("Operate"),
+            Some("skill.list"),
+        ),
+        ("skill" | "skills", "read" | "get") => {
+            let mut map = payload.as_object().cloned().unwrap_or_default();
+            if !map.contains_key("name") {
+                if let Some(id) = map.get("id").and_then(Value::as_str) {
+                    map.insert("name".to_string(), json!(id));
+                }
+            }
+            map.insert("operation".to_string(), json!("read"));
+            app_cli_action_call(
+                "skills.inspect",
+                Value::Object(map),
+                Some("Operate"),
+                Some("skill.read"),
+            )
         }
         ("skill" | "skills", "run" | "invoke" | "create" | "confirm") => {
             let mut map = payload.as_object().cloned().unwrap_or_default();
@@ -849,21 +1035,44 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("skill.invoke"),
             )
         }
-        ("mcp", "list") => {
-            app_cli_action_call("mcp.list", payload, Some("Operate"), Some("mcp.list"))
+        ("skill" | "skills", "install" | "installfromrepo" | "install-from-repo") => {
+            app_cli_action_call(
+                "skills.manage",
+                payload_with_operation(payload, "installFromRepo"),
+                Some("Operate"),
+                Some("skill.installFromRepo"),
+            )
         }
-        ("mcp", "get") => app_cli_action_call(
-            "mcp.sessions",
-            payload,
+        ("skill" | "skills", "uninstall" | "delete" | "remove") => app_cli_action_call(
+            "skills.manage",
+            payload_with_operation(payload, "uninstall"),
             Some("Operate"),
-            Some("mcp.sessions"),
+            Some("skill.uninstall"),
         ),
-        ("mcp", "verify") => {
-            app_cli_action_call("mcp.test", payload, Some("Operate"), Some("mcp.test"))
-        }
-        ("mcp", "install" | "create" | "update") => {
-            app_cli_action_call("mcp.save", payload, Some("Operate"), Some("mcp.save"))
-        }
+        ("mcp", "list") => app_cli_action_call(
+            "mcp.inspect",
+            payload_with_operation(payload, "list"),
+            Some("Operate"),
+            Some("mcp.list"),
+        ),
+        ("mcp", "get") => app_cli_action_call(
+            "mcp.inspect",
+            payload_with_operation(payload, "get"),
+            Some("Operate"),
+            Some("mcp.get"),
+        ),
+        ("mcp", "verify") => app_cli_action_call(
+            "mcp.manage",
+            payload_with_operation(payload, "test"),
+            Some("Operate"),
+            Some("mcp.test"),
+        ),
+        ("mcp", "install" | "create" | "update") => app_cli_action_call(
+            "mcp.manage",
+            payload_with_operation(payload, "save"),
+            Some("Operate"),
+            Some("mcp.save"),
+        ),
         ("mcp", "run" | "call") => {
             app_cli_action_call("mcp.call", payload, Some("Operate"), Some("mcp.call"))
         }
@@ -916,8 +1125,8 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("team.guide.create"),
         ),
         ("team.session" | "team_session" | "team-session", "create") => app_cli_action_call(
-            "team.session.create",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "session.create"),
             Some("Operate"),
             Some("team.session.create"),
         ),
@@ -935,29 +1144,49 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ),
         ("team.member" | "team_member" | "team-member", "spawn" | "create" | "add") => {
             app_cli_action_call(
-                "team.member.spawn",
-                payload,
+                "team.control",
+                payload_with_operation(payload, "member.spawn"),
                 Some("Operate"),
                 Some("team.member.spawn"),
             )
         }
         ("team.member" | "team_member" | "team-member", "match") => app_cli_action_call(
-            "team.member.match",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "member.match"),
             Some("Operate"),
             Some("team.member.match"),
         ),
         ("team.member" | "team_member" | "team-member", "rename") => app_cli_action_call(
-            "team.member.rename",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "member.rename"),
             Some("Operate"),
             Some("team.member.rename"),
         ),
         ("team.member" | "team_member" | "team-member", "shutdown") => app_cli_action_call(
-            "team.member.shutdown",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "member.shutdown"),
             Some("Operate"),
             Some("team.member.shutdown"),
+        ),
+        ("team.member" | "team_member" | "team-member", "interrupt" | "cancel") => {
+            app_cli_action_call(
+                "team.control",
+                payload_with_operation(payload, "member.interrupt"),
+                Some("Operate"),
+                Some("team.member.interrupt"),
+            )
+        }
+        ("team.member" | "team_member" | "team-member", "resume" | "wake") => app_cli_action_call(
+            "team.control",
+            payload_with_operation(payload, "member.resume"),
+            Some("Operate"),
+            Some("team.member.resume"),
+        ),
+        ("team.member" | "team_member" | "team-member", "wait") => app_cli_action_call(
+            "team.control",
+            payload_with_operation(payload, "member.wait"),
+            Some("Operate"),
+            Some("team.member.wait"),
         ),
         ("team.member" | "team_member" | "team-member", "list") => app_cli_action_call(
             "team.members.list",
@@ -966,14 +1195,14 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("team.member.list"),
         ),
         ("team.task" | "team_task" | "team-task", "create") => app_cli_action_call(
-            "team.task.create",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "task.create"),
             Some("Operate"),
             Some("team.task.create"),
         ),
         ("team.task" | "team_task" | "team-task", "update") => app_cli_action_call(
-            "team.task.update",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "task.update"),
             Some("Operate"),
             Some("team.task.update"),
         ),
@@ -984,20 +1213,20 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("team.task.list"),
         ),
         ("team.message" | "team_message" | "team-message", "send") => app_cli_action_call(
-            "team.message.send",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "message.send"),
             Some("Operate"),
             Some("team.message.send"),
         ),
         ("team.report" | "team_report" | "team-report", "request") => app_cli_action_call(
-            "team.report.request",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "report.request"),
             Some("Operate"),
             Some("team.report.request"),
         ),
         ("team.report" | "team_report" | "team-report", "submit") => app_cli_action_call(
-            "team.report.submit",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "report.submit"),
             Some("Operate"),
             Some("team.report.submit"),
         ),
@@ -1008,10 +1237,16 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("team.report.list"),
         ),
         ("team.artifact" | "team_artifact" | "team-artifact", "attach") => app_cli_action_call(
-            "team.artifact.attach",
-            payload,
+            "team.control",
+            payload_with_operation(payload, "artifact.attach"),
             Some("Operate"),
             Some("team.artifact.attach"),
+        ),
+        ("team.blocker" | "team_blocker" | "team-blocker", "raise") => app_cli_action_call(
+            "team.control",
+            payload_with_operation(payload, "blocker.raise"),
+            Some("Operate"),
+            Some("team.blocker.raise"),
         ),
         ("cli_runtime", "list") => app_cli_action_call(
             "cli_runtime.environment.list",
@@ -1060,6 +1295,12 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 )
             }
         }
+        ("cli_runtime", "write-stdin" | "writestdin" | "input") => app_cli_action_call(
+            "cli_runtime.execution.writeStdin",
+            payload,
+            Some("Operate"),
+            Some("cli_runtime.writeStdin"),
+        ),
         ("cli_runtime", "diagnose") => app_cli_action_call(
             "cli_runtime.diagnose",
             payload,
@@ -1399,15 +1640,21 @@ fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
             };
             format!("{scope_prefix}.{normalized_action}")
         }
+        "inspect.image" | "inspectimage" | "image.info" | "imageinfo" => {
+            "workspace.inspectImage".to_string()
+        }
         "create.directory" | "createdirectory" | "mkdir" => "workspace.createDirectory".to_string(),
         "write" => "workspace.write".to_string(),
+        "patch" => "workspace.patch".to_string(),
         "workspace.create.directory" | "workspace.createdirectory" | "workspace.mkdir" => {
             "workspace.createDirectory".to_string()
         }
         "workspace.list"
         | "workspace.read"
+        | "workspace.inspectImage"
         | "workspace.createDirectory"
         | "workspace.write"
+        | "workspace.patch"
         | "workspace.search"
         | "knowledge.list"
         | "knowledge.read"
@@ -1418,8 +1665,10 @@ fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
     match combined.as_str() {
         "workspace.list"
         | "workspace.read"
+        | "workspace.inspectImage"
         | "workspace.createDirectory"
         | "workspace.write"
+        | "workspace.patch"
         | "workspace.search"
         | "knowledge.list"
         | "knowledge.read"
@@ -1489,8 +1738,8 @@ fn profile_update(arguments: &Value) -> NormalizedToolCall {
     copy_if_present(&mut payload, arguments, "markdown");
     copy_if_present(&mut payload, arguments, "reason");
     app_cli_action_call(
-        "redclaw.profile.update",
-        Value::Object(payload),
+        "profile.manage",
+        payload_with_operation(Value::Object(payload), "update"),
         Some("redclaw_update_profile_doc"),
         None,
     )
@@ -1502,8 +1751,8 @@ fn creator_profile_update(arguments: &Value) -> NormalizedToolCall {
     copy_if_present(&mut payload, arguments, "markdown");
     copy_if_present(&mut payload, arguments, "reason");
     app_cli_action_call(
-        "redclaw.profile.update",
-        Value::Object(payload),
+        "profile.manage",
+        payload_with_operation(Value::Object(payload), "update"),
         Some("redclaw_update_creator_profile"),
         None,
     )
@@ -1521,10 +1770,16 @@ fn profile_doc_to_app_cli(arguments: &Value) -> NormalizedToolCall {
     let translated_action = match action {
         "bundle" => Some("redclaw.profile.bundle"),
         "read" => Some("redclaw.profile.read"),
-        "update" => Some("redclaw.profile.update"),
+        "update" => Some("profile.manage"),
         _ => None,
     };
     match translated_action {
+        Some("profile.manage") => app_cli_action_call(
+            "profile.manage",
+            payload_with_operation(Value::Object(payload), "update"),
+            Some("profile_doc"),
+            Some(action),
+        ),
         Some(translated) => app_cli_action_call(
             translated,
             Value::Object(payload),
@@ -1545,25 +1800,28 @@ fn mcp_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         .get("action")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let translated_action = match action {
-        "list" => Some("mcp.list"),
-        "sessions" => Some("mcp.sessions"),
-        "oauth_status" | "oauth-status" => Some("mcp.oauthStatus"),
-        "save" => Some("mcp.save"),
-        "test" | "probe" => Some("mcp.test"),
-        "call" => Some("mcp.call"),
-        "list_tools" => Some("mcp.listTools"),
-        "list_resources" => Some("mcp.listResources"),
-        "list_resource_templates" => Some("mcp.listResourceTemplates"),
-        "disconnect" => Some("mcp.disconnect"),
-        "disconnect_all" | "disconnect-all" => Some("mcp.disconnectAll"),
-        "discover_local" | "discover-local" => Some("mcp.discoverLocal"),
-        "import_local" | "import-local" => Some("mcp.importLocal"),
+    let translated = match action {
+        "list" => Some(("mcp.inspect", Some("list"))),
+        "sessions" => Some(("mcp.inspect", Some("sessions"))),
+        "oauth_status" | "oauth-status" => Some(("mcp.manage", Some("oauthStatus"))),
+        "save" => Some(("mcp.manage", Some("save"))),
+        "test" | "probe" => Some(("mcp.manage", Some("test"))),
+        "call" => Some(("mcp.call", None)),
+        "list_tools" => Some(("mcp.inspect", Some("tools"))),
+        "list_resources" => Some(("mcp.inspect", Some("resources"))),
+        "list_resource_templates" => Some(("mcp.inspect", Some("resourceTemplates"))),
+        "disconnect" => Some(("mcp.manage", Some("disconnect"))),
+        "disconnect_all" | "disconnect-all" => Some(("mcp.manage", Some("disconnectAll"))),
+        "discover_local" | "discover-local" => Some(("mcp.manage", Some("discoverLocal"))),
+        "import_local" | "import-local" => Some(("mcp.manage", Some("importLocal"))),
         _ => None,
     };
-    match translated_action {
-        Some(translated) => {
-            app_cli_action_call(translated, arguments.clone(), Some("mcp"), Some(action))
+    match translated {
+        Some((translated, operation)) => {
+            let payload = operation
+                .map(|operation| payload_with_operation(arguments.clone(), operation))
+                .unwrap_or_else(|| arguments.clone());
+            app_cli_action_call(translated, payload, Some("mcp"), Some(action))
         }
         None => app_cli_legacy_command_call(
             &format!("mcp {}", action.replace('_', "-")),
@@ -1580,11 +1838,37 @@ fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let translated_action = match action {
-        "list" => Some("skills.list"),
+        "list" | "read" | "get" => Some("skills.inspect"),
         "invoke" => Some("skills.invoke"),
+        "install" | "install_from_repo" | "install-from-repo" => Some("skills.manage"),
+        "uninstall" | "delete" | "remove" => Some("skills.manage"),
         _ => None,
     };
     match translated_action {
+        Some("skills.manage") => {
+            let operation = match action {
+                "uninstall" | "delete" | "remove" => "uninstall",
+                _ => "installFromRepo",
+            };
+            app_cli_action_call(
+                "skills.manage",
+                payload_with_operation(arguments.clone(), operation),
+                Some("skill"),
+                Some(action),
+            )
+        }
+        Some("skills.inspect") => {
+            let operation = match action {
+                "read" | "get" => "read",
+                _ => "list",
+            };
+            app_cli_action_call(
+                "skills.inspect",
+                payload_with_operation(arguments.clone(), operation),
+                Some("skill"),
+                Some(action),
+            )
+        }
         Some(translated) => {
             app_cli_action_call(translated, arguments.clone(), Some("skill"), Some(action))
         }
@@ -1649,8 +1933,8 @@ fn app_cli_action_or_legacy_call(
             Some(operation),
         ),
         "redclaw.profile.completeStyleDefinition" => app_cli_action_call(
-            "redclaw.profile.completeStyleDefinition",
-            payload,
+            "profile.manage",
+            payload_with_operation(payload, "completeStyleDefinition"),
             Some(legacy_tool_name),
             Some(operation),
         ),
@@ -1669,6 +1953,18 @@ fn app_cli_action_or_legacy_call(
             app_cli_legacy_command_call(command, payload, Some(legacy_tool_name), Some(operation))
         }
     }
+}
+
+fn payload_with_operation(payload: Value, operation: &str) -> Value {
+    let mut map = payload.as_object().cloned().unwrap_or_default();
+    map.insert("operation".to_string(), json!(operation));
+    Value::Object(map)
+}
+
+fn payload_with_mode(payload: Value, mode: &str) -> Value {
+    let mut map = payload.as_object().cloned().unwrap_or_default();
+    map.insert("mode".to_string(), json!(mode));
+    Value::Object(map)
 }
 
 fn app_cli_action_call(
@@ -1725,18 +2021,23 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["memory", "list", ..] => Some("memory.list"),
+        ["memory", "list", ..] => {
+            translated_payload.insert("mode".to_string(), json!("list"));
+            Some("memory.search")
+        }
         ["memory", "search", ..] => {
             if let Some(query) = extract_flag_value(&tokens, &["--query", "-q"]) {
                 translated_payload.insert("query".to_string(), json!(query));
             }
+            translated_payload.insert("mode".to_string(), json!("search"));
             Some("memory.search")
         }
         ["memory", "recall", ..] => {
             if let Some(query) = extract_flag_value(&tokens, &["--query", "-q"]) {
                 translated_payload.insert("query".to_string(), json!(query));
             }
-            Some("memory.recall")
+            translated_payload.insert("mode".to_string(), json!("recall"));
+            Some("memory.search")
         }
         ["memory", "add", rest @ ..] => {
             if !translated_payload.contains_key("content") && !rest.is_empty() {
@@ -1746,8 +2047,14 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         }
         ["memory", "update", ..] => Some("memory.update"),
         ["memory", "archive", ..] => Some("memory.archive"),
-        ["memory", "rebuild-index", ..] => Some("memory.rebuildIndex"),
-        ["memory", "diagnostics", ..] => Some("memory.diagnostics"),
+        ["memory", "rebuild-index", ..] => {
+            translated_payload.insert("operation".to_string(), json!("rebuildIndex"));
+            Some("memory.manage")
+        }
+        ["memory", "diagnostics", ..] => {
+            translated_payload.insert("operation".to_string(), json!("diagnostics"));
+            Some("memory.manage")
+        }
         ["redclaw", "profile-bundle", ..] => Some("redclaw.profile.bundle"),
         ["redclaw", "profile-read", ..] => {
             if let Some(doc_type) = extract_flag_value(&tokens, &["--doc-type"]) {
@@ -1756,10 +2063,54 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
             Some("redclaw.profile.read")
         }
         ["redclaw", "profile-update", ..] => Some("redclaw.profile.update"),
-        ["redclaw", "runner-status", ..] => Some("redclaw.runner.status"),
-        ["redclaw", "runner-start", ..] => Some("redclaw.runner.start"),
-        ["redclaw", "runner-stop", ..] => Some("redclaw.runner.stop"),
-        ["redclaw", "runner-set-config", ..] => Some("redclaw.runner.setConfig"),
+        ["redclaw", "runner-status", ..] => {
+            translated_payload.insert("operation".to_string(), json!("status"));
+            Some("runner.manage")
+        }
+        ["redclaw", "runner-start", ..] => {
+            translated_payload.insert("operation".to_string(), json!("start"));
+            Some("runner.manage")
+        }
+        ["redclaw", "runner-stop", ..] => {
+            translated_payload.insert("operation".to_string(), json!("stop"));
+            Some("runner.manage")
+        }
+        ["redclaw", "runner-set-config", ..] => {
+            translated_payload.insert("operation".to_string(), json!("setConfig"));
+            Some("runner.manage")
+        }
+        ["redclaw", "runner-run-now", ..] => {
+            translated_payload.insert("operation".to_string(), json!("runNow"));
+            Some("runner.manage")
+        }
+        ["redclaw", "task-preview", ..] => {
+            translated_payload.insert("operation".to_string(), json!("preview"));
+            Some("task.read")
+        }
+        ["redclaw", "task-list", ..] => {
+            translated_payload.insert("operation".to_string(), json!("list"));
+            Some("task.read")
+        }
+        ["redclaw", "task-stats", ..] => {
+            translated_payload.insert("operation".to_string(), json!("stats"));
+            Some("task.read")
+        }
+        ["redclaw", "task-create", ..] => {
+            translated_payload.insert("operation".to_string(), json!("create"));
+            Some("task.manage")
+        }
+        ["redclaw", "task-confirm", ..] => {
+            translated_payload.insert("operation".to_string(), json!("confirm"));
+            Some("task.manage")
+        }
+        ["redclaw", "task-update", ..] => {
+            translated_payload.insert("operation".to_string(), json!("update"));
+            Some("task.manage")
+        }
+        ["redclaw", "task-cancel", ..] => {
+            translated_payload.insert("operation".to_string(), json!("cancel"));
+            Some("task.manage")
+        }
         ["manuscripts", "list", ..] => Some("manuscripts.list"),
         ["manuscripts", "create-project", ..] => {
             if let Some(kind) = extract_flag_value(&tokens, &["--kind"]) {
@@ -1795,17 +2146,58 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         ["runtime", "tasks", "get", ..] => Some("runtime.tasks.get"),
         ["runtime", "tasks", "resume", ..] => Some("runtime.tasks.resume"),
         ["runtime", "tasks", "cancel", ..] => Some("runtime.tasks.cancel"),
-        ["mcp", "list", ..] => Some("mcp.list"),
+        ["mcp", "list", ..] => {
+            translated_payload.insert("operation".to_string(), json!("list"));
+            Some("mcp.inspect")
+        }
         ["mcp", "call", ..] => Some("mcp.call"),
-        ["mcp", "list-tools", ..] => Some("mcp.listTools"),
-        ["mcp", "list-resources", ..] => Some("mcp.listResources"),
+        ["mcp", "list-tools", ..] => {
+            translated_payload.insert("operation".to_string(), json!("tools"));
+            Some("mcp.inspect")
+        }
+        ["mcp", "list-resources", ..] => {
+            translated_payload.insert("operation".to_string(), json!("resources"));
+            Some("mcp.inspect")
+        }
+        ["mcp", "list-resource-templates", ..] => {
+            translated_payload.insert("operation".to_string(), json!("resourceTemplates"));
+            Some("mcp.inspect")
+        }
         ["mcp", "disconnect", ..] => Some("mcp.disconnect"),
-        ["skills", "list", ..] => Some("skills.list"),
+        ["task-brief", "goal", rest @ ..] | ["taskbrief", "goal", rest @ ..] => {
+            let operation = rest.first().copied().unwrap_or("get");
+            translated_payload.insert("operation".to_string(), json!(operation));
+            Some("taskBrief.goal")
+        }
+        ["task-brief", "context", rest @ ..] | ["taskbrief", "context", rest @ ..] => {
+            let operation = rest.first().copied().unwrap_or("get");
+            translated_payload.insert("operation".to_string(), json!(operation));
+            Some("taskBrief.context")
+        }
+        ["skills", "list", ..] => {
+            translated_payload.insert("operation".to_string(), json!("list"));
+            Some("skills.inspect")
+        }
+        ["skills", "read", ..] | ["skills", "get", ..] => {
+            if let Some(name) = extract_flag_value(&tokens, &["--name"]) {
+                translated_payload.insert("name".to_string(), json!(name));
+            }
+            translated_payload.insert("operation".to_string(), json!("read"));
+            Some("skills.inspect")
+        }
         ["skills", "invoke", ..] => {
             if let Some(name) = extract_flag_value(&tokens, &["--name"]) {
                 translated_payload.insert("name".to_string(), json!(name));
             }
             Some("skills.invoke")
+        }
+        ["skills", "install-from-repo", ..] | ["skills", "install-from-github", ..] => {
+            translated_payload.insert("operation".to_string(), json!("installFromRepo"));
+            Some("skills.manage")
+        }
+        ["skills", "uninstall", ..] | ["skills", "delete", ..] => {
+            translated_payload.insert("operation".to_string(), json!("uninstall"));
+            Some("skills.manage")
         }
         ["image", "generate", ..] => Some("image.generate"),
         ["video", "generate", ..] => Some("video.generate"),
@@ -1948,7 +2340,14 @@ mod tests {
         assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
-            Some(&json!("mcp.oauthStatus"))
+            Some(&json!("mcp.manage"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("oauthStatus"))
         );
     }
 
@@ -2014,7 +2413,14 @@ mod tests {
         assert_eq!(create.name, "workflow");
         assert_eq!(
             create.arguments.get("action"),
-            Some(&json!("assets.create"))
+            Some(&json!("assets.manage"))
+        );
+        assert_eq!(
+            create
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("create"))
         );
         assert_eq!(
             create
@@ -2218,6 +2624,25 @@ mod tests {
         );
         assert_eq!(normalized.arguments.get("query"), Some(&json!("creator")));
         assert_eq!(normalized.arguments.get("path"), Some(&json!("docs")));
+    }
+
+    #[test]
+    fn normalizes_redbox_fs_inspect_image_action() {
+        let normalized = normalize_tool_call(
+            "resource",
+            &json!({
+                "action": "inspect-image",
+                "path": "images/sample.png"
+            }),
+        );
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("workspace.inspectImage"))
+        );
+        assert_eq!(
+            normalized.arguments.get("path"),
+            Some(&json!("images/sample.png"))
+        );
     }
 
     #[test]
@@ -2441,24 +2866,78 @@ mod tests {
         assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
-            Some(&json!("redclaw.profile.completeStyleDefinition"))
+            Some(&json!("profile.manage"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("completeStyleDefinition"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redclaw_runner_mutations_to_runner_manage() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "redclaw.runner",
+                "operation": "setConfig",
+                "input": {
+                    "config": { "intervalMinutes": 30 }
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("runner.manage"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("setConfig"))
+        );
+
+        let legacy = normalize_tool_call(
+            "workflow",
+            &json!({ "command": "redclaw runner-start", "payload": {} }),
+        );
+        assert_eq!(legacy.name, "workflow");
+        assert_eq!(
+            legacy.arguments.get("action"),
+            Some(&json!("runner.manage"))
+        );
+        assert_eq!(
+            legacy
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("start"))
         );
     }
 
     #[test]
     fn normalizes_operate_team_resources_to_structured_actions() {
         let cases = [
-            ("team.session", "create", "team.session.create"),
+            ("team.session", "create", "team.control"),
             ("team.session", "list", "team.session.list"),
             ("team.session", "get", "team.session.get"),
-            ("team.member", "spawn", "team.member.spawn"),
+            ("team.member", "spawn", "team.control"),
+            ("team.member", "interrupt", "team.control"),
+            ("team.member", "resume", "team.control"),
+            ("team.member", "wait", "team.control"),
             ("team.member", "list", "team.members.list"),
-            ("team.task", "create", "team.task.create"),
-            ("team.task", "update", "team.task.update"),
-            ("team.message", "send", "team.message.send"),
-            ("team.report", "request", "team.report.request"),
-            ("team.report", "submit", "team.report.submit"),
-            ("team.artifact", "attach", "team.artifact.attach"),
+            ("team.task", "create", "team.control"),
+            ("team.task", "update", "team.control"),
+            ("team.message", "send", "team.control"),
+            ("team.report", "request", "team.control"),
+            ("team.report", "submit", "team.control"),
+            ("team.artifact", "attach", "team.control"),
             ("team.guide", "create", "team.guide.create"),
         ];
 
@@ -2509,11 +2988,11 @@ mod tests {
     #[test]
     fn normalizes_operate_plugin_resources_to_structured_actions() {
         let cases = [
-            ("plugins", "list", "plugins.list"),
+            ("plugins", "list", "plugins.discover"),
             ("plugins", "connectors", "plugins.connectors"),
-            ("plugins", "marketplace", "plugins.marketplace"),
-            ("plugins", "codexMarketplace", "plugins.codexMarketplace"),
-            ("plugins", "discoverLocal", "plugins.discoverLocal"),
+            ("plugins", "marketplace", "plugins.discover"),
+            ("plugins", "codexMarketplace", "plugins.discover"),
+            ("plugins", "discoverLocal", "plugins.discover"),
             ("plugins", "install", "plugins.install"),
             ("plugins", "installCodex", "plugins.installCodex"),
             ("plugins", "request", "plugins.requestInstall"),
@@ -2560,6 +3039,80 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("name")),
             Some(&json!("writing-style"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_skill_read_id_to_name() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "skills",
+                "operation": "read",
+                "id": "writing-style"
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("skills.inspect"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("read"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("name")),
+            Some(&json!("writing-style"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_skill_management_to_skills_manage() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "skills",
+                "operation": "installFromRepo",
+                "input": { "source": "owner/repo" }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("skills.manage"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("installFromRepo"))
+        );
+
+        let legacy = normalize_tool_call(
+            "workflow",
+            &json!({ "command": "skills uninstall", "payload": { "name": "demo" } }),
+        );
+        assert_eq!(legacy.name, "workflow");
+        assert_eq!(
+            legacy.arguments.get("action"),
+            Some(&json!("skills.manage"))
+        );
+        assert_eq!(
+            legacy
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("uninstall"))
         );
     }
 
@@ -2642,6 +3195,67 @@ mod tests {
                 .and_then(|value| value.get("legacyCommand")),
             Some(&json!("unknown"))
         );
+    }
+
+    #[test]
+    fn normalizes_redclaw_task_reads_to_task_read_modes() {
+        for (operation, mode) in [("preview", "preview"), ("list", "list"), ("stats", "stats")] {
+            let normalized = normalize_tool_call(
+                "Operate",
+                &json!({
+                    "resource": "redclaw.task",
+                    "operation": operation,
+                    "input": { "ownerScope": "user" }
+                }),
+            );
+            assert_eq!(normalized.name, "workflow");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!("task.read")),
+                "{operation}"
+            );
+            assert_eq!(
+                normalized
+                    .arguments
+                    .get("payload")
+                    .and_then(|value| value.get("operation")),
+                Some(&json!(mode)),
+                "{operation}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizes_redclaw_task_commands_to_consolidated_actions() {
+        for (command, action, operation) in [
+            ("redclaw task-preview", "task.read", "preview"),
+            ("redclaw task-list", "task.read", "list"),
+            ("redclaw task-stats", "task.read", "stats"),
+            ("redclaw task-create", "task.manage", "create"),
+            ("redclaw task-cancel", "task.manage", "cancel"),
+        ] {
+            let normalized = normalize_tool_call(
+                "workflow",
+                &json!({
+                    "command": command,
+                    "payload": { "ownerScope": "user" }
+                }),
+            );
+            assert_eq!(normalized.name, "workflow");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!(action)),
+                "{command}"
+            );
+            assert_eq!(
+                normalized
+                    .arguments
+                    .get("payload")
+                    .and_then(|value| value.get("operation")),
+                Some(&json!(operation)),
+                "{command}"
+            );
+        }
     }
 
     #[test]
@@ -2743,6 +3357,90 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("stage")),
             Some(&json!("research"))
+        );
+    }
+
+    #[test]
+    fn normalizes_context_resource_to_task_brief_context() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "context",
+                "operation": "compact",
+                "input": {
+                    "force": true
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("taskBrief.context"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("compact"))
+        );
+    }
+
+    #[test]
+    fn normalizes_memory_read_variants_to_memory_search_modes() {
+        for (operation, mode) in [("list", "list"), ("search", "search"), ("recall", "recall")] {
+            let normalized = normalize_tool_call(
+                "Operate",
+                &json!({
+                    "resource": "memory",
+                    "operation": operation,
+                    "input": {
+                        "query": "project preference"
+                    }
+                }),
+            );
+
+            assert_eq!(normalized.name, "workflow");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!("memory.search"))
+            );
+            assert_eq!(
+                normalized
+                    .arguments
+                    .get("payload")
+                    .and_then(|value| value.get("mode")),
+                Some(&json!(mode))
+            );
+        }
+    }
+
+    #[test]
+    fn normalizes_goal_resource_to_task_brief_goal() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "goal",
+                "operation": "create",
+                "input": {
+                    "objective": "finish tool optimization",
+                    "tokenBudget": 12000
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("taskBrief.goal"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("create"))
         );
     }
 
@@ -2899,6 +3597,41 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("id")),
             Some(&json!("cli-exec-123"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_cli_runtime_write_stdin_to_execution_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "cli_runtime",
+                "operation": "write-stdin",
+                "input": {
+                    "executionId": "cli-exec-123",
+                    "text": "continue",
+                    "appendNewline": true
+                }
+            }),
+        );
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("cli_runtime.execution.writeStdin"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("executionId")),
+            Some(&json!("cli-exec-123"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("appendNewline")),
+            Some(&json!(true))
         );
     }
 }

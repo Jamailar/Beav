@@ -17,7 +17,11 @@ fn mark_team_member_wake_active(
     active.insert(team_wake_key(session_id, member_id))
 }
 
-fn clear_team_member_wake_active(state: &State<'_, AppState>, session_id: &str, member_id: &str) {
+pub(super) fn clear_team_member_wake_active(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    member_id: &str,
+) {
     if let Ok(mut active) = state.active_team_member_wakes.lock() {
         active.remove(&team_wake_key(session_id, member_id));
     }
@@ -126,7 +130,14 @@ fn prepare_team_member_wake(
 fn team_member_is_settled(status: &str) -> bool {
     matches!(
         status,
-        "idle" | "completed" | "failed" | "offline" | "suspended" | "archived" | "shutdown"
+        "idle"
+            | "completed"
+            | "failed"
+            | "cancelled"
+            | "offline"
+            | "suspended"
+            | "archived"
+            | "shutdown"
     )
 }
 

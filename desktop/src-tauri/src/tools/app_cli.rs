@@ -234,6 +234,75 @@ fn normalized_app_cli_action_key(value: &str) -> String {
         .collect()
 }
 
+fn canonical_app_cli_action_for_policy(action: &str) -> &str {
+    match normalized_app_cli_action_key(action).as_str() {
+        "pluginslist" | "pluginsconnectors" => "plugins.discover",
+        "pluginsmarketplace" | "pluginscodexmarketplace" | "pluginsdiscoverlocal" => {
+            "plugins.discover"
+        }
+        "pluginsinstallcodex" | "pluginsrequestinstall" => "plugins.install",
+        "skillsinstallfromrepo"
+        | "skillsinstallfromgithub"
+        | "skillsuninstall"
+        | "skillsdelete" => "skills.manage",
+        "skillslist" | "skillsread" | "skillsget" => "skills.inspect",
+        "taskbriefcontext" | "taskbriefgetcontext" | "taskbriefcompactcontext" => {
+            "taskBrief.context"
+        }
+        "memorylist" | "memoryrecall" => "memory.search",
+        "memoryadd" => "memory.note",
+        "memoryupdate" | "memoryarchive" | "memoryrebuildindex" | "memorydiagnostics" => {
+            "memory.manage"
+        }
+        "redclawrunnerstatus"
+        | "redclawrunnerstart"
+        | "redclawrunnerstop"
+        | "redclawrunnersetconfig" => "runner.manage",
+        "redclawprofileupdate" | "redclawprofilecompletestyledefinition" => "profile.manage",
+        "redclawtaskpreview" | "redclawtasklist" | "redclawtaskstats" | "taskpreview"
+        | "tasklist" => "task.read",
+        "redclawtaskcreate" | "redclawtaskconfirm" | "redclawtaskupdate" | "redclawtaskcancel" => {
+            "task.manage"
+        }
+        "assetscreate"
+        | "assetsupdate"
+        | "assetsdelete"
+        | "assetscategoriescreate"
+        | "subjectscreate"
+        | "subjectsupdate"
+        | "subjectsdelete"
+        | "subjectscategoriescreate" => "assets.manage",
+        "mcplist"
+        | "mcpsessions"
+        | "mcpget"
+        | "mcplisttools"
+        | "mcplistresources"
+        | "mcplistresourcetemplates" => "mcp.inspect",
+        "mcpadd" | "mcpremove" | "mcpdelete" | "mcpenable" | "mcpdisable" | "mcpdiscoverlocal"
+        | "mcpimportlocal" | "mcpsave" | "mcptest" | "mcpdisconnect" | "mcpdisconnectall"
+        | "mcpoauthstatus" => "mcp.manage",
+        "mcptools" => "mcp.inspect",
+        "teamsessioncreate"
+        | "teammemberspawn"
+        | "teammembermatch"
+        | "teammemberrename"
+        | "teammembershutdown"
+        | "teammemberinterrupt"
+        | "teammembercancel"
+        | "teammemberresume"
+        | "teammemberwait"
+        | "teamtaskcreate"
+        | "teamtaskupdate"
+        | "teammessagesend"
+        | "teamreportrequest"
+        | "teamreportsubmit"
+        | "teamartifactattach"
+        | "teamblockerraise" => "team.control",
+        "redclawprofilebundle" | "redclawprofileread" => "profile.read",
+        _ => action,
+    }
+}
+
 fn compat_metadata(arguments: &Value) -> Option<Value> {
     payload_field(arguments, "__compat")
         .cloned()
@@ -556,6 +625,7 @@ impl<'a> AppCliExecutor<'a> {
         if action == "web.fetch" {
             return Ok(());
         }
+        let policy_action = canonical_app_cli_action_for_policy(action);
         if action == "manuscripts.writeCurrent"
             && is_bound_manuscript_write_call(arguments)
             && self.current_authoring_session_target().is_some()
@@ -570,13 +640,15 @@ impl<'a> AppCliExecutor<'a> {
                     self.session_id,
                 ))
             })?;
-            if plan.has_direct_app_cli_action(action) {
+            if plan.has_direct_app_cli_action(action)
+                || plan.has_direct_app_cli_action(policy_action)
+            {
                 return Ok(());
             }
             if let Some(deferred) = plan
                 .deferred_app_cli_actions
                 .iter()
-                .find(|entry| entry.action == action)
+                .find(|entry| entry.action == action || entry.action == policy_action)
             {
                 return Err(app_cli_error_json(
                     Some(action),
@@ -605,7 +677,10 @@ impl<'a> AppCliExecutor<'a> {
                 })),
             ));
         };
-        if allowed_actions.iter().any(|item| item == action) {
+        if allowed_actions
+            .iter()
+            .any(|item| item == action || item == policy_action)
+        {
             let plan = with_store(self.state, |store| {
                 Ok::<_, String>(build_tool_registry_plan_for_session(
                     &store,
@@ -613,7 +688,9 @@ impl<'a> AppCliExecutor<'a> {
                     self.session_id,
                 ))
             })?;
-            if plan.has_direct_app_cli_action(action) {
+            if plan.has_direct_app_cli_action(action)
+                || plan.has_direct_app_cli_action(policy_action)
+            {
                 return Ok(());
             }
             return Err(app_cli_error_json(
@@ -705,6 +782,366 @@ impl<'a> AppCliExecutor<'a> {
         ))
     }
 
+    fn handle_team_control(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("team.control"),
+                    "OPERATION_REQUIRED",
+                    "team.control requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        match operation.as_str() {
+            "sessioncreate" | "createsession" => {
+                let tokens = vec!["team".to_string(), "create-session".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "memberspawn" | "membercreate" | "memberadd" | "addmember" => {
+                let tokens = vec!["team".to_string(), "add-member".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "membermatch" | "matchmember" => self.call_channel(
+                "team-runtime:execute-tool",
+                json!({ "action": "team.member.match", "payload": request }),
+            ),
+            "memberrename" | "renamemember" => {
+                let tokens = vec!["team".to_string(), "rename-member".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "membershutdown" | "shutdownmember" => {
+                let tokens = vec!["team".to_string(), "shutdown-member".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "memberinterrupt" | "interruptmember" | "membercancel" | "cancelmember" => {
+                let tokens = vec!["team".to_string(), "interrupt-member".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "memberresume" | "resumemember" | "memberwake" | "wakemember" => {
+                let tokens = vec!["team".to_string(), "resume-member".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "memberwait" | "waitmember" => {
+                let tokens = vec!["team".to_string(), "wait-member".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "taskcreate" | "createtask" => {
+                let tokens = vec!["team".to_string(), "create-task".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "taskupdate" | "updatetask" => {
+                let tokens = vec!["team".to_string(), "update-task".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "messagesend" | "sendmessage" => {
+                let tokens = vec!["team".to_string(), "send-message".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "reportrequest" | "requestreport" => {
+                let tokens = vec!["team".to_string(), "request-report".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "reportsubmit" | "submitreport" => {
+                let tokens = vec!["team".to_string(), "submit-report".to_string()];
+                app_cli_runtime::handle(self, &tokens, &request)
+            }
+            "artifactattach" | "attachartifact" => self.call_channel(
+                "team-runtime:execute-tool",
+                json!({ "action": "team.artifact.attach", "payload": request }),
+            ),
+            "blockerraise" | "raiseblocker" => self.call_channel(
+                "team-runtime:execute-tool",
+                json!({ "action": "team.blocker.raise", "payload": request }),
+            ),
+            _ => Err(app_cli_error_json(
+                Some("team.control"),
+                "UNSUPPORTED_OPERATION",
+                &format!("unsupported team.control operation: {operation}"),
+                false,
+                None,
+            )),
+        }
+    }
+
+    fn handle_assets_manage(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("assets.manage"),
+                    "OPERATION_REQUIRED",
+                    "assets.manage requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        match operation.as_str() {
+            "create" | "add" => {
+                let resolved = self.asset_payload_with_resolved_category(&request)?;
+                let tokens = vec!["create".to_string()];
+                self.handle_subjects(&tokens, &resolved)
+            }
+            "update" => {
+                let resolved = self.asset_payload_with_resolved_category(&request)?;
+                let tokens = vec!["update".to_string()];
+                self.handle_subjects(&tokens, &resolved)
+            }
+            "delete" | "remove" => {
+                let tokens = vec!["delete".to_string()];
+                self.handle_subjects(&tokens, &request)
+            }
+            "categorycreate" | "createcategory" | "categoriescreate" => {
+                self.call_channel("subjects:categories:create", request)
+            }
+            _ => Err(app_cli_error_json(
+                Some("assets.manage"),
+                "UNSUPPORTED_OPERATION",
+                &format!("unsupported assets.manage operation: {operation}"),
+                false,
+                None,
+            )),
+        }
+    }
+
+    fn handle_mcp_manage(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("mcp.manage"),
+                    "OPERATION_REQUIRED",
+                    "mcp.manage requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        let token = match operation.as_str() {
+            "add" => "add",
+            "remove" | "delete" => "remove",
+            "enable" => "enable",
+            "disable" => "disable",
+            "save" => "save",
+            "test" | "probe" => "test",
+            "disconnect" => "disconnect",
+            "disconnectall" => "disconnect-all",
+            "discoverlocal" => "discover-local",
+            "importlocal" => "import-local",
+            "oauthstatus" => "oauth-status",
+            _ => {
+                return Err(app_cli_error_json(
+                    Some("mcp.manage"),
+                    "UNSUPPORTED_OPERATION",
+                    &format!("unsupported mcp.manage operation: {operation}"),
+                    false,
+                    None,
+                ));
+            }
+        };
+        let tokens = vec![token.to_string()];
+        app_cli_mcp::handle(self, &tokens, &request)
+    }
+
+    fn handle_mcp_inspect(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("mcp.inspect"),
+                    "OPERATION_REQUIRED",
+                    "mcp.inspect requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        let token = match operation.as_str() {
+            "list" => "list",
+            "sessions" => "sessions",
+            "get" | "read" => "get",
+            "tools" | "listtools" => "list-tools",
+            "resources" | "listresources" => "list-resources",
+            "resourcetemplates" | "listresourcetemplates" => "list-resource-templates",
+            _ => {
+                return Err(app_cli_error_json(
+                    Some("mcp.inspect"),
+                    "UNSUPPORTED_OPERATION",
+                    &format!("unsupported mcp.inspect operation: {operation}"),
+                    false,
+                    None,
+                ));
+            }
+        };
+        let tokens = vec![token.to_string()];
+        app_cli_mcp::handle(self, &tokens, &request)
+    }
+
+    fn handle_profile_manage(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("profile.manage"),
+                    "OPERATION_REQUIRED",
+                    "profile.manage requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        let token = match operation.as_str() {
+            "update" => "profile-update",
+            "completestyledefinition" | "complete" => "profile-complete-style-definition",
+            _ => {
+                return Err(app_cli_error_json(
+                    Some("profile.manage"),
+                    "UNSUPPORTED_OPERATION",
+                    &format!("unsupported profile.manage operation: {operation}"),
+                    false,
+                    None,
+                ));
+            }
+        };
+        let tokens = vec![token.to_string()];
+        self.handle_redclaw(&tokens, &request)
+    }
+
+    fn handle_runner_manage(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("runner.manage"),
+                    "OPERATION_REQUIRED",
+                    "runner.manage requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        let token = match operation.as_str() {
+            "status" => "runner-status",
+            "start" => "runner-start",
+            "stop" => "runner-stop",
+            "setconfig" | "config" | "updateconfig" => "runner-set-config",
+            "runnow" | "run" => "runner-run-now",
+            _ => {
+                return Err(app_cli_error_json(
+                    Some("runner.manage"),
+                    "UNSUPPORTED_OPERATION",
+                    &format!("unsupported runner.manage operation: {operation}"),
+                    false,
+                    None,
+                ));
+            }
+        };
+        let tokens = vec![token.to_string()];
+        self.handle_redclaw(&tokens, &request)
+    }
+
+    fn handle_task_manage(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("task.manage"),
+                    "OPERATION_REQUIRED",
+                    "task.manage requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        let token = match operation.as_str() {
+            "create" => "task-create",
+            "confirm" => "task-confirm",
+            "update" => "task-update",
+            "cancel" | "delete" | "disable" => "task-cancel",
+            _ => {
+                return Err(app_cli_error_json(
+                    Some("task.manage"),
+                    "UNSUPPORTED_OPERATION",
+                    &format!("unsupported task.manage operation: {operation}"),
+                    false,
+                    None,
+                ));
+            }
+        };
+        let tokens = vec![token.to_string()];
+        self.handle_redclaw(&tokens, &request)
+    }
+
+    fn handle_skills_manage(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("skills.manage"),
+                    "OPERATION_REQUIRED",
+                    "skills.manage requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        let token = match operation.as_str() {
+            "installfromrepo" | "installfromgithub" | "install" => "install-from-repo",
+            "uninstall" | "delete" | "remove" => "uninstall",
+            _ => {
+                return Err(app_cli_error_json(
+                    Some("skills.manage"),
+                    "UNSUPPORTED_OPERATION",
+                    &format!("unsupported skills.manage operation: {operation}"),
+                    false,
+                    None,
+                ));
+            }
+        };
+        let tokens = vec![token.to_string()];
+        self.handle_skills(&tokens, &request)
+    }
+
+    fn handle_skills_inspect(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| {
+                if payload_string_alias(payload, &["name", "id"]).is_some() {
+                    "read".to_string()
+                } else {
+                    "list".to_string()
+                }
+            });
+        let request = consolidated_action_payload(payload);
+        let token = match operation.as_str() {
+            "list" => "list",
+            "read" | "get" => "read",
+            _ => {
+                return Err(app_cli_error_json(
+                    Some("skills.inspect"),
+                    "UNSUPPORTED_OPERATION",
+                    &format!("unsupported skills.inspect operation: {operation}"),
+                    false,
+                    None,
+                ));
+            }
+        };
+        let tokens = vec![token.to_string()];
+        self.handle_skills(&tokens, &request)
+    }
+
     fn execute_structured_action(&self, action: &str, payload: &Value) -> Result<Value, String> {
         let result = match normalized_app_cli_action_key(action).as_str() {
             "memorylist" => {
@@ -715,6 +1152,22 @@ impl<'a> AppCliExecutor<'a> {
             "websearch" => self.handle_web(&["search".to_string()], payload),
             "taskbriefget" => self.handle_task_brief_get(payload),
             "taskbriefupdate" => self.handle_task_brief_update(payload),
+            "taskbriefgoal" => self.handle_task_brief_goal(payload),
+            "taskbriefcontext" => self.handle_task_brief_context(payload),
+            "taskbriefgetcontext" => {
+                let mut request = payload.as_object().cloned().unwrap_or_default();
+                request
+                    .entry("operation".to_string())
+                    .or_insert(json!("get"));
+                self.handle_task_brief_context(&Value::Object(request))
+            }
+            "taskbriefcompactcontext" => {
+                let mut request = payload.as_object().cloned().unwrap_or_default();
+                request
+                    .entry("operation".to_string())
+                    .or_insert(json!("compact"));
+                self.handle_task_brief_context(&Value::Object(request))
+            }
             "sessionresourceslist" => self.handle_session_resources_list(payload),
             "sessionresourcesget" => self.handle_session_resources_get(payload),
             "pluginslist" => self.call_channel("plugins:list", json!({})),
@@ -724,12 +1177,21 @@ impl<'a> AppCliExecutor<'a> {
                 self.call_channel("plugins:codex-marketplace", payload.clone())
             }
             "pluginsdiscoverlocal" => self.call_channel("plugins:discover-local", payload.clone()),
+            "pluginsdiscover" => self.handle_plugins_discover(payload),
             "pluginsinstall" => self.call_channel("plugins:install", payload.clone()),
             "pluginsinstallcodex" => self.call_channel("plugins:install-codex", payload.clone()),
             "pluginsrequestinstall" => self.handle_plugins_request_install(payload),
             "videoanalyze" => self.handle_video_analyze(payload),
             "memorysearch" => {
-                let tokens = vec!["search".to_string()];
+                let mode = payload_string(payload, "mode")
+                    .map(|value| normalized_app_cli_action_key(&value))
+                    .unwrap_or_else(|| "search".to_string());
+                let token = match mode.as_str() {
+                    "list" => "list",
+                    "recall" => "recall",
+                    _ => "search",
+                };
+                let tokens = vec![token.to_string()];
                 self.handle_memory(&tokens, payload)
             }
             "memoryrecall" => {
@@ -737,6 +1199,10 @@ impl<'a> AppCliExecutor<'a> {
                 self.handle_memory(&tokens, payload)
             }
             "memoryadd" => {
+                let tokens = vec!["add".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
+            "memorynote" => {
                 let tokens = vec!["add".to_string()];
                 self.handle_memory(&tokens, payload)
             }
@@ -748,6 +1214,7 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["archive".to_string()];
                 self.handle_memory(&tokens, payload)
             }
+            "memorymanage" => self.handle_memory_manage(payload),
             "memoryrebuildindex" => {
                 let tokens = vec!["rebuild-index".to_string()];
                 self.handle_memory(&tokens, payload)
@@ -764,6 +1231,8 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["profile-read".to_string()];
                 self.handle_redclaw(&tokens, payload)
             }
+            "profileread" => self.handle_profile_read(payload),
+            "profilemanage" => self.handle_profile_manage(payload),
             "redclawprofileupdate" => {
                 let tokens = vec!["profile-update".to_string()];
                 self.handle_redclaw(&tokens, payload)
@@ -776,6 +1245,7 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["runner-status".to_string()];
                 self.handle_redclaw(&tokens, payload)
             }
+            "runnermanage" => self.handle_runner_manage(payload),
             "redclawrunnerstart" => {
                 let tokens = vec!["runner-start".to_string()];
                 self.handle_redclaw(&tokens, payload)
@@ -792,6 +1262,11 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["task-preview".to_string()];
                 self.handle_redclaw(&tokens, payload)
             }
+            "taskpreview" => {
+                let tokens = vec!["task-preview".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "taskmanage" => self.handle_task_manage(payload),
             "redclawtaskcreate" => {
                 let tokens = vec!["task-create".to_string()];
                 self.handle_redclaw(&tokens, payload)
@@ -816,6 +1291,8 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["task-stats".to_string()];
                 self.handle_redclaw(&tokens, payload)
             }
+            "taskread" => self.handle_task_list_alias(payload),
+            "tasklist" => self.handle_task_list_alias(payload),
             "manuscriptslist" => {
                 let tokens = vec!["list".to_string()];
                 self.handle_manuscripts(&tokens, payload)
@@ -886,6 +1363,7 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["get".to_string()];
                 self.handle_subjects(&tokens, payload)
             }
+            "assetsmanage" | "subjectsmanage" => self.handle_assets_manage(payload),
             "subjectscreate" | "assetscreate" => {
                 let resolved = self.asset_payload_with_resolved_category(payload)?;
                 let tokens = vec!["create".to_string()];
@@ -961,6 +1439,7 @@ impl<'a> AppCliExecutor<'a> {
                 require_confirmed_team_plan("team.guide.create", payload)?;
                 self.call_channel("team-runtime:guide-create", payload.clone())
             }
+            "teamcontrol" => self.handle_team_control(payload),
             "teamsessioncreate" => {
                 let tokens = vec!["team".to_string(), "create-session".to_string()];
                 app_cli_runtime::handle(self, &tokens, payload)
@@ -1025,6 +1504,10 @@ impl<'a> AppCliExecutor<'a> {
                 "team-runtime:execute-tool",
                 json!({ "action": "team.artifact.attach", "payload": payload }),
             ),
+            "teamblockerraise" => self.call_channel(
+                "team-runtime:execute-tool",
+                json!({ "action": "team.blocker.raise", "payload": payload }),
+            ),
             "approvalrequest" => self.handle_approval_request(payload),
             "cliruntimedetect" => {
                 let tokens = vec!["detect".to_string()];
@@ -1062,6 +1545,10 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["execution".to_string(), "get".to_string()];
                 app_cli_cli_runtime::handle(self, &tokens, payload)
             }
+            "cliruntimeexecutionwritestdin" | "cliruntimewritestdin" => {
+                let tokens = vec!["execution".to_string(), "write-stdin".to_string()];
+                app_cli_cli_runtime::handle(self, &tokens, payload)
+            }
             "cliruntimeverify" => {
                 let tokens = vec!["verify".to_string()];
                 app_cli_cli_runtime::handle(self, &tokens, payload)
@@ -1078,6 +1565,7 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["list".to_string()];
                 app_cli_mcp::handle(self, &tokens, payload)
             }
+            "mcpmanage" => self.handle_mcp_manage(payload),
             "mcpadd" => {
                 let tokens = vec!["add".to_string()];
                 app_cli_mcp::handle(self, &tokens, payload)
@@ -1118,7 +1606,12 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["call".to_string()];
                 app_cli_mcp::handle(self, &tokens, payload)
             }
+            "mcpinspect" => self.handle_mcp_inspect(payload),
             "mcplisttools" => {
+                let tokens = vec!["list-tools".to_string()];
+                app_cli_mcp::handle(self, &tokens, payload)
+            }
+            "mcptools" => {
                 let tokens = vec!["list-tools".to_string()];
                 app_cli_mcp::handle(self, &tokens, payload)
             }
@@ -1150,10 +1643,16 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["list".to_string()];
                 self.handle_skills(&tokens, payload)
             }
+            "skillsinspect" => self.handle_skills_inspect(payload),
+            "skillsread" | "skillsget" => {
+                let tokens = vec!["read".to_string()];
+                self.handle_skills(&tokens, payload)
+            }
             "skillsinvoke" => {
                 let tokens = vec!["invoke".to_string()];
                 self.handle_skills(&tokens, payload)
             }
+            "skillsmanage" => self.handle_skills_manage(payload),
             "skillsinstallfromrepo" | "skillsinstallfromgithub" => {
                 let tokens = vec!["install-from-repo".to_string()];
                 self.handle_skills(&tokens, payload)
@@ -1363,6 +1862,89 @@ impl<'a> AppCliExecutor<'a> {
             }
             other => Err(format!(
                 "plugins.requestInstall unsupported toolType: {other}; expected plugin or connector"
+            )),
+        }
+    }
+
+    fn handle_plugins_discover(&self, payload: &Value) -> Result<Value, String> {
+        let source = payload_string_alias(payload, &["source", "mode", "kind"])
+            .unwrap_or_else(|| {
+                if payload_string_alias(payload, &["path", "sourceRoot"]).is_some() {
+                    "local".to_string()
+                } else if payload_string_alias(payload, &["codexRoot"]).is_some() {
+                    "codex".to_string()
+                } else {
+                    "marketplace".to_string()
+                }
+            })
+            .to_ascii_lowercase();
+        match source.as_str() {
+            "installed" | "enabled" | "list" => self.call_channel("plugins:list", json!({})),
+            "local" | "filesystem" | "file-system" | "file_system" => {
+                self.call_channel("plugins:discover-local", payload.clone())
+            }
+            "codex" | "codex-marketplace" | "codex_marketplace" | "cache" => {
+                self.call_channel("plugins:codex-marketplace", payload.clone())
+            }
+            "marketplace" | "remote" | "registry" => {
+                self.call_channel("plugins:marketplace", payload.clone())
+            }
+            other => Err(format!(
+                "plugins.discover unsupported source: {other}; expected installed, marketplace, codex, or local"
+            )),
+        }
+    }
+
+    fn handle_memory_manage(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string_alias(payload, &["operation", "op", "mode"])
+            .unwrap_or_else(|| "update".to_string())
+            .to_ascii_lowercase();
+        let token = match operation.as_str() {
+            "update" | "edit" | "patch" => "update",
+            "archive" | "delete" | "remove" => "archive",
+            "rebuildindex" | "rebuild" | "reindex" => "rebuild-index",
+            "diagnostics" | "diagnose" | "status" => "diagnostics",
+            other => {
+                return Err(format!(
+                    "memory.manage unsupported operation: {other}; expected update, archive, rebuildIndex, or diagnostics"
+                ))
+            }
+        };
+        self.handle_memory(&[token.to_string()], payload)
+    }
+
+    fn handle_profile_read(&self, payload: &Value) -> Result<Value, String> {
+        if payload_string_alias(payload, &["docType", "doc_type", "type"]).is_some() {
+            self.handle_redclaw(&["profile-read".to_string()], payload)
+        } else {
+            self.handle_redclaw(&["profile-bundle".to_string()], payload)
+        }
+    }
+
+    fn handle_task_list_alias(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string_alias(payload, &["operation", "op", "mode"])
+            .unwrap_or_else(|| {
+                if payload
+                    .get("stats")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    "stats".to_string()
+                } else {
+                    "list".to_string()
+                }
+            })
+            .to_ascii_lowercase();
+        match operation.as_str() {
+            "preview" | "draft" => self.handle_redclaw(&["task-preview".to_string()], payload),
+            "list" | "definitions" | "tasks" => {
+                self.handle_redclaw(&["task-list".to_string()], payload)
+            }
+            "stats" | "statistics" | "counters" => {
+                self.handle_redclaw(&["task-stats".to_string()], payload)
+            }
+            other => Err(format!(
+                "task.read unsupported operation: {other}; expected preview, list, or stats"
             )),
         }
     }
@@ -1606,6 +2188,24 @@ fn merge_payload(options: &Map<String, Value>, payload: &Value) -> Value {
     let mut merged = options.clone();
     if let Some(payload_object) = payload.as_object() {
         for (key, value) in payload_object {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(merged)
+}
+
+fn consolidated_action_payload(payload: &Value) -> Value {
+    let mut merged = Map::<String, Value>::new();
+    if let Some(inner) = payload_field(payload, "payload").and_then(Value::as_object) {
+        for (key, value) in inner {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(object) = payload.as_object() {
+        for (key, value) in object {
+            if key == "operation" || key == "payload" {
+                continue;
+            }
             merged.insert(key.clone(), value.clone());
         }
     }
@@ -2774,7 +3374,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
             "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|get-events|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
-            "skills list|invoke|create|save|enable|disable|market-install",
+            "skills list|read|invoke|create|save|enable|disable|market-install",
             "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
             "ai roles-list|detect-protocol|test-connection",
         ],
@@ -2919,6 +3519,7 @@ fn help_response(namespace: Option<&str>) -> Value {
         "settings" => vec!["settings summary", "settings get", "settings set [payload]"],
         "skills" => vec![
             "skills list",
+            "skills read --name <skill>",
             "skills invoke --name <skill>",
             "skills create --name <skill>",
             "skills save --location <path> --content \"...\"",
@@ -3576,6 +4177,86 @@ mod tests {
         assert_eq!(
             normalized_app_cli_action_key("team.member.spawn"),
             "teammemberspawn"
+        );
+    }
+
+    #[test]
+    fn canonical_app_cli_action_for_policy_maps_consolidated_aliases() {
+        for (legacy, canonical) in [
+            ("plugins.list", "plugins.discover"),
+            ("plugins.connectors", "plugins.discover"),
+            ("plugins.marketplace", "plugins.discover"),
+            ("plugins.codexMarketplace", "plugins.discover"),
+            ("plugins.discoverLocal", "plugins.discover"),
+            ("plugins.requestInstall", "plugins.install"),
+            ("skills.installFromRepo", "skills.manage"),
+            ("skills.uninstall", "skills.manage"),
+            ("skills.list", "skills.inspect"),
+            ("skills.read", "skills.inspect"),
+            ("taskBrief.getContext", "taskBrief.context"),
+            ("taskBrief.compactContext", "taskBrief.context"),
+            ("memory.list", "memory.search"),
+            ("memory.recall", "memory.search"),
+            ("memory.add", "memory.note"),
+            ("memory.update", "memory.manage"),
+            ("memory.archive", "memory.manage"),
+            ("memory.rebuildIndex", "memory.manage"),
+            ("memory.diagnostics", "memory.manage"),
+            ("mcp.list", "mcp.inspect"),
+            ("mcp.get", "mcp.inspect"),
+            ("mcp.sessions", "mcp.inspect"),
+            ("mcp.listTools", "mcp.inspect"),
+            ("mcp.tools", "mcp.inspect"),
+            ("mcp.listResources", "mcp.inspect"),
+            ("mcp.listResourceTemplates", "mcp.inspect"),
+            ("mcp.add", "mcp.manage"),
+            ("mcp.remove", "mcp.manage"),
+            ("mcp.enable", "mcp.manage"),
+            ("mcp.disable", "mcp.manage"),
+            ("mcp.discoverLocal", "mcp.manage"),
+            ("mcp.importLocal", "mcp.manage"),
+            ("mcp.save", "mcp.manage"),
+            ("mcp.test", "mcp.manage"),
+            ("mcp.disconnect", "mcp.manage"),
+            ("mcp.disconnectAll", "mcp.manage"),
+            ("mcp.oauthStatus", "mcp.manage"),
+            ("assets.create", "assets.manage"),
+            ("assets.update", "assets.manage"),
+            ("assets.delete", "assets.manage"),
+            ("assets.categories.create", "assets.manage"),
+            ("team.session.create", "team.control"),
+            ("team.member.spawn", "team.control"),
+            ("team.member.match", "team.control"),
+            ("team.member.resume", "team.control"),
+            ("team.member.wait", "team.control"),
+            ("team.member.interrupt", "team.control"),
+            ("team.task.create", "team.control"),
+            ("team.message.send", "team.control"),
+            ("team.report.submit", "team.control"),
+            ("team.blocker.raise", "team.control"),
+            ("redclaw.profile.bundle", "profile.read"),
+            ("redclaw.profile.read", "profile.read"),
+            ("redclaw.profile.update", "profile.manage"),
+            ("redclaw.profile.completeStyleDefinition", "profile.manage"),
+            ("redclaw.runner.status", "runner.manage"),
+            ("redclaw.runner.start", "runner.manage"),
+            ("redclaw.runner.stop", "runner.manage"),
+            ("redclaw.runner.setConfig", "runner.manage"),
+            ("redclaw.task.preview", "task.read"),
+            ("redclaw.task.list", "task.read"),
+            ("redclaw.task.stats", "task.read"),
+            ("task.preview", "task.read"),
+            ("task.list", "task.read"),
+            ("redclaw.task.create", "task.manage"),
+            ("redclaw.task.confirm", "task.manage"),
+            ("redclaw.task.update", "task.manage"),
+            ("redclaw.task.cancel", "task.manage"),
+        ] {
+            assert_eq!(canonical_app_cli_action_for_policy(legacy), canonical);
+        }
+        assert_eq!(
+            canonical_app_cli_action_for_policy("mcp.tools"),
+            "mcp.inspect"
         );
     }
 

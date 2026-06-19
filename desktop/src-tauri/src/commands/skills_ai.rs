@@ -6,8 +6,8 @@ mod marketplace;
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
     build_market_file_skill_record, build_workspace_skill_record,
-    compute_skill_discovery_fingerprint, install_skills_from_repo, invoke_skill,
-    preferred_user_skill_root, refresh_skill_store_catalog, resolve_skill_file_path,
+    compute_skill_discovery_fingerprint, find_catalog_skill_by_name, install_skills_from_repo,
+    invoke_skill, preferred_user_skill_root, refresh_skill_store_catalog, resolve_skill_file_path,
     skill_catalog_changed, skills_catalog_list_value, write_skill_record_to_path,
     InstallSkillsFromRepoRequest, SkillInvokeRequest, UninstallSkillRequest,
 };
@@ -51,6 +51,7 @@ pub fn handle_skills_ai_channel(
     if !matches!(
         channel,
         "skills:list"
+            | "skills:read"
             | "skills:invoke"
             | "skills:create"
             | "skills:save"
@@ -99,6 +100,31 @@ pub fn handle_skills_ai_channel(
                     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 }
                 Ok(list)
+            }
+            "skills:read" => {
+                let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
+                let _ = refresh_skill_store_catalog(state);
+                let requested_name = requested_skill_name(payload);
+                if requested_name.is_empty() {
+                    return Err("技能名称不能为空".to_string());
+                }
+                let skill = with_store(state, |store| {
+                    Ok(find_catalog_skill_by_name(&store.skills, &requested_name))
+                })?
+                .ok_or_else(|| format!("技能不存在: {requested_name}"))?;
+                Ok(json!({
+                    "success": true,
+                    "skill": skill.clone(),
+                    "name": skill.name,
+                    "description": skill.description,
+                    "location": skill.location,
+                    "body": skill.body,
+                    "metadata": skill.metadata,
+                    "disabled": skill.disabled,
+                    "isBuiltin": skill.is_builtin,
+                    "sourceScope": skill.source_scope,
+                    "fingerprint": skill.fingerprint,
+                }))
             }
             "skills:invoke" => {
                 let started_at = now_ms();

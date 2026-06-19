@@ -39,21 +39,16 @@ pub fn default_direct_namespaces(
             "generation.job",
             "video_analysis",
             subjects::NAMESPACE,
-            "skills",
             voice::NAMESPACE,
         ],
-        "knowledge" => vec![subjects::NAMESPACE, memory::NAMESPACE, "skills"],
+        "knowledge" => vec![subjects::NAMESPACE],
         "redclaw" => vec![
-            memory::NAMESPACE,
-            redclaw::PROFILE_NAMESPACE,
             image::NAMESPACE,
             "video_analysis",
             voice::NAMESPACE,
-            redclaw::TASK_NAMESPACE,
             "video",
             manuscripts::NAMESPACE,
             subjects::NAMESPACE,
-            "skills",
         ],
         "background-maintenance" | "diagnostics" => vec![
             runtime::NAMESPACE,
@@ -71,8 +66,6 @@ pub fn default_direct_namespaces(
             team::ARTIFACT_NAMESPACE,
             team::BLOCKER_NAMESPACE,
             subjects::NAMESPACE,
-            memory::NAMESPACE,
-            "skills",
             image::NAMESPACE,
             manuscripts::NAMESPACE,
             "video_analysis",
@@ -80,8 +73,6 @@ pub fn default_direct_namespaces(
         ],
         _ => vec![
             subjects::NAMESPACE,
-            memory::NAMESPACE,
-            "skills",
             image::NAMESPACE,
             manuscripts::NAMESPACE,
             "video_analysis",
@@ -102,9 +93,7 @@ pub fn default_direct_namespaces(
         }
         "video" | "video-generation" => prepend_namespace(&mut namespaces, "video"),
         "voice" | "tts" | "speech" => prepend_namespace(&mut namespaces, voice::NAMESPACE),
-        "redclaw-task" | "scheduled-task" => {
-            prepend_namespace(&mut namespaces, redclaw::TASK_NAMESPACE)
-        }
+        "redclaw-task" | "scheduled-task" => {}
         "knowledge" | "search" => prepend_namespace(&mut namespaces, subjects::NAMESPACE),
         _ => {}
     }
@@ -154,6 +143,9 @@ pub fn action_family_for_action(action: &str) -> Option<&'static str> {
         "manuscripts" => Some(manuscripts::FAMILY),
         "memory" => Some(memory::FAMILY),
         "assets" | "subjects" => Some(subjects::FAMILY),
+        "profile" => Some("profile"),
+        "task" => Some("task"),
+        "runner" => Some(redclaw::FAMILY),
         "redclaw" => Some(redclaw::FAMILY),
         "team" => Some(team::FAMILY),
         "runtime" => Some(runtime::FAMILY),
@@ -199,9 +191,9 @@ mod tests {
     }
 
     #[test]
-    fn task_intent_can_promote_redclaw_task_namespace() {
+    fn task_intent_does_not_promote_full_redclaw_task_namespace() {
         let namespaces = default_direct_namespaces("redclaw", Some("scheduled-task"));
 
-        assert_eq!(namespaces.first(), Some(&redclaw::TASK_NAMESPACE));
+        assert!(!namespaces.contains(&redclaw::TASK_NAMESPACE));
     }
 }
