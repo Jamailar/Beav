@@ -84,6 +84,7 @@ interface RedClawTeamRoom {
 }
 
 const REDCLAW_AI_SURFACE_STORAGE_KEY = 'redbox:redclaw-ai-surface:v1';
+const REDCLAW_DRAFT_SESSION_SENTINEL = '__draft__';
 function readInitialRedClawAiSurface(): RedClawAiSurface {
     if (typeof window === 'undefined') return 'redclaw';
     const saved = String(window.localStorage.getItem(REDCLAW_AI_SURFACE_STORAGE_KEY) || '').trim();
@@ -233,8 +234,15 @@ function redClawLastSessionStorageKey(spaceId: string): string {
 function readRedClawLastSessionId(spaceId: string): string | null {
     if (typeof window === 'undefined') return null;
     const raw = localStorage.getItem(redClawLastSessionStorageKey(spaceId));
+    if (raw === REDCLAW_DRAFT_SESSION_SENTINEL) return null;
     const sessionId = String(raw || '').trim();
     return sessionId || null;
+}
+
+function writeRedClawLastSessionId(spaceId: string, sessionId: string | null): void {
+    if (typeof window === 'undefined') return;
+    const normalized = String(sessionId || '').trim();
+    localStorage.setItem(redClawLastSessionStorageKey(spaceId), normalized || REDCLAW_DRAFT_SESSION_SENTINEL);
 }
 
 function automationRunSessionId(value: unknown): string {
@@ -735,7 +743,7 @@ export function RedClaw({
     useEffect(() => {
         if (typeof window === 'undefined') return;
         if (!activeSpaceId || !activeSessionId) return;
-        localStorage.setItem(redClawLastSessionStorageKey(activeSpaceId), activeSessionId);
+        writeRedClawLastSessionId(activeSpaceId, activeSessionId);
     }, [activeSessionId, activeSpaceId]);
 
     useEffect(() => {
@@ -1037,7 +1045,7 @@ export function RedClaw({
                         ? activeSessionIdRef.current
                         : rememberedSessionId && items.some((item) => item.id === rememberedSessionId)
                             ? rememberedSessionId
-                            : items[0]?.id || null;
+                            : null;
 
             if (items.length === 0 && shouldCreateIfEmpty) {
                 const created = await uiMeasure('redclaw', 'sessions:create_context', async () => (
@@ -1388,6 +1396,7 @@ export function RedClaw({
         setIsSessionLoading(false);
         setHistoryLoading(false);
         setPreviewTarget(null);
+        writeRedClawLastSessionId(activeSpaceId || 'default', null);
         setChatRefreshKey((value) => value + 1);
         debugUi('sessions:new_draft', { activeSpaceId: activeSpaceId || 'default' });
     }, [activeSpaceId, debugUi, onOpenChatSurface]);
@@ -1663,13 +1672,14 @@ export function RedClaw({
             setActiveSessionId(nextSessionId);
             if (!nextSessionId) {
                 manualDraftActiveRef.current = true;
+                writeRedClawLastSessionId(activeSpaceId || 'default', null);
                 setChatRefreshKey((value) => value + 1);
             }
         } catch (error) {
             console.error('Failed to archive RedClaw session:', error);
             setChatActionMessage(error instanceof Error ? error.message : '归档对话失败');
         }
-    }, []);
+    }, [activeSpaceId]);
 
     const deleteRoomFromRedClaw = useCallback(async (room: RedClawTeamRoom) => {
         if (!room?.id) return;
