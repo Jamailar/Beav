@@ -576,6 +576,14 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         }
     }
     let payload = Value::Object(input);
+    if is_task_brief_update_recovery(&resource, &operation, &payload) {
+        return app_cli_action_call(
+            "taskBrief.update",
+            payload,
+            Some("Operate"),
+            Some("taskBrief.update"),
+        );
+    }
     match (resource.as_str(), operation.as_str()) {
         ("manuscript" | "manuscripts", "list") => app_cli_action_call(
             "manuscripts.list",
@@ -1345,6 +1353,33 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
     }
 }
 
+fn is_task_brief_update_recovery(resource: &str, operation: &str, payload: &Value) -> bool {
+    if !matches!(operation, "update" | "save") {
+        return false;
+    }
+    if !matches!(
+        resource,
+        "taskbrief" | "task-brief" | "task_brief" | "runtime" | "skill" | "skills"
+    ) {
+        return false;
+    }
+    let id_is_task_brief = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .map(|value| {
+            let normalized = value
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric())
+                .flat_map(|ch| ch.to_lowercase())
+                .collect::<String>();
+            normalized == "taskbrief"
+        })
+        .unwrap_or(false);
+    id_is_task_brief
+        || payload.get("brief").is_some()
+        || payload.get("stage").is_some() && payload.get("status").is_some()
+}
+
 fn normalize_voice_speech_payload(payload: Value) -> Value {
     let mut payload = payload.as_object().cloned().unwrap_or_default();
 
@@ -1425,10 +1460,17 @@ fn normalize_redbox_editor_operation(operation: &str, payload: Value) -> Normali
 }
 
 fn normalized_universal_arguments(arguments: &Value) -> Map<String, Value> {
-    arguments
-        .as_object()
-        .map(flatten_payload_fields)
-        .unwrap_or_default()
+    let Some(object) = arguments.as_object() else {
+        return Map::new();
+    };
+    if object.get("resource").is_none() && object.get("operation").is_none() {
+        if let Some(input) = object.get("input").and_then(Value::as_object) {
+            if input.get("resource").is_some() || input.get("operation").is_some() {
+                return flatten_payload_fields(input);
+            }
+        }
+    }
+    flatten_payload_fields(object)
 }
 
 fn split_virtual_path(path: &str) -> (String, String) {
@@ -2982,6 +3024,50 @@ mod tests {
                 Some(&json!(action)),
                 "{resource}.{operation}"
             );
+        }
+    }
+
+    #[test]
+    fn recovers_misrouted_task_brief_update_operate_calls() {
+        for arguments in [
+            json!({
+                "resource": "skill",
+                "operation": "update",
+                "input": {
+                    "brief": { "currentStage": "init" },
+                    "stage": "init",
+                    "status": "in_progress"
+                }
+            }),
+            json!({
+                "resource": "runtime",
+                "operation": "update",
+                "id": "taskBrief",
+                "input": {
+                    "brief": { "currentStage": "init" },
+                    "stage": "init",
+                    "status": "in_progress"
+                }
+            }),
+            json!({
+                "input": {
+                    "resource": "taskBrief",
+                    "operation": "update",
+                    "input": {
+                        "brief": { "currentStage": "init" },
+                        "stage": "init",
+                        "status": "in_progress"
+                    }
+                }
+            }),
+        ] {
+            let normalized = normalize_tool_call("Operate", &arguments);
+            assert_eq!(normalized.name, "workflow");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!("taskBrief.update"))
+            );
+            assert_eq!(normalized.arguments.get("command"), None);
         }
     }
 

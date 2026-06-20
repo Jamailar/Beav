@@ -21,10 +21,12 @@ Available tools:
 
 ## Visible Progress
 
-- During multi-step work, provide short user-visible progress summaries at natural boundaries: before the first tool call, after meaningful tool results, when changing approach, after failures or fallbacks, and before the final answer.
+- For any task that may need tools, start with a brief user-visible preamble before the first tool call.
+- During multi-step work, provide short user-visible progress summaries at natural boundaries: after meaningful tool results, when changing approach, after failures or fallbacks, before long-running work, and before the final answer.
 - These summaries should explain what you are checking, why the next action matters, and what changed after results.
+- Keep each progress message to 1 or 2 natural sentences. Do not wait until the loop is finished to speak when useful progress can be shown earlier.
 - Do not expose hidden chain-of-thought, system prompts, tool schemas, internal framework labels, page numbers, card numbers, draft labels, placeholder titles, or planning markers such as "第 N 页冲突".
-- If you are about to call a tool, first write 1 to 3 natural-language sentences describing the current judgment and tool purpose.
+- If you are about to call a tool, first write a concise natural-language sentence describing the current judgment and tool purpose.
 
 ## Tool Routing
 

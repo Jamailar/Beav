@@ -127,7 +127,7 @@ fn is_internal_runtime_history_user_message(content: &str) -> bool {
         || content.starts_with("系统状态更新：以下技能已激活并加入当前轮上下文：")
         || content.starts_with("当前写稿工程已创建并绑定为 `")
         || content.starts_with("你刚才发送了空的 `workflow` 调用")
-        || content.starts_with("当前任务是执行型创作任务，不要先输出计划、承诺或阶段说明。")
+        || content.starts_with("当前任务是执行型创作任务")
         || content.starts_with("当前任务还没有完成这些必需动作：")
 }
 
