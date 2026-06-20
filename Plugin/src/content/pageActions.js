@@ -309,17 +309,31 @@ export function getElementAttribute(options = {}) {
 }
 
 export function queryElements(options = {}) {
-  const base = findAnyTarget(options);
-  if (!base) return { success: false, error: 'Element not found' };
   const relativeSelector = String(options.relativeSelector || options.relative_selector || '').trim();
-  const nodes = relativeSelector
-    ? [...base.querySelectorAll(relativeSelector)]
-    : [base];
+  const baseNodes = collectLocatorTargets(options);
+  if (!baseNodes.length) return { success: false, error: 'Element not found' };
+  const rawNodes = relativeSelector
+    ? baseNodes.flatMap((base) => [...base.querySelectorAll(relativeSelector)])
+    : baseNodes;
+  const limit = normalizeLocatorLimit(options.limit ?? options.maxResults);
+  const nodes = rawNodes.slice(0, limit);
+  const values = nodes.map((node) => node instanceof Element ? elementReadSnapshot(node) : null).filter(Boolean);
   return {
     success: true,
-    selector: cssPath(base),
+    selector: cssPath(baseNodes[0]),
     relativeSelector: relativeSelector || null,
-    values: nodes.map((node) => node instanceof Element ? elementReadSnapshot(node) : null),
+    count: rawNodes.length,
+    returnedCount: values.length,
+    first: values[0] || null,
+    values,
+    textContents: values.map((item) => item.text_content ?? ''),
+    innerTexts: values.map((item) => item.inner_text ?? ''),
+    allTextContents: values.map((item) => item.text_content ?? ''),
+    allInnerTexts: values.map((item) => item.inner_text ?? ''),
+    isEnabled: values[0]?.enabled ?? false,
+    isVisible: values[0]?.visible ?? false,
+    textContent: values[0]?.text_content ?? null,
+    innerText: values[0]?.inner_text ?? null,
   };
 }
 
@@ -669,6 +683,46 @@ function findAnyTarget(options) {
     .find((node) => elementLabel(node) === text) || null;
 }
 
+function collectLocatorTargets(options = {}) {
+  let nodes = [];
+  if (options.selector) {
+    nodes = [...document.querySelectorAll(String(options.selector))];
+  } else {
+    const text = String(options.label || options.textLabel || options.name || options.text || '').trim();
+    const exact = options.exact !== false;
+    const role = String(options.role || '').trim().toLowerCase();
+    const candidates = [...document.querySelectorAll('input,textarea,select,button,a,[role],[aria-label],[title],[data-testid]')];
+    nodes = candidates.filter((node) => {
+      if (!(node instanceof Element)) return false;
+      if (role) {
+        const nodeRole = String(node.getAttribute('role') || implicitRole(node) || '').toLowerCase();
+        if (nodeRole !== role) return false;
+      }
+      if (!text) return true;
+      const label = elementLabel(node);
+      return exact ? label === text : label.toLowerCase().includes(text.toLowerCase());
+    });
+  }
+  if (options.visible === true) {
+    nodes = nodes.filter(isElementActuallyVisible);
+  } else if (options.visible === false) {
+    nodes = nodes.filter((node) => !isElementActuallyVisible(node));
+  }
+  const nth = Number(options.nth ?? options.index);
+  if (Number.isInteger(nth) && nth >= 0) return nodes[nth] ? [nodes[nth]] : [];
+  if (options.first === true) return nodes[0] ? [nodes[0]] : [];
+  if (options.last === true) return nodes.length ? [nodes[nodes.length - 1]] : [];
+  if (options.all === true || options.multiple === true || options.mode === 'all' || options.mode === 'count') {
+    return nodes;
+  }
+  return nodes[0] ? [nodes[0]] : [];
+}
+
+function normalizeLocatorLimit(value) {
+  const limit = Number(value || 50);
+  return Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.floor(limit))) : 50;
+}
+
 function findSelectOption(select, options) {
   const optionValue = options.value != null ? String(options.value) : '';
   const optionText = String(options.optionText || options.text || options.label || options.labelText || '').trim();
@@ -732,7 +786,27 @@ function elementReadSnapshot(node) {
     attributes: Object.fromEntries([...node.attributes || []].map((attr) => [attr.name, attr.value])),
     inner_text: normalizeWhitespace(node.innerText || ''),
     text_content: node.textContent,
+    value: readElementValue(node),
+    enabled: isElementEnabled(node),
+    visible: isElementActuallyVisible(node),
+    selector: cssPath(node),
+    descriptor: elementDescriptor(node),
   };
+}
+
+function isElementEnabled(node) {
+  if (!(node instanceof Element)) return false;
+  if (node.hasAttribute('disabled')) return false;
+  if (String(node.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return false;
+  return true;
+}
+
+function isElementActuallyVisible(node) {
+  if (!(node instanceof Element)) return false;
+  const style = window.getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+  const rect = node.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
 }
 
 function normalizeCheckedValue(options = {}) {

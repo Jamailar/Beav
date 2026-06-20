@@ -699,6 +699,225 @@ fn web_search_input_schema() -> Value {
     )
 }
 
+fn browser_control_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": [
+                        "capabilities",
+                        "info",
+                        "documentation",
+                        "nameSession",
+                        "turnEnded",
+                        "listTabs",
+                        "newTab",
+                        "getTab",
+                        "selectedTab",
+                        "open",
+                        "claimTab",
+                        "goto",
+                        "back",
+                        "forward",
+                        "reload",
+                        "close",
+                        "finalizeTabs",
+                        "waitForLoadState",
+                        "waitForURL",
+                        "waitForTimeout",
+                        "evaluate",
+                        "domSnapshot",
+                        "queryElements",
+                        "count",
+                        "allTextContents",
+                        "innerText",
+                        "textContent",
+                        "isEnabled",
+                        "waitForSelector",
+                        "click",
+                        "doubleClick",
+                        "hover",
+                        "clickNode",
+                        "scroll",
+                        "scrollNode",
+                        "type",
+                        "check",
+                        "setChecked",
+                        "uncheck",
+                        "isChecked",
+                        "isVisible",
+                        "getValue",
+                        "getValues",
+                        "getAttribute",
+                        "select",
+                        "screenshot",
+                        "assets",
+                        "frames",
+                        "consoleLogs",
+                        "readClipboard",
+                        "readClipboardText",
+                        "writeClipboard",
+                        "writeClipboardText",
+                        "mouseMove",
+                        "mouseClick",
+                        "mouseDrag",
+                        "mouseWheel",
+                        "keyboardType",
+                        "keyPress",
+                        "press",
+                        "keyboardCombo",
+                        "visibility",
+                        "setVisibility",
+                        "viewportState",
+                        "setViewport",
+                        "resetViewport",
+                        "history",
+                        "browserContext",
+                        "windows",
+                        "events",
+                        "eventSummary",
+                        "sessionEvents",
+                        "cdp"
+                    ],
+                    "description": "Codex-style browser runtime operation."
+                }),
+            ),
+            ("url", string_schema("HTTP(S) URL for open/goto operations.")),
+            ("tabId", integer_schema("Browser tab id returned by listTabs/newTab/open/claimTab.", 0, i64::MAX)),
+            ("id", string_schema("Opaque browser or tab id for Codex-style get/claim operations.")),
+            ("selector", string_schema("CSS selector for query/click/type operations.")),
+            ("text", string_schema("Visible text or typed text, depending on operation.")),
+            ("name", string_schema("Browser session name for nameSession.")),
+            ("role", string_schema("ARIA role for getByRole-style element lookup.")),
+            ("label", string_schema("Visible label for getByLabel-style element lookup.")),
+            ("placeholder", string_schema("Placeholder text for getByPlaceholder-style element lookup.")),
+            ("testId", string_schema("Test id for getByTestId-style element lookup.")),
+            ("nodeId", string_schema("DOM snapshot node id for node operations.")),
+            ("attribute", string_schema("Attribute name for getAttribute.")),
+            ("value", string_schema("Value for fill/select/check-like operations.")),
+            ("key", string_schema("Keyboard key for keyPress.")),
+            (
+                "keys",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Keyboard shortcut keys for keyboardCombo."
+                }),
+            ),
+            ("exact", bool_schema("Whether text/role matching should be exact.")),
+            ("checked", bool_schema("Target checked state for setChecked.")),
+            ("active", bool_schema("Whether a created or opened tab should become active.")),
+            ("newWindow", bool_schema("Whether open/newTab should create a new browser window.")),
+            ("x", number_schema("Viewport x coordinate.", -100000.0, 100000.0)),
+            ("y", number_schema("Viewport y coordinate.", -100000.0, 100000.0)),
+            ("deltaX", number_schema("Mouse wheel horizontal delta.", -100000.0, 100000.0)),
+            ("deltaY", number_schema("Mouse wheel vertical delta.", -100000.0, 100000.0)),
+            ("width", integer_schema("Viewport or window width.", 1, 100000)),
+            ("height", integer_schema("Viewport or window height.", 1, 100000)),
+            ("windowId", integer_schema("Browser window id.", 0, i64::MAX)),
+            ("frameId", integer_schema("Frame id for frame-scoped operations.", 0, i64::MAX)),
+            ("limit", integer_schema("Maximum returned records.", 1, 1000)),
+            ("timeoutMs", integer_schema("Operation timeout in milliseconds.", 1, 600000)),
+            ("ms", integer_schema("Fixed wait duration for waitForTimeout.", 0, 120000)),
+            ("state", string_schema("Load, visibility, checked, or window state depending on operation.")),
+            ("waitUntil", string_schema("Load state for goto/wait operations.")),
+            ("query", string_schema("History, tab, or element query text.")),
+            ("urlRegex", string_schema("Regular expression for waitForURL.")),
+            ("button", string_schema("Mouse button for coordinate clicks.")),
+            ("direction", string_schema("Scroll direction such as up, down, left, or right.")),
+            ("origin", string_schema("Tab claim origin, usually user or agent.")),
+            ("pageRole", string_schema("Controlled tab role metadata, such as source or result.")),
+            ("format", string_schema("Screenshot format, usually png or jpeg.")),
+            ("pixels", number_schema("Scroll distance in pixels.", -100000.0, 100000.0)),
+            ("quality", integer_schema("Screenshot JPEG quality.", 1, 100)),
+            ("activeOnly", bool_schema("Whether tab/context listing should only include active tabs.")),
+            ("all", bool_schema("Whether locator-style reads should return every matching element.")),
+            ("visible", bool_schema("Whether locator-style reads should filter by visibility.")),
+            ("first", bool_schema("Whether locator-style reads should return only the first match.")),
+            ("last", bool_schema("Whether locator-style reads should return only the last match.")),
+            ("nth", integer_schema("Zero-based locator match index.", 0, 100000)),
+            ("script", string_schema("JavaScript expression for evaluate. Browser policy treats evaluate as state-changing unless approved.")),
+            ("expression", string_schema("JavaScript expression alias for evaluate.")),
+            ("pageFunction", string_schema("Codex-style evaluate pageFunction alias.")),
+            ("method", string_schema("Chrome DevTools Protocol method for cdp.")),
+            (
+                "params",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Chrome DevTools Protocol params for cdp."
+                }),
+            ),
+            (
+                "include",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Browser context sections to include, such as activeTab, tabs, windows, history, bookmarks, topSites, readingList."
+                }),
+            ),
+            (
+                "items",
+                json!({
+                    "type": "array",
+                    "items": { "type": "object", "additionalProperties": true },
+                    "description": "Clipboard items or operation-specific item payloads."
+                }),
+            ),
+            (
+                "from",
+                json!({
+                    "oneOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "string" },
+                        { "type": "number" }
+                    ],
+                    "description": "Start coordinate/object for drag or history date lower bound."
+                }),
+            ),
+            (
+                "to",
+                json!({
+                    "oneOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "string" },
+                        { "type": "number" }
+                    ],
+                    "description": "End coordinate/object for drag or history date upper bound."
+                }),
+            ),
+            (
+                "path",
+                json!({
+                    "type": "array",
+                    "items": { "type": "object", "additionalProperties": true },
+                    "description": "Coordinate path for drag operations."
+                }),
+            ),
+            (
+                "keep",
+                json!({
+                    "type": "array",
+                    "items": { "type": "object", "additionalProperties": true },
+                    "description": "Codex-style finalizeTabs keep entries such as {tabId,status}."
+                }),
+            ),
+            (
+                "options",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Operation-specific browser options passed to the backend."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some("Control the RedBox browser runtime through a Codex-style facade for tab, DOM, locator, CUA/input, clipboard, screenshot, and browser-context operations. Prefer this over raw mcp.call or individual browser MCP tools."),
+    )
+}
+
 fn task_brief_get_input_schema() -> Value {
     object_schema(
         &[("sessionId", string_schema("Optional active session id."))],
@@ -4273,6 +4492,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "browser.control",
+        namespace: "browser",
+        description: "Control the RedBox browser runtime through a Codex-style facade: name sessions, create/read/claim/finalize tabs, navigate/back/forward, read DOM, query/read/wait/click/type/scroll locator targets, wait for URLs, capture screenshots/assets, use clipboard/input primitives, evaluate approved scripts, and inspect browser context. Prefer this over raw mcp.call or individual browser MCP tools.",
+        input_schema: browser_control_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },

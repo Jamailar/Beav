@@ -23,6 +23,7 @@ import { exportPage } from './background/pageExportRuntime.js';
 import { evaluatePageScript } from './background/pageScriptRuntime.js';
 import { CONTENT_CURSOR_ARRIVED_TYPE, TARGET_CURSOR_ARRIVED_TYPE, TARGET_GET_CURSOR_STATE_TYPE, clearCursorOverlayForLeases, clearCursorOverlayForTab, configurePixelInputTelemetry, dispatchKeyboardCombo, dispatchKeyboardPress, dispatchKeyboardType, dispatchMouseClick, dispatchMouseDrag, dispatchMouseMove, dispatchMouseWheel, hasPendingCursorArrivals, hideCursorOverlay, moveCursorOverlay, notifyCursorArrived, readCursorOverlayState, republishCursorOverlayStateForTab } from './background/pixelInput.js';
 import { closeSidePanel, configureSidePanelTelemetry, getSidePanelStatus, openSidePanel, registerSidePanelStatus, requireSidePanelOpen, restoreSidePanelStatus, toggleSidePanel } from './background/sidePanelStatus.js';
+import { TARGET_GET_CONTROL_BADGE_STATE_TYPE, initializeTabControlBadges, readTabControlBadgeState } from './background/tabControlBadge.js';
 import { clearLeaseFaviconBadges, hasUnseenFinalizedBadges, initializeTabFaviconBadges, listFinalizedBadges, markFinalizedBadges } from './background/tabFaviconBadge.js';
 import { configureManagedTabGroupTelemetry, ensureAgentTabGroup, getManagedGroupIdContainingTabs, initializeManagedTabGroups, listManagedTabGroups, reconcileManagedGroupForTabs, refreshManagedGroupsFromChrome, releaseTabsFromManagedGroups, setSessionGroupTitle } from './background/tabGroupManager.js';
 import { createTabLifecycleRuntime } from './background/tabLifecycleRuntime.js';
@@ -58,12 +59,13 @@ const CONTENT_GET_VALUE_TYPE = 'xwow-data-ai:get-value';
 const CONTENT_GET_VALUES_TYPE = 'xwow-data-ai:get-values';
 const CONTENT_GET_ATTRIBUTE_TYPE = 'xwow-data-ai:get-attribute';
 const CONTENT_QUERY_ELEMENTS_TYPE = 'xwow-data-ai:query-elements';
-const CONTROLLED_PAGE_MUTATION_ACTIONS = new Set(['page.navigate', 'page.goto', 'page.waitForLoadState', 'page.evaluate', 'page.evaluateScript', 'page.scroll', 'page.click', 'page.clickNode', 'node.click', 'page.hover', 'page.inspectPoint', 'page.hitTest', 'page.scrollNode', 'node.scroll', 'page.waitForNode', 'node.wait', 'page.waitForSelector', 'page.waitSelector', 'page.check', 'page.setChecked', 'page.isChecked', 'page.isVisible', 'page.getValue', 'page.getValues', 'page.getAttribute', 'page.queryElements', 'page.domSnapshot', 'page.export', 'tab.export', 'page.consoleLogs', 'tab_console_logs', 'tab.consoleLogs', 'page.select', 'page.type', 'page.frames', 'page.readClipboard', 'clipboard.read', 'page.readClipboardText', 'clipboard.readText', 'page.writeClipboard', 'clipboard.write', 'page.writeClipboardText', 'clipboard.writeText', 'page.waitForFileChooser', 'page.acceptFileChooser', 'page.setInputFiles', 'fileChooser.accept', 'webmcp.listTools', 'webmcp.invokeTool', 'webmcp_list_tools', 'webmcp_invoke_tool', 'input.mouseDrag', 'input.mouseWheel', 'input.keyboardType', 'input.keyboardPress', 'input.keyboardCombo']);
+const CONTROLLED_PAGE_MUTATION_ACTIONS = new Set(['page.navigate', 'page.goto', 'page.waitForLoadState', 'page.waitForURL', 'page.waitForTimeout', 'page.evaluate', 'page.evaluateScript', 'page.scroll', 'page.click', 'page.clickNode', 'node.click', 'page.hover', 'page.inspectPoint', 'page.hitTest', 'page.scrollNode', 'node.scroll', 'page.waitForNode', 'node.wait', 'page.waitForSelector', 'page.waitSelector', 'page.check', 'page.setChecked', 'page.isChecked', 'page.isVisible', 'page.getValue', 'page.getValues', 'page.getAttribute', 'page.queryElements', 'page.domSnapshot', 'page.export', 'tab.export', 'page.consoleLogs', 'tab_console_logs', 'tab.consoleLogs', 'page.select', 'page.type', 'page.frames', 'page.readClipboard', 'clipboard.read', 'page.readClipboardText', 'clipboard.readText', 'page.writeClipboard', 'clipboard.write', 'page.writeClipboardText', 'clipboard.writeText', 'page.waitForFileChooser', 'page.acceptFileChooser', 'page.setInputFiles', 'fileChooser.accept', 'webmcp.listTools', 'webmcp.invokeTool', 'webmcp_list_tools', 'webmcp_invoke_tool', 'input.mouseDrag', 'input.mouseWheel', 'input.keyboardType', 'input.keyboardPress', 'input.keyboardCombo']);
 const CDP_COMMAND_TIMEOUT_MS = getDefaultCdpTimeoutMs();
 
 let cachedBaseUrl = null;
 let activeRun = null;
 let activeBrowserSession = null;
+let initializePromise = null;
 let nativeStatus = getNativeStatus();
 let lastClientHeartbeatState = null;
 const activeTabObserver = createActiveTabObserver({
@@ -116,9 +118,74 @@ const BROWSER_CONTROL_MCP_TOOLS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: true },
   },
   {
+    name: 'browser.info',
+    description: 'Return browser-control backend, session, policy, and capability metadata.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: true },
+  },
+  {
+    name: 'browser.context',
+    description: 'Return readonly user browser context such as open tabs, windows, and history summaries.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'number' } }, additionalProperties: true },
+  },
+  {
+    name: 'browser.events',
+    description: 'Replay browser-control runtime events.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'number' }, afterEventId: { type: 'string' } }, additionalProperties: true },
+  },
+  {
+    name: 'browser.events.summary',
+    description: 'Summarize browser-control runtime events.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: true },
+  },
+  {
+    name: 'browser.sessionEvents',
+    description: 'Replay browser-control session lifecycle events.',
+    inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: true },
+  },
+  {
+    name: 'browser.visibility.get',
+    description: 'Return browser window visibility state.',
+    inputSchema: { type: 'object', properties: { windowId: { type: 'number' } }, additionalProperties: true },
+  },
+  {
+    name: 'browser.visibility.set',
+    description: 'Set browser window visibility state.',
+    inputSchema: { type: 'object', properties: { windowId: { type: 'number' }, state: { type: 'string' } }, additionalProperties: true },
+  },
+  {
+    name: 'windows.list',
+    description: 'List browser windows with bounded metadata.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'number' } }, additionalProperties: true },
+  },
+  {
+    name: 'history.search',
+    description: 'Search recent browser history metadata.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: true },
+  },
+  {
     name: 'tabs.list',
     description: 'List current user browser tabs with bounded tab metadata.',
     inputSchema: { type: 'object', properties: { limit: { type: 'number' } }, additionalProperties: true },
+  },
+  {
+    name: 'tab.info',
+    description: 'Read metadata for a tab or the current active tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, activeOnly: { type: 'boolean' }, sessionId: { type: 'string' } }, additionalProperties: true },
+  },
+  {
+    name: 'tabs.finalize',
+    description: 'Finalize browser-control tabs, closing or handing off tabs according to keep entries.',
+    inputSchema: { type: 'object', properties: { keep: { type: 'array', items: { type: 'object' } }, sessionId: { type: 'string' } }, additionalProperties: true },
+  },
+  {
+    name: 'session.name',
+    description: 'Name the current browser-control session.',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, sessionId: { type: 'string' } }, required: ['name'], additionalProperties: true },
+  },
+  {
+    name: 'turn.ended',
+    description: 'Mark the current browser-control turn ended.',
+    inputSchema: { type: 'object', properties: { turnId: { type: 'string' }, sessionId: { type: 'string' } }, additionalProperties: true },
   },
   {
     name: 'tab.claim',
@@ -136,9 +203,59 @@ const BROWSER_CONTROL_MCP_TOOLS = [
     inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, url: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'url'], additionalProperties: true },
   },
   {
+    name: 'tab.back',
+    description: 'Navigate a controlled tab back in history.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, waitUntil: { type: 'string' }, timeoutMs: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'tab.forward',
+    description: 'Navigate a controlled tab forward in history.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, waitUntil: { type: 'string' }, timeoutMs: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'tab.reload',
+    description: 'Reload a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'tab.close',
+    description: 'Close a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'page.frames',
+    description: 'List frames in a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'page.waitForLoadState',
+    description: 'Wait for a controlled tab to reach a load state.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, state: { type: 'string' }, timeoutMs: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'page.waitForURL',
+    description: 'Wait for a controlled tab URL to match a target, wildcard, or regex.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, url: { type: 'string' }, urlRegex: { type: 'string' }, exact: { type: 'boolean' }, timeoutMs: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'page.waitForTimeout',
+    description: 'Wait for a fixed duration in a controlled tab context.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, timeoutMs: { type: 'number' }, ms: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'page.evaluate',
+    description: 'Evaluate JavaScript in a controlled tab through CDP; browser policy treats this as state-changing unless approved.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, script: { type: 'string' }, expression: { type: 'string' }, timeoutMs: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
     name: 'page.domSnapshot',
     description: 'Read a bounded DOM snapshot for a tab or frame.',
     inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, frameId: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'page.waitForSelector',
+    description: 'Wait for a selector to appear in a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, timeoutMs: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
   },
   {
     name: 'page.queryElements',
@@ -151,9 +268,79 @@ const BROWSER_CONTROL_MCP_TOOLS = [
     inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, text: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
   },
   {
+    name: 'page.doubleClick',
+    description: 'Double-click a page element by selector or text.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, text: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'page.hover',
+    description: 'Hover a page element by selector or text.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, text: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'node.click',
+    description: 'Click a page node by DOM snapshot node reference.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, nodeId: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'page.scroll',
+    description: 'Scroll a controlled tab or frame.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, direction: { type: 'string' }, pixels: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'node.scroll',
+    description: 'Scroll a DOM snapshot node.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, nodeId: { type: 'string' }, deltaY: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
     name: 'page.type',
     description: 'Type text into a page element.',
     inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, text: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector', 'text'], additionalProperties: true },
+  },
+  {
+    name: 'page.check',
+    description: 'Check a checkbox or switch-like page element.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
+  },
+  {
+    name: 'page.setChecked',
+    description: 'Set a checkbox or switch-like page element state.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, checked: { type: 'boolean' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
+  },
+  {
+    name: 'page.isChecked',
+    description: 'Return whether a checkbox or switch-like element is checked.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
+  },
+  {
+    name: 'page.isVisible',
+    description: 'Return whether a page element is visible.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
+  },
+  {
+    name: 'page.getValue',
+    description: 'Read the value of a page form element.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
+  },
+  {
+    name: 'page.getValues',
+    description: 'Read values from matching page form elements.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
+  },
+  {
+    name: 'page.getAttribute',
+    description: 'Read an attribute from a page element.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, attribute: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
+  },
+  {
+    name: 'page.select',
+    description: 'Select one or more options in a native select element.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, selector: { type: 'string' }, value: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'selector'], additionalProperties: true },
+  },
+  {
+    name: 'page.consoleLogs',
+    description: 'Read console logs captured for a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, limit: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
   },
   {
     name: 'page.assets',
@@ -164,6 +351,76 @@ const BROWSER_CONTROL_MCP_TOOLS = [
     name: 'page.screenshot',
     description: 'Capture a visible-tab screenshot as a data URL.',
     inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, format: { type: 'string' }, quality: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'clipboard.read',
+    description: 'Read browser clipboard items for a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'clipboard.readText',
+    description: 'Read browser clipboard text for a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'clipboard.write',
+    description: 'Write browser clipboard items for a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, items: { type: 'array' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'clipboard.writeText',
+    description: 'Write browser clipboard text for a controlled tab.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, text: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'text'], additionalProperties: true },
+  },
+  {
+    name: 'input.mouseMove',
+    description: 'Move the browser mouse cursor overlay.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, x: { type: 'number' }, y: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId', 'x', 'y'], additionalProperties: true },
+  },
+  {
+    name: 'input.mouseClick',
+    description: 'Click browser viewport coordinates.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, x: { type: 'number' }, y: { type: 'number' }, button: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'x', 'y'], additionalProperties: true },
+  },
+  {
+    name: 'input.mouseDrag',
+    description: 'Drag between browser viewport coordinates.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, from: { type: 'object' }, to: { type: 'object' }, path: { type: 'array' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'input.mouseWheel',
+    description: 'Scroll by browser viewport wheel deltas.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, deltaX: { type: 'number' }, deltaY: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'input.keyboardType',
+    description: 'Type text through browser keyboard input.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, text: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'text'], additionalProperties: true },
+  },
+  {
+    name: 'input.keyboardPress',
+    description: 'Press a browser keyboard key.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, key: { type: 'string' }, sessionId: { type: 'string' } }, required: ['tabId', 'key'], additionalProperties: true },
+  },
+  {
+    name: 'input.keyboardCombo',
+    description: 'Press a browser keyboard shortcut.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, keys: { type: 'array', items: { type: 'string' } }, sessionId: { type: 'string' } }, required: ['tabId', 'keys'], additionalProperties: true },
+  },
+  {
+    name: 'viewport.state',
+    description: 'Read browser viewport state.',
+    inputSchema: { type: 'object', properties: { windowId: { type: 'number' }, sessionId: { type: 'string' } }, additionalProperties: true },
+  },
+  {
+    name: 'viewport.set',
+    description: 'Set browser viewport dimensions.',
+    inputSchema: { type: 'object', properties: { width: { type: 'number' }, height: { type: 'number' }, windowId: { type: 'number' }, sessionId: { type: 'string' } }, required: ['width', 'height'], additionalProperties: true },
+  },
+  {
+    name: 'viewport.reset',
+    description: 'Reset browser viewport state.',
+    inputSchema: { type: 'object', properties: { windowId: { type: 'number' }, sessionId: { type: 'string' } }, additionalProperties: true },
   },
   {
     name: 'cdp.send',
@@ -229,11 +486,11 @@ let lastStatus = {
 };
 
 chrome.runtime.onInstalled.addListener(() => {
-  void ensureLifecycleInstallState().then(() => initialize()).catch(() => initialize());
+  void ensureLifecycleInstallState().then(() => ensureInitialized()).catch(() => ensureInitialized());
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void initialize();
+  void ensureInitialized();
 });
 
 configureLifecycleGuard({
@@ -282,6 +539,7 @@ function isBrowserControlRuntimeMessage(message = {}) {
   if (type.startsWith('xwow-data-ai:') || type.startsWith('redbox-browser-control:')) return true;
   if (type === 'browser.action' || type === 'GET_NATIVE_HOST_STATUS') return true;
   if (type === TARGET_GET_CURSOR_STATE_TYPE || type === TARGET_CURSOR_ARRIVED_TYPE) return true;
+  if (type === TARGET_GET_CONTROL_BADGE_STATE_TYPE) return true;
   const method = String(message?.method || '');
   return method === 'ensureCodexAppServer' || method === 'ensure_codex_app_server';
 }
@@ -349,6 +607,10 @@ async function handleMessage(message, sender = {}) {
     case TARGET_GET_CURSOR_STATE_TYPE: {
       const tabId = Number(message.tabId || sender?.tab?.id || activeBrowserSession?.activeTabId || 0);
       return { ok: true, success: true, state: browserControlRuntime.readCursorState(tabId) };
+    }
+    case TARGET_GET_CONTROL_BADGE_STATE_TYPE: {
+      const tabId = Number(message.tabId || sender?.tab?.id || activeBrowserSession?.activeTabId || 0);
+      return { ok: true, success: true, state: await readTabControlBadgeState(tabId) };
     }
     case 'xwow-data-ai:get-status':
       return { success: true, status: { ...lastStatus, nativeHost: nativeStatus } };
@@ -427,17 +689,36 @@ async function initialize() {
   await startClientHeartbeat();
   await restoreSidePanelStatus();
   await restoreNativeStatus();
+  await connectNativeTransport({ silent: true }).catch(() => {});
   lastClientHeartbeatState = await getBrowserClientHeartbeatState().catch(() => null);
   await restorePendingUpdate();
   await activeTabObserver.initialize().catch(() => {});
   tabLifecycleRuntime.initialize();
   await initializeManagedTabGroups().catch(() => {});
   initializeTabFaviconBadges();
+  initializeTabControlBadges();
   setStatus({
     connected: nativeStatus.state === 'connected',
     lastError: nativeStatus.error || '',
   });
 }
+
+function ensureInitialized() {
+  if (!initializePromise) {
+    initializePromise = initialize().catch((error) => {
+      initializePromise = null;
+      throw error;
+    });
+  }
+  return initializePromise;
+}
+
+void ensureInitialized().catch((error) => {
+  setStatus({
+    connected: false,
+    lastError: describeError(error),
+  });
+});
 
 async function getSettings() {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
@@ -1163,6 +1444,19 @@ async function runBrowserAction(action, context = {}) {
       case 'turn.ended':
         result = await endActiveTurn(session, normalized.turnId || session.currentTurnId || session.turnId);
         break;
+      case 'tab.info': {
+        const tabId = Number(normalized.tabId || normalized.id || session.activeTabId || activeBrowserSession?.activeTabId || 0);
+        const tab = tabId
+          ? await chrome.tabs.get(tabId).catch(() => null)
+          : await getActiveTabInfo();
+        result = {
+          success: true,
+          tab: tab ? tabInfo(tab) : null,
+          url: tab?.url || '',
+          title: tab?.title || '',
+        };
+        break;
+      }
       case 'tab.navigate':
         await requireActiveControlledTabLease(session, normalized.tabId, 'tab.navigate');
         result = await openUrl(normalized.url, {
@@ -1170,6 +1464,18 @@ async function runBrowserAction(action, context = {}) {
           active: normalized.active !== false,
           waitUntilComplete: normalized.waitUntilComplete !== false,
         });
+        break;
+      case 'tab.back':
+        await requireActiveControlledTabLease(session, normalized.tabId, 'tab.back');
+        if (typeof chrome.tabs.goBack !== 'function') throw new Error('chrome.tabs.goBack is unavailable');
+        await chrome.tabs.goBack(normalized.tabId);
+        result = await waitForTargetLoadState(normalized.tabId, normalized.waitUntil || normalized.state || 'load', Number(normalized.timeoutMs || normalized.timeout_ms || 30_000));
+        break;
+      case 'tab.forward':
+        await requireActiveControlledTabLease(session, normalized.tabId, 'tab.forward');
+        if (typeof chrome.tabs.goForward !== 'function') throw new Error('chrome.tabs.goForward is unavailable');
+        await chrome.tabs.goForward(normalized.tabId);
+        result = await waitForTargetLoadState(normalized.tabId, normalized.waitUntil || normalized.state || 'load', Number(normalized.timeoutMs || normalized.timeout_ms || 30_000));
         break;
       case 'page.navigate':
       case 'page.goto': {
@@ -1202,6 +1508,18 @@ async function runBrowserAction(action, context = {}) {
         result = await waitForTargetLoadState(normalized.tabId, state, Number(normalized.timeoutMs || normalized.timeout_ms || 10_000));
         break;
       }
+      case 'page.waitForURL':
+        await requireActiveControlledTabLease(session, normalized.tabId, 'page.waitForURL');
+        result = await waitForTabUrlMatch(normalized.tabId, normalized, Number(normalized.timeoutMs || normalized.timeout_ms || 10_000));
+        break;
+      case 'page.waitForTimeout':
+        await requireActiveControlledTabLease(session, normalized.tabId, 'page.waitForTimeout');
+        {
+          const waitedMs = Math.min(120_000, Math.max(0, Number(normalized.timeoutMs || normalized.timeout_ms || normalized.ms || normalized.milliseconds || 0)));
+          await sleep(waitedMs);
+          result = { success: true, tabId: normalized.tabId, waitedMs, checkedAt: new Date().toISOString() };
+        }
+        break;
       case 'page.assets':
       case 'tab_page_assets_list':
         result = await readPageAssetInventory(normalized.tabId, normalized.options || normalized);
@@ -2769,6 +3087,56 @@ async function waitForTargetLoadState(tabId, state = 'load', timeoutMs = 10_000)
     title: tab?.title || '',
     checkedAt: new Date().toISOString(),
   };
+}
+
+async function waitForTabUrlMatch(tabId, action = {}, timeoutMs = 10_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab?.url && tabUrlMatchesTarget(tab.url, action)) {
+      return {
+        success: true,
+        tabId,
+        url: tab.url || '',
+        title: tab.title || '',
+        checkedAt: new Date().toISOString(),
+      };
+    }
+    await sleep(100);
+  }
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  return {
+    success: false,
+    error: 'waitForURL timed out',
+    tabId,
+    url: tab?.url || '',
+    title: tab?.title || '',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function tabUrlMatchesTarget(url, action = {}) {
+  const current = String(url || '');
+  const exact = action.exact === true;
+  const target = String(action.url || action.targetUrl || action.pattern || '').trim();
+  const regex = String(action.urlRegex || action.regex || '').trim();
+  if (regex) {
+    try {
+      return new RegExp(regex).test(current);
+    } catch {
+      return false;
+    }
+  }
+  if (!target) return !!current && current !== 'about:blank';
+  if (exact) return current === target;
+  if (target.includes('*')) {
+    const pattern = target
+      .split('*')
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('.*');
+    return new RegExp(`^${pattern}$`).test(current);
+  }
+  return current === target || current.includes(target);
 }
 
 async function waitForTabUrl(tabId, timeoutMs) {

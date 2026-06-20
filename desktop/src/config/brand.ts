@@ -11,6 +11,8 @@ type GeneratedBrandConfig = {
   downloadUrl?: string;
   githubIssuesUrl?: string;
   githubRepoUrl?: string;
+  founderXHandle?: string;
+  founderXUrl?: string;
   theme?: AppBrandTheme;
 };
 
@@ -99,5 +101,7 @@ export const APP_BRAND = {
   downloadUrl: String(config.downloadUrl || ''),
   githubIssuesUrl: String(config.githubIssuesUrl || ''),
   githubRepoUrl: String(config.githubRepoUrl || ''),
+  founderXHandle: String(config.founderXHandle || ''),
+  founderXUrl: String(config.founderXUrl || ''),
   theme: config.theme || {},
 } as const;

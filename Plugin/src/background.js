@@ -234,6 +234,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (isBrowserControlMessage(message)) return false;
   void (async () => {
     try {
       const result = await handleMessage(message, sender);
@@ -252,6 +253,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   })();
   return true;
 });
+
+function isBrowserControlMessage(message = {}) {
+  const type = String(message?.type || '');
+  if (type.startsWith('xwow-data-ai:') || type.startsWith('redbox-browser-control:')) return true;
+  if (type === 'browser.action' || type === 'GET_NATIVE_HOST_STATUS') return true;
+  const method = String(message?.method || '');
+  return method === 'ensureCodexAppServer' || method === 'ensure_codex_app_server';
+}
 
 async function handleMessage(message, sender) {
   const tabContext = await resolveMessageTab(message, sender);
@@ -2039,12 +2048,7 @@ async function writePluginUpdateState(nextState) {
 
 async function applyUpdateBadge(stateInput) {
   const state = sanitizeUpdateState(stateInput);
-  const badgeText = state.hasUpdate ? 'NEW' : '';
-  await chrome.action.setBadgeBackgroundColor({ color: '#c2410c' }).catch(() => {});
-  if (typeof chrome.action.setBadgeTextColor === 'function') {
-    await chrome.action.setBadgeTextColor({ color: '#fff7ed' }).catch(() => {});
-  }
-  await chrome.action.setBadgeText({ text: badgeText }).catch(() => {});
+  await chrome.action.setBadgeText({ text: '' }).catch(() => {});
   const title = state.hasUpdate
     ? `RedBox Capture：发现新版本 ${state.latestVersion}`
     : `RedBox Capture ${state.currentVersion}`;

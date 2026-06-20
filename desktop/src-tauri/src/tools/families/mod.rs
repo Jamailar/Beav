@@ -151,6 +151,7 @@ pub fn action_family_for_action(action: &str) -> Option<&'static str> {
         "cli_runtime" => Some(cli_runtime::FAMILY),
         "skills" => Some("skills"),
         "mcp" => Some("mcp"),
+        "browser" => Some("browser"),
         _ => None,
     }
 }

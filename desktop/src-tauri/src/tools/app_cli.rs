@@ -37,6 +37,8 @@ use crate::{
 
 #[path = "app_cli_ai.rs"]
 mod app_cli_ai;
+#[path = "app_cli_browser.rs"]
+mod app_cli_browser;
 #[path = "app_cli_cli_runtime.rs"]
 mod app_cli_cli_runtime;
 #[path = "app_cli_domains.rs"]
@@ -1150,6 +1152,7 @@ impl<'a> AppCliExecutor<'a> {
             }
             "webfetch" => self.handle_web(&["fetch".to_string()], payload),
             "websearch" => self.handle_web(&["search".to_string()], payload),
+            "browsercontrol" => app_cli_browser::handle(self, payload),
             "taskbriefget" => self.handle_task_brief_get(payload),
             "taskbriefupdate" => self.handle_task_brief_update(payload),
             "taskbriefgoal" => self.handle_task_brief_goal(payload),

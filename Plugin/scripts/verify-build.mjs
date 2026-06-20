@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repositoryRoot = path.resolve(pluginRoot, '..');
 const sourceDir = path.join(pluginRoot, 'src');
 const outputDir = path.join(pluginRoot, 'dist', 'extension');
 
@@ -66,6 +67,44 @@ function collectDynamicScriptFiles(backgroundSource) {
   return files;
 }
 
+function extractQuotedStringList(source, regex, label) {
+  const match = source.match(regex);
+  assert(match, `Could not find ${label}`);
+  return [...match[1].matchAll(/["']([^"']+)["']/g)].map((item) => item[1]);
+}
+
+function extractBackgroundMcpTools(source) {
+  const match = source.match(/const BROWSER_CONTROL_MCP_TOOLS = \[([\s\S]*?)\n\];/);
+  assert(match, 'Could not find BROWSER_CONTROL_MCP_TOOLS');
+  return [...match[1].matchAll(/name: '([^']+)'/g)].map((item) => item[1]);
+}
+
+function extractJsFallbackTools(source) {
+  const match = source.match(/const FALLBACK_TOOLS = \[([\s\S]*?)\n\];/);
+  assert(match, 'Could not find FALLBACK_TOOLS');
+  return [...match[1].matchAll(/browserTool\('([^']+)'/g)].map((item) => item[1]);
+}
+
+function extractRustToolConst(source, constName) {
+  return extractQuotedStringList(
+    source,
+    new RegExp(`const ${constName}: &\\[&str\\] = &\\[([\\s\\S]*?)\\n\\];`),
+    constName,
+  );
+}
+
+function diffList(left, right) {
+  const rightSet = new Set(right);
+  return left.filter((item) => !rightSet.has(item));
+}
+
+function assertSameSet(leftName, left, rightName, right) {
+  const leftOnly = diffList(left, right);
+  const rightOnly = diffList(right, left);
+  assert.equal(leftOnly.length, 0, `${leftName} contains tools missing from ${rightName}: ${leftOnly.join(', ')}`);
+  assert.equal(rightOnly.length, 0, `${rightName} contains tools missing from ${leftName}: ${rightOnly.join(', ')}`);
+}
+
 async function assertOutputFile(relativePath) {
   assert(!relativePath.includes('..'), `Invalid output reference: ${relativePath}`);
   await exists(path.join(outputDir, relativePath));
@@ -118,4 +157,60 @@ const builtObserver = await readText(path.join(outputDir, 'pageObserver.js'));
 assert(builtObserver.includes('page-state:get'), 'Built pageObserver should retain page-state message handling');
 assert(builtObserver.includes('pageRouteBridge.js'), 'Built pageObserver should retain page route bridge injection');
 
-console.log('Verified built extension manifest, page assets, dynamic scripts, and key content-script contracts.');
+const browserMcpConfig = await readJson(path.join(pluginRoot, '.mcp.json'));
+const configuredBrowserTools = browserMcpConfig.mcpServers?.['browser-control']?.enabledTools || [];
+assert(configuredBrowserTools.length > 0, 'Browser MCP config must expose enabledTools');
+
+const browserControlBackgroundSource = await readText(path.join(sourceDir, 'browserControlBackground.js'));
+const backgroundBrowserTools = extractBackgroundMcpTools(browserControlBackgroundSource);
+const jsFallbackBrowserTools = extractJsFallbackTools(await readText(path.join(pluginRoot, 'mcp-server.mjs')));
+const rustBrowserMcpSource = await readText(path.join(repositoryRoot, 'desktop/src-tauri/src/browser_control_mcp.rs'));
+const rustEnabledBrowserTools = extractRustToolConst(rustBrowserMcpSource, 'ENABLED_TOOLS');
+assertSameSet('.mcp enabledTools', configuredBrowserTools, 'browserControlBackground tools', backgroundBrowserTools);
+assertSameSet('.mcp enabledTools', configuredBrowserTools, 'mcp-server fallback tools', jsFallbackBrowserTools);
+assertSameSet('.mcp enabledTools', configuredBrowserTools, 'Rust browser MCP tools', rustEnabledBrowserTools);
+
+const browserActionCases = new Set([...browserControlBackgroundSource.matchAll(/case '([^']+)'/g)].map((item) => item[1]));
+const missingBrowserActionCases = configuredBrowserTools.filter((toolName) => !browserActionCases.has(toolName));
+assert.equal(
+  missingBrowserActionCases.length,
+  0,
+  `Browser MCP tools must have browserControlBackground switch cases: ${missingBrowserActionCases.join(', ')}`,
+);
+
+const configuredReadOnlyTools = Object.entries(browserMcpConfig.mcpServers?.['browser-control']?.perTool || {})
+  .filter(([, policy]) => policy?.approvalMode === 'never')
+  .map(([toolName]) => toolName);
+const rustReadOnlyBrowserTools = extractRustToolConst(rustBrowserMcpSource, 'READ_ONLY_TOOLS');
+assertSameSet('.mcp read-only browser tools', configuredReadOnlyTools, 'Rust read-only browser tools', rustReadOnlyBrowserTools);
+
+for (const toolName of [
+  'tab.back',
+  'tab.forward',
+  'page.waitForURL',
+  'page.waitForTimeout',
+  'page.evaluate',
+  'page.queryElements',
+  'tabs.finalize',
+]) {
+  assert(configuredBrowserTools.includes(toolName), `Browser MCP tools must include ${toolName}`);
+}
+
+const builtBrowserControlContent = await readText(path.join(outputDir, 'browserControlContent.js'));
+for (const contractText of ['allTextContents', 'isEnabled', 'textContent', 'returnedCount', 'AGENT_CONTROL_BADGE', 'GET_AGENT_CONTROL_BADGE_STATE']) {
+  assert(
+    builtBrowserControlContent.includes(contractText),
+    `Built browserControlContent should preserve browser-control content contract: ${contractText}`,
+  );
+}
+
+const browserClientPath = path.join(pluginRoot, 'scripts/browser-client.mjs');
+await exists(browserClientPath);
+const browserClientModule = await import(`${browserClientPath}?verify=${Date.now()}`);
+assert.equal(typeof browserClientModule.setupBrowserRuntime, 'function', 'browser-client must export setupBrowserRuntime');
+for (const docName of ['browser-runtime.md', 'browser-playwright.md', 'browser-troubleshooting.md']) {
+  const doc = await readText(path.join(pluginRoot, 'docs', docName));
+  assert(doc.includes('browser'), `${docName} should describe browser runtime behavior`);
+}
+
+console.log('Verified built extension manifest, page assets, dynamic scripts, browser-control contracts, browser-client runtime, and key content-script contracts.');

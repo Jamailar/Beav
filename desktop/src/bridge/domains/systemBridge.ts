@@ -134,6 +134,7 @@ export function createSystemBridge(core: BridgeCore) {
     onAppUpdateAvailable: (listener: Listener) => core.on('app:update-available', listener),
     offAppUpdateAvailable: (listener: Listener) => core.off('app:update-available', listener),
     openAppReleasePage: (url?: string) => core.invokeChannel('app:open-release-page', { url }),
+    openExternalUrl: (url: string) => core.invokeChannel('app:open-external-url', { url }),
     openPath: (path: string) => core.invokeChannel('app:open-path', { path }),
     clipboardReadText: () => core.invokeChannel('clipboard:read-text'),
     clipboardWriteText: (text: string) => core.invokeChannel('clipboard:write-html', { text }),
