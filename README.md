@@ -178,11 +178,12 @@ RedBox 2.4.0 预发布版重点补齐真实 Chrome 浏览器控制链路，让 A
 
 #### 下载
 
-v2.4.0 当前为预发布版本，先提供浏览器控制链路和插件包验证：
+v2.4.0 当前为预发布版本，已提供 macOS、Windows 多架构安装包和浏览器插件包：
 
 - [查看 v2.4.0 Pre-release](https://github.com/Jamailar/RedBox/releases/tag/v2.4.0)
+- macOS：`RedBox_2.4.0_aarch64.dmg`、`RedBox_2.4.0_x64.dmg`
+- Windows：`RedBox_2.4.0_x64-setup.exe`、`RedBox_2.4.0_arm64-setup.exe`、`RedBox_2.4.0_x86-setup.exe`
 - 浏览器插件：`RedBox_Browser_Extension_2.4.0.zip`
-- 桌面端版本号已同步到 `2.4.0`；完整 macOS / Windows 安装包会在签名构建完成后补充到正式发布链路。
 
 ### v2.3.0 (2026-06-17)
 
