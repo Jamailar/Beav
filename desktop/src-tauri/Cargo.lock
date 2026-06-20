@@ -4123,7 +4123,7 @@ dependencies = [
 
 [[package]]
 name = "redbox"
-version = "2.3.2"
+version = "2.4.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
