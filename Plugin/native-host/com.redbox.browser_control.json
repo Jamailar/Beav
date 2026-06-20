@@ -1,0 +1,9 @@
+{
+  "name": "com.redbox.browser_control",
+  "description": "RedBox browser control native messaging host",
+  "path": "__HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://__EXTENSION_ID__/"
+  ]
+}

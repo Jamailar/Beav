@@ -1,0 +1,26 @@
+{
+  "name": "redbox-capture-plugin",
+  "private": true,
+  "version": "2.4.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "packageManager": "pnpm@10.28.2+sha512.41872f037ad22f7348e3b1debbaf7e867cfd448f2726d9cf74c08f19507c31d2c8e7a11525b983febc2df640b5438dee6023ebb1f84ed43cc2d654d2bc326264",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "verify": "node scripts/verify-build.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm build && pnpm verify && pnpm typecheck",
+    "install:native-host": "node install-native-host.mjs",
+    "diagnose:browser-control": "node scripts/diagnose-browser-control.mjs",
+    "smoke:browser-control": "node scripts/smoke-browser-control-e2e.mjs",
+    "mcp:server": "node mcp-server.mjs",
+    "agent:call": "node agent-client.mjs",
+    "package": "zsh ./package-plugin.sh"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3"
+  }
+}

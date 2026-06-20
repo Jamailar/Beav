@@ -153,6 +153,37 @@
 
 ## 更新日志
 
+### v2.4.0 (2026-06-20)
+
+RedBox 2.4.0 预发布版重点补齐真实 Chrome 浏览器控制链路，让 AI 不再把“读取网页”误当成“操作浏览器”。浏览器插件、native host、App 内置 MCP 和桌面端 `Operate(resource="browser")` 现在形成同一条可验收链路，可以接管用户已打开的标签页、读取 DOM、点击输入、滚动、截图，并在受控标签页上显示明确的 `RedBox 控制中` 标识。
+
+#### 真实 Chrome 浏览器控制
+
+- 新增 Codex-style browser facade，桌面端通过 `Operate(resource="browser", operation="control")` 暴露 tab、locator、DOM snapshot、等待、点击、输入、滚动、截图和 finalize 等浏览器操作。
+- 浏览器插件新增 agent-side JS client，调试脚本可以按 `setupBrowserRuntime -> agent.browsers.get("extension")` 的对象 API 调用真实浏览器。
+- native host 安装器支持自动发现 Chrome / Edge / Brave 里的 RedBox 扩展，并写入使用绝对 Node 路径的 launcher，避免 GUI Chrome 因 PATH 不一致启动失败。
+- 新增 `diagnose:browser-control` 和 `smoke:browser-control`，分别覆盖真实 native host/socket/extension 诊断和隔离 profile 回归测试。
+
+#### 受控标签与隐私边界
+
+- 被 AI claim 或 create 的标签页会显示 `RedBox 控制中` 页面内标签，并在 release/finalize/turn ended 后自动移除，用户可以直接分辨哪些页面正在被控制。
+- 浏览器上下文、历史搜索、剪贴板读取等敏感能力默认走更高风险授权，不再当作无感只读能力暴露。
+- 验收文档明确要求使用真实已安装插件的 Google Chrome，不用 Chromium smoke 替代真实用户浏览器验证；遇到 macOS Keychain / Chrome Safe Storage 授权提示应拒绝。
+
+#### App 工具面与运行时
+
+- AI tool surface 对齐 Codex 风格，命令执行、浏览器控制、计划工具和兼容层职责更清楚。
+- 优化运行过程说明回放，恢复 session 后可以更稳定地看到过程事件。
+- 修复桌面端启动后恢复上次应用视图的问题，减少启动回到错误页面的情况。
+
+#### 下载
+
+v2.4.0 当前为预发布版本，先提供浏览器控制链路和插件包验证：
+
+- [查看 v2.4.0 Pre-release](https://github.com/Jamailar/RedBox/releases/tag/v2.4.0)
+- 浏览器插件：`RedBox_Browser_Extension_2.4.0.zip`
+- 桌面端版本号已同步到 `2.4.0`；完整 macOS / Windows 安装包会在签名构建完成后补充到正式发布链路。
+
 ### v2.3.0 (2026-06-17)
 
 RedBox 2.3.0 重点增强小红书评论区采集与选题洞察能力。浏览器插件现在可以采集笔记评论区内容，并把评论沉淀到知识库中，后续可直接交给 AI 分析用户关注点、高频问题、购买顾虑和潜在内容选题。
