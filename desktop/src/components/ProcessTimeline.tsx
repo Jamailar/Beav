@@ -5,6 +5,7 @@ import { APP_BRAND } from '../config/brand';
 
 export type ProcessItemType =
   | 'phase'
+  | 'commentary'
   | 'thought'
   | 'error'
   | 'tool-call'

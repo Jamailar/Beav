@@ -865,6 +865,21 @@ export interface SessionToolResultItem {
   updatedAt: number;
 }
 
+export interface SessionRuntimeEventRecord {
+  id: string;
+  category: string;
+  eventType: RuntimeUnifiedEventType | string;
+  sessionId?: string | null;
+  runtimeId?: string | null;
+  parentRuntimeId?: string | null;
+  sourceTaskId?: string | null;
+  taskId?: string | null;
+  toolCallId?: string | null;
+  projectId?: string | null;
+  payload?: unknown;
+  createdAt: number;
+}
+
 export interface SessionBridgeSessionSummary {
   id: string;
   title: string;
@@ -1376,6 +1391,7 @@ declare global {
         getTrace: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionRuntimeRecord[]>;
         getCheckpoints: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionCheckpointRecord[]>;
         getToolResults: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionToolResultItem[]>;
+        getEvents: (payload: { sessionId: string; limit?: number; includeChildSessions?: boolean; category?: string; eventType?: string }) => Promise<SessionRuntimeEventRecord[]>;
         onEvent: (listener: (...args: unknown[]) => void) => void;
         offEvent: (listener: (...args: unknown[]) => void) => void;
       };

@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::MutexGuard;
+use std::sync::{MutexGuard, TryLockError};
 use std::time::Duration;
 use tauri::State;
 
@@ -1140,6 +1140,28 @@ pub fn with_store_mut<T>(
     }
     schedule_store_persist(state);
     Ok(result)
+}
+
+pub fn try_with_store_mut<T>(
+    state: &State<'_, AppState>,
+    mutator: impl FnOnce(&mut AppStore) -> Result<T, String>,
+) -> Result<Option<T>, String> {
+    let mut store = match state.store.try_lock() {
+        Ok(store) => store,
+        Err(TryLockError::WouldBlock) => return Ok(None),
+        Err(TryLockError::Poisoned(_)) => return Err("状态锁已损坏".to_string()),
+    };
+    let result = mutator(&mut store)?;
+    let retention = crate::session_manager::enforce_default_retention(&mut store);
+    drop(store);
+    for session_id in retention.removed_session_ids {
+        let _ = crate::runtime::remove_session_bundle(state, &session_id);
+        if let Ok(mut guard) = state.chat_runtime_states.lock() {
+            guard.remove(&session_id);
+        }
+    }
+    schedule_store_persist(state);
+    Ok(Some(result))
 }
 
 pub fn with_store<T>(

@@ -59,9 +59,10 @@ pub struct ToolRegistryPlan {
 
 impl ToolRegistryPlan {
     pub fn has_direct_app_cli_action(&self, action: &str) -> bool {
+        let canonical = canonical_app_cli_action(action);
         self.direct_app_cli_actions
             .iter()
-            .any(|descriptor| descriptor.action == action)
+            .any(|descriptor| descriptor.action == action || descriptor.action == canonical)
     }
 
     #[allow(dead_code)]
@@ -81,6 +82,13 @@ impl ToolRegistryPlan {
         self.deferred_mcp_tools
             .iter()
             .find(|tool| tool.callable_name == name)
+    }
+}
+
+fn canonical_app_cli_action(action: &str) -> &str {
+    match action {
+        "redclaw.profile.bundle" | "redclaw.profile.read" => "profile.read",
+        _ => action,
     }
 }
 

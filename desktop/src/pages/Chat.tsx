@@ -578,7 +578,7 @@ type FixedSessionWarmSnapshot = {
 
 const FIXED_SESSION_SNAPSHOT_TTL_MS = 30_000;
 const fixedSessionWarmSnapshots = new Map<string, FixedSessionWarmSnapshot>();
-const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntimeState | null]>>();
+const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntimeState | null, unknown[]]>>();
 
 function shouldPreserveFixedSessionWarmMessages(
   warm: FixedSessionWarmSnapshot | null,
@@ -818,6 +818,10 @@ function mergeAssistantContent(currentContent: string, incomingContent: string):
   return `${current}${incoming}`;
 }
 
+function normalizeTimelineCommentarySegment(content: string): string {
+  return String(content || '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function mergeThoughtDelta(currentThought: string, incomingThought: string): string {
   const current = String(currentThought || '');
   const incoming = String(incomingThought || '');
@@ -904,6 +908,13 @@ function findLastRunningTimelineThoughtIndex(timeline: ProcessItem[]): number {
   return findLatestTimelineItemIndex(
     timeline,
     (item) => item.type === 'thought' && item.status === 'running',
+  );
+}
+
+function findLastRunningTimelineCommentaryIndex(timeline: ProcessItem[]): number {
+  return findLatestTimelineItemIndex(
+    timeline,
+    (item) => item.type === 'commentary' && item.status === 'running',
   );
 }
 
@@ -1108,6 +1119,247 @@ function buildRuntimeResumeTimelineItem(sessionId: string): ProcessItem {
   };
 }
 
+type PersistedRuntimeEvent = {
+  id?: string;
+  eventType?: string;
+  event_type?: string;
+  payload?: unknown;
+  createdAt?: number | string;
+  created_at?: number | string;
+  toolCallId?: string | null;
+  tool_call_id?: string | null;
+};
+
+function runtimeObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function runtimeText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function runtimeEventType(event: PersistedRuntimeEvent): string {
+  return runtimeText(event.eventType || event.event_type);
+}
+
+function runtimeEventCreatedAt(event: PersistedRuntimeEvent): number {
+  const raw = event.createdAt ?? event.created_at;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
+
+function runtimeEventId(event: PersistedRuntimeEvent, fallback: string): string {
+  return runtimeText(event.id) || fallback;
+}
+
+function stringifyRuntimePreview(value: unknown, maxLength = 420): string {
+  if (typeof value === 'string') return value.slice(0, maxLength);
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized.length > maxLength ? `${serialized.slice(0, maxLength - 1)}...` : serialized;
+  } catch {
+    return '';
+  }
+}
+
+function persistedRuntimeTargetAssistantIndex(
+  messages: Message[],
+  messageTimes: Array<number | undefined>,
+  eventCreatedAt: number,
+): number {
+  let fallback = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].role !== 'ai') continue;
+    fallback = index;
+    const messageTime = messageTimes[index];
+    if (typeof messageTime !== 'number' || eventCreatedAt <= messageTime + 1_500) {
+      return index;
+    }
+  }
+  return fallback;
+}
+
+function pushOrMergeNarrationItem(
+  timeline: ProcessItem[],
+  type: 'commentary' | 'thought',
+  content: string,
+  timestamp: number,
+  id: string,
+) {
+  const normalized = normalizeTimelineCommentarySegment(content);
+  if (!normalized) return;
+  const last = timeline[timeline.length - 1];
+  if (last?.type === type && last.status === 'done') {
+    last.content = type === 'thought'
+      ? mergeThoughtDelta(last.content || '', normalized)
+      : mergeAssistantContent(last.content || '', normalized);
+    return;
+  }
+  timeline.push({
+    id,
+    type,
+    content: normalized,
+    status: 'done',
+    timestamp,
+    duration: 0,
+  });
+}
+
+function upsertPersistedToolItem(
+  timeline: ProcessItem[],
+  eventType: string,
+  payload: Record<string, unknown>,
+  timestamp: number,
+  eventId: string,
+  recordToolCallId?: string | null,
+) {
+  const output = runtimeObject(payload.output);
+  const callId = runtimeText(payload.callId || payload.toolCallId || payload.tool_call_id || recordToolCallId || eventId);
+  const name = runtimeText(payload.name || payload.toolName || payload.tool_name) || 'tool_call';
+  const isTerminal = eventType === 'runtime:tool-end' || eventType === 'tool_result';
+  const partial = output.partial === true || payload.partial === true;
+  const failed = output.success === false || runtimeText(output.status) === 'error' || runtimeText(payload.status) === 'error';
+  const status: ProcessItem['status'] = failed ? 'failed' : isTerminal && !partial ? 'done' : 'running';
+  const outputText = runtimeText(output.content)
+    || runtimeText(output.summary)
+    || runtimeText(output.summaryText)
+    || runtimeText(output.resultText)
+    || stringifyRuntimePreview(output);
+  const existingIndex = timeline.findIndex((item) => item.type === 'tool-call' && item.toolData?.callId === callId);
+  const nextItem: ProcessItem = {
+    id: existingIndex === -1 ? `tool_${callId || eventId}` : timeline[existingIndex].id,
+    type: 'tool-call',
+    title: name,
+    content: runtimeText(payload.description) || outputText,
+    status,
+    timestamp: existingIndex === -1 ? timestamp : timeline[existingIndex].timestamp,
+    duration: existingIndex === -1 ? undefined : Math.max(0, timestamp - timeline[existingIndex].timestamp),
+    toolData: {
+      callId,
+      name,
+      input: payload.input ?? {},
+      output: outputText,
+    },
+  };
+  if (existingIndex === -1) {
+    timeline.push(nextItem);
+  } else {
+    timeline[existingIndex] = {
+      ...timeline[existingIndex],
+      ...nextItem,
+      toolData: {
+        ...timeline[existingIndex].toolData,
+        ...nextItem.toolData,
+      },
+    };
+  }
+}
+
+function applyPersistedRuntimeEventsToMessages(
+  messages: Message[],
+  messageTimes: Array<number | undefined>,
+  eventsRaw: unknown,
+): Message[] {
+  const events = Array.isArray(eventsRaw)
+    ? (eventsRaw as PersistedRuntimeEvent[])
+        .filter((event) => runtimeEventType(event))
+        .sort((left, right) => runtimeEventCreatedAt(left) - runtimeEventCreatedAt(right))
+    : [];
+  if (events.length === 0) return messages;
+
+  const next = messages.map((message) => ({
+    ...message,
+    timeline: [...(message.timeline || [])],
+  }));
+
+  events.forEach((event, index) => {
+    const eventType = runtimeEventType(event);
+    const timestamp = runtimeEventCreatedAt(event);
+    const targetIndex = persistedRuntimeTargetAssistantIndex(next, messageTimes, timestamp);
+    if (targetIndex === -1) return;
+
+    const payload = runtimeObject(event.payload);
+    const timeline = next[targetIndex].timeline;
+    const eventId = runtimeEventId(event, `runtime_event_${timestamp}_${index}`);
+
+    if (eventType === 'runtime:text-delta' || eventType === 'text_delta') {
+      const content = runtimeText(payload.content);
+      const stream = runtimeText(payload.stream || 'response');
+      const messagePhase = runtimeText(payload.messagePhase || (stream === 'thought' ? 'thought' : 'final_answer'));
+      if (messagePhase === 'commentary') {
+        pushOrMergeNarrationItem(timeline, 'commentary', content, timestamp, `commentary_${eventId}`);
+      } else if (messagePhase === 'thought' || stream === 'thought') {
+        pushOrMergeNarrationItem(timeline, 'thought', content, timestamp, `thought_${eventId}`);
+      }
+      return;
+    }
+
+    if (
+      eventType === 'runtime:tool-start'
+      || eventType === 'runtime:tool-update'
+      || eventType === 'runtime:tool-end'
+      || eventType === 'tool_request'
+      || eventType === 'tool_result'
+    ) {
+      upsertPersistedToolItem(timeline, eventType, payload, timestamp, eventId, event.toolCallId || event.tool_call_id);
+      return;
+    }
+
+    if (eventType === 'runtime:checkpoint' || eventType === 'task_checkpoint_saved') {
+      const checkpointType = runtimeText(payload.checkpointType || payload.checkpoint_type);
+      const checkpointPayload = runtimeObject(payload.payload);
+      if (checkpointType === 'chat.error') {
+        const detail = runtimeText(checkpointPayload.detail || checkpointPayload.message || checkpointPayload.raw)
+          || stringifyRuntimePreview(checkpointPayload);
+        if (detail) {
+          timeline.push({
+            id: `error_${eventId}`,
+            type: 'error',
+            title: '处理失败',
+            content: truncateErrorDetail(detail),
+            status: 'failed',
+            timestamp,
+          });
+        }
+      } else if (checkpointType === 'chat.skill_activated') {
+        const name = runtimeText(checkpointPayload.name);
+        if (name) {
+          timeline.push({
+            id: `skill_${eventId}`,
+            type: 'skill',
+            content: runtimeText(checkpointPayload.description),
+            status: 'done',
+            timestamp,
+            skillData: {
+              name,
+              description: runtimeText(checkpointPayload.description),
+            },
+          });
+        }
+      }
+      return;
+    }
+
+    if (eventType === 'runtime:done') {
+      const failed = runtimeText(payload.status) === 'error' || runtimeText(payload.reason) === 'error';
+      next[targetIndex].timeline = timeline.map((item) => (
+        item.status === 'running'
+          ? { ...item, status: failed ? 'failed' : 'done', duration: Math.max(0, timestamp - item.timestamp) }
+          : item
+      ));
+    }
+  });
+
+  return next;
+}
+
 export function Chat({
   isActive = true,
   onExecutionStateChange,
@@ -1269,7 +1521,8 @@ export function Chat({
   }, [pendingAttachments.length]);
   
   // Throttle buffer for streaming updates
-  const pendingUpdateRef = useRef<{ content: string } | null>(null);
+  const pendingUpdateRef = useRef<{ content: string; messagePhase: string } | null>(null);
+  const openResponseSegmentRef = useRef('');
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingThoughtUpdateRef = useRef<{ content: string } | null>(null);
   const thoughtUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1437,6 +1690,7 @@ export function Chat({
       updateTimerRef.current = null;
     }
     pendingUpdateRef.current = null;
+    openResponseSegmentRef.current = '';
     if (thoughtUpdateTimerRef.current) {
       clearTimeout(thoughtUpdateTimerRef.current);
       thoughtUpdateTimerRef.current = null;
@@ -1977,9 +2231,9 @@ export function Chat({
         messageType: 'reply',
         content: '',
         tools: [],
-        timeline: (
-          pendingMessage.taskHints?.forceMultiAgent
-        ) ? buildPendingAssistantTimeline('任务已提交') : [],
+        timeline: pendingMessage.taskHints?.forceMultiAgent
+          ? buildPendingAssistantTimeline('任务已提交')
+          : [],
         isStreaming: true,
         processingStartedAt,
       };
@@ -2045,7 +2299,7 @@ export function Chat({
       const shouldRecoverRuntime = coldRecoveryPendingRef.current;
       coldRecoveryPendingRef.current = false;
       debugUi('select_session:start', { sessionId, shouldRecoverRuntime });
-      const [history, runtimeStateRaw] = await uiMeasure('chat', 'select_session:load', async () => {
+      const [history, runtimeStateRaw, runtimeEventsRaw] = await uiMeasure('chat', 'select_session:load', async () => {
         if (fixedSessionId && sessionId === fixedSessionId) {
           let inflight = fixedSessionInflightLoads.get(sessionId);
           if (!inflight) {
@@ -2054,7 +2308,12 @@ export function Chat({
               shouldRecoverRuntime
                 ? window.ipcRenderer.chat.getRuntimeState(sessionId)
                 : Promise.resolve(null),
-            ]) as Promise<[unknown[], ChatRuntimeState | null]>;
+              window.ipcRenderer.runtime.getEvents({
+                sessionId,
+                limit: 500,
+                includeChildSessions: false,
+              }).catch(() => []),
+            ]) as Promise<[unknown[], ChatRuntimeState | null, unknown[]]>;
             fixedSessionInflightLoads.set(sessionId, inflight);
             void inflight.finally(() => {
               if (fixedSessionInflightLoads.get(sessionId) === inflight) {
@@ -2069,7 +2328,12 @@ export function Chat({
           shouldRecoverRuntime
             ? window.ipcRenderer.chat.getRuntimeState(sessionId)
             : Promise.resolve(null),
-        ]) as Promise<[unknown[], ChatRuntimeState | null]>;
+          window.ipcRenderer.runtime.getEvents({
+            sessionId,
+            limit: 500,
+            includeChildSessions: false,
+          }).catch(() => []),
+        ]) as Promise<[unknown[], ChatRuntimeState | null, unknown[]]>;
       }, { sessionId, shouldRecoverRuntime });
       if (requestId !== selectSessionRequestRef.current) {
         return;
@@ -2094,7 +2358,8 @@ export function Chat({
 
       // Convert DB messages to UI messages
       let lastUserCreatedAt: number | undefined;
-      const uiMessages: Message[] = history.map((msg: any) => {
+      const messageTimes: Array<number | undefined> = [];
+      let uiMessages: Message[] = history.map((msg: any) => {
         // 解析 attachment（数据库中存储为 JSON 字符串）
         let attachment = undefined;
         let attachments: UploadedFileAttachment[] = [];
@@ -2123,6 +2388,7 @@ export function Chat({
         if (role === 'user') {
           lastUserCreatedAt = createdAt;
         }
+        messageTimes.push(createdAt);
 
         return {
           id: msg.id,
@@ -2142,6 +2408,7 @@ export function Chat({
           processingFinishedAt,
         };
       });
+      uiMessages = applyPersistedRuntimeEventsToMessages(uiMessages, messageTimes, runtimeEventsRaw);
 
       const runtimeProcessing = Boolean(runtimeState?.success && runtimeState?.isProcessing);
       const runtimePartial = runtimeState?.partialResponse || '';
@@ -2274,7 +2541,7 @@ export function Chat({
     });
   }, []);
 
-  const appendAssistantChunk = useCallback((chunk: string) => {
+  const appendAssistantChunk = useCallback((chunk: string, messagePhase = 'final_answer') => {
     if (!chunk) return;
     setMessages(prev => {
       if (prev.length === 0) {
@@ -2289,11 +2556,36 @@ export function Chat({
 
       missedChunksRef.current = consumeBufferedChunk(missedChunksRef.current, chunk);
       const next = [...prev];
+      let timeline = lastMsg.timeline;
+      let suppressPendingIndicator = lastMsg.suppressPendingIndicator;
+      if (messagePhase === 'commentary') {
+        const now = Date.now();
+        timeline = [...lastMsg.timeline];
+        const commentaryIndex = findLastRunningTimelineCommentaryIndex(timeline);
+        if (commentaryIndex === -1) {
+          timeline.push({
+            id: `commentary_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            type: 'commentary',
+            content: chunk,
+            status: 'running',
+            timestamp: now,
+          });
+        } else {
+          const commentaryItem = timeline[commentaryIndex];
+          timeline[commentaryIndex] = {
+            ...commentaryItem,
+            content: mergeAssistantContent(commentaryItem.content || '', chunk),
+          };
+        }
+        suppressPendingIndicator = true;
+      }
       next[lastReplyIndex] = {
         ...lastMsg,
         content: lastMsg.content + chunk,
         isStreaming: true,
         messageType: 'reply',
+        suppressPendingIndicator,
+        timeline,
       };
       return next;
     });
@@ -2379,9 +2671,10 @@ export function Chat({
     }
 
     const chunk = pendingUpdateRef.current?.content || '';
+    const messagePhase = pendingUpdateRef.current?.messagePhase || 'final_answer';
     pendingUpdateRef.current = null;
     if (chunk) {
-      appendAssistantChunk(chunk);
+      appendAssistantChunk(chunk, messagePhase);
     }
   }, [appendAssistantChunk]);
 
@@ -2579,7 +2872,7 @@ export function Chat({
       });
     };
 
-    const handleResponseChunk = (_: unknown, { content }: { content: string }) => {
+    const handleResponseChunk = (_: unknown, { content, messagePhase }: { content: string; messagePhase?: string }) => {
       if (!isActiveRef.current) {
         if (import.meta.env.DEV) {
           console.warn('[ui][chat] inactive page received response chunk');
@@ -2637,9 +2930,19 @@ export function Chat({
       // 直接更新 Ref 缓冲，防止闭包过时
       missedChunksRef.current += content;
 
+      const normalizedMessagePhase = String(messagePhase || 'final_answer').trim() || 'final_answer';
+      if (pendingUpdateRef.current && pendingUpdateRef.current.messagePhase !== normalizedMessagePhase) {
+        flushPendingAssistantChunk();
+      }
+      if (normalizedMessagePhase === 'final_answer') {
+        openResponseSegmentRef.current += content;
+      } else if (normalizedMessagePhase === 'commentary') {
+        openResponseSegmentRef.current = '';
+      }
+
       // 1. Accumulate content
       if (!pendingUpdateRef.current) {
-        pendingUpdateRef.current = { content: '' };
+        pendingUpdateRef.current = { content: '', messagePhase: normalizedMessagePhase };
       }
       pendingUpdateRef.current.content += content;
 
@@ -2654,6 +2957,9 @@ export function Chat({
 
     const handleToolStart = (_: unknown, toolData: { callId: string; name: string; input: unknown; description?: string }) => {
       if (!isActiveRef.current) return;
+      flushPendingAssistantChunk();
+      const commentarySegment = openResponseSegmentRef.current;
+      openResponseSegmentRef.current = '';
       setMessages(prev => {
         const runningThinkingIndex = findLastRunningThinkingIndex(prev);
         const lastReplyIndex = findLastAssistantReplyIndex(prev);
@@ -2670,13 +2976,34 @@ export function Chat({
         const lastMsg = next[lastReplyIndex];
 
         const newTimeline = [...lastMsg.timeline];
+        const now = Date.now();
+        const normalizedCommentarySegment = normalizeTimelineCommentarySegment(commentarySegment);
+        if (normalizedCommentarySegment) {
+          newTimeline.push({
+            id: `commentary_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            type: 'commentary',
+            content: normalizedCommentarySegment,
+            status: 'done',
+            timestamp: now,
+            duration: 0,
+          });
+        }
         const runningThoughtIndex = findLastRunningTimelineThoughtIndex(newTimeline);
         if (runningThoughtIndex !== -1) {
           const thoughtItem = newTimeline[runningThoughtIndex];
           newTimeline[runningThoughtIndex] = {
             ...thoughtItem,
             status: 'done',
-            duration: Date.now() - thoughtItem.timestamp,
+            duration: now - thoughtItem.timestamp,
+          };
+        }
+        const runningCommentaryIndex = findLastRunningTimelineCommentaryIndex(newTimeline);
+        if (runningCommentaryIndex !== -1) {
+          const commentaryItem = newTimeline[runningCommentaryIndex];
+          newTimeline[runningCommentaryIndex] = {
+            ...commentaryItem,
+            status: 'done',
+            duration: now - commentaryItem.timestamp,
           };
         }
 
@@ -2686,7 +3013,7 @@ export function Chat({
             type: 'tool-call',
             content: toolData.description || '',
             status: 'running',
-            timestamp: Date.now(),
+            timestamp: now,
             toolData: {
                 callId: toolData.callId,
                 name: toolData.name,
@@ -3207,6 +3534,7 @@ export function Chat({
       blurComposer('response_end');
       flushPendingStreamingUpdates();
       const finalContent = typeof payload?.content === 'string' ? payload.content : '';
+      openResponseSegmentRef.current = '';
       const streamStats = streamStatsRef.current;
       debugUi('chat:response_end:ui', {
         sessionId: currentSessionIdRef.current,
@@ -3330,6 +3658,7 @@ export function Chat({
       blurComposer('cancelled');
       flushPendingStreamingUpdates();
       missedChunksRef.current = '';
+      openResponseSegmentRef.current = '';
       debugUi('response_cancelled', {
         sessionId: currentSessionIdRef.current,
         chunks: streamStatsRef.current?.chunks || 0,
@@ -3478,8 +3807,8 @@ export function Chat({
       onThoughtDelta: ({ content }) => {
         handleThoughtDelta(null, { content });
       },
-      onResponseDelta: ({ content }) => {
-        handleResponseChunk(null, { content });
+      onResponseDelta: ({ content, messagePhase }) => {
+        handleResponseChunk(null, { content, messagePhase });
       },
       onChatDone: ({ status, content, reason }) => {
         debugUi('runtime_done:received', {
@@ -3633,6 +3962,7 @@ export function Chat({
         updateTimerRef.current = null;
       }
       pendingUpdateRef.current = null;
+      openResponseSegmentRef.current = '';
       if (thoughtUpdateTimerRef.current) {
         clearTimeout(thoughtUpdateTimerRef.current);
         thoughtUpdateTimerRef.current = null;

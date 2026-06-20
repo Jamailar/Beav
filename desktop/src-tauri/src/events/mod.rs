@@ -1,10 +1,11 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+use crate::persistence::try_with_store_mut;
 use crate::runtime::{
-    RuntimeCheckpointPayload, RuntimeEventEnvelope, RuntimeSubagentEventPayload,
-    RuntimeTaskNodeChangedPayload, RuntimeToolCallPayload, RuntimeToolOutputPayload,
-    RuntimeToolResultPayload,
+    append_runtime_event, session_lineage_fields, RuntimeCheckpointPayload, RuntimeEventEnvelope,
+    RuntimeSubagentEventPayload, RuntimeTaskNodeChangedPayload, RuntimeToolCallPayload,
+    RuntimeToolOutputPayload, RuntimeToolResultPayload,
 };
 use crate::{append_debug_trace_state, now_i64, payload_field, payload_string, AppState};
 
@@ -43,14 +44,25 @@ fn emit_legacy_chat_compat_event<R: Runtime>(
             let stream =
                 payload_string(payload, "stream").unwrap_or_else(|| "response".to_string());
             let content = payload_string(payload, "content").unwrap_or_default();
+            let message_phase = payload_string(payload, "messagePhase")
+                .unwrap_or_else(|| runtime_text_delta_message_phase(&stream).to_string());
             if content.is_empty() {
                 return;
             }
             if stream == "thought" {
-                let _ = app.emit("chat:thought-delta", json!({ "content": content }));
-                let _ = app.emit("chat:thinking", json!({ "content": content }));
+                let _ = app.emit(
+                    "chat:thought-delta",
+                    json!({ "content": content, "messagePhase": message_phase }),
+                );
+                let _ = app.emit(
+                    "chat:thinking",
+                    json!({ "content": content, "messagePhase": message_phase }),
+                );
             } else {
-                let _ = app.emit("chat:response-chunk", json!({ "content": content }));
+                let _ = app.emit(
+                    "chat:response-chunk",
+                    json!({ "content": content, "messagePhase": message_phase }),
+                );
             }
         }
         "tool_request" | "runtime:tool-start" => {
@@ -173,11 +185,12 @@ fn log_runtime_event_emit<R: Runtime>(
             payload_string(payload, "runtimeMode").unwrap_or_default(),
         )),
         "runtime:text-delta" => Some(format!(
-            "[runtime][emit] event={} session={} task={} stream={} content_chars={}",
+            "[runtime][emit] event={} session={} task={} stream={} messagePhase={} content_chars={}",
             event_type,
             session_id.unwrap_or(""),
             task_id.unwrap_or(""),
             payload_string(payload, "stream").unwrap_or_else(|| "response".to_string()),
+            payload_string(payload, "messagePhase").unwrap_or_default(),
             payload_string(payload, "content")
                 .unwrap_or_default()
                 .chars()
@@ -226,6 +239,58 @@ fn log_runtime_event_emit<R: Runtime>(
     append_debug_trace_state(&state, line);
 }
 
+fn runtime_event_category(event_type: &str) -> &'static str {
+    if event_type.starts_with("runtime:cli-") {
+        "cli_runtime"
+    } else if event_type.starts_with("runtime:collab-") {
+        "team_runtime"
+    } else {
+        "chat_runtime"
+    }
+}
+
+fn runtime_event_tool_call_id(payload: &Value) -> Option<String> {
+    payload_string(payload, "callId")
+        .or_else(|| payload_string(payload, "toolCallId"))
+        .or_else(|| payload_string(payload, "tool_call_id"))
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn persist_runtime_event_record<R: Runtime>(
+    app: &AppHandle<R>,
+    event_type: &str,
+    session_id: Option<&str>,
+    task_id: Option<&str>,
+    runtime_id: Option<&str>,
+    parent_runtime_id: Option<&str>,
+    payload: &Value,
+) {
+    let Some(session_id) = session_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let state = app.state::<AppState>();
+    let _ = try_with_store_mut(&state, |store| {
+        let (store_runtime_id, store_parent_runtime_id, source_task_id) =
+            session_lineage_fields(store, session_id);
+        append_runtime_event(
+            store,
+            runtime_event_category(event_type),
+            event_type,
+            Some(session_id.to_string()),
+            runtime_id.map(ToString::to_string).or(store_runtime_id),
+            parent_runtime_id
+                .map(ToString::to_string)
+                .or(store_parent_runtime_id),
+            source_task_id,
+            task_id.map(ToString::to_string),
+            runtime_event_tool_call_id(payload),
+            None,
+            Some(payload.clone()),
+        );
+        Ok(())
+    });
+}
+
 pub fn emit_runtime_event<R: Runtime>(
     app: &AppHandle<R>,
     event_type: &str,
@@ -246,6 +311,15 @@ pub fn emit_runtime_event_with_lineage<R: Runtime>(
     payload: Value,
 ) {
     let event_payload = payload.clone();
+    persist_runtime_event_record(
+        app,
+        event_type,
+        session_id,
+        task_id,
+        runtime_id,
+        parent_runtime_id,
+        &payload,
+    );
     let _ = app.emit(
         "runtime:event",
         RuntimeEventEnvelope::new(
@@ -280,6 +354,7 @@ pub fn emit_runtime_stream_start(
 }
 
 pub fn emit_runtime_text_delta(app: &AppHandle, session_id: &str, stream: &str, content: &str) {
+    let message_phase = runtime_text_delta_message_phase(stream);
     emit_runtime_event(
         app,
         "runtime:text-delta",
@@ -288,8 +363,17 @@ pub fn emit_runtime_text_delta(app: &AppHandle, session_id: &str, stream: &str, 
         json!({
             "stream": stream,
             "content": content,
+            "messagePhase": message_phase,
         }),
     );
+}
+
+fn runtime_text_delta_message_phase(stream: &str) -> &'static str {
+    if stream == "thought" {
+        "thought"
+    } else {
+        "final_answer"
+    }
 }
 
 pub fn split_stream_chunks(content: &str, max_chars: usize) -> Vec<String> {

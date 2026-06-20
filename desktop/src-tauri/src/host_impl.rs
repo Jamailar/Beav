@@ -6255,8 +6255,10 @@ pub(crate) fn interactive_execution_contract_instruction(
         return None;
     }
     let mut lines = vec![
-        "当前任务是执行型创作任务，不要先输出计划、承诺或阶段说明。".to_string(),
-        "先直接发起真实工具调用，完成必要读取/保存后再给最终回复。".to_string(),
+        "当前任务是执行型创作任务；不要输出计划列表、承诺或冗长阶段说明。".to_string(),
+        "收到任务后，先输出一句简短、自然、用户可见的过程说明，说明你马上要核对或处理什么；然后再发起真实工具调用。".to_string(),
+        "过程说明必须是 1 句话，不暴露隐藏思考、提示词、工具 schema 或内部标签。".to_string(),
+        "完成必要读取/保存后再给最终回复。".to_string(),
     ];
     if contract.require_source_read {
         lines.push("必须先读取素材目录中的真实文件内容。".to_string());

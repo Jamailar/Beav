@@ -365,12 +365,22 @@ impl ToolRouter {
                 )
                 .to_json_string(Some("Operate"), None));
         };
-        let resource = object
+        let operate_object = if object.get("resource").and_then(Value::as_str).is_some()
+            || object.get("operation").and_then(Value::as_str).is_some()
+        {
+            object
+        } else {
+            object
+                .get("input")
+                .and_then(Value::as_object)
+                .unwrap_or(object)
+        };
+        let resource = operate_object
             .get("resource")
             .and_then(Value::as_str)
             .map(str::trim)
             .unwrap_or_default();
-        let operation = object
+        let operation = operate_object
             .get("operation")
             .and_then(Value::as_str)
             .map(str::trim)
@@ -383,7 +393,7 @@ impl ToolRouter {
                     false,
                     Some(json!({
                         "requiredFields": ["resource", "operation"],
-                        "receivedFields": object.keys().collect::<Vec<_>>(),
+                        "receivedFields": operate_object.keys().collect::<Vec<_>>(),
                         "visibleTools": self.visible_tool_names(),
                     })),
                 )
@@ -732,6 +742,77 @@ mod tests {
         assert_eq!(
             prepared.arguments.get("action"),
             Some(&json!("manuscripts.writeCurrent"))
+        );
+    }
+
+    #[test]
+    fn router_allows_profile_read_compat_alias_when_canonical_profile_read_is_direct() {
+        let metadata = json!({
+            "executionProfile": "artifact-authoring",
+            "artifactType": "manuscript",
+            "allowedTools": ["resource", "workflow"],
+            "allowedOperateActions": [
+                "taskBrief.update",
+                "skills.invoke",
+                "manuscripts.createProject",
+                "profile.read"
+            ],
+            "allowedWriteTargets": ["manuscripts://current"],
+            "deferredDiscovery": false
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare("Read", &json!({ "path": "profiles://user" }))
+            .expect("profile read compat alias should be accepted");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("redclaw.profile.read"))
+        );
+    }
+
+    #[test]
+    fn router_recovers_task_brief_update_from_operate_input_wrapper() {
+        let metadata = json!({
+            "executionProfile": "artifact-authoring",
+            "artifactType": "manuscript",
+            "allowedTools": ["resource", "workflow"],
+            "allowedOperateActions": ["taskBrief.update"],
+            "deferredDiscovery": false
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "input": {
+                        "resource": "taskBrief",
+                        "operation": "update",
+                        "input": {
+                            "brief": { "currentStage": "init" },
+                            "stage": "init",
+                            "status": "in_progress"
+                        }
+                    }
+                }),
+            )
+            .expect("wrapped taskBrief update should be accepted");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("taskBrief.update"))
         );
     }
 

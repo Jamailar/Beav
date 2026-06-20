@@ -14,6 +14,8 @@ type RuntimeScopedPayload = {
   parentRuntimeId?: string;
 };
 
+export type RuntimeMessagePhase = 'commentary' | 'final_answer' | 'thought' | string;
+
 type TaskScopedPayload = RuntimeScopedPayload & {
   taskId: string;
 };
@@ -39,8 +41,8 @@ export interface RuntimeEventStreamHandlers {
   getActiveSessionId?: () => string | null | undefined;
   onPhaseStart?: (payload: RuntimeScopedPayload & { phase: string; runtimeMode: string }) => void;
   onThoughtStart?: (payload: RuntimeScopedPayload) => void;
-  onThoughtDelta?: (payload: RuntimeScopedPayload & { content: string }) => void;
-  onResponseDelta?: (payload: RuntimeScopedPayload & { content: string }) => void;
+  onThoughtDelta?: (payload: RuntimeScopedPayload & { content: string; messagePhase: RuntimeMessagePhase }) => void;
+  onResponseDelta?: (payload: RuntimeScopedPayload & { content: string; messagePhase: RuntimeMessagePhase }) => void;
   onChatDone?: (payload: RuntimeScopedPayload & {
     status: string;
     content: string;
@@ -346,11 +348,12 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     const content = String(payload.content || '');
     if (!content) return;
     const stream = toText(payload.stream || 'response');
+    const messagePhase = toText(payload.messagePhase || (stream === 'thought' ? 'thought' : 'final_answer'));
     if (stream === 'thought') {
-      handlers.onThoughtDelta?.({ sessionId, ...runtimeMeta, content });
+      handlers.onThoughtDelta?.({ sessionId, ...runtimeMeta, content, messagePhase });
       return;
     }
-    handlers.onResponseDelta?.({ sessionId, ...runtimeMeta, content });
+    handlers.onResponseDelta?.({ sessionId, ...runtimeMeta, content, messagePhase });
     return;
   }
 

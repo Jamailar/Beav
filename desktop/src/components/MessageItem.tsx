@@ -212,6 +212,24 @@ const stripInternalProtocolMarkup = (value: string): string => {
   return sanitized.replace(/\n{3,}/g, '\n\n').trim();
 };
 
+const stripTimelineCommentaryFromContent = (content: string, timeline: ProcessItem[]): string => {
+  let remaining = String(content || '');
+  for (const item of timeline) {
+    if (item.type !== 'commentary') continue;
+    const commentary = stripInternalProtocolMarkup(String(item.content || ''));
+    if (!commentary) continue;
+    if (remaining.startsWith(commentary)) {
+      remaining = remaining.slice(commentary.length);
+      continue;
+    }
+    const index = remaining.indexOf(commentary);
+    if (index !== -1) {
+      remaining = `${remaining.slice(0, index)}${remaining.slice(index + commentary.length)}`;
+    }
+  }
+  return remaining.trimStart();
+};
+
 function InlineCopyButton({ text, label = '复制' }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -978,11 +996,22 @@ export const MessageItem = memo(({
     () => filteredTimeline.some((item) => item.type === 'thought' && String(item.content || '').trim()),
     [filteredTimeline],
   );
+  const hasTimelineNarration = useMemo(
+    () => filteredTimeline.some(
+      (item) => (item.type === 'thought' || item.type === 'commentary') && String(item.content || '').trim(),
+    ),
+    [filteredTimeline],
+  );
+  const visibleAssistantContent = useMemo(
+    () => (!isUser ? stripTimelineCommentaryFromContent(sanitizedAssistantContent, filteredTimeline) : sanitizedAssistantContent),
+    [filteredTimeline, isUser, sanitizedAssistantContent],
+  );
   const showWorkflowDetails = workflowDisplayMode !== 'thoughts-only';
-  const hasAssistantResponseContent = !isUser && Boolean(sanitizedAssistantContent);
+  const hasAssistantResponseContent = !isUser && Boolean(visibleAssistantContent);
   const showPendingThinkingIndicator = !isUser
     && !isThinkingMessage
     && !msg.suppressPendingIndicator
+    && !hasTimelineNarration
     && Boolean(msg.isStreaming && !hasAssistantResponseContent);
   const showProcessingTimer = !isUser && !isThinkingMessage && typeof msg.processingStartedAt === 'number' && Number.isFinite(msg.processingStartedAt);
   const hasMessageAttachments = Boolean(
@@ -1148,9 +1177,9 @@ export const MessageItem = memo(({
     : transformMarkdownUrl;
   const renderedAssistantContent = useMemo(() => (
     linkRenderMode === 'preview-card' && !isUser
-      ? linkifyPreviewFilePaths(sanitizedAssistantContent)
-      : sanitizedAssistantContent
-  ), [isUser, linkRenderMode, sanitizedAssistantContent]);
+      ? linkifyPreviewFilePaths(visibleAssistantContent)
+      : visibleAssistantContent
+  ), [isUser, linkRenderMode, visibleAssistantContent]);
 
   const renderPreviewAwareMarkdownContent = useCallback((content: string) => (
     linkRenderMode === 'preview-card' && !isUser
@@ -1437,7 +1466,7 @@ export const MessageItem = memo(({
     };
 
     timeline.forEach((item) => {
-      if (item.type !== 'thought') {
+      if (item.type !== 'thought' && item.type !== 'commentary') {
         statusGroup.push(item);
         return;
       }
