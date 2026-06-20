@@ -56,11 +56,12 @@ scope: repository
 
 浏览器 AI 控制链路与采集链路并行，不替代结构化采集：
 
-1. 桌面端启动时自动注册内置 `RedBox Browser Control` MCP server，stdio command 指向 RedBox App 自身的 `--redbox-browser-control-mcp` 模式。
-2. 内置 MCP 通过本机 JSON-RPC socket 调用 `Plugin/native-host/host.mjs`；`Plugin/mcp-server.mjs` / `Plugin/.mcp.json` 仅作为开发态或外部 MCP 客户端入口。
-3. native host 经 Chrome native messaging 转发到扩展 background。
-4. `Plugin/src/browserControlBackground.js` 负责 tab/session、DOM snapshot、selector 操作、截图、CDP、页面资产读取等通用浏览器能力。
-5. `Plugin/src/browserControlContent.js` 仅在 AI 调用浏览器工具时动态注入；现有 `Plugin/src/pageObserver.js` 和 `Plugin/src/xhsBridge.js` 继续承担结构化采集。
+1. 桌面端通过 `Operate(resource="browser", operation="control", input={...})` 暴露 Codex-style browser runtime facade，负责 session 命名、tab 创建/读取/接管/释放、前进后退/导航、DOM snapshot、selector / locator 查询与读值、等待 URL / selector / load state、点击输入、按键、滚动、截图、剪贴板、资产读取和浏览器上下文读取；`evaluate` 保持浏览器 policy 的 state-changing 约束。插件目录同时提供 `scripts/browser-client.mjs`，用于 agent / 调试脚本按 Codex `setupBrowserRuntime -> agent.browsers.get("extension") -> Browser/Tab/Playwright facade` 的对象 API 使用同一后端。
+2. 桌面端启动时自动注册内置 `RedBox Browser Control` MCP server，stdio command 指向 RedBox App 自身的 `--redbox-browser-control-mcp` 模式；该 MCP 是 browser facade 的后端适配层，不再作为普通 agent 浏览器任务的首选调用面。
+3. 内置 MCP 通过本机 JSON-RPC socket 调用 `Plugin/native-host/host.mjs`；`Plugin/mcp-server.mjs` / `Plugin/.mcp.json` 仅作为开发态或外部 MCP 客户端入口。
+4. native host 经 Chrome native messaging 转发到扩展 background。
+5. `Plugin/src/browserControlBackground.js` 负责 tab/session、DOM snapshot、selector 操作、截图、CDP、页面资产读取等通用浏览器能力。
+6. `Plugin/src/browserControlContent.js` 仅在 AI 调用浏览器工具时动态注入；现有 `Plugin/src/pageObserver.js` 和 `Plugin/src/xhsBridge.js` 继续承担结构化采集。
 
 ### 3.2 AI 创作链路
 
@@ -579,7 +580,8 @@ scope: repository
 | 后台服务 | `Plugin/src/background.js` | 页面识别、保存动作、更新检查、右键菜单、本地服务健康检查 | 统一消息分发与采集执行 |
 | 浏览器控制后台 | `Plugin/src/browserControlBackground.js` | MCP/native host 命令路由、tab/session、DOM、截图、CDP、下载状态 | 叠加到 background，消息类型加前缀，避免抢答既有采集消息 |
 | 浏览器控制内容脚本 | `Plugin/src/browserControlContent.js` | AI 控制时的 DOM snapshot、selector 查询、点击、输入、资产读取 | 通过 `chrome.scripting.executeScript` 动态注入 |
-| MCP 入口 | `desktop/src-tauri/src/browser_control_mcp.rs`、`Plugin/mcp-server.mjs`、`Plugin/.mcp.json` | 向桌面端 AI 暴露 browser-control stdio MCP server | App 内置 Rust MCP 入口自动注册；JS MCP 入口用于开发调试和外部客户端 |
+| Browser runtime facade | `desktop/src-tauri/src/tools/app_cli_browser.rs`、`desktop/src-tauri/src/tools/catalog.rs`、`Plugin/scripts/browser-client.mjs` | 向 App AI / agent-side JS 暴露 Codex-style browser API | `Operate(resource="browser", operation="control")` 为 App 首选入口；`setupBrowserRuntime({ globals })` 为 JS agent / 调试入口；`open/goto/back/forward/getTab/domSnapshot/queryElements/count/allTextContents/waitForSelector/waitForURL/click/type/press/scroll/screenshot/finalizeTabs` 等 operation 内部适配 browser-control MCP/native host |
+| MCP 入口 | `desktop/src-tauri/src/browser_control_mcp.rs`、`Plugin/mcp-server.mjs`、`Plugin/.mcp.json` | browser facade 的后端适配与外部 MCP 接入 | App 内置 Rust MCP 入口自动注册；JS MCP 入口用于开发调试和外部客户端 |
 | Native host | `Plugin/native-host/host.mjs` | Chrome native messaging 与本机 JSON-RPC socket 桥接 | host 方法本地处理，浏览器方法转发给扩展 |
 | 内容脚本 | `Plugin/src/pageObserver.js` | 对小红书、YouTube、公众号、抖音等页面做 DOM / 路由观察 | 抽取页面元信息和拖拽图片 payload |
 | 路由桥 | `Plugin/src/pageRouteBridge.js` | 监听 SPA 路由变化 | patch `pushState` / `replaceState` 并发事件 |

@@ -876,6 +876,18 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("web", "search" | "lookup") => {
             app_cli_action_call("web.search", payload, Some("Operate"), Some("web.search"))
         }
+        ("browser", "control" | "run") => app_cli_action_call(
+            "browser.control",
+            payload,
+            Some("Operate"),
+            Some("browser.control"),
+        ),
+        ("browser", operation) if !operation.is_empty() => app_cli_action_call(
+            "browser.control",
+            payload_with_operation(payload, operation),
+            Some("Operate"),
+            Some("browser.control"),
+        ),
         ("taskbrief" | "task-brief" | "task_brief", "get" | "read") => app_cli_action_call(
             "taskBrief.get",
             payload,
@@ -3000,6 +3012,56 @@ mod tests {
             );
             assert_eq!(normalized.arguments.get("command"), None);
         }
+    }
+
+    #[test]
+    fn normalizes_operate_browser_resource_to_browser_control() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "browser",
+                "operation": "control",
+                "input": {
+                    "operation": "open",
+                    "url": "https://example.com"
+                }
+            }),
+        );
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("browser.control"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("open"))
+        );
+
+        let shorthand = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "browser",
+                "operation": "domSnapshot",
+                "input": {
+                    "tabId": 123
+                }
+            }),
+        );
+        assert_eq!(shorthand.name, "workflow");
+        assert_eq!(
+            shorthand.arguments.get("action"),
+            Some(&json!("browser.control"))
+        );
+        assert_eq!(
+            shorthand
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("domsnapshot"))
+        );
     }
 
     #[test]

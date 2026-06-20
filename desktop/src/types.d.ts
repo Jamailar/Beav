@@ -1796,6 +1796,7 @@ declare global {
       onAppUpdateAvailable: (listener: (...args: unknown[]) => void) => void;
       offAppUpdateAvailable: (listener: (...args: unknown[]) => void) => void;
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
+      openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string; url?: string }>;
       openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
       clipboardReadText: () => Promise<string>;
       clipboardWriteText: (text: string) => Promise<{ success: boolean; error?: string; text?: string }>;

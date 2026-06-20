@@ -506,6 +506,7 @@ fn intent_priority_app_cli_actions(task_intent: Option<&str>) -> &'static [&'sta
 const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "web.fetch",
     "web.search",
+    "browser.control",
     "taskBrief.get",
     "taskBrief.update",
     "taskBrief.context",
@@ -667,6 +668,7 @@ fn namespaces_for_direct_action_family(family: &str) -> Vec<String> {
         .collect(),
         "plugins" => vec!["plugins".to_string()],
         "mcp" => vec!["mcp".to_string()],
+        "browser" => vec!["browser".to_string()],
         "skills" => vec!["skills".to_string()],
         "memory" => vec![families::memory::NAMESPACE.to_string()],
         "profile" => vec!["profile".to_string()],
@@ -933,6 +935,21 @@ mod tests {
     }
 
     #[test]
+    fn default_modes_expose_browser_control_direct() {
+        for runtime_mode in ["redclaw", "team", "knowledge", "image-generation"] {
+            let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+                runtime_mode,
+                ..ToolRegistryPlanParams::default()
+            });
+
+            assert!(
+                plan.has_direct_app_cli_action("browser.control"),
+                "{runtime_mode}"
+            );
+        }
+    }
+
+    #[test]
     fn default_high_noise_groups_stay_within_target_counts() {
         for runtime_mode in ["redclaw", "team", "knowledge", "image-generation"] {
             let plan = build_tool_registry_plan(ToolRegistryPlanParams {
@@ -1190,6 +1207,25 @@ mod tests {
             .direct_app_cli_actions
             .iter()
             .all(|descriptor| descriptor.namespace == "mcp"));
+    }
+
+    #[test]
+    fn browser_family_selects_browser_control_namespace() {
+        let metadata = json!({
+            "directActionFamilies": ["browser"],
+            "maxDirectActions": 8
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "team",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("browser.control"));
+        assert!(plan
+            .direct_app_cli_actions
+            .iter()
+            .all(|descriptor| descriptor.namespace == "browser"));
     }
 
     #[test]

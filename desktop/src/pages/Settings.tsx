@@ -5434,18 +5434,6 @@ export function Settings({
     scheduleRemoteTabWarmup,
   ]);
 
-  const handleOpenKnowledgeApiGuide = async () => {
-    try {
-      const result = await window.ipcRenderer.openKnowledgeApiGuide();
-      if (!result.success) {
-        void appAlert(`打开知识导入 API 文档失败：${result.error || '未知错误'}`);
-      }
-    } catch (error) {
-      console.error('Failed to open knowledge api guide', error);
-      void appAlert(`打开知识导入 API 文档失败：${String(error)}`);
-    }
-  };
-
   const handlePickWorkspaceDir = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.pickWorkspaceDir();
@@ -6422,7 +6410,6 @@ export function Settings({
                 handleRefreshFileIndexDashboard={async () => {
                   await loadFileIndexDashboard({ force: true });
                 }}
-                handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
                 recentDebugLogs={recentDebugLogs}
                 isDebugLogsLoading={isDebugLogsLoading}
                 handleRefreshDebugLogs={loadRecentDebugLogs}

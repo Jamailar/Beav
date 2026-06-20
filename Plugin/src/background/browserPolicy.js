@@ -61,6 +61,7 @@ export function classifyBrowserAction(type) {
   if (/^(page\.navigate|page\.goto)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
   if (/^page\.waitForLoadState$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
   if (/^(page\.evaluate|page\.evaluateScript)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.STATE_CHANGING;
+  if (/^page\.(waitForURL|waitForTimeout)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
   if (/^input\.mouseMove$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_REVEAL;
   if (/^input\.mouseClick$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_REVEAL;
   if (/^input\.mouseDrag$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.LOCAL_FILTER;
@@ -89,9 +90,9 @@ export function classifyBrowserAction(type) {
   if (/^tab_page_assets_bundle$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_EXPORT;
   if (/^(webmcp\.listTools|webmcp_list_tools)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
   if (/^(webmcp\.invokeTool|webmcp_invoke_tool)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.STATE_CHANGING;
-  if (/^(tab\.activate|activateTab|focusTab)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
+  if (/^(tab\.activate|activateTab|focusTab|tab\.back|tab\.forward)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
   if (/^(tab\.close|tab\.remove|closeTab)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.STATE_CHANGING;
-  if (/^(browser\.ping|browser\.info|browser\.events|browser\.sessionEvents|browser\.clientHeartbeat|lifecycle\.status|browser\.lifecycleStatus|sidePanel\.status|sidepanel\.status|session\.tabs|session\.name|turn\.ended|tabLeases\.list|tabs\.leases|tab\.lifecycleEvents|tabs\.lifecycleEvents|tabLifecycle\.events|tab\.lifecycleSnapshot|tabs\.lifecycleSnapshot|tabLifecycle\.snapshot|tabs\.list|windows\.list|browser\.windows|tabs\.finalize|tabs\.finalizedBadges|managedTabGroups\.list|tabGroups\.managed|activeTabObserver\.snapshot|activeTabs\.snapshot|page\.frames|frames\.list|history\.search|bookmarks\.list|topSites\.list|readingList\.list|sessions\.recentlyClosed|sessions\.devices|browser\.context|userBrowser\.context|viewport\.state|cdp\.viewportState|browser\.visibility\.get|browser_visibility_get|tab_page_assets_list|download\.events|download\.state|downloads\.state|downloads\.search)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
+  if (/^(browser\.ping|browser\.info|browser\.events|browser\.sessionEvents|browser\.clientHeartbeat|lifecycle\.status|browser\.lifecycleStatus|sidePanel\.status|sidepanel\.status|session\.tabs|session\.name|turn\.ended|tab\.info|tabLeases\.list|tabs\.leases|tab\.lifecycleEvents|tabs\.lifecycleEvents|tabLifecycle\.events|tab\.lifecycleSnapshot|tabs\.lifecycleSnapshot|tabLifecycle\.snapshot|tabs\.list|windows\.list|browser\.windows|tabs\.finalize|tabs\.finalizedBadges|managedTabGroups\.list|tabGroups\.managed|activeTabObserver\.snapshot|activeTabs\.snapshot|page\.frames|frames\.list|history\.search|bookmarks\.list|topSites\.list|readingList\.list|sessions\.recentlyClosed|sessions\.devices|browser\.context|userBrowser\.context|viewport\.state|cdp\.viewportState|browser\.visibility\.get|browser_visibility_get|tab_page_assets_list|download\.events|download\.state|downloads\.state|downloads\.search)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
   if (/^(browser\.visibility\.set|browser_visibility_set)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_REVEAL;
   if (/^(sidePanel|sidepanel)\.(open|close|toggle)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_REVEAL;
   if (/screenshot|wait|read|assets/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
@@ -151,6 +152,11 @@ export function buildBrowserPolicyDecision(action, options = {}) {
     'page.waitReady',
     'tab.close',
     'tab.remove',
+    'tab.info',
+    'tab.back',
+    'tab.forward',
+    'page.waitForURL',
+    'page.waitForTimeout',
     'tabs.list',
     'windows.list',
     'browser.windows',

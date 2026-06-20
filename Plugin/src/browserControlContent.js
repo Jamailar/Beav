@@ -1,4 +1,5 @@
 import './siteAdapters.js';
+import { applyControlledTabBadge } from './content/controlBadge.js';
 import { applyAgentCursorState, hideAgentCursor, moveAgentCursor } from './content/cursorOverlay.js';
 import { readDomSnapshot, readFrame } from './content/domReader.js';
 import { applyTabFaviconBadge } from './content/faviconBadge.js';
@@ -30,10 +31,13 @@ const XWOW_PAGE_ASSETS = 'xwow-data-ai:page-assets';
 const XWOW_CURSOR_MOVE = 'xwow-data-ai:cursor-move';
 const XWOW_CURSOR_HIDE = 'xwow-data-ai:cursor-hide';
 const XWOW_CONTENT_PING = 'xwow-data-ai:content-ping';
+const XWOW_CONTROL_BADGE = 'xwow-data-ai:control-badge';
 const TARGET_CONTENT_PING = 'CONTENT_PING';
+const TARGET_CONTROL_BADGE = 'AGENT_CONTROL_BADGE';
 const XWOW_TAB_FAVICON_BADGE = 'TAB_FAVICON_BADGE';
 const TARGET_CURSOR_STATE = 'AGENT_CURSOR_STATE';
 const TARGET_GET_CURSOR_STATE = 'GET_AGENT_CURSOR_STATE';
+const TARGET_GET_CONTROL_BADGE_STATE = 'GET_AGENT_CONTROL_BADGE_STATE';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   void (async () => {
@@ -145,6 +149,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(applyTabFaviconBadge(message.options || {}));
       return;
     }
+    if (message?.type === XWOW_CONTROL_BADGE || message?.type === TARGET_CONTROL_BADGE) {
+      sendResponse(applyControlledTabBadge(message.state || message.options || {}));
+      return;
+    }
     sendResponse({ success: false, error: 'Unknown content message type' });
   })().catch((error) => {
     sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
@@ -154,4 +162,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.runtime.sendMessage({ type: TARGET_GET_CURSOR_STATE }).then((response) => {
   if (response?.state) applyAgentCursorState(response.state);
+}).catch(() => {});
+
+chrome.runtime.sendMessage({ type: TARGET_GET_CONTROL_BADGE_STATE }).then((response) => {
+  if (response?.state) applyControlledTabBadge(response.state);
 }).catch(() => {});

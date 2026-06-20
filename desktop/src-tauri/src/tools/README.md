@@ -57,6 +57,7 @@
 - `Operate(resource="image", operation="generate")` 的比例、尺寸、质量必须放在 `input.aspectRatio` / `input.size` / `input.quality`，不要只写进自然语言 prompt。支持的 `aspectRatio` 为 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`。
 - `Operate(resource="media", operation="videoRetalk")` 只接收已可远程访问的 `input.video_url` 与 `input.audio_url`，并必须携带计费字段 `durationSeconds` / `resolution`；本地上传、数字人角色资产创建和首页入口由上层产品流负责。
 - `Operate(resource="session", operation="list|get")` 只负责读取当前会话可见资源索引，返回用户附件和工具结果里出现过的文件 / 媒体引用；模型需要复用上一轮附件或生成产物时，必须使用返回的 `reference` / `path`，不要编造本地路径。
+- `Operate(resource="browser", operation="control")` 是 Codex-style 浏览器 facade；普通浏览器自动化必须通过 `input.operation` 表达 `open|goto|back|forward|getTab|domSnapshot|queryElements|count|allTextContents|waitForSelector|waitForURL|click|type|press|scroll|screenshot|finalizeTabs` 等动作，不要把 `mcp.call` 当浏览器执行入口。
 - `workflow` / `resource` / `editor` 作为内部执行层，仍一律优先走 `action + payload` 协议。
 - 虚拟路径示例：
   - `workspace://README.md`

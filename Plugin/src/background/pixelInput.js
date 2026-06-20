@@ -202,6 +202,7 @@ export async function dispatchKeyboardPress(action = {}, options = {}) {
   emitPixelInputTelemetry('input.started', { actionType: 'input.keyboardPress', tabId, key });
   await focusTabForPixelInput(tabId);
   await attachCdpTab(tabId);
+  if (action.selector || action.focusSelector) await focusElementForKeyboardCombo(tabId, action.selector || action.focusSelector, action);
   const params = {
     key,
     code: String(action.code || key),

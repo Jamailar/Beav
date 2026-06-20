@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 const HOST_NAME = 'com.redbox.browser_control';
 const DEFAULT_API_BASE = '';
 const LOG_PATH = path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-host.log');
-const ENDPOINT_STATE_PATH = path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
+const ENDPOINT_STATE_PATH = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
+  || path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
 const DEFAULT_AGENT_SOCKET_PATH = process.platform === 'win32'
   ? '\\\\.\\pipe\\redbox-browser-control'
   : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.sock`);

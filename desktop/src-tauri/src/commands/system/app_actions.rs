@@ -65,6 +65,17 @@ pub(super) fn open_release_page(payload: &Value) -> Result<Value, String> {
     Ok(json!({ "success": true, "url": url }))
 }
 
+pub(super) fn open_external_url(payload: &Value) -> Result<Value, String> {
+    let url = payload_string(payload, "url")
+        .or_else(|| payload_value_as_string(payload))
+        .ok_or_else(|| "url is required".to_string())?;
+    if !is_http_url(&url) {
+        return Err("Invalid external URL".to_string());
+    }
+    open::that(&url).map_err(|error| error.to_string())?;
+    Ok(json!({ "success": true, "url": url }))
+}
+
 pub(super) fn open_knowledge_api_guide(app: &AppHandle) -> Result<Value, String> {
     let path = knowledge_api_guide_path(app)?;
     open::that(&path).map_err(|error| error.to_string())?;

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2, X } from 'lucide-react';
+import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, ExternalLink, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
 import { APP_BRAND } from '../../config/brand';
 import { SUPPORTED_LANGUAGES, useI18n, type AppLanguage } from '../../i18n';
@@ -349,7 +349,6 @@ interface GeneralSettingsSectionProps {
     fileIndexDashboard: FileIndexDashboard | null;
     fileIndexLoading: boolean;
     handleRefreshFileIndexDashboard: () => Promise<void>;
-    handleOpenKnowledgeApiGuide: () => Promise<void>;
     recentDebugLogs: string[];
     isDebugLogsLoading: boolean;
     handleRefreshDebugLogs: () => Promise<void>;
@@ -573,7 +572,6 @@ function GeneralSettingsSectionInner({
     fileIndexDashboard,
     fileIndexLoading,
     handleRefreshFileIndexDashboard,
-    handleOpenKnowledgeApiGuide,
     recentDebugLogs,
     isDebugLogsLoading,
     handleRefreshDebugLogs,
@@ -606,10 +604,52 @@ function GeneralSettingsSectionInner({
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
     const [isDebugLogsExpanded, setIsDebugLogsExpanded] = useState(false);
     const [isNotificationExpanded, setIsNotificationExpanded] = useState(false);
+    const founderXUrl = APP_BRAND.founderXUrl.trim();
+    const founderXHandle = APP_BRAND.founderXHandle.trim() || founderXUrl;
+    const handleOpenFounderX = async () => {
+        if (!founderXUrl) return;
+        const result = await window.ipcRenderer.openExternalUrl(founderXUrl);
+        if (!result?.success) {
+            console.warn('Failed to open founder X profile:', result?.error);
+        }
+    };
 
     return (
         <section className="space-y-6">
             <h2 className="text-lg font-medium text-text-primary mb-6">{t('settings.general.title')}</h2>
+
+            <div className="group">
+                <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                    {t('settings.general.workspaceRoot')}
+                </label>
+                <div className="flex items-center gap-2">
+                    <div className="flex-1 relative">
+                        <FolderOpen className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
+                        <input
+                            type="text"
+                            value={formData.workspace_dir}
+                            onChange={(e) => setFormData((d: any) => ({ ...d, workspace_dir: e.target.value }))}
+                            placeholder="~/.redbox"
+                            className="w-full bg-surface-secondary/30 rounded border border-border pl-10 pr-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                        />
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => void handlePickWorkspaceDir()}
+                        className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-primary hover:bg-surface-secondary transition-colors"
+                    >
+                        {t('settings.general.pickFolder')}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleResetWorkspaceDir}
+                        disabled={!String(formData.workspace_dir || '').trim()}
+                        className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-secondary transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {t('settings.general.restoreDefault')}
+                    </button>
+                </div>
+            </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                 <div className="flex items-start justify-between gap-4">
@@ -684,6 +724,17 @@ function GeneralSettingsSectionInner({
                         <p className="text-xs text-text-tertiary mt-1">
                             {t('settings.general.updateDescription')}
                         </p>
+                        {founderXUrl ? (
+                            <button
+                                type="button"
+                                onClick={() => void handleOpenFounderX()}
+                                className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-accent-primary"
+                                title={founderXUrl}
+                            >
+                                <span>{t('settings.general.founderX', { handle: founderXHandle })}</span>
+                                <ExternalLink className="h-3 w-3" />
+                            </button>
+                        ) : null}
                     </div>
                     <button
                         type="button"
@@ -710,39 +761,6 @@ function GeneralSettingsSectionInner({
                 </div>
             </div>
 
-            <div className="group">
-                <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                    {t('settings.general.workspaceRoot')}
-                </label>
-                <div className="flex items-center gap-2">
-                    <div className="flex-1 relative">
-                        <FolderOpen className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
-                        <input
-                            type="text"
-                            value={formData.workspace_dir}
-                            onChange={(e) => setFormData((d: any) => ({ ...d, workspace_dir: e.target.value }))}
-                            placeholder="~/.redbox"
-                            className="w-full bg-surface-secondary/30 rounded border border-border pl-10 pr-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                        />
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => void handlePickWorkspaceDir()}
-                        className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-primary hover:bg-surface-secondary transition-colors"
-                    >
-                        {t('settings.general.pickFolder')}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={handleResetWorkspaceDir}
-                        disabled={!String(formData.workspace_dir || '').trim()}
-                        className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-secondary transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        {t('settings.general.restoreDefault')}
-                    </button>
-                </div>
-            </div>
-
             {handleOpenAppOnboarding && (
                 <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
@@ -757,19 +775,6 @@ function GeneralSettingsSectionInner({
                     </div>
                 </div>
             )}
-
-            <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-text-primary">知识库导入</span>
-                    <button
-                        type="button"
-                        onClick={() => void handleOpenKnowledgeApiGuide()}
-                        className="text-xs font-medium text-accent-primary transition-colors hover:opacity-80"
-                    >
-                        打开 API 文档
-                    </button>
-                </div>
-            </div>
 
             <FileIndexSettingsPanel
                 dashboard={fileIndexDashboard}
