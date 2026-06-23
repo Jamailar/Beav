@@ -146,7 +146,7 @@
 
 ## 社区
 
-[![加入微信交流群](https://img.shields.io/badge/微信社群-扫码加入-E11D48?style=for-the-badge&logo=wechat&logoColor=white)](./images/wechat.png)
+<a href="./images/wechat.png"><img src="./images/wechat.png" alt="加入微信交流群" width="280"></a>
 
 - [GitHub Issues](https://github.com/Jamailar/RedBox/issues)
 - [GitHub Discussions](https://github.com/Jamailar/RedBox/discussions)
