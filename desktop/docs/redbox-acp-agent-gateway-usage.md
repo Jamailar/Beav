@@ -104,7 +104,7 @@ node desktop/scripts/redbox-acp-client.mjs artifact --artifact-id acp-artifact-.
 
 ## Session Rules
 
-- If no target is provided, RedBox creates a new ACP session, collaboration session, and chat projection.
+- If no target is provided, RedBox creates a new ACP session and chat projection. It may also create an internal coordination record for runtime delivery, but that record is not a user-facing Team item.
 - Reuse `sessionId` or `acpSessionId` to continue a conversation.
 - Use `attachTo.type=collab_session` to bind to an existing RedBox collaboration session.
 - Use `attachTo.type=project_ref` to bind to an existing project reference.
@@ -139,7 +139,7 @@ For P0, external agents should expect:
 - event polling through `nextCursor` and `hasMore`
 - artifact references through `artifactRefs`
 - a user-visible RedBox conversation row labeled `ACP: <client>`
-- a Workboard session with the external source badge when the session is shown in Team
+- no auto-created Team / Workboard row; external-agent communication belongs in the conversation list
 
 When Creator Agent returns JSON or fenced JSON with `artifact` / `artifacts`, RedBox creates structured artifact refs and also keeps the full text response as a `text_response` artifact.
 

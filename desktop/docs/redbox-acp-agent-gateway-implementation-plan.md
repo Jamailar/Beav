@@ -123,7 +123,7 @@ Minimum happy path:
 3. External agent creates an ACP session with a goal.
 4. RedBox writes the incoming message to durable mailbox.
 5. RedBox wakes Creator Agent runtime.
-6. RedBox UI shows the external collaboration session in Workboard and the conversation list, with a visible external-agent source badge.
+6. RedBox UI shows the external-agent conversation in the normal conversation list, with a visible external-agent source badge.
 7. Creator Agent produces a brief or plan.
 8. Gateway streams progress events and returns artifact refs.
 9. External agent can continue the same session.
@@ -154,7 +154,6 @@ External Agent
 
 RedBox UI
   -> Settings Agent Gateway panel
-  -> Workboard / Collaboration session projection
   -> Chat conversation list with ACP source badges
   -> Chat / RedClaw deep links
 ```
@@ -779,15 +778,17 @@ Avoid explanatory walls of text. Use concise labels and copy buttons.
 
 ### 11.2 Workboard / Collaboration
 
-Add source badges and run status:
+ACP may create or bind a `CollabSessionRecord` internally so the runtime can reuse mailbox, coordinator, and event infrastructure. This is an implementation detail, not a user-facing team.
 
-- Source: `ACP: Codex`, `ACP: Hermes`, `ACP: OpenClaw`, or custom client name.
-- Session status: active, queued, running, awaiting approval, completed, failed.
-- Latest external message.
-- Latest Creator Agent report.
-- Artifact list.
+Team / Workboard rules:
 
-Use stale-while-revalidate. Existing board data must remain visible during refresh.
+- Do not show auto-created ACP sessions in the Team sidebar.
+- Do not count external ACP clients as team members.
+- Do not add `All / Local / External` filters to Team for ACP.
+- If a user explicitly attaches ACP to an existing real collaboration session, that existing team session remains visible as a team; the ACP client is still shown as the caller, not a member.
+- Any ACP status, source label, run status, or artifact ref should appear in the conversation list/detail, not as a team card.
+
+Use stale-while-revalidate for existing team data. Team refresh must not blank real collaboration sessions.
 
 ### 11.3 Chat / RedClaw
 
@@ -795,7 +796,7 @@ P0 does not need a new chat surface, but ACP conversations must still appear in 
 
 Conversation list requirements:
 
-- Show ACP sessions in the main conversation list or a visible `External Agent` group, not only in Workboard.
+- Show ACP sessions in the main conversation list or a visible `External Agent` group.
 - Add a source badge on every ACP row: `ACP: Codex`, `ACP: Hermes`, `ACP: OpenClaw`, or custom client name.
 - Use an external-agent icon or compact label next to the title.
 - Show the latest external message or latest Creator Agent response as the row preview.
@@ -804,18 +805,12 @@ Conversation list requirements:
 - Allow filtering by `All`, `Local`, and `External Agent`.
 - Make the source label visible in the conversation header after opening the session.
 
-Deep links from Workboard should open the same conversation detail:
-
-- Open session detail.
-- Continue in RedBox.
-- Copy artifact URI.
-- Cancel run.
-
 Implementation note:
 
 - ACP-created runtime sessions must carry metadata such as `source="acp"`, `externalClientId`, `externalClientName`, `acpSessionId`, and `collabSessionId`.
 - Chat list queries should include these sessions by default, but preserve the source badge so users can immediately tell this is communication with an external AI.
-- If the existing Chat list cannot safely show ACP sessions in P0, add a visible `External Agent` group in the same list component rather than hiding them behind Workboard only.
+- Team list queries should filter out auto-created `source="acp"` collaboration sessions so implementation records do not appear as teams.
+- If the existing Chat list cannot safely show ACP sessions in P0, add a visible `External Agent` group in the same list component.
 
 ## 12. Security And Approval
 
@@ -1074,7 +1069,7 @@ Exit criteria:
 - Run result includes artifact refs.
 - Artifact refs are stable and resolvable.
 
-### Phase 6: Settings And Workboard UI
+### Phase 6: Settings And Conversation UI
 
 Goal: user can enable, inspect, and control ACP access without a new major UI surface.
 
@@ -1084,7 +1079,7 @@ Files:
 - `desktop/src/pages/settings/SettingsSections.tsx`
 - `desktop/src/bridge/domains/systemBridge.ts`
 - `desktop/src/bridge/domains/teamRuntimeBridge.ts`
-- `desktop/src/pages/workboard/*`
+- `desktop/src/pages/Team.tsx`
 - `desktop/src/pages/Chat.tsx`
 - conversation/session list components used by Chat
 
@@ -1097,8 +1092,7 @@ Tasks:
 - Add capability view.
 - Add `Copy Codex Instructions`, `Copy Hermes Instructions`, `Copy OpenClaw Instructions`, and `Copy Generic Instructions`.
 - Add copy action for manifest URL and guide URL.
-- Add Workboard source badges for ACP sessions.
-- Add run status and artifact refs in collaboration details.
+- Keep auto-created ACP sessions out of the Team sidebar; they are not teams.
 - Add ACP sessions to the conversation list with visible source badges.
 - Add `All / Local / External Agent` filtering if the list would otherwise mix sources ambiguously.
 - Add ACP source metadata to the opened conversation header.
@@ -1110,7 +1104,7 @@ Exit criteria:
 - User can copy endpoint/token.
 - User can copy agent-specific connection instructions.
 - Copied instructions include manifest URL, guide URL, endpoint, session flow, and continuation rule.
-- ACP-created session appears in Workboard without blank refresh.
+- ACP-created session does not appear as a Team / Workboard item.
 - ACP-created session appears in the conversation list with a visible external-agent badge.
 - Continuing an ACP session updates the existing list row instead of creating a duplicate row.
 - Opening an ACP row shows the same transcript that the external agent and RedBox Creator Agent used.
@@ -1216,8 +1210,8 @@ Do not mix UI, host schema, runtime wake, and adapter scripts in one commit.
 - `pnpm exec tsc --noEmit`.
 - Settings card renders with gateway disabled.
 - Settings copy-instructions actions include manifest, guide, endpoint, and continuation rule.
-- Workboard keeps stale session data during refresh.
-- ACP source badge appears for external session.
+- Team keeps stale session data during refresh.
+- ACP auto-created sessions are filtered out of Team / Workboard.
 - Chat conversation list shows ACP sessions with `ACP: <client>` badges.
 - Chat conversation header preserves source metadata after opening an ACP session.
 
@@ -1232,8 +1226,8 @@ Do not mix UI, host schema, runtime wake, and adapter scripts in one commit.
 7. Post message.
 8. Start run.
 9. Poll events.
-10. Confirm Workboard shows the ACP session.
-11. Confirm the conversation list shows the same session with `ACP: <client>` badge.
+10. Confirm Team / Workboard does not show the auto-created ACP session.
+11. Confirm the conversation list shows the session with `ACP: <client>` badge.
 12. Confirm final artifact is resolvable.
 
 ## 18. Current Implementation Snapshot
@@ -1254,7 +1248,7 @@ Implemented on 2026-06-24:
 - Settings exposes ACP manifest/guide URLs and copy prompts for Codex, Hermes, and OpenClaw.
 - Run and session event endpoints support cursor/limit polling and return `nextCursor` and `hasMore`.
 - Runtime/RedClaw/Advisor session lists can render ACP labels from `metadata.source=acp` and `metadata.sourceLabel`.
-- Team/Workboard sidebar shows ACP source badges and a compact `All / Local / External` filter when external sessions exist.
+- Team/Workboard sidebar filters out auto-created ACP sessions because external-agent conversations are not teams.
 - Startup recovery marks persisted `queued`/`running` ACP runs as `expired`, appends an audit event, and clears the active run count so external pollers do not wait forever after app restart.
 - Normal runtime milestones are projected into ACP audit events for ACP chat projections: stream start, tool start/end, checkpoints, and done.
 - ACP run creation detects approval-gated capabilities such as paid generation, browser control, deletion, publishing, and external export; matching runs enter `awaiting_approval`, expose `run.approval`, write audit events, and register a `RuntimeApprovalRecord` instead of starting execution.
