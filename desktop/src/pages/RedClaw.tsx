@@ -84,11 +84,36 @@ interface RedClawTeamRoom {
 }
 
 const REDCLAW_AI_SURFACE_STORAGE_KEY = 'redbox:redclaw-ai-surface:v1';
+const REDCLAW_HIDDEN_EXTERNAL_SESSION_IDS_STORAGE_KEY = 'redbox:redclaw:hidden-external-session-ids:v1';
 const REDCLAW_DRAFT_SESSION_SENTINEL = '__draft__';
 function readInitialRedClawAiSurface(): RedClawAiSurface {
     if (typeof window === 'undefined') return 'redclaw';
     const saved = String(window.localStorage.getItem(REDCLAW_AI_SURFACE_STORAGE_KEY) || '').trim();
     return saved === 'advisor' || saved === 'room' ? saved : 'redclaw';
+}
+
+function readHiddenExternalSessionIds(): string[] {
+    if (typeof window === 'undefined') return [];
+    try {
+        const raw = window.localStorage.getItem(REDCLAW_HIDDEN_EXTERNAL_SESSION_IDS_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed)
+            ? Array.from(new Set(parsed.map((item) => String(item || '').trim()).filter(Boolean)))
+            : [];
+    } catch (error) {
+        console.warn('Failed to read hidden external RedClaw sessions:', error);
+        return [];
+    }
+}
+
+function writeHiddenExternalSessionIds(sessionIds: string[]): void {
+    if (typeof window === 'undefined') return;
+    try {
+        const normalized = Array.from(new Set(sessionIds.map((item) => String(item || '').trim()).filter(Boolean)));
+        window.localStorage.setItem(REDCLAW_HIDDEN_EXTERNAL_SESSION_IDS_STORAGE_KEY, JSON.stringify(normalized));
+    } catch (error) {
+        console.warn('Failed to write hidden external RedClaw sessions:', error);
+    }
 }
 
 function visibleTeamSessions(sessions: TeamWorkbenchSession[]): TeamWorkbenchSession[] {
@@ -531,6 +556,7 @@ export function RedClaw({
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
     const [sessionList, setSessionList] = useState<ContextChatSessionListItem[]>([]);
     const [externalAgentSessions, setExternalAgentSessions] = useState<ContextChatSessionListItem[]>([]);
+    const [hiddenExternalSessionIds, setHiddenExternalSessionIds] = useState<string[]>(readHiddenExternalSessionIds);
     const [sessionActivityById, setSessionActivityById] = useState<Record<string, RedClawHistorySessionActivity>>({});
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -806,6 +832,11 @@ export function RedClaw({
         sessionListRef.current = sessionList;
     }, [sessionList]);
 
+    const hiddenExternalSessionIdSet = useMemo(
+        () => new Set(hiddenExternalSessionIds),
+        [hiddenExternalSessionIds],
+    );
+
     const normalizeExternalAgentSession = useCallback((item: ContextChatSessionListItem): ContextChatSessionListItem => {
         const rawTitle = String(
             item.chatSession?.title
@@ -845,7 +876,9 @@ export function RedClaw({
                         const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
                             ? item.metadata as Record<string, unknown>
                             : {};
+                        const sessionId = String(item.id || item.chatSession?.id || '').trim();
                         return String(metadata.source || '').trim() === 'acp'
+                            && !hiddenExternalSessionIdSet.has(sessionId)
                             && !item.archived
                             && metadata.archived !== true
                             && String(metadata.status || '').trim() !== 'archived';
@@ -856,7 +889,7 @@ export function RedClaw({
         } catch (error) {
             console.error('Failed to load external agent sessions:', error);
         }
-    }, [normalizeExternalAgentSession]);
+    }, [hiddenExternalSessionIdSet, normalizeExternalAgentSession]);
 
     useEffect(() => {
         return subscribeRuntimeEventStream({
@@ -1730,9 +1763,18 @@ export function RedClaw({
     const archiveUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem) => {
         const targetSessionId = String(session?.id || '').trim();
         if (!targetSessionId || (session.surface !== 'redclaw' && session.surface !== 'external')) return;
+        const isExternalSession = session.surface === 'external';
+        if (isExternalSession) {
+            setHiddenExternalSessionIds((prev) => {
+                if (prev.includes(targetSessionId)) return prev;
+                const next = [...prev, targetSessionId];
+                writeHiddenExternalSessionIds(next);
+                return next;
+            });
+            setExternalAgentSessions((prev) => prev.filter((item) => item.id !== targetSessionId));
+        }
         try {
             await window.ipcRenderer.chat.archiveSession(targetSessionId);
-            setExternalAgentSessions((prev) => prev.filter((item) => item.id !== targetSessionId));
             const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
             sessionListRef.current = remaining;
             setSessionList(remaining);
@@ -1747,6 +1789,7 @@ export function RedClaw({
             }
         } catch (error) {
             console.error('Failed to archive RedClaw session:', error);
+            if (isExternalSession) return;
             setChatActionMessage(error instanceof Error ? error.message : '归档对话失败');
         }
     }, [activeSpaceId]);
