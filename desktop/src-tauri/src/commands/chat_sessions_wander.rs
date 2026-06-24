@@ -3260,16 +3260,32 @@ pub fn handle_chat_sessions_wander_channel(
             "chat:archive-session" => {
                 let session_id = payload_value_as_string(&payload).unwrap_or_default();
                 with_store_mut(state, |store| {
+                    let archived_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
                     if let Some(session) =
                         store.chat_sessions.iter_mut().find(|s| s.id == session_id)
                     {
                         session.archived = true;
-                        session.archived_at = Some(
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as i64)
-                                .unwrap_or(0),
-                        );
+                        session.archived_at = Some(archived_at);
+                        let mut metadata = session
+                            .metadata
+                            .take()
+                            .and_then(|value| value.as_object().cloned())
+                            .unwrap_or_default();
+                        metadata.insert("archived".to_string(), json!(true));
+                        metadata.insert("archivedAt".to_string(), json!(archived_at));
+                        session.metadata = Some(Value::Object(metadata));
+                    }
+                    let now = crate::now_i64();
+                    for acp_session in store
+                        .acp_sessions
+                        .iter_mut()
+                        .filter(|item| item.chat_session_id == session_id)
+                    {
+                        acp_session.status = "archived".to_string();
+                        acp_session.updated_at = now;
                     }
                     remove_session_artifacts(store, &session_id);
                     Ok(json!({ "success": true }))
@@ -3292,6 +3308,27 @@ pub fn handle_chat_sessions_wander_channel(
                     {
                         with_store_mut(state, |store| {
                             crate::persistence::apply_session_file_entries_to_store(store, entries);
+                            if let Some(session) =
+                                store.chat_sessions.iter_mut().find(|s| s.id == session_id)
+                            {
+                                session.archived = false;
+                                session.archived_at = None;
+                                if let Some(metadata) = session.metadata.as_mut() {
+                                    if let Some(object) = metadata.as_object_mut() {
+                                        object.remove("archived");
+                                        object.remove("archivedAt");
+                                    }
+                                }
+                            }
+                            let now = crate::now_i64();
+                            for acp_session in store
+                                .acp_sessions
+                                .iter_mut()
+                                .filter(|item| item.chat_session_id == session_id)
+                            {
+                                acp_session.status = "active".to_string();
+                                acp_session.updated_at = now;
+                            }
                             Ok(json!({ "success": true }))
                         })?;
                     }

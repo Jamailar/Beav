@@ -845,7 +845,10 @@ export function RedClaw({
                         const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
                             ? item.metadata as Record<string, unknown>
                             : {};
-                        return String(metadata.source || '').trim() === 'acp' && !item.archived;
+                        return String(metadata.source || '').trim() === 'acp'
+                            && !item.archived
+                            && metadata.archived !== true
+                            && String(metadata.status || '').trim() !== 'archived';
                     })
                     .map(normalizeExternalAgentSession))
                 : [];
