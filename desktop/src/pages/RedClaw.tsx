@@ -935,7 +935,7 @@ export function RedClaw({
                 surface: 'redclaw',
                 speakerLabel: REDCLAW_DISPLAY_NAME,
             })),
-            ...externalAgentSessions.slice(0, 1).map((session): RedClawHistoryListItem => ({
+            ...externalAgentSessions.map((session): RedClawHistoryListItem => ({
                 ...session,
                 surface: 'external',
                 speakerLabel: 'External Agent',
