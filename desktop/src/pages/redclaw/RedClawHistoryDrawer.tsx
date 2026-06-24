@@ -1184,24 +1184,28 @@ export function RedClawHistorySidebarSection({
                                     )}
 
                                     <div className="flex items-center justify-between gap-2">
-                                        <div className="min-w-0 flex flex-1 items-center gap-1.5 pr-14">
+                                        <div className="min-w-0 flex-1 pr-14">
                                             <h4 className={clsx(
                                                 'min-w-0 truncate text-[13px] font-bold leading-tight transition-colors',
                                                 isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
                                             )}>
                                                 {title}
                                             </h4>
-                                            {isAutomationSession && (
-                                                <Clock3
-                                                    className="h-3.5 w-3.5 shrink-0 text-text-tertiary/80"
-                                                    strokeWidth={1.75}
-                                                    aria-label="定时任务"
-                                                />
-                                            )}
-                                            {acpLabel && (
-                                                <span className="shrink-0 rounded border border-border bg-surface-secondary/60 px-1.5 py-0.5 text-[9px] font-semibold text-text-tertiary">
-                                                    {acpLabel}
-                                                </span>
+                                            {(isAutomationSession || acpLabel) && (
+                                                <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                                                    {isAutomationSession && (
+                                                        <Clock3
+                                                            className="h-3.5 w-3.5 shrink-0 text-text-tertiary/80"
+                                                            strokeWidth={1.75}
+                                                            aria-label="定时任务"
+                                                        />
+                                                    )}
+                                                    {acpLabel && (
+                                                        <span className="min-w-0 truncate rounded border border-border bg-surface-secondary/60 px-1.5 py-0.5 text-[9px] font-semibold text-text-tertiary">
+                                                            {acpLabel}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             )}
                                         </div>
 
