@@ -9,6 +9,8 @@
   "downloadUrl": "https://redbox.ziz.hk/download",
   "githubIssuesUrl": "https://github.com/Jamailar/RedBox/issues",
   "githubRepoUrl": "https://github.com/Jamailar/RedBox",
+  "founderXHandle": "@JambaHailar",
+  "founderXUrl": "https://x.com/JambaHailar",
   "theme": {
     "light": {
       "accentPrimary": "162 120 75",

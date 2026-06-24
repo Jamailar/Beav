@@ -384,6 +384,8 @@ function resolveBrand(config, requestedVariant) {
     downloadUrl: variantConfig.downloadUrl || '',
     githubIssuesUrl: variantConfig.githubIssuesUrl || '',
     githubRepoUrl: variantConfig.githubRepoUrl || '',
+    founderXHandle: variantConfig.founderXHandle || '',
+    founderXUrl: variantConfig.founderXUrl || '',
     theme,
   };
 }
@@ -465,6 +467,8 @@ export async function syncBrand({ cwd = process.cwd(), variant: requestedVariant
     downloadUrl: brand.downloadUrl,
     githubIssuesUrl: brand.githubIssuesUrl,
     githubRepoUrl: brand.githubRepoUrl,
+    founderXHandle: brand.founderXHandle,
+    founderXUrl: brand.founderXUrl,
     theme: brand.theme,
   };
 

@@ -12,6 +12,8 @@
       "downloadUrl": "https://redbox.ziz.hk/download",
       "githubIssuesUrl": "https://github.com/Jamailar/RedBox/issues",
       "githubRepoUrl": "https://github.com/Jamailar/RedBox",
+      "founderXHandle": "@JambaHailar",
+      "founderXUrl": "https://x.com/JambaHailar",
       "appIcon": {
         "png": "branding/variants/redbox/icons/icon.png",
         "icns": "branding/variants/redbox/icons/icon.icns",
