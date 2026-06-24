@@ -46,6 +46,25 @@ fn normalize_official_call_records_value_extracts_nested_records() {
 }
 
 #[test]
+fn normalize_official_call_record_items_marks_knowledge_visual_index() {
+    let records = normalize_official_call_record_items(&[json!({
+        "id": "visual-1",
+        "model": "gpt-4o-mini",
+        "points_cost": 0.2,
+        "metadata": {
+            "usagePurpose": "knowledge_visual_index"
+        },
+        "created_at": "2026-04-16T06:00:00Z"
+    })]);
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        payload_string(&records[0], "purpose").as_deref(),
+        Some("knowledge_visual_index")
+    );
+}
+
+#[test]
 fn normalize_official_call_records_value_merges_multiple_payload_arrays() {
     let records = normalize_official_call_records_value(&json!({
         "data": {

@@ -41,6 +41,7 @@ interface RedboxCallRecordItem {
   points: number;
   createdAt: string;
   status: string;
+  purpose?: string | null;
 }
 
 interface OfficialRealmConfig {
@@ -1447,7 +1448,16 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                     {callRecords.slice(0, 30).map((record) => (
                       <tr key={record.id} className="hover:bg-black/[0.005] dark:hover:bg-white/[0.005] transition-colors">
                         <td className="px-5 py-3 text-sm font-medium text-text-secondary">{new Date(record.createdAt).toLocaleString()}</td>
-                        <td className="px-5 py-3 text-sm font-medium text-text-secondary">{record.model || '-'}</td>
+                        <td className="px-5 py-3 text-sm font-medium text-text-secondary">
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            <span>{record.model || '-'}</span>
+                            {record.purpose === 'knowledge_visual_index' && (
+                              <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                                知识库图像索引
+                              </span>
+                            )}
+                          </span>
+                        </td>
                         <td className="px-5 py-3 text-right text-sm font-bold text-accent-primary">{record.points}</td>
                         <td className="px-5 py-3 text-right text-sm font-medium text-text-tertiary">{record.tokens}</td>
                       </tr>

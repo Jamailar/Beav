@@ -239,7 +239,13 @@ pub(super) fn analyze_visual_source(
         "POST",
         &endpoint_url,
         config.api_key.as_deref(),
-        &[],
+        &[
+            (
+                "X-RedBox-Usage-Purpose",
+                "knowledge_visual_index".to_string(),
+            ),
+            ("X-RedBox-Usage-Label", "知识库图像索引".to_string()),
+        ],
         Some(body),
         Some(timeout_seconds),
     );

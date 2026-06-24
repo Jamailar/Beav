@@ -175,6 +175,74 @@ fn iso_time_from_value(value: Option<&Value>) -> String {
     }
 }
 
+fn nested_payload_string(item: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = payload_string(item, key).filter(|item| !item.trim().is_empty()) {
+            return Some(value);
+        }
+    }
+    for nested_key in [
+        "metadata",
+        "meta",
+        "extra",
+        "request",
+        "request_metadata",
+        "requestMetadata",
+        "headers",
+    ] {
+        let Some(nested) = item.get(nested_key).filter(|value| value.is_object()) else {
+            continue;
+        };
+        for key in keys {
+            if let Some(value) = payload_string(nested, key).filter(|item| !item.trim().is_empty())
+            {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn normalize_call_record_purpose(item: &Value) -> Option<&'static str> {
+    let purpose = nested_payload_string(
+        item,
+        &[
+            "purpose",
+            "usage_purpose",
+            "usagePurpose",
+            "source",
+            "source_type",
+            "sourceType",
+            "scenario",
+            "scene",
+            "tag",
+            "x-redbox-usage-purpose",
+            "X-RedBox-Usage-Purpose",
+        ],
+    )
+    .unwrap_or_default()
+    .trim()
+    .to_ascii_lowercase()
+    .replace(['-', ' ', ':', '.'], "_");
+
+    if matches!(
+        purpose.as_str(),
+        "knowledge_visual_index"
+            | "visual_index"
+            | "knowledge_image_index"
+            | "knowledge_image_understanding"
+            | "document_visual_index"
+            | "redbox_knowledge_visual_index"
+    ) || (purpose.contains("knowledge")
+        && purpose.contains("visual")
+        && purpose.contains("index"))
+    {
+        return Some("knowledge_visual_index");
+    }
+
+    None
+}
+
 pub(super) fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value> {
     let mut seen_ids = HashSet::<String>::new();
     let mut records = Vec::<Value>::new();
@@ -216,6 +284,7 @@ pub(super) fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value
                 .or_else(|| item.get("time"))
                 .or_else(|| item.get("timestamp")),
         );
+        let purpose = normalize_call_record_purpose(item);
 
         let normalized = json!({
             "id": id,
@@ -225,6 +294,7 @@ pub(super) fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value
             "points": if points.is_finite() { points } else { 0.0 },
             "status": if status.trim().is_empty() { "success" } else { status.as_str() },
             "createdAt": created_at,
+            "purpose": purpose,
             "raw": item,
         });
         if seen_ids.insert(id) {
