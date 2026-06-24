@@ -1189,7 +1189,7 @@ export function RedClawHistorySidebarSection({
                                     <div className="flex items-center justify-between gap-2">
                                         <div className="min-w-0 flex-1 pr-14">
                                             <h4 className={clsx(
-                                                'flex min-w-0 items-center gap-1.5 text-[13px] font-bold leading-tight transition-colors',
+                                                'flex min-w-0 items-center gap-1.5 text-[13px] font-semibold leading-tight transition-colors',
                                                 isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
                                             )}>
                                                 {isAutomationSession && (
