@@ -11,6 +11,11 @@ pub(crate) fn handle_channel(
     if let Some(result) = commands::system::handle_system_channel(app, state, channel, &payload) {
         return result;
     }
+    if let Some(result) =
+        commands::analytics::handle_analytics_channel(app, state, channel, &payload)
+    {
+        return result;
+    }
     if let Some(result) = commands::audio::handle_audio_channel(app, state, channel, &payload) {
         return result;
     }

@@ -411,6 +411,7 @@ export function buildFallbackResponse(channel: string, error: unknown, payload?:
     || channel === 'logs:dismiss-report'
     || channel === 'logs:set-upload-consent'
     || channel === 'logs:append-renderer'
+    || channel === 'logs:create-auto-report'
   ) {
     return { success: false, error: `${APP_BRAND.displayName} diagnostics action failed for "${channel}": ${message}` };
   }

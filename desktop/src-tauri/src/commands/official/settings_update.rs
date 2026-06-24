@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use super::*;
+use crate::persistence::with_store;
 use crate::persistence::with_store_mut;
 use crate::store::settings as settings_store;
 use crate::{emit_redbox_auth_data_updated, emit_redbox_auth_session_updated, now_iso, AppState};
@@ -74,12 +75,20 @@ pub(super) fn apply_official_settings_update(
             return Err("auth generation changed; stale update dropped".to_string());
         }
     }
+    let previous_settings =
+        with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
     let merged_settings = with_store_mut(state, |store| {
         Ok(settings_store::update_settings(store, |settings| {
             merge_official_settings(settings, &next_settings);
             crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
         }))
     })?;
+    crate::analytics::observe_official_settings_update(
+        state,
+        &previous_settings,
+        &merged_settings,
+        source,
+    );
     if should_sync_model_config {
         if let Err(error) = crate::ai_model_manager::store::sync_model_config_file(
             &state.store_path,

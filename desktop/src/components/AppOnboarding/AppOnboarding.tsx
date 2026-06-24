@@ -1,27 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   type LucideIcon,
   Bot,
   BrainCircuit,
   ChevronLeft,
   Check,
-  Cpu,
   Database,
   Download,
   FileText,
   FolderOpen,
   Image,
   MessageSquareText,
-  Palette,
   PenTool,
   Play,
   Rocket,
   Sparkles,
-  Users,
   Zap,
 } from 'lucide-react';
 import { APP_BRAND } from '../../config/brand';
-import { STEPS, markAppOnboardingSeen } from './constants';
+import { setAppAcquisitionSource, STEPS, markAppOnboardingSeen } from './constants';
 
 interface AppOnboardingProps {
   open: boolean;
@@ -41,6 +38,7 @@ interface OnboardingStepContent {
   eyebrow: string;
   title: string;
   desc: string;
+  acquisitionSurvey?: boolean;
   cards?: VisualCard[];
   image?: {
     src: string;
@@ -53,7 +51,24 @@ interface OnboardingStepContent {
   };
 }
 
+const ACQUISITION_SOURCES = [
+  { value: 'xiaohongshu', label: '小红书' },
+  { value: 'bilibili', label: 'B站' },
+  { value: 'wechat_article', label: '公众号/文章' },
+  { value: 'search', label: '搜索引擎' },
+  { value: 'github', label: 'GitHub' },
+  { value: 'friend_referral', label: '朋友推荐' },
+  { value: 'ai_recommendation', label: 'AI 工具推荐' },
+  { value: 'other', label: '其他' },
+];
+
 const STEP_CONTENT: OnboardingStepContent[] = [
+  {
+    eyebrow: '一个小问题',
+    title: `你是从哪里知道 ${APP_BRAND.displayName} 的？`,
+    desc: '选择一个最接近的来源，帮助我们判断应该把产品打磨和发布重点放在哪里。',
+    acquisitionSurvey: true,
+  },
   {
     eyebrow: '本地创作工作台',
     title: `${APP_BRAND.displayName} 帮你把灵感变成内容资产。`,
@@ -91,41 +106,6 @@ const STEP_CONTENT: OnboardingStepContent[] = [
           { icon: Sparkles, color: 'bg-pink-100 text-pink-600' },
         ],
         tone: 'bg-orange-100 text-orange-600',
-      },
-    ],
-  },
-  {
-    eyebrow: '重点能力',
-    title: '从分析到发布，核心环节都能接住。',
-    desc: '视频分析、套图制作、角色一致性与自动化任务会按你的工作节奏组合起来。',
-    cards: [
-      {
-        icon: Play,
-        title: '视频分析',
-        desc: '转写、拆解结构、提取要点，再转成小红书笔记方向。',
-        meta: '转写 + 摘要',
-        tone: 'bg-red-100 text-red-600',
-      },
-      {
-        icon: Palette,
-        title: '套图与封面',
-        desc: '围绕同一主题批量生成统一风格的图文内容。',
-        chips: [
-          { icon: Image, color: 'bg-cyan-100 text-cyan-600' },
-          { icon: Palette, color: 'bg-fuchsia-100 text-fuchsia-600' },
-        ],
-        tone: 'bg-fuchsia-100 text-fuchsia-600',
-      },
-      {
-        icon: Users,
-        title: '角色创建与使用',
-        desc: '维护角色外貌、人设和声音，让多次生成保持同一表达。',
-        chips: [
-          { icon: Users, color: 'bg-emerald-100 text-emerald-600' },
-          { icon: MessageSquareText, color: 'bg-sky-100 text-sky-600' },
-          { icon: Sparkles, color: 'bg-amber-100 text-amber-600' },
-        ],
-        tone: 'bg-emerald-100 text-emerald-600',
       },
     ],
   },
@@ -170,37 +150,6 @@ const STEP_CONTENT: OnboardingStepContent[] = [
           { icon: Sparkles, color: 'bg-amber-100 text-amber-600' },
         ],
         tone: 'bg-violet-100 text-violet-600',
-      },
-    ],
-  },
-  {
-    eyebrow: '开始前的准备',
-    title: '连好模型和工作目录，就可以正式开工。',
-    desc: '只需要确认 AI 服务商和本地存储位置，后续素材、稿件和生成结果都会有明确归处。',
-    cards: [
-      {
-        icon: Cpu,
-        title: '配置 AI 模型',
-        desc: '添加 API 端点和服务商 Key，选择你偏好的模型。',
-        meta: '设置 / AI 模型',
-        tone: 'bg-indigo-100 text-indigo-600',
-      },
-      {
-        icon: FolderOpen,
-        title: '设置工作目录',
-        desc: '选择本地文件夹存放知识库、生成素材和稿件。',
-        meta: '设置 / 通用',
-        tone: 'bg-amber-100 text-amber-600',
-      },
-      {
-        icon: Check,
-        title: '保留本地掌控',
-        desc: '工作数据留在本机，刷新或重启后继续接着做。',
-        chips: [
-          { icon: Database, color: 'bg-emerald-100 text-emerald-600' },
-          { icon: Check, color: 'bg-sky-100 text-sky-600' },
-        ],
-        tone: 'bg-emerald-100 text-emerald-600',
       },
     ],
   },
@@ -332,27 +281,169 @@ function CharacterAssetPreview({ image }: { image: { src: string; alt: string } 
   );
 }
 
+function onboardingStepKind(content: OnboardingStepContent) {
+  if (content.acquisitionSurvey) return 'acquisition_survey';
+  if (content.video) return 'video';
+  if (content.image) return 'image';
+  if (content.cards) return 'cards';
+  return 'content';
+}
+
+function AcquisitionSurvey({
+  selected,
+  onSelect,
+  invalid,
+}: {
+  selected: string;
+  onSelect: (source: string) => void;
+  invalid: boolean;
+}) {
+  return (
+    <div className="w-full max-w-[980px]">
+      <div className={`app-onboarding-acquisition-options grid grid-cols-4 gap-3 ${invalid ? 'app-onboarding-acquisition-options-invalid' : ''}`}>
+        {ACQUISITION_SOURCES.map((source) => {
+          const active = selected === source.value;
+          return (
+            <button
+              key={source.value}
+              type="button"
+              onClick={() => onSelect(source.value)}
+              className={`flex h-[clamp(66px,7vh,86px)] items-center justify-between rounded-2xl border px-5 text-left text-[clamp(16px,1.12vw,22px)] font-semibold shadow-[0_14px_40px_rgba(120,75,45,0.05)] transition-all active:scale-[0.99] ${
+                active
+                  ? 'border-accent-primary bg-white text-accent-primary shadow-[0_18px_45px_rgba(167,116,73,0.14)]'
+                  : 'border-zinc-200/80 bg-white/80 text-zinc-700 hover:border-accent-primary/35 hover:bg-white hover:shadow-[0_18px_45px_rgba(120,75,45,0.1)]'
+              }`}
+            >
+              <span>{source.label}</span>
+              {active ? <Check className="h-4 w-4" strokeWidth={2.2} /> : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
   const [step, setStep] = useState(0);
+  const [acquisitionSource, setAcquisitionSource] = useState('');
+  const [acquisitionInvalid, setAcquisitionInvalid] = useState(false);
+  const acquisitionShownRef = useRef(false);
+  const acquisitionInvalidTimerRef = useRef<number | null>(null);
+  const acquisitionInvalidFrameRef = useRef<number | null>(null);
+  const onboardingStartedAtRef = useRef<number>(0);
+  const stepStartedAtRef = useRef<number>(0);
+  const trackedStepRef = useRef<number | null>(null);
   const content = useMemo(() => STEP_CONTENT[step] ?? STEP_CONTENT[0], [step]);
 
   useEffect(() => {
     if (open) {
       setStep(0);
+      setAcquisitionSource('');
+      setAcquisitionInvalid(false);
+      acquisitionShownRef.current = false;
+      onboardingStartedAtRef.current = Date.now();
+      stepStartedAtRef.current = Date.now();
+      trackedStepRef.current = null;
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open || trackedStepRef.current === step) return;
+    trackedStepRef.current = step;
+    stepStartedAtRef.current = Date.now();
+    void window.ipcRenderer.analytics.track('onboarding_step_viewed', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+      properties: {
+        stepIndex: step,
+        step: STEPS[step] || `step_${step + 1}`,
+        stepKind: onboardingStepKind(content),
+      },
+    });
+  }, [content, open, step]);
+
+  useEffect(() => {
+    if (!open || !content.acquisitionSurvey || acquisitionShownRef.current) return;
+    acquisitionShownRef.current = true;
+    void window.ipcRenderer.analytics.track('acquisition_survey_shown', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+    });
+  }, [content.acquisitionSurvey, open]);
+
+  useEffect(() => {
+    return () => {
+      if (acquisitionInvalidTimerRef.current !== null) {
+        window.clearTimeout(acquisitionInvalidTimerRef.current);
+      }
+      if (acquisitionInvalidFrameRef.current !== null) {
+        window.cancelAnimationFrame(acquisitionInvalidFrameRef.current);
+      }
+    };
+  }, []);
 
   if (!open) return null;
 
   const isLast = step === STEPS.length - 1;
   const isVideoStep = Boolean(content.video);
+  const isAcquisitionStep = Boolean(content.acquisitionSurvey);
 
   const handleClose = () => {
     markAppOnboardingSeen();
     onClose();
   };
 
-  const handleNext = () => {
+  const trackStepCompleted = (action: 'next' | 'skip' | 'finish') => {
+    const now = Date.now();
+    const durationMs = stepStartedAtRef.current > 0 ? now - stepStartedAtRef.current : 0;
+    void window.ipcRenderer.analytics.track('onboarding_step_completed', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+      properties: {
+        stepIndex: step,
+        step: STEPS[step] || `step_${step + 1}`,
+        stepKind: onboardingStepKind(content),
+        action,
+        durationMs,
+      },
+    });
+    if (action === 'finish') {
+      const totalDurationMs =
+        onboardingStartedAtRef.current > 0 ? now - onboardingStartedAtRef.current : durationMs;
+      void window.ipcRenderer.analytics.track('onboarding_completed', {
+        surface: 'app-onboarding',
+        origin: 'renderer',
+        properties: {
+          totalSteps: STEPS.length,
+          totalDurationMs,
+        },
+      });
+    }
+  };
+
+  const triggerAcquisitionRequiredPrompt = () => {
+    if (acquisitionInvalidTimerRef.current !== null) {
+      window.clearTimeout(acquisitionInvalidTimerRef.current);
+    }
+    if (acquisitionInvalidFrameRef.current !== null) {
+      window.cancelAnimationFrame(acquisitionInvalidFrameRef.current);
+    }
+    setAcquisitionInvalid(false);
+    acquisitionInvalidFrameRef.current = window.requestAnimationFrame(() => {
+      setAcquisitionInvalid(true);
+      acquisitionInvalidTimerRef.current = window.setTimeout(() => {
+        setAcquisitionInvalid(false);
+      }, 620);
+    });
+  };
+
+  const handleNext = (options?: { suppressAcquisitionSkip?: boolean }) => {
+    if (isAcquisitionStep && !acquisitionSource && !options?.suppressAcquisitionSkip) {
+      triggerAcquisitionRequiredPrompt();
+      return;
+    }
+    trackStepCompleted(isLast ? 'finish' : options?.suppressAcquisitionSkip ? 'skip' : 'next');
     if (isLast) {
       handleClose();
       return;
@@ -364,17 +455,95 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
     setStep((value) => Math.max(value - 1, 0));
   };
 
+  const handleAcquisitionSelect = (source: string) => {
+    setAcquisitionInvalid(false);
+    setAcquisitionSource(source);
+    setAppAcquisitionSource(source);
+    void window.ipcRenderer.analytics.track('acquisition_survey_answered', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+      properties: {
+        source,
+      },
+    });
+  };
+
+  const handleAcquisitionSkip = () => {
+    void window.ipcRenderer.analytics.track('acquisition_survey_skipped', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+      properties: {
+        action: 'skip_button',
+      },
+    });
+    handleNext({ suppressAcquisitionSkip: true });
+  };
+
   return (
     <div
       className={`app-onboarding fixed inset-0 z-[10030] h-screen w-screen overflow-hidden bg-white text-zinc-950 ${
-        isVideoStep ? 'flex flex-col' : 'grid'
+        isVideoStep || isAcquisitionStep ? 'flex flex-col' : 'grid'
       }`}
-      style={isVideoStep ? undefined : { display: 'grid', gridTemplateColumns: '49.6% 50.4%' }}
+      style={isVideoStep || isAcquisitionStep ? undefined : { display: 'grid', gridTemplateColumns: '49.6% 50.4%' }}
       role="dialog"
       aria-modal="true"
       aria-label={`${APP_BRAND.displayName} Onboarding`}
     >
-      {isVideoStep && content.video ? (
+      {isAcquisitionStep ? (
+        <section className="relative flex h-screen min-w-0 flex-col overflow-hidden bg-white px-[5vw] py-[7vh]">
+          <div className="relative z-10 flex flex-1 flex-col items-center justify-center text-center">
+            <div className="text-[clamp(18px,1.25vw,26px)] font-semibold text-accent-primary">{content.eyebrow}</div>
+            <h1 className="mt-5 max-w-[940px] text-[clamp(46px,5vw,88px)] font-bold leading-[1.08] tracking-normal text-zinc-950">
+              {content.title}
+            </h1>
+            <p className="mt-6 max-w-[760px] text-[clamp(18px,1.45vw,28px)] font-medium leading-[1.55] tracking-normal text-zinc-500">
+              {content.desc}
+            </p>
+            <div className="mt-[7vh] flex w-full justify-center">
+              <AcquisitionSurvey
+                selected={acquisitionSource}
+                onSelect={handleAcquisitionSelect}
+                invalid={acquisitionInvalid}
+              />
+            </div>
+          </div>
+          <div className="relative z-10 flex items-center justify-between gap-6">
+            <div className="flex items-center gap-5">
+              {step > 0 ? (
+                <button
+                  type="button"
+                  onClick={handlePrevious}
+                  className="inline-flex h-10 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-zinc-500 transition-colors hover:bg-white/60 hover:text-zinc-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+                >
+                  <ChevronLeft className="h-4 w-4" strokeWidth={1.8} />
+                  上一步
+                </button>
+              ) : null}
+              <div className="flex items-center gap-3" aria-label={`第 ${step + 1} 步，共 ${STEPS.length} 步`}>
+                {STEPS.map((_, index) => (
+                  <StepDot key={index} index={index} current={step} />
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleAcquisitionSkip}
+                className="inline-flex h-[clamp(48px,5vh,58px)] items-center justify-center rounded-xl px-5 text-[clamp(16px,1.05vw,20px)] font-semibold text-zinc-400 transition-colors hover:bg-white/60 hover:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+              >
+                跳过
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNext()}
+                className="inline-flex h-[clamp(58px,6vh,76px)] min-w-[clamp(124px,8vw,160px)] items-center justify-center rounded-xl bg-white/75 px-7 text-[clamp(20px,1.5vw,30px)] font-semibold text-zinc-600 transition-colors hover:bg-white hover:text-zinc-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : isVideoStep && content.video ? (
         <section className="relative flex h-screen min-w-0 flex-col overflow-hidden bg-[#ffe7d8] px-[4vw] py-[6vh]">
           <div
             className="absolute inset-0 opacity-70"
@@ -410,7 +579,7 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
             </div>
             <button
               type="button"
-              onClick={handleNext}
+              onClick={() => handleNext()}
               className="inline-flex h-[clamp(58px,6vh,76px)] min-w-[clamp(124px,8vw,160px)] items-center justify-center rounded-xl bg-white/70 px-7 text-[clamp(20px,1.5vw,30px)] font-semibold text-zinc-500 transition-colors hover:bg-white hover:text-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
             >
               {isLast ? '开始' : 'Next'}
@@ -452,7 +621,7 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
               </div>
               <button
                 type="button"
-                onClick={handleNext}
+                onClick={() => handleNext()}
                 className="inline-flex h-[clamp(58px,6vh,76px)] min-w-[clamp(124px,8vw,160px)] items-center justify-center rounded-xl bg-zinc-100 px-7 text-[clamp(20px,1.5vw,30px)] font-semibold text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
               >
                 {isLast ? '开始' : 'Next'}

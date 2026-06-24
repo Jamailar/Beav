@@ -171,6 +171,12 @@ pub(super) fn handle_billing_channel(
                 None,
                 request_generation,
             )?;
+            crate::analytics::observe_billing_order_created(
+                state,
+                &order,
+                "official-order-create",
+                "page_pay",
+            );
             Ok(json!({ "success": true, "order": order }))
         })()),
         "redbox-auth:create-wechat-native-order" => Some((|| -> Result<Value, String> {
@@ -232,6 +238,12 @@ pub(super) fn handle_billing_channel(
                 None,
                 request_generation,
             )?;
+            crate::analytics::observe_billing_order_created(
+                state,
+                &order,
+                "official-wechat-order-create",
+                "wechat_native",
+            );
             Ok(json!({ "success": true, "order": order }))
         })()),
         "redbox-auth:order-status" => Some((|| -> Result<Value, String> {
@@ -273,6 +285,7 @@ pub(super) fn handle_billing_channel(
                 None,
                 request_generation,
             )?;
+            crate::analytics::observe_billing_order_status(state, &order, "official-order-status");
             Ok(json!({ "success": true, "order": order }))
         })()),
         "redbox-auth:open-payment-form" => Some((|| -> Result<Value, String> {
@@ -393,6 +406,12 @@ pub(super) fn handle_billing_channel(
                 None,
                 request_generation,
             )?;
+            crate::analytics::observe_billing_order_created(
+                state,
+                &order,
+                "official-billing-create-order",
+                "official_billing",
+            );
             Ok(json!({ "success": true, "order": order }))
         })()),
         "official:billing:list-calls" => Some((|| -> Result<Value, String> {

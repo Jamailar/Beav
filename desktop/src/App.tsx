@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, lazy, Suspense, type ReactNode } from
 import { FileText, Loader2, MessageSquareWarning } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
-import { AppOnboarding, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
+import { AppOnboarding, getAppAcquisitionSource, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
 import { FeedbackReportDialog } from './components/FeedbackReportDialog';
 import { useLlmReadinessLifecycle } from './hooks/useLlmReadinessLifecycle';
 import { useLlmReadinessState } from './hooks/useLlmReadinessState';
@@ -138,6 +138,25 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
 
   const isManuscriptEditorActive = currentView === 'redclaw' && Boolean(activeManuscriptEditorFile);
   const effectiveImmersiveMode: ImmersiveMode = isManuscriptEditorActive ? false : immersiveMode;
+
+  useEffect(() => {
+    const acquisitionSource = getAppAcquisitionSource();
+    void window.ipcRenderer.analytics.track('app_launched', {
+      surface: 'app-shell',
+      origin: 'renderer',
+      properties: acquisitionSource ? { acquisitionSource } : {},
+    });
+  }, []);
+
+  useEffect(() => {
+    void window.ipcRenderer.analytics.track('surface_viewed', {
+      surface: currentView,
+      origin: 'renderer',
+      properties: {
+        surface: currentView,
+      },
+    });
+  }, [currentView]);
 
   return (
     <>

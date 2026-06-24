@@ -185,11 +185,29 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   const activeRequestIdRef = useRef('');
   const historyListRef = useRef<WanderHistoryRecord[]>([]);
   const activeItemsRef = useRef<WanderItem[]>([]);
+  const topicCenterViewedRef = useRef(false);
   const activeOption = parsedResult?.options?.[selectedOptionIndex];
   const activeDirectionFrame = activeOption?.direction_frame || parsedResult?.direction_frame;
   const hasGuidedInput = guidedSourceMode === 'topic'
     ? Boolean(guidedTopic.trim())
     : Boolean(selectedAnchor);
+
+  const trackTopicEvent = useCallback((
+    event: Parameters<typeof window.ipcRenderer.analytics.track>[0],
+    properties: Record<string, string | number | boolean | null | undefined> = {},
+  ) => {
+    void window.ipcRenderer.analytics.track(event, {
+      surface: 'wander',
+      origin: 'renderer',
+      properties,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isActive || topicCenterViewedRef.current) return;
+    topicCenterViewedRef.current = true;
+    trackTopicEvent('topic_center_viewed');
+  }, [isActive, trackTopicEvent]);
 
   function catalogSummaryToWanderItem(item: KnowledgeCatalogSummary): WanderItem {
     const isVideo = item.kind === 'youtube-video' || Boolean(item.hasVideo);
@@ -845,6 +863,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       },
       knowledgeReferences,
     });
+    trackTopicEvent('topic_used_for_task', {
+      sourceMode: activeSourceMode,
+      hasBrief: true,
+      evidenceCount: items.length,
+      optionIndex: selectedOptionIndex,
+    });
   };
 
   const syncWanderSettings = useCallback(async () => {
@@ -884,6 +908,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
 
   const handleSelectionModeChange = (mode: 'random' | 'manual') => {
     if (loading) return;
+    trackTopicEvent('topic_source_selected', {
+      sourceMode: mode,
+    });
     setSelectionMode(mode);
     setParseError(null);
     setValidationIssues([]);
@@ -901,6 +928,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   };
 
   const handleGuidedSourceModeChange = (mode: 'topic' | 'anchor') => {
+    trackTopicEvent('topic_source_selected', {
+      sourceMode: 'manual',
+      guidedSourceMode: mode,
+    });
     setGuidedSourceMode(mode);
     setParseError(null);
     if (mode === 'topic') {
@@ -952,6 +983,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       setCurrentHistoryId(record.id);
       setPendingStartMode(null);
       setShowHistory(false);
+      trackTopicEvent('topic_selected', {
+        source: 'history',
+        topicStatus: isAbandonedHistoryRecord(record) ? 'abandoned' : 'active',
+        evidenceCount: normalizeWanderItemsPayload(record.items).length,
+      });
     } catch (e) {
       console.error('Failed to parse history:', e);
     }
@@ -961,6 +997,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
   const deleteHistory = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     await window.ipcRenderer.wander.deleteHistory(id);
+    trackTopicEvent('topic_deleted', {
+      source: 'history',
+    });
     const newList = historyList.filter(h => h.id !== id);
     const activeList = newList.filter(record => !isAbandonedHistoryRecord(record));
     setHistoryList(newList);
@@ -1005,6 +1044,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       } else {
         clearTopicDetail();
       }
+      trackTopicEvent('topic_abandoned_toggled', {
+        source: isPersistedTopic ? 'history' : 'current',
+        topicStatus: 'abandoned',
+      });
     } catch (error) {
       console.error('Failed to abandon wander topic:', error);
       setParseError('放弃失败，请稍后重试');
@@ -1187,6 +1230,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         setParsedResult(normalizedResult);
         setParseError(error);
         setValidationIssues(normalizedIssues);
+        trackTopicEvent('topic_generation_failed', {
+          sourceMode: activeSourceMode,
+          reason: normalizedIssues.length > 0 ? 'validation' : 'runtime',
+          issueCount: normalizedIssues.length,
+        });
         if (resultItems) {
           setItems(resultItems);
           activeItemsRef.current = resultItems;
@@ -1208,9 +1256,19 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
             setCurrentHistoryId(historyId);
             void loadHistoryList();
           }
+          trackTopicEvent('topic_generation_completed', {
+            sourceMode: activeSourceMode,
+            topicCount: normalizedResult.options?.length || 1,
+            evidenceCount: nextItems.length,
+            hasWarning: Boolean(guidedWarning),
+          });
         } else {
           setParsedResult(null);
           setParseError('结果解析失败');
+          trackTopicEvent('topic_generation_failed', {
+            sourceMode: activeSourceMode,
+            reason: 'parse',
+          });
         }
       }
 
@@ -1250,6 +1308,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     setItems([]);
     setShowFinal(false);
     setCurrentHistoryId(null);
+    trackTopicEvent('topic_generation_started', {
+      sourceMode: effectiveSelectionMode,
+      guidedSourceMode: effectiveSelectionMode === 'manual' ? guidedSourceMode : null,
+      commentSourceMode: effectiveSelectionMode === 'comments' ? commentSourceMode : null,
+      multiChoice: effectiveSelectionMode === 'comments' ? false : multiChoiceEnabled,
+    });
     try {
       await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => resolve());
@@ -1262,6 +1326,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
           setShowFinal(true);
           setLoading(false);
           activeRequestIdRef.current = '';
+          trackTopicEvent('topic_generation_failed', {
+            sourceMode: effectiveSelectionMode,
+            reason: 'missing_input',
+          });
           return;
         }
         const guided = await window.ipcRenderer.wander.getGuidedItems({
@@ -1282,6 +1350,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
           setShowFinal(true);
           setLoading(false);
           activeRequestIdRef.current = '';
+          trackTopicEvent('topic_generation_failed', {
+            sourceMode: effectiveSelectionMode,
+            reason: 'insufficient_sources',
+            evidenceCount: nextItems.length,
+          });
           return;
         }
       } else if (effectiveSelectionMode === 'comments') {
@@ -1299,6 +1372,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         setShowFinal(true);
         setLoading(false);
         activeRequestIdRef.current = '';
+        trackTopicEvent('topic_generation_failed', {
+          sourceMode: effectiveSelectionMode,
+          reason: 'no_sources',
+        });
         return;
       }
 
@@ -1321,6 +1398,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       setLiveStatus(toStableTwoLineText('选题失败'));
       setPhase('done');
       setShowFinal(true);
+      trackTopicEvent('topic_generation_failed', {
+        sourceMode: effectiveSelectionMode,
+        reason: 'exception',
+      });
     } finally {
       if (!activeRequestIdRef.current) {
         setLoading(false);
@@ -1444,6 +1525,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       mode: 'random' as const,
       onClick: () => {
         if (loading) return;
+        trackTopicEvent('topic_source_selected', {
+          sourceMode: 'random',
+        });
         setSelectionMode('random');
         setPendingStartMode('random');
         setParseError(null);
@@ -1457,6 +1541,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       mode: 'comments' as const,
       onClick: () => {
         if (loading) return;
+        trackTopicEvent('topic_source_selected', {
+          sourceMode: 'comments',
+          commentSourceMode: 'random',
+        });
         setSelectionMode('comments');
         setCommentSourceMode('random');
         setSelectedCommentItem(null);
@@ -1832,6 +1920,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                   onClick={() => {
                     if (row.record) {
                       loadHistory(row.record);
+                    } else {
+                      trackTopicEvent('topic_selected', {
+                        source: 'current',
+                        topicStatus: row.abandoned ? 'abandoned' : 'active',
+                        evidenceCount: row.evidenceCount,
+                      });
                     }
                   }}
                   className={clsx(
@@ -2336,7 +2430,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                             <button
                               key={`${option.topic.title}-${index}`}
                               type="button"
-                              onClick={() => setSelectedOptionIndex(index)}
+                              onClick={() => {
+                                setSelectedOptionIndex(index);
+                                trackTopicEvent('topic_option_selected', {
+                                  sourceMode: activeSourceMode,
+                                  optionIndex: index,
+                                  optionCount: parsedResult.options?.length || 0,
+                                });
+                              }}
                               className={clsx(
                                 'text-left rounded-2xl border p-4 transition-all duration-300 relative group active:scale-[0.98]',
                                 selected

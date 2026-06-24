@@ -1,4 +1,5 @@
 pub mod advisor_ops;
+pub mod analytics;
 pub mod assistant_daemon;
 pub mod audio;
 pub mod brand_workspace;

@@ -927,10 +927,11 @@ export function Settings({
     chat_max_tokens_deepseek: String(DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK),
     wander_deep_think_enabled: false,
     debug_log_enabled: false,
-    diagnostics_upload_consent: 'prompt',
+    diagnostics_upload_consent: 'approved',
     diagnostics_include_advanced_context: false,
     diagnostics_auto_send_same_crash: false,
     diagnostics_last_prompted_at: '',
+    analytics_consent: 'approved',
     release_log_retention_days: '7',
     release_log_max_file_mb: '10',
     cli_runtime_execution_mode: 'host_compatible',
@@ -3917,14 +3918,11 @@ export function Settings({
           chat_max_tokens_deepseek: sanitizeChatMaxTokensInput(String(settings.chat_max_tokens_deepseek || DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK), DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK),
           wander_deep_think_enabled: Boolean(settings.wander_deep_think_enabled),
           debug_log_enabled: Boolean(settings.debug_log_enabled),
-          diagnostics_upload_consent: settings.diagnostics_upload_consent === 'approved'
-            ? 'approved'
-            : settings.diagnostics_upload_consent === 'none'
-              ? 'none'
-              : 'prompt',
+          diagnostics_upload_consent: settings.diagnostics_upload_consent === 'none' ? 'none' : 'approved',
           diagnostics_include_advanced_context: Boolean(settings.diagnostics_include_advanced_context),
           diagnostics_auto_send_same_crash: Boolean(settings.diagnostics_auto_send_same_crash),
           diagnostics_last_prompted_at: String(settings.diagnostics_last_prompted_at || ''),
+          analytics_consent: settings.analytics_consent === 'none' ? 'none' : 'approved',
           release_log_retention_days: String(settings.release_log_retention_days || 7),
           release_log_max_file_mb: String(settings.release_log_max_file_mb || 10),
           cli_runtime_execution_mode: loadedCliRuntimeExecutionMode,
@@ -5798,6 +5796,8 @@ export function Settings({
         diagnostics_include_advanced_context: Boolean(formData.diagnostics_include_advanced_context),
         diagnostics_auto_send_same_crash: Boolean(formData.diagnostics_auto_send_same_crash),
         diagnostics_last_prompted_at: formData.diagnostics_last_prompted_at || null,
+        analytics_consent: formData.analytics_consent,
+        analytics_last_prompted_at: new Date().toISOString(),
         release_log_retention_days: releaseLogRetentionDays,
         release_log_max_file_mb: releaseLogMaxFileMb,
         notifications_json: JSON.stringify(notificationSettings),
@@ -5811,6 +5811,14 @@ export function Settings({
         ),
         chat_max_tokens_default: chatMaxTokensDefault,
         chat_max_tokens_deepseek: chatMaxTokensDeepseek,
+      });
+      void window.ipcRenderer.analytics.track('settings_changed', {
+        surface: 'settings',
+        origin: 'renderer',
+        properties: {
+          settingKey: 'analytics_consent',
+          valueKind: formData.analytics_consent,
+        },
       });
       clearAiSourceDraftDirty(aiSourceSaveGeneration);
       if (formData.debug_log_enabled) {

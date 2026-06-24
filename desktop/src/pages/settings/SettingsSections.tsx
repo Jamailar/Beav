@@ -44,6 +44,7 @@ type SettingsFormData = {
     diagnostics_include_advanced_context: boolean;
     diagnostics_auto_send_same_crash: boolean;
     diagnostics_last_prompted_at: string;
+    analytics_consent: 'none' | 'prompt' | 'approved';
     release_log_retention_days: string;
     release_log_max_file_mb: string;
     proxy_enabled: boolean;

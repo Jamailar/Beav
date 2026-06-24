@@ -54,7 +54,13 @@ fn append_video_generation_event(
             optional_payload_string(payload, "toolCallId")
                 .or_else(|| optional_payload_string(payload, "tool_call_id")),
             project_id,
-            Some(event_payload),
+            Some(event_payload.clone()),
+        );
+        crate::analytics::observe_media_generation_event(
+            state,
+            "video",
+            event_type,
+            &event_payload,
         );
         Ok(())
     });
