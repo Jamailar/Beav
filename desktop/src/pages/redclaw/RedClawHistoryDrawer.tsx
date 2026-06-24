@@ -253,8 +253,8 @@ export function RedClawHistorySidebarSection({
     }, [pinnedRoomIdSet, teamRooms]);
     const sortedSessionList = useMemo(() => {
         return [...sessionList].sort((left, right) => {
-            const leftPinned = Boolean(left.starred) || pinnedSessionIdSet.has(left.id);
-            const rightPinned = Boolean(right.starred) || pinnedSessionIdSet.has(right.id);
+            const leftPinned = left.surface !== 'external' && (Boolean(left.starred) || pinnedSessionIdSet.has(left.id));
+            const rightPinned = right.surface !== 'external' && (Boolean(right.starred) || pinnedSessionIdSet.has(right.id));
             if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
             return 0;
         });
@@ -1142,7 +1142,8 @@ export function RedClawHistorySidebarSection({
                         {sortedSessionList.map((session) => {
                             const isActive = session.id === activeSessionId;
                             const title = displaySessionTitle(session.chatSession?.title?.trim() || '未命名会话', session.surface);
-                            const isPinned = Boolean(session.starred) || pinnedSessionIdSet.has(session.id);
+                            const canPinSession = session.surface !== 'external';
+                            const isPinned = canPinSession && (Boolean(session.starred) || pinnedSessionIdSet.has(session.id));
                             const menuOpen = menuTarget?.type === 'session' && menuTarget.id === session.id;
                             const activity = sessionActivityById[session.id];
                             const isUnread = Boolean(session.unread) || unreadSessionIdSet.has(session.id);
@@ -1231,22 +1232,24 @@ export function RedClawHistorySidebarSection({
                                             )}
                                             onClick={(event) => event.stopPropagation()}
                                         >
-                                            <button
-                                                type="button"
-                                                onClick={(event) => {
-                                                    event.preventDefault();
-                                                    event.stopPropagation();
-                                                    togglePinnedSession(session.id, !isPinned);
-                                                }}
-                                                className={clsx(
-                                                    'flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-surface-secondary hover:text-text-primary',
-                                                    isPinned ? 'text-accent-primary' : 'text-text-tertiary'
-                                                )}
-                                                title={isPinned ? '取消置顶' : '置顶'}
-                                                aria-label={isPinned ? '取消置顶' : '置顶'}
-                                            >
-                                                <Pin className="h-3.5 w-3.5" />
-                                            </button>
+                                            {canPinSession && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(event) => {
+                                                        event.preventDefault();
+                                                        event.stopPropagation();
+                                                        togglePinnedSession(session.id, !isPinned);
+                                                    }}
+                                                    className={clsx(
+                                                        'flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-surface-secondary hover:text-text-primary',
+                                                        isPinned ? 'text-accent-primary' : 'text-text-tertiary'
+                                                    )}
+                                                    title={isPinned ? '取消置顶' : '置顶'}
+                                                    aria-label={isPinned ? '取消置顶' : '置顶'}
+                                                >
+                                                    <Pin className="h-3.5 w-3.5" />
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 onClick={(event) => {
@@ -1275,13 +1278,15 @@ export function RedClawHistorySidebarSection({
                                             onClick={(event) => event.stopPropagation()}
                                             onContextMenu={(event) => event.preventDefault()}
                                         >
-                                            <button
-                                                type="button"
-                                                onMouseDown={(event) => runSessionMenuAction(event, () => setPinnedSession(session.id, !isPinned))}
-                                                className={SESSION_CONTEXT_MENU_ITEM_CLASS}
-                                            >
-                                                {isPinned ? '取消置顶' : '置顶对话'}
-                                            </button>
+                                            {canPinSession && (
+                                                <button
+                                                    type="button"
+                                                    onMouseDown={(event) => runSessionMenuAction(event, () => setPinnedSession(session.id, !isPinned))}
+                                                    className={SESSION_CONTEXT_MENU_ITEM_CLASS}
+                                                >
+                                                    {isPinned ? '取消置顶' : '置顶对话'}
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 onMouseDown={(event) => runSessionMenuAction(event, () => openRenameDialog(session))}
