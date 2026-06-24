@@ -605,6 +605,7 @@ function GeneralSettingsSectionInner({
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
     const [isDebugLogsExpanded, setIsDebugLogsExpanded] = useState(false);
     const [isNotificationExpanded, setIsNotificationExpanded] = useState(false);
+    const shouldShowAppOnboardingReplay = import.meta.env.DEV && Boolean(handleOpenAppOnboarding);
     const founderXUrl = APP_BRAND.founderXUrl.trim();
     const founderXHandle = APP_BRAND.founderXHandle.trim() || founderXUrl;
     const handleOpenFounderX = async () => {
@@ -762,7 +763,7 @@ function GeneralSettingsSectionInner({
                 </div>
             </div>
 
-            {handleOpenAppOnboarding && (
+            {shouldShowAppOnboardingReplay && (
                 <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                         <span className="text-sm font-medium text-text-primary">教程</span>
