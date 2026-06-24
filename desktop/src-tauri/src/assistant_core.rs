@@ -1110,6 +1110,12 @@ pub(crate) fn run_assistant_listener(
         &app,
         &format!("assistant daemon listening on http://{}:{}", host, port),
     );
+    if let Err(error) = crate::refresh_acp_discovery_file(&app, true) {
+        emit_assistant_log(
+            &app,
+            &format!("assistant daemon ACP discovery write failed: {}", error),
+        );
+    }
     let join = thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             match listener.accept() {
@@ -1130,6 +1136,15 @@ pub(crate) fn run_assistant_listener(
                     thread::sleep(Duration::from_millis(500));
                 }
             }
+        }
+        if let Err(error) = crate::refresh_acp_discovery_file(&app, false) {
+            emit_assistant_log(
+                &app,
+                &format!(
+                    "assistant daemon ACP discovery stop update failed: {}",
+                    error
+                ),
+            );
         }
         emit_assistant_log(&app, "assistant daemon stopped");
     });

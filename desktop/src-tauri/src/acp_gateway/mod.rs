@@ -1,6 +1,7 @@
 mod artifacts;
 mod audit;
 mod auth;
+mod discovery;
 mod errors;
 mod guide;
 mod http;
@@ -15,6 +16,7 @@ pub(crate) use audit::project_runtime_event_to_acp_audit;
 pub(crate) use auth::{
     acp_gateway_public_value, apply_acp_gateway_config, create_acp_client, revoke_acp_client,
 };
+pub(crate) use discovery::refresh_acp_discovery_file;
 pub(crate) use http::{handle_acp_gateway_http_request, is_acp_gateway_path};
 pub(crate) use runs::repair_acp_runs_after_load;
 

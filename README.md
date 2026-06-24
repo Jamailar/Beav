@@ -90,7 +90,9 @@
 
 RedBox 的长期方向是成为通用 Agent 的本地自媒体创作资源层。外部 Agent 负责规划和推理，RedBox 负责提供素材、上下文、媒体处理和创作产物管理。
 
-当前优先接入方式是本地 **ACP Agent Gateway**：外部 Agent 先读取 RedBox Creator Agent 的 manifest / guide，再创建或复用 ACP 会话，把创作任务交给 RedBox AI，并通过事件轮询拿到状态和素材/稿件产物引用。详细方案见 [`desktop/docs/redbox-acp-agent-gateway-implementation-plan.md`](desktop/docs/redbox-acp-agent-gateway-implementation-plan.md)，命令行 helper 见 [`desktop/scripts/redbox-acp-client.mjs`](desktop/scripts/redbox-acp-client.mjs)。
+当前优先接入方式是本地 **ACP Agent Gateway**：外部 Agent 先通过本机 discovery 文件或 helper 发现当前端口，再读取 RedBox Creator Agent 的 manifest / guide，创建或复用 ACP 会话，把创作任务交给 RedBox AI，并通过事件轮询拿到状态和素材/稿件产物引用。详细方案见 [`desktop/docs/redbox-acp-agent-gateway-implementation-plan.md`](desktop/docs/redbox-acp-agent-gateway-implementation-plan.md)，使用说明见 [`desktop/docs/redbox-acp-agent-gateway-usage.md`](desktop/docs/redbox-acp-agent-gateway-usage.md)，命令行 helper 见 [`desktop/scripts/redbox-acp-client.mjs`](desktop/scripts/redbox-acp-client.mjs)。
+
+外部 Agent 的推荐发现顺序是：读取 `REDBOX_ACP_DISCOVERY_FILE` 或系统默认的 `RedBox/acp-gateway.json`，再访问其中的 `manifestUrl` / `guideUrl`；如果文件不存在，再回退到默认 `http://127.0.0.1:31937/acp/v1`。这样 Codex、Hermes、OpenClaw 不需要假设用户电脑上的端口固定不变。
 
 | 接入对象 | 使用 RedBox 做什么 | 推荐能力形态 |
 | --- | --- | --- |
