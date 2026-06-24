@@ -10,7 +10,22 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 pub fn list_sessions_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    with_store(state, |store| Ok(json!(list_collab_sessions(&store))))
+    with_store(state, |store| {
+        let sessions = list_collab_sessions(&store)
+            .into_iter()
+            .filter(|session| {
+                let source = session.source.trim();
+                let metadata_source = session
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("source"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                source != "acp" && metadata_source != "acp"
+            })
+            .collect::<Vec<_>>();
+        Ok(json!(sessions))
+    })
 }
 
 pub fn create_session_value(
