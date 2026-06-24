@@ -4,6 +4,7 @@ use crate::member_skill::{attach_member_skill_metadata, detach_member_skill_meta
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
+    load_session_bundle_chat_messages, merge_chat_messages_with_bundle_history,
     tool_results_value_for_session, trace_value_for_session, transcript_resume_messages,
     transcript_session_meta_by_id, update_session_context_record, SessionTranscriptFileMeta,
 };
@@ -3222,7 +3223,12 @@ pub fn handle_chat_sessions_wander_channel(
                         );
                         Vec::new()
                     });
-                    return Ok(json!(messages));
+                    let bundle_messages =
+                        load_session_bundle_chat_messages(state, &session_id).unwrap_or_default();
+                    return Ok(json!(merge_chat_messages_with_bundle_history(
+                        messages,
+                        bundle_messages,
+                    )));
                 }
                 with_store(state, |store| {
                     let mut seen = HashSet::new();
@@ -3237,7 +3243,12 @@ pub fn handle_chat_sessions_wander_channel(
                         .cloned()
                         .collect();
                     messages.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-                    Ok(json!(messages))
+                    let bundle_messages =
+                        load_session_bundle_chat_messages(state, &session_id).unwrap_or_default();
+                    Ok(json!(merge_chat_messages_with_bundle_history(
+                        messages,
+                        bundle_messages,
+                    )))
                 })
             }
             "chat:create-session" => {

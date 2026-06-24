@@ -76,6 +76,87 @@ pub fn load_session_bundle_messages(
     )
 }
 
+fn display_content_from_bundle_message(content: &str) -> String {
+    const ACP_EXTERNAL_PROMPT_MARKER: &str = "\nExternal prompt:\n";
+    if !content.starts_with("External agent request through RedBox ACP.") {
+        return content.to_string();
+    }
+    content
+        .split_once(ACP_EXTERNAL_PROMPT_MARKER)
+        .map(|(_, prompt)| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty())
+        .unwrap_or_else(|| content.to_string())
+}
+
+pub fn load_session_bundle_chat_messages(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<Vec<ChatMessageRecord>, String> {
+    let resolved_session_id =
+        resolve_session_id_or_latest(state, session_id).unwrap_or_else(|_| session_id.to_string());
+    let messages = load_session_bundle_messages(state, &resolved_session_id)?;
+    let mut restored = Vec::<ChatMessageRecord>::new();
+    for (index, item) in messages.into_iter().enumerate() {
+        let role = item
+            .get("role")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|role| *role == "user" || *role == "assistant")
+            .unwrap_or("");
+        if role.is_empty() {
+            continue;
+        }
+        let raw_content = item
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let content = display_content_from_bundle_message(&raw_content);
+        if content.trim().is_empty() {
+            continue;
+        }
+        if let Some(previous) = restored.last() {
+            if previous.role == role && previous.content == content {
+                continue;
+            }
+        }
+        restored.push(ChatMessageRecord {
+            id: format!("bundle-{resolved_session_id}-{index}"),
+            session_id: resolved_session_id.clone(),
+            role: role.to_string(),
+            content,
+            display_content: None,
+            attachment: None,
+            metadata: item.get("metadata").cloned(),
+            created_at: format!("{index:013}"),
+        });
+    }
+    Ok(restored)
+}
+
+pub fn merge_chat_messages_with_bundle_history(
+    mut messages: Vec<ChatMessageRecord>,
+    bundle_messages: Vec<ChatMessageRecord>,
+) -> Vec<ChatMessageRecord> {
+    if bundle_messages.len() <= messages.len() {
+        messages.sort_by(|a, b| compare_created_at(&a.created_at, &b.created_at));
+        return messages;
+    }
+    let mut seen = bundle_messages
+        .iter()
+        .map(|message| (message.role.clone(), message.content.clone()))
+        .collect::<std::collections::HashSet<_>>();
+    let mut merged = bundle_messages;
+    messages.sort_by(|a, b| compare_created_at(&a.created_at, &b.created_at));
+    for message in messages {
+        if seen.insert((message.role.clone(), message.content.clone())) {
+            merged.push(message);
+        }
+    }
+    merged.sort_by(|a, b| compare_created_at(&a.created_at, &b.created_at));
+    merged
+}
+
 pub fn save_session_bundle_messages(
     state: &State<'_, AppState>,
     session_id: &str,
