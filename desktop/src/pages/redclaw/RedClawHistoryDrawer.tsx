@@ -11,7 +11,7 @@ interface RedClawTeamRoom {
     isSystem?: boolean;
 }
 
-export type RedClawHistorySurface = 'redclaw' | 'advisor' | 'room';
+export type RedClawHistorySurface = 'redclaw' | 'advisor' | 'room' | 'external';
 
 export interface RedClawHistoryListItem extends ContextChatSessionListItem {
     surface: RedClawHistorySurface;
