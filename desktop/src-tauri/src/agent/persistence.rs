@@ -19,6 +19,35 @@ use crate::{
     AppState, ChatMessageRecord, ChatSessionRecord,
 };
 
+fn bundle_message_key(message: &Value) -> Option<(String, String)> {
+    let role = message.get("role")?.as_str()?.trim().to_string();
+    let content = message.get("content")?.as_str()?.trim().to_string();
+    if role.is_empty() || content.is_empty() {
+        return None;
+    }
+    Some((role, content))
+}
+
+fn merge_bundle_history(existing: Vec<Value>, next: Vec<Value>) -> Vec<Value> {
+    if existing.len() <= next.len() {
+        return next;
+    }
+    let mut seen = existing
+        .iter()
+        .filter_map(bundle_message_key)
+        .collect::<std::collections::HashSet<_>>();
+    let mut merged = existing;
+    for message in next {
+        if bundle_message_key(&message)
+            .map(|key| seen.insert(key))
+            .unwrap_or(true)
+        {
+            merged.push(message);
+        }
+    }
+    merged
+}
+
 pub fn persist_chat_exchange(
     state: &State<'_, AppState>,
     context: &ChatExchangeContext,
@@ -198,6 +227,10 @@ pub fn persist_chat_exchange(
             .collect::<Vec<_>>();
         Ok(())
     })?;
+    if let Ok(existing_bundle_messages) = load_session_bundle_messages(state, &final_session_id) {
+        bundle_messages_snapshot =
+            merge_bundle_history(existing_bundle_messages, bundle_messages_snapshot);
+    }
     let should_sync_bundle = load_session_bundle_messages(state, &final_session_id)
         .map(|messages| {
             messages
