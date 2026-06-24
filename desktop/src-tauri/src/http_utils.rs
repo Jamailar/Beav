@@ -11,6 +11,10 @@ use crate::background_command;
 
 pub(crate) const HTTP_STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
 
+fn http_console_trace_enabled() -> bool {
+    env::var("REDBOX_HTTP_TRACE").ok().as_deref() == Some("1")
+}
+
 struct CurlJsonDebugCapture {
     dir: PathBuf,
     response_headers_path: PathBuf,
@@ -304,7 +308,9 @@ fn emit_curl_json_diagnostics(
     sections.push(render_debug_section("response_body", response_body));
     sections.push(render_debug_section("stderr", stderr));
     let line = sections.join("\n");
-    eprintln!("{line}");
+    if http_console_trace_enabled() {
+        eprintln!("{line}");
+    }
     crate::append_debug_trace_global(line);
 }
 
@@ -649,7 +655,9 @@ fn execute_curl_json_response_once(
             truncate_http_error(&error),
             truncate_http_debug_payload(&stdout)
         );
-        eprintln!("{line}");
+        if http_console_trace_enabled() {
+            eprintln!("{line}");
+        }
         crate::append_debug_trace_global(line);
         emit_curl_json_diagnostics(
             method,
@@ -682,7 +690,9 @@ fn execute_curl_json_response_once(
             "[http][curl-json] empty_json_body method={} url={} transport={} status={}",
             method, url, transport, status
         );
-        eprintln!("{line}");
+        if http_console_trace_enabled() {
+            eprintln!("{line}");
+        }
         crate::append_debug_trace_global(line);
         if !(200..300).contains(&status) {
             emit_curl_json_diagnostics(
@@ -730,7 +740,9 @@ fn execute_curl_json_response_once(
             raw_body_log.replace('\n', "\\n").replace('\r', "\\r"),
             error
         );
-        eprintln!("{line}");
+        if http_console_trace_enabled() {
+            eprintln!("{line}");
+        }
         crate::append_debug_trace_global(line);
         message
     })?;

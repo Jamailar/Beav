@@ -10109,8 +10109,12 @@ pub(crate) async fn ipc_invoke(
     .await
     .map_err(|error| error.to_string());
     let elapsed_ms = started_at.elapsed().as_millis();
-    if elapsed_ms >= 250 {
-        eprintln!("[ipc][slow] channel={channel_for_log} elapsed_ms={elapsed_ms}");
+    if elapsed_ms >= 1_000 {
+        let line = format!("[ipc][slow] channel={channel_for_log} elapsed_ms={elapsed_ms}");
+        crate::append_debug_trace_global(line.clone());
+        if std::env::var("REDBOX_IPC_SLOW_LOG").ok().as_deref() == Some("1") {
+            eprintln!("{line}");
+        }
     }
     result.and_then(|result| result)
 }

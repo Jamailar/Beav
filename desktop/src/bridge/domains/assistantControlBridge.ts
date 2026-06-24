@@ -7,6 +7,8 @@ export function createAssistantControlBridge(core: BridgeCore) {
       start: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-start', payload || {}),
       stop: () => core.invokeChannel('assistant:daemon-stop'),
       setConfig: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-set-config', payload || {}),
+      createAcpClient: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-acp-client-create', payload || {}),
+      revokeAcpClient: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-acp-client-revoke', payload || {}),
       startWeixinLogin: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-weixin-login-start', payload || {}),
       waitForWeixinLogin: (payload?: Record<string, unknown>) => core.invokeChannel('assistant:daemon-weixin-login-wait', payload || {}),
       onStatus: (listener: Listener) => core.on('assistant:daemon-status', listener),

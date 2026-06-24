@@ -3,24 +3,53 @@ import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import { useI18n } from '../../i18n';
 import { SAFE_REMARK_PLUGINS } from '../../utils/markdownRemarkPlugins';
-import type { AppUpdateNoticePayload } from './useAppUpdateNotice';
+import type { AppUpdateInstallState, AppUpdateNoticePayload } from './useAppUpdateNotice';
 
 interface AppUpdateNoticeModalProps {
   notice: AppUpdateNoticePayload;
   publishedDateLabel: string;
   isOpeningReleasePage: boolean;
+  isInstallingUpdate: boolean;
+  installState: AppUpdateInstallState;
   openReleasePage: () => void;
+  installUpdate: () => void;
   closeNotice: () => void;
+}
+
+function formatUpdateProgress(state: AppUpdateInstallState): string {
+  if (state.status !== 'downloading') return '';
+  if (!state.contentLength || state.contentLength <= 0) return '';
+  const percent = Math.max(0, Math.min(100, Math.round((state.downloaded / state.contentLength) * 100)));
+  return `${percent}%`;
 }
 
 export function AppUpdateNoticeModal({
   notice,
   publishedDateLabel,
   isOpeningReleasePage,
+  isInstallingUpdate,
+  installState,
   openReleasePage,
+  installUpdate,
   closeNotice,
 }: AppUpdateNoticeModalProps) {
   const { t } = useI18n();
+  const updateProgress = formatUpdateProgress(installState);
+  const installStatusLabel = notice.mode === 'current'
+    ? ''
+    : installState.status === 'checking'
+      ? t('layout.updateChecking')
+      : installState.status === 'downloading'
+        ? updateProgress
+          ? t('layout.updateDownloadingProgress', { progress: updateProgress })
+          : t('layout.updateDownloading')
+        : installState.status === 'installing'
+          ? t('layout.updateInstalling')
+          : installState.status === 'installed'
+            ? t('layout.updateInstalled')
+            : installState.status === 'failed'
+              ? t('layout.updateFailed')
+              : '';
 
   return (
     <div
@@ -58,19 +87,36 @@ export function AppUpdateNoticeModal({
                   {t('layout.currentVersion', { version: notice.currentVersion })}
                   {publishedDateLabel ? ` · ${t('layout.publishedAt', { date: publishedDateLabel })}` : ''}
                 </div>
+                {installStatusLabel && (
+                  <div className="text-xs text-text-tertiary mt-2">{installStatusLabel}</div>
+                )}
               </div>
             </div>
             {notice.mode !== 'current' && (
-              <button
-                type="button"
-                onClick={() => {
-                  void openReleasePage();
-                }}
-                disabled={isOpeningReleasePage}
-                className="h-11 px-5 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 transition-colors whitespace-nowrap"
-              >
-                {isOpeningReleasePage ? t('layout.opening') : t('layout.downloadAndInstall')}
-              </button>
+              <div className="flex items-center gap-2">
+                {installState.status === 'failed' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void openReleasePage();
+                    }}
+                    disabled={isOpeningReleasePage}
+                    className="h-11 px-4 rounded-lg border border-border text-text-secondary text-sm font-medium hover:bg-surface-secondary disabled:opacity-60 transition-colors whitespace-nowrap"
+                  >
+                    {isOpeningReleasePage ? t('layout.opening') : t('layout.openDownloadPage')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    void installUpdate();
+                  }}
+                  disabled={isInstallingUpdate}
+                  className="h-11 px-5 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 transition-colors whitespace-nowrap"
+                >
+                  {isInstallingUpdate ? t('layout.updating') : t('layout.installUpdate')}
+                </button>
+              </div>
             )}
           </div>
         </div>

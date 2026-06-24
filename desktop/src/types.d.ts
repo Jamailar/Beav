@@ -1800,9 +1800,12 @@ declare global {
         render: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary; outputPath?: string; compositionPath?: string; subtitlePath?: string | null }>;
       };
       getAppVersion: () => Promise<string>;
-      checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string } }>;
+      checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string; installable?: boolean } }>;
+      installAppUpdate: () => Promise<{ success: boolean; installed?: boolean; hasUpdate?: boolean; inFlight?: boolean; error?: string }>;
       onAppUpdateAvailable: (listener: (...args: unknown[]) => void) => void;
       offAppUpdateAvailable: (listener: (...args: unknown[]) => void) => void;
+      onAppUpdateInstallProgress: (listener: (...args: unknown[]) => void) => void;
+      offAppUpdateInstallProgress: (listener: (...args: unknown[]) => void) => void;
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
       openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string; url?: string }>;
       openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
@@ -2764,6 +2767,33 @@ declare global {
             endpointPath: string;
             webhookUrl: string;
           };
+          acpGateway?: {
+            enabled: boolean;
+            requireToken: boolean;
+            localOnly: boolean;
+            endpointPath: string;
+            manifestPath: string;
+            guidePath: string;
+            defaultRuntimeMode: string;
+            defaultClientLabel: string;
+            lastError?: string | null;
+            activeRunCount: number;
+            baseUrl: string;
+            manifestUrl: string;
+            guideUrl: string;
+            clients: Array<{
+              id: string;
+              name: string;
+              kind: string;
+              tokenPreview?: string | null;
+              allowedScopes: string[];
+              disabled: boolean;
+              createdAt: number;
+              updatedAt: number;
+              lastSeenAt?: number | null;
+              metadata?: Record<string, unknown> | null;
+            }>;
+          };
           weixin: {
             enabled: boolean;
             endpointPath: string;
@@ -2817,6 +2847,16 @@ declare global {
             sidecarCwd?: string;
             sidecarEnv?: Record<string, string>;
           };
+          acpGateway?: {
+            enabled?: boolean;
+            requireToken?: boolean;
+            localOnly?: boolean;
+            endpointPath?: string;
+            manifestPath?: string;
+            guidePath?: string;
+            defaultRuntimeMode?: string;
+            defaultClientLabel?: string;
+          };
         }) => Promise<unknown>;
         stop: () => Promise<unknown>;
         setConfig: (payload?: {
@@ -2852,7 +2892,33 @@ declare global {
             sidecarCwd?: string;
             sidecarEnv?: Record<string, string>;
           };
+          acpGateway?: {
+            enabled?: boolean;
+            requireToken?: boolean;
+            localOnly?: boolean;
+            endpointPath?: string;
+            manifestPath?: string;
+            guidePath?: string;
+            defaultRuntimeMode?: string;
+            defaultClientLabel?: string;
+          };
         }) => Promise<unknown>;
+        createAcpClient: (payload?: {
+          name?: string;
+          kind?: string;
+        }) => Promise<{
+          success?: boolean;
+          client?: Record<string, unknown>;
+          token?: string;
+          status?: unknown;
+        }>;
+        revokeAcpClient: (payload?: {
+          clientId?: string;
+        }) => Promise<{
+          success?: boolean;
+          client?: Record<string, unknown>;
+          status?: unknown;
+        }>;
         startWeixinLogin: (payload?: {
           accountId?: string;
           force?: boolean;

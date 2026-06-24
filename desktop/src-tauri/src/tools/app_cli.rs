@@ -27,6 +27,9 @@ use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
+use crate::tools::action_aliases::{
+    canonical_app_cli_action_for_policy, normalized_app_cli_action_key,
+};
 use crate::tools::plan::build_tool_registry_plan_for_session;
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{
@@ -228,83 +231,6 @@ fn authoring_project_kind_label(kind: AuthoringProjectKind) -> &'static str {
     }
 }
 
-fn normalized_app_cli_action_key(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(|ch| ch.to_lowercase())
-        .collect()
-}
-
-fn canonical_app_cli_action_for_policy(action: &str) -> &str {
-    match normalized_app_cli_action_key(action).as_str() {
-        "pluginslist" | "pluginsconnectors" => "plugins.discover",
-        "pluginsmarketplace" | "pluginscodexmarketplace" | "pluginsdiscoverlocal" => {
-            "plugins.discover"
-        }
-        "pluginsinstallcodex" | "pluginsrequestinstall" => "plugins.install",
-        "skillsinstallfromrepo"
-        | "skillsinstallfromgithub"
-        | "skillsuninstall"
-        | "skillsdelete" => "skills.manage",
-        "skillslist" | "skillsread" | "skillsget" => "skills.inspect",
-        "taskbriefcontext" | "taskbriefgetcontext" | "taskbriefcompactcontext" => {
-            "taskBrief.context"
-        }
-        "memorylist" | "memoryrecall" => "memory.search",
-        "memoryadd" => "memory.note",
-        "memoryupdate" | "memoryarchive" | "memoryrebuildindex" | "memorydiagnostics" => {
-            "memory.manage"
-        }
-        "redclawrunnerstatus"
-        | "redclawrunnerstart"
-        | "redclawrunnerstop"
-        | "redclawrunnersetconfig" => "runner.manage",
-        "redclawprofileupdate" | "redclawprofilecompletestyledefinition" => "profile.manage",
-        "redclawtaskpreview" | "redclawtasklist" | "redclawtaskstats" | "taskpreview"
-        | "tasklist" => "task.read",
-        "redclawtaskcreate" | "redclawtaskconfirm" | "redclawtaskupdate" | "redclawtaskcancel" => {
-            "task.manage"
-        }
-        "assetscreate"
-        | "assetsupdate"
-        | "assetsdelete"
-        | "assetscategoriescreate"
-        | "subjectscreate"
-        | "subjectsupdate"
-        | "subjectsdelete"
-        | "subjectscategoriescreate" => "assets.manage",
-        "mcplist"
-        | "mcpsessions"
-        | "mcpget"
-        | "mcplisttools"
-        | "mcplistresources"
-        | "mcplistresourcetemplates" => "mcp.inspect",
-        "mcpadd" | "mcpremove" | "mcpdelete" | "mcpenable" | "mcpdisable" | "mcpdiscoverlocal"
-        | "mcpimportlocal" | "mcpsave" | "mcptest" | "mcpdisconnect" | "mcpdisconnectall"
-        | "mcpoauthstatus" => "mcp.manage",
-        "mcptools" => "mcp.inspect",
-        "teamsessioncreate"
-        | "teammemberspawn"
-        | "teammembermatch"
-        | "teammemberrename"
-        | "teammembershutdown"
-        | "teammemberinterrupt"
-        | "teammembercancel"
-        | "teammemberresume"
-        | "teammemberwait"
-        | "teamtaskcreate"
-        | "teamtaskupdate"
-        | "teammessagesend"
-        | "teamreportrequest"
-        | "teamreportsubmit"
-        | "teamartifactattach"
-        | "teamblockerraise" => "team.control",
-        "redclawprofilebundle" | "redclawprofileread" => "profile.read",
-        _ => action,
-    }
-}
-
 fn compat_metadata(arguments: &Value) -> Option<Value> {
     payload_field(arguments, "__compat")
         .cloned()
@@ -337,7 +263,7 @@ fn normalized_structured_arguments(arguments: &Value) -> Value {
     }
     normalized.insert("action".to_string(), json!(action));
     normalized.insert("payload".to_string(), payload);
-    Value::Object(normalized)
+    crate::tools::action_aliases::canonicalize_app_cli_arguments(&Value::Object(normalized))
 }
 
 fn action_success_envelope(action: &str, data: Value, compat: Option<Value>) -> Value {
@@ -1367,6 +1293,8 @@ impl<'a> AppCliExecutor<'a> {
                 self.handle_subjects(&tokens, payload)
             }
             "assetsmanage" | "subjectsmanage" => self.handle_assets_manage(payload),
+            "spacesmanage" => self.handle_spaces_manage(payload),
+            "workspacesetup" => self.handle_workspace_setup(payload),
             "subjectscreate" | "assetscreate" => {
                 let resolved = self.asset_payload_with_resolved_category(payload)?;
                 let tokens = vec!["create".to_string()];
@@ -3398,6 +3326,7 @@ fn help_response(namespace: Option<&str>) -> Value {
         "spaces" => vec![
             "spaces list",
             "spaces get --id <spaceId>",
+            "spaces create --name <name>",
             "spaces rename --id <spaceId> --name <newName>",
             "spaces delete --id <spaceId>",
             "spaces switch --id <spaceId>",
@@ -4228,10 +4157,19 @@ mod tests {
             ("mcp.disconnect", "mcp.manage"),
             ("mcp.disconnectAll", "mcp.manage"),
             ("mcp.oauthStatus", "mcp.manage"),
+            ("asset.create", "assets.manage"),
+            ("asset.update", "assets.manage"),
+            ("asset.delete", "assets.manage"),
+            ("asset.categories.create", "assets.manage"),
             ("assets.create", "assets.manage"),
             ("assets.update", "assets.manage"),
             ("assets.delete", "assets.manage"),
             ("assets.categories.create", "assets.manage"),
+            ("space.create", "spaces.manage"),
+            ("spaces.create", "spaces.manage"),
+            ("spaces.switch", "spaces.manage"),
+            ("spaces.rename", "spaces.manage"),
+            ("spaces.delete", "spaces.manage"),
             ("team.session.create", "team.control"),
             ("team.member.spawn", "team.control"),
             ("team.member.match", "team.control"),
@@ -4308,6 +4246,40 @@ mod tests {
         assert_eq!(
             normalized.pointer("/payload/reason"),
             Some(&json!("重新创建任务"))
+        );
+    }
+
+    #[test]
+    fn normalized_structured_arguments_canonicalizes_legacy_asset_action() {
+        let normalized = normalized_structured_arguments(&json!({
+            "action": "asset.categories.create",
+            "payload": { "name": "在职备考/脱产备考日常" }
+        }));
+        assert_eq!(normalized.get("action"), Some(&json!("assets.manage")));
+        assert_eq!(
+            normalized.pointer("/payload/operation"),
+            Some(&json!("category.create"))
+        );
+        assert_eq!(
+            normalized.pointer("/payload/name"),
+            Some(&json!("在职备考/脱产备考日常"))
+        );
+    }
+
+    #[test]
+    fn normalized_structured_arguments_canonicalizes_legacy_space_action() {
+        let normalized = normalized_structured_arguments(&json!({
+            "action": "spaces.create",
+            "payload": { "name": "护理考研账号" }
+        }));
+        assert_eq!(normalized.get("action"), Some(&json!("spaces.manage")));
+        assert_eq!(
+            normalized.pointer("/payload/operation"),
+            Some(&json!("create"))
+        );
+        assert_eq!(
+            normalized.pointer("/payload/name"),
+            Some(&json!("护理考研账号"))
         );
     }
 

@@ -83,6 +83,21 @@ function windowsTargetXwinArch(target) {
   return null;
 }
 
+function isWindowsUpdaterArchive(filePath) {
+  const base = path.basename(filePath).toLowerCase();
+  return base.endsWith('-setup.exe.zip') || base.endsWith('.nsis.zip') || base.endsWith('.msi.zip');
+}
+
+function withDefaultTauriSigningEnv(env) {
+  if (env.TAURI_SIGNING_PRIVATE_KEY || env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+    return env;
+  }
+  return {
+    ...env,
+    TAURI_SIGNING_PRIVATE_KEY_PATH: path.join(os.homedir(), '.tauri', 'redbox-updater.key'),
+  };
+}
+
 async function resolveWindowsArtifacts(bundleRoot) {
   const nsisDir = path.join(bundleRoot, 'nsis');
   const setupPath = await findNewestFile(nsisDir, (filePath) => filePath.endsWith('-setup.exe'));
@@ -90,8 +105,16 @@ async function resolveWindowsArtifacts(bundleRoot) {
     nsisDir,
     (filePath) => filePath.endsWith('.exe') && !filePath.endsWith('-setup.exe'),
   );
-  const portableZipPath = await findNewestFile(nsisDir, (filePath) => filePath.endsWith('.zip'));
-  return { nsisDir, setupPath, portableExePath, portableZipPath };
+  const portableZipPath = await findNewestFile(
+    nsisDir,
+    (filePath) => filePath.endsWith('.zip') && !isWindowsUpdaterArchive(filePath),
+  );
+  const updaterArchivePath = await findNewestFile(nsisDir, isWindowsUpdaterArchive);
+  const updaterSignaturePath = updaterArchivePath ? `${updaterArchivePath}.sig` : null;
+  if (!updaterArchivePath || !(await pathExists(updaterSignaturePath))) {
+    throw new Error(`Unable to locate generated Windows updater archive and signature in ${nsisDir}`);
+  }
+  return { nsisDir, setupPath, portableExePath, portableZipPath, updaterArchivePath, updaterSignaturePath };
 }
 
 async function resolveFetchedWindowsArtifacts(localDir) {
@@ -100,8 +123,13 @@ async function resolveFetchedWindowsArtifacts(localDir) {
     localDir,
     (filePath) => filePath.endsWith('.exe') && !filePath.endsWith('-setup.exe'),
   );
-  const portableZipPath = await findNewestFile(localDir, (filePath) => filePath.endsWith('.zip'));
-  return { setupPath, portableExePath, portableZipPath };
+  const portableZipPath = await findNewestFile(
+    localDir,
+    (filePath) => filePath.endsWith('.zip') && !isWindowsUpdaterArchive(filePath),
+  );
+  const updaterArchivePath = await findNewestFile(localDir, isWindowsUpdaterArchive);
+  const updaterSignaturePath = updaterArchivePath ? `${updaterArchivePath}.sig` : null;
+  return { setupPath, portableExePath, portableZipPath, updaterArchivePath, updaterSignaturePath };
 }
 
 async function resolveFetchedWindowsArtifactsForTarget(localDir, target) {
@@ -126,9 +154,17 @@ async function resolveFetchedWindowsArtifactsForTarget(localDir, target) {
   );
   const portableZipPath = await findNewestFile(
     localDir,
-    (filePath) => filePath.endsWith('.zip') && fileMatchesTarget(filePath),
+    (filePath) => filePath.endsWith('.zip') && !isWindowsUpdaterArchive(filePath) && fileMatchesTarget(filePath),
   );
-  return { setupPath, portableExePath, portableZipPath };
+  const updaterArchivePath = await findNewestFile(
+    localDir,
+    (filePath) => isWindowsUpdaterArchive(filePath) && fileMatchesTarget(filePath),
+  );
+  const updaterSignaturePath = updaterArchivePath ? `${updaterArchivePath}.sig` : null;
+  if (!updaterArchivePath || !(await pathExists(updaterSignaturePath))) {
+    throw new Error(`Unable to locate fetched Windows updater archive and signature for ${target} in ${localDir}`);
+  }
+  return { setupPath, portableExePath, portableZipPath, updaterArchivePath, updaterSignaturePath };
 }
 
 async function writeSummary(summary) {
@@ -240,7 +276,13 @@ async function buildLocalTarget({ target, runner, signCommand, hostIsWindows, bu
     );
 
     const bundleRoot = bundleRootForTarget(target);
-    const { setupPath, portableExePath, portableZipPath } = await resolveWindowsArtifacts(bundleRoot);
+    const {
+      setupPath,
+      portableExePath,
+      portableZipPath,
+      updaterArchivePath,
+      updaterSignaturePath,
+    } = await resolveWindowsArtifacts(bundleRoot);
     if (!setupPath) {
       throw new Error(`Unable to locate generated NSIS installer in ${bundleRoot}`);
     }
@@ -255,6 +297,14 @@ async function buildLocalTarget({ target, runner, signCommand, hostIsWindows, bu
     const portableZipArtifactPath = portableZipPath
       ? await copyArtifactToDir(portableZipPath, installerArtifactsDir('windows'))
       : null;
+    const updaterArtifactPath = await copyArtifactToDir(
+      updaterArchivePath,
+      installerArtifactsDir('windows'),
+    );
+    const updaterSignatureArtifactPath = await copyArtifactToDir(
+      updaterSignaturePath,
+      installerArtifactsDir('windows'),
+    );
 
     return {
       target,
@@ -263,9 +313,13 @@ async function buildLocalTarget({ target, runner, signCommand, hostIsWindows, bu
       setupPath,
       portableExePath,
       portableZipPath,
+      updaterArchivePath,
+      updaterSignaturePath,
       installerPath,
       portableExeArtifactPath,
       portableZipArtifactPath,
+      updaterArtifactPath,
+      updaterSignatureArtifactPath,
     };
   } finally {
     await tempConfig.cleanup();
@@ -285,7 +339,7 @@ async function buildLocally({ targets, runner, signCommand, requireSigning }) {
 
   const hostIsWindows = process.platform === 'win32';
   let clangWrappers = null;
-  let buildEnv = process.env;
+  let buildEnv = withDefaultTauriSigningEnv(process.env);
   if (hostIsWindows) {
     logStep('Using native Windows build path');
   } else {
@@ -362,9 +416,13 @@ async function buildLocally({ targets, runner, signCommand, requireSigning }) {
     setupPath: artifacts[0]?.setupPath || null,
     portableExePath: artifacts[0]?.portableExePath || null,
     portableZipPath: artifacts[0]?.portableZipPath || null,
+    updaterArchivePath: artifacts[0]?.updaterArchivePath || null,
+    updaterSignaturePath: artifacts[0]?.updaterSignaturePath || null,
     installerPath: artifacts[0]?.installerPath || null,
     portableExeArtifactPath: artifacts[0]?.portableExeArtifactPath || null,
     portableZipArtifactPath: artifacts[0]?.portableZipArtifactPath || null,
+    updaterArtifactPath: artifacts[0]?.updaterArtifactPath || null,
+    updaterSignatureArtifactPath: artifacts[0]?.updaterSignatureArtifactPath || null,
     artifacts,
   };
 
@@ -384,6 +442,8 @@ async function buildLocally({ targets, runner, signCommand, requireSigning }) {
       console.log(`  portable zip: ${artifact.portableZipPath}`);
       console.log(`  portable zip copy: ${artifact.portableZipArtifactPath}`);
     }
+    console.log(`  updater: ${artifact.updaterArtifactPath}`);
+    console.log(`  updater signature: ${artifact.updaterSignatureArtifactPath}`);
   }
   console.log(`- summary: ${summaryPath}`);
 }
@@ -459,6 +519,7 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
         'node ./scripts/tauri-preflight.mjs',
         'pnpm install --frozen-lockfile',
         'rustup target add aarch64-pc-windows-msvc x86_64-pc-windows-msvc i686-pc-windows-msvc',
+        'export TAURI_SIGNING_PRIVATE_KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/redbox-updater.key}"',
         remoteCleanupNsisDirs,
         `env ${remoteEnv.join(' ')} node ${shellQuote(remoteScriptPath)}`,
       ].join(' && '),
@@ -480,6 +541,7 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
         '--include=*/',
         '--include=*.exe',
         '--include=*.zip',
+        '--include=*.sig',
         '--include=*.yml',
         '--include=*.blockmap',
         '--exclude=*',
@@ -497,7 +559,13 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
   const packageJson = await readPackageJson();
   const artifacts = [];
   for (const target of targets) {
-    const { setupPath, portableExePath, portableZipPath } =
+    const {
+      setupPath,
+      portableExePath,
+      portableZipPath,
+      updaterArchivePath,
+      updaterSignaturePath,
+    } =
       await resolveFetchedWindowsArtifactsForTarget(localWinDir, target);
 
     if (!setupPath) {
@@ -513,9 +581,13 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
       setupPath,
       portableExePath,
       portableZipPath,
+      updaterArchivePath,
+      updaterSignaturePath,
       installerPath: setupPath,
       portableExeArtifactPath: portableExePath,
       portableZipArtifactPath: portableZipPath,
+      updaterArtifactPath: updaterArchivePath,
+      updaterSignatureArtifactPath: updaterSignaturePath,
     });
   }
 
@@ -532,9 +604,13 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
     setupPath: artifacts[0]?.setupPath || null,
     portableExePath: artifacts[0]?.portableExePath || null,
     portableZipPath: artifacts[0]?.portableZipPath || null,
+    updaterArchivePath: artifacts[0]?.updaterArchivePath || null,
+    updaterSignaturePath: artifacts[0]?.updaterSignaturePath || null,
     installerPath: artifacts[0]?.installerPath || null,
     portableExeArtifactPath: artifacts[0]?.portableExeArtifactPath || null,
     portableZipArtifactPath: artifacts[0]?.portableZipArtifactPath || null,
+    updaterArtifactPath: artifacts[0]?.updaterArtifactPath || null,
+    updaterSignatureArtifactPath: artifacts[0]?.updaterSignatureArtifactPath || null,
     artifacts,
   };
 
@@ -551,6 +627,8 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
     if (artifact.portableZipArtifactPath) {
       console.log(`  portable zip: ${artifact.portableZipArtifactPath}`);
     }
+    console.log(`  updater: ${artifact.updaterArtifactPath}`);
+    console.log(`  updater signature: ${artifact.updaterSignatureArtifactPath}`);
   }
   console.log(`- summary: ${summaryPath}`);
 }

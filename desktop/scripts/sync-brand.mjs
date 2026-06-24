@@ -386,6 +386,7 @@ function resolveBrand(config, requestedVariant) {
     githubRepoUrl: variantConfig.githubRepoUrl || '',
     founderXHandle: variantConfig.founderXHandle || '',
     founderXUrl: variantConfig.founderXUrl || '',
+    developerWechatQrSrc: variantConfig.developerWechatQrSrc || '',
     theme,
   };
 }
@@ -469,6 +470,7 @@ export async function syncBrand({ cwd = process.cwd(), variant: requestedVariant
     githubRepoUrl: brand.githubRepoUrl,
     founderXHandle: brand.founderXHandle,
     founderXUrl: brand.founderXUrl,
+    developerWechatQrSrc: brand.developerWechatQrSrc,
     theme: brand.theme,
   };
 

@@ -54,6 +54,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "app",
       "dmg",
@@ -80,5 +81,16 @@
       "../branding/variants/redbox/icons/icon.icns",
       "../branding/variants/redbox/icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1QThCMzUzODYzNUMzNjQKUldSa3d6V0dVN09vZFc5SGVYOTF4M2RRbG5keEZ5NGV6Y24yOHdXeDlSR3N1Q29XQXFHZFpHM0kK",
+      "endpoints": [
+        "https://redbox.ziz.hk/api/updates/tauri?target={{target}}&arch={{arch}}&currentVersion={{current_version}}&bundleType={{bundle_type}}"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

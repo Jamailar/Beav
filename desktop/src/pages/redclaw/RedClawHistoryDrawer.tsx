@@ -829,8 +829,17 @@ export function RedClawHistorySidebarSection({
     const sessionWorkingDirectory = (session: RedClawHistoryListItem): string => {
         const direct = String(session.workingDirectory || '').trim();
         if (direct) return direct;
-        const metadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : null;
+        const metadata = session.metadata && typeof session.metadata === 'object'
+            ? session.metadata as Record<string, unknown>
+            : null;
         return String(metadata?.workingDirectory || '').trim();
+    };
+    const sessionAcpLabel = (session: RedClawHistoryListItem): string => {
+        const metadata = session.metadata && typeof session.metadata === 'object'
+            ? session.metadata as Record<string, unknown>
+            : null;
+        if (String(metadata?.source || '').trim() !== 'acp') return '';
+        return String(metadata?.sourceLabel || 'ACP: External Agent').trim();
     };
 
     const openSessionContextMenu = (
@@ -1140,6 +1149,7 @@ export function RedClawHistorySidebarSection({
                             const isAutomationSession = isAutomationHistorySession(session);
                             const workingDirectory = sessionWorkingDirectory(session);
                             const canUseWorkingDirectory = Boolean(workingDirectory);
+                            const acpLabel = sessionAcpLabel(session);
                             const platformLabel = /mac/i.test(navigator.platform || '') ? '在 Finder 中显示' : '在文件资源管理器中显示';
 
                             return (
@@ -1187,6 +1197,11 @@ export function RedClawHistorySidebarSection({
                                                     strokeWidth={1.75}
                                                     aria-label="定时任务"
                                                 />
+                                            )}
+                                            {acpLabel && (
+                                                <span className="shrink-0 rounded border border-border bg-surface-secondary/60 px-1.5 py-0.5 text-[9px] font-semibold text-text-tertiary">
+                                                    {acpLabel}
+                                                </span>
                                             )}
                                         </div>
 

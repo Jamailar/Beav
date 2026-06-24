@@ -1748,6 +1748,72 @@ fn assets_manage_input_schema() -> Value {
     )
 }
 
+fn spaces_manage_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": ["list", "get", "create", "switch", "rename", "delete", "ensure"],
+                    "description": "One workspace space management operation. Use ensure when the user asks for an independent named workspace."
+                }),
+            ),
+            ("id", string_schema("Space id for get/switch/rename/delete.")),
+            ("spaceId", string_schema("Alias for id.")),
+            ("name", string_schema("Space display name for create/ensure/rename.")),
+            (
+                "activate",
+                json!({
+                    "type": "boolean",
+                    "description": "For ensure, switch to the existing or newly created space. Defaults to true."
+                }),
+            ),
+        ],
+        &["operation"],
+        Some("List, create, switch, rename, delete, or ensure a named independent workspace space. Creating a new space is membership-gated by the host."),
+    )
+}
+
+fn workspace_setup_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "spaceName",
+                string_schema("Independent workspace space name to ensure and activate."),
+            ),
+            ("name", string_schema("Alias for spaceName.")),
+            (
+                "activate",
+                json!({
+                    "type": "boolean",
+                    "description": "Switch to the ensured space before initializing categories. Defaults to true."
+                }),
+            ),
+            (
+                "assetCategories",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 20,
+                    "description": "Asset library categories to ensure in the active space."
+                }),
+            ),
+            (
+                "categories",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 20,
+                    "description": "Alias for assetCategories."
+                }),
+            ),
+        ],
+        &[],
+        Some("Set up a named independent workspace space and initialize missing asset categories. Creating a new space remains membership-gated."),
+    )
+}
+
 fn assets_generate_character_card_input_schema() -> Value {
     object_schema(
         &[
@@ -4305,6 +4371,8 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "voice" => Some("voice"),
         "generation" => Some("generation"),
         "media" => Some("media"),
+        "spaces" => Some("space"),
+        "workspace" => Some("workspace"),
         "session" => Some("session"),
         "web" => Some("web"),
         "skills" => Some("skill"),
@@ -5150,6 +5218,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         description: "Generate a reusable 16:9 character card image for a character asset, then write the result back to the asset image set and media library.",
         input_schema: assets_generate_character_card_input_schema,
         output_schema: subjects_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "spaces.manage",
+        namespace: "spaces",
+        description: "Manage independent workspace spaces: list, get, create, switch, rename, delete, or ensure a named space. New space creation is host membership-gated.",
+        input_schema: spaces_manage_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "workspace.setup",
+        namespace: "workspace",
+        description: "Ensure and activate a named independent workspace space, then initialize missing asset categories. Use for requests like creating a dedicated workspace and setting up categories.",
+        input_schema: workspace_setup_input_schema,
+        output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
@@ -7380,6 +7470,8 @@ mod tests {
         assert!(actions.contains(&"assets.search"));
         assert!(actions.contains(&"assets.get"));
         assert!(actions.contains(&"assets.manage"));
+        assert!(actions.contains(&"spaces.manage"));
+        assert!(actions.contains(&"workspace.setup"));
         assert!(!actions.contains(&"assets.create"));
         assert!(!actions.contains(&"assets.update"));
         assert!(actions.contains(&"assets.generateCharacterCard"));

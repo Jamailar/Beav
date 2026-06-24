@@ -523,6 +523,8 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "generation.job.get",
     "assets.manage",
     "assets.generateCharacterCard",
+    "spaces.manage",
+    "workspace.setup",
     "voice.speech",
     "voice.list",
     "voice.get",

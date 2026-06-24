@@ -50,7 +50,13 @@ function collectInstallerLines(summary) {
   if (artifacts.length > 0) {
     for (const artifact of artifacts) {
       const target = artifact?.target ? ` (${artifact.target})` : '';
-      for (const key of ['installerPath', 'debArtifactPath', 'zipPath']) {
+      for (const key of [
+        'installerPath',
+        'debArtifactPath',
+        'zipPath',
+        'updaterArtifactPath',
+        'updaterSignatureArtifactPath',
+      ]) {
         const value = String(artifact?.[key] || '').trim();
         if (value) {
           lines.push(`${key}${target}: ${value}`);
@@ -60,7 +66,13 @@ function collectInstallerLines(summary) {
     return lines;
   }
 
-  for (const key of ['installerPath', 'debArtifactPath', 'zipPath']) {
+  for (const key of [
+    'installerPath',
+    'debArtifactPath',
+    'zipPath',
+    'updaterArtifactPath',
+    'updaterSignatureArtifactPath',
+  ]) {
     const value = String(summary?.[key] || '').trim();
     if (value) {
       lines.push(`${key}: ${value}`);

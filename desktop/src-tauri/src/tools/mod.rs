@@ -1,3 +1,4 @@
+pub mod action_aliases;
 pub mod action_search;
 pub mod app_cli;
 pub mod bash;

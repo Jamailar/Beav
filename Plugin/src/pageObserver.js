@@ -1814,14 +1814,7 @@ function removeXhsDomButtons() {
 
 function getRedboxOverlayConfig(pageInfo) {
     if (USER_PROFILE_FEATURE_ENABLED && (isXhsProfilePath() || pageInfo?.kind === 'xhs-profile')) {
-        return {
-            variant: 'profile',
-            title: 'RedBox 博主采集',
-            subtitle: '小红书博主页',
-            actions: [
-                { label: '采集博主笔记', action: 'bloggerNotes', primary: true, title: '采集当前博主主页笔记' },
-            ],
-        };
+        return null;
     }
     if (isXhsNoteDetailPath() || /^xhs-(note|image|video)$/i.test(String(pageInfo?.kind || ''))) {
         return {
@@ -1926,9 +1919,12 @@ function getRedboxOverlayConfig(pageInfo) {
     };
 }
 
-function renderXhsOverlay(pageInfo) {
+function renderXhsOverlay(pageInfo, config = getRedboxOverlayConfig(pageInfo)) {
     if (!xhsOverlayHost?.shadowRoot) return;
-    const config = getRedboxOverlayConfig(pageInfo);
+    if (!config) {
+        removeXhsOverlay();
+        return;
+    }
     const shadow = xhsOverlayHost.shadowRoot;
     const dock = shadow.querySelector('.dock');
     if (!dock) return;
@@ -1986,8 +1982,13 @@ function renderXhsOverlay(pageInfo) {
 }
 
 function ensureXhsOverlay(pageInfo) {
+    const config = getRedboxOverlayConfig(pageInfo);
+    if (!config) {
+        removeXhsOverlay();
+        return;
+    }
     if (xhsOverlayHost?.isConnected) {
-        renderXhsOverlay(pageInfo);
+        renderXhsOverlay(pageInfo, config);
         return;
     }
 
@@ -2104,7 +2105,7 @@ function ensureXhsOverlay(pageInfo) {
 
     xhsOverlayHost = host;
     (document.body || document.documentElement).appendChild(host);
-    renderXhsOverlay(pageInfo);
+    renderXhsOverlay(pageInfo, config);
 }
 
 function handleWindowBlur() {

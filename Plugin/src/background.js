@@ -57,6 +57,7 @@ const DEFAULT_PLUGIN_SETTINGS = {
   xhsKeywordNoteLimit: 20,
   xhsLinkBatchLimit: 50,
   xhsBloggerCollectionMode: 'api',
+  xhsSaveCommentsWithNote: true,
   saveToRedboxByDefault: true,
   autoUpdateCheck: true,
 };
@@ -818,6 +819,7 @@ function normalizePluginSettings(input = {}) {
     xhsKeywordNoteLimit: Math.round(clampNumber(source.xhsKeywordNoteLimit, 1, 50, DEFAULT_PLUGIN_SETTINGS.xhsKeywordNoteLimit)),
     xhsLinkBatchLimit: Math.round(clampNumber(source.xhsLinkBatchLimit, 1, 50, DEFAULT_PLUGIN_SETTINGS.xhsLinkBatchLimit)),
     xhsBloggerCollectionMode: normalizeText(source.xhsBloggerCollectionMode) === 'tab' ? 'tab' : 'api',
+    xhsSaveCommentsWithNote: source.xhsSaveCommentsWithNote !== false,
     saveToRedboxByDefault: source.saveToRedboxByDefault !== false,
     autoUpdateCheck: source.autoUpdateCheck !== false,
   };
@@ -3020,7 +3022,7 @@ function buildXhsEntryV2Request(notePayload = {}, commentsPayload = {}) {
       : [];
   const text = normalizeText(notePayload?.text) || normalizeText(notePayload?.content);
   const visibleCount = Number(commentsPayload?.visibleCount || comments.length || 0);
-  const total = Number(commentsPayload?.total || visibleCount || 0);
+  const total = Number(commentsPayload?.total || notePayload?.stats?.comments || visibleCount || 0);
 
   return {
     source: createKnowledgeSourceInput({
@@ -4145,6 +4147,7 @@ async function saveZhihuArticleFromTab(tabId) {
 
 async function saveXhsNoteFromTab(tabId) {
   const payload = await runExtraction(tabId, extractXhsNotePayload, { world: 'MAIN' });
+  const settings = await readPluginSettings();
   console.log('[redbox-plugin][xhs] payload', {
     title: payload?.title || '',
     imageCount: Array.isArray(payload?.images) ? payload.images.length : 0,
@@ -4155,43 +4158,46 @@ async function saveXhsNoteFromTab(tabId) {
   if (!payload?.title && !payload?.content && !payload?.images?.length && !payload?.videoUrl) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
-  await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
-    source: payload?.source,
-    noteId: payload?.noteId,
-    total: Number(payload?.stats?.comments || 0),
-  }, {
-    status: 'started',
-  })).catch((error) => {
-    pluginWarn('xhs-comments-checkpoint-start-failed', { error: describeError(error) });
-  });
-  const commentsPayload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN', captureRuntime: true })
-    .catch((error) => {
-      pluginWarn('xhs-comments-inline-extract-failed', {
-        error: describeError(error),
-      });
-      void upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
-        source: payload?.source,
-        noteId: payload?.noteId,
-        total: Number(payload?.stats?.comments || 0),
-      }, {
-        status: 'failed',
-        error: error instanceof Error ? error.message : String(error),
-      })).catch(() => {});
-      return {};
-    });
-  if (Array.isArray(commentsPayload?.captureDiagnostics)) {
-    pluginLog('xhs-comments-capture-diagnostics', {
-      count: Array.isArray(commentsPayload?.comments) ? commentsPayload.comments.length : 0,
-      total: Number(commentsPayload?.total || 0),
-      events: commentsPayload.captureDiagnostics.slice(-6),
-    });
-    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
-      source: commentsPayload?.source || payload?.source,
-      sourceId: commentsPayload?.noteId || payload?.noteId,
-      status: 'loaded',
+  let commentsPayload = {};
+  if (settings.xhsSaveCommentsWithNote !== false) {
+    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
+      source: payload?.source,
+      noteId: payload?.noteId,
+      total: Number(payload?.stats?.comments || 0),
+    }, {
+      status: 'started',
     })).catch((error) => {
-      pluginWarn('xhs-comments-checkpoint-loaded-failed', { error: describeError(error) });
+      pluginWarn('xhs-comments-checkpoint-start-failed', { error: describeError(error) });
     });
+    commentsPayload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN', captureRuntime: true })
+      .catch((error) => {
+        pluginWarn('xhs-comments-inline-extract-failed', {
+          error: describeError(error),
+        });
+        void upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
+          source: payload?.source,
+          noteId: payload?.noteId,
+          total: Number(payload?.stats?.comments || 0),
+        }, {
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        })).catch(() => {});
+        return {};
+      });
+    if (Array.isArray(commentsPayload?.captureDiagnostics)) {
+      pluginLog('xhs-comments-capture-diagnostics', {
+        count: Array.isArray(commentsPayload?.comments) ? commentsPayload.comments.length : 0,
+        total: Number(commentsPayload?.total || 0),
+        events: commentsPayload.captureDiagnostics.slice(-6),
+      });
+      await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+        source: commentsPayload?.source || payload?.source,
+        sourceId: commentsPayload?.noteId || payload?.noteId,
+        status: 'loaded',
+      })).catch((error) => {
+        pluginWarn('xhs-comments-checkpoint-loaded-failed', { error: describeError(error) });
+      });
+    }
   }
   let response;
   try {
@@ -4206,14 +4212,16 @@ async function saveXhsNoteFromTab(tabId) {
       });
     }
   } catch (error) {
-    await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
-      source: commentsPayload?.source || payload?.source,
-      sourceId: commentsPayload?.noteId || payload?.noteId,
-      total: Number(commentsPayload?.total || payload?.stats?.comments || 0),
-      captured: Array.isArray(commentsPayload?.comments) ? commentsPayload.comments.length : 0,
-      status: 'failed',
-      error: error instanceof Error ? error.message : String(error),
-    })).catch(() => {});
+    if (settings.xhsSaveCommentsWithNote !== false) {
+      await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+        source: commentsPayload?.source || payload?.source,
+        sourceId: commentsPayload?.noteId || payload?.noteId,
+        total: Number(commentsPayload?.total || payload?.stats?.comments || 0),
+        captured: Array.isArray(commentsPayload?.comments) ? commentsPayload.comments.length : 0,
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      })).catch(() => {});
+    }
     throw error;
   }
   return {

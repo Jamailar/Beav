@@ -1,6 +1,6 @@
 mod ai_model_ops;
 mod app_actions;
-mod app_update;
+pub(crate) mod app_update;
 mod clipboard_ops;
 mod feedback;
 mod logging_ops;

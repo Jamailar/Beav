@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft, Server, Store, X } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft, Server, Store, X, MessageSquareText } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
@@ -94,6 +94,7 @@ import { useI18n, type I18nKey } from '../i18n';
 import {
   GeneralSettingsSection,
   ExperimentalSettingsSection,
+  RemoteConnectionSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
   type FileIndexDashboard,
@@ -430,6 +431,8 @@ function EcommercePlatformsSettingsSection({
 }
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
+type AcpGatewayStatus = NonNullable<AssistantDaemonStatus['acpGateway']>;
+type AcpClientStatus = AcpGatewayStatus['clients'][number];
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 type CliRuntimeInstallMethodOption = 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
 type CliRuntimeExecutionMode = 'managed' | 'host_compatible' | 'unrestricted';
@@ -470,6 +473,16 @@ type AssistantDaemonDraft = {
     enabled: boolean;
     endpointPath: string;
     authToken: string;
+  };
+  acpGateway: {
+    enabled: boolean;
+    requireToken: boolean;
+    localOnly: boolean;
+    endpointPath: string;
+    manifestPath: string;
+    guidePath: string;
+    defaultRuntimeMode: string;
+    defaultClientLabel: string;
   };
   weixin: {
     enabled: boolean;
@@ -517,6 +530,16 @@ const createDefaultAssistantDaemonDraft = (): AssistantDaemonDraft => ({
     endpointPath: '/hooks/channel/relay',
     authToken: '',
   },
+  acpGateway: {
+    enabled: false,
+    requireToken: false,
+    localOnly: true,
+    endpointPath: '/acp/v1',
+    manifestPath: '/acp/v1/manifest',
+    guidePath: '/acp/v1/guide',
+    defaultRuntimeMode: 'default',
+    defaultClientLabel: 'External Agent',
+  },
   weixin: {
     enabled: false,
     endpointPath: '/hooks/weixin/relay',
@@ -554,6 +577,16 @@ const assistantDaemonStatusToDraft = (status?: AssistantDaemonStatus | null): As
       endpointPath: String(status.relay?.endpointPath || '/hooks/channel/relay'),
       authToken: String(status.relay?.authToken || ''),
     },
+    acpGateway: {
+      enabled: Boolean(status.acpGateway?.enabled),
+      requireToken: Boolean(status.acpGateway?.requireToken),
+      localOnly: status.acpGateway?.localOnly !== false,
+      endpointPath: String(status.acpGateway?.endpointPath || '/acp/v1'),
+      manifestPath: String(status.acpGateway?.manifestPath || '/acp/v1/manifest'),
+      guidePath: String(status.acpGateway?.guidePath || '/acp/v1/guide'),
+      defaultRuntimeMode: String(status.acpGateway?.defaultRuntimeMode || 'default'),
+      defaultClientLabel: String(status.acpGateway?.defaultClientLabel || 'External Agent'),
+    },
     weixin: {
       enabled: Boolean(status.weixin?.enabled),
       endpointPath: String(status.weixin?.endpointPath || '/hooks/weixin/relay'),
@@ -579,6 +612,7 @@ type RuntimeSessionListItem = {
   } | null;
   transcriptCount: number;
   checkpointCount: number;
+  metadata?: Record<string, unknown> | null;
   chatSession?: {
     id: string;
     title?: string;
@@ -1020,6 +1054,7 @@ export function Settings({
   const [assistantDaemonLogs, setAssistantDaemonLogs] = useState<string[]>([]);
   const [assistantDaemonBusy, setAssistantDaemonBusy] = useState(false);
   const [assistantDaemonDraftDirty, setAssistantDaemonDraftDirty] = useState(false);
+  const [assistantDaemonAcpToken, setAssistantDaemonAcpToken] = useState('');
   const [assistantDaemonWeixinLoginBusy, setAssistantDaemonWeixinLoginBusy] = useState(false);
   const [assistantDaemonWeixinLogin, setAssistantDaemonWeixinLogin] = useState<AssistantDaemonWeixinLoginState | null>(null);
   const [developerVersionTapCount, setDeveloperVersionTapCount] = useState(0);
@@ -4584,6 +4619,16 @@ export function Settings({
       endpointPath: String(assistantDaemonDraft.relay.endpointPath || '').trim(),
       authToken: String(assistantDaemonDraft.relay.authToken || '').trim() || undefined,
     },
+    acpGateway: {
+      enabled: assistantDaemonDraft.acpGateway.enabled,
+      requireToken: assistantDaemonDraft.acpGateway.requireToken,
+      localOnly: assistantDaemonDraft.acpGateway.localOnly,
+      endpointPath: String(assistantDaemonDraft.acpGateway.endpointPath || '').trim() || '/acp/v1',
+      manifestPath: String(assistantDaemonDraft.acpGateway.manifestPath || '').trim() || '/acp/v1/manifest',
+      guidePath: String(assistantDaemonDraft.acpGateway.guidePath || '').trim() || '/acp/v1/guide',
+      defaultRuntimeMode: String(assistantDaemonDraft.acpGateway.defaultRuntimeMode || '').trim() || 'default',
+      defaultClientLabel: String(assistantDaemonDraft.acpGateway.defaultClientLabel || '').trim() || 'External Agent',
+    },
     weixin: {
       enabled: assistantDaemonDraft.weixin.enabled,
       endpointPath: String(assistantDaemonDraft.weixin.endpointPath || '').trim(),
@@ -4613,6 +4658,50 @@ export function Settings({
       setAssistantDaemonBusy(false);
     }
   }, [buildAssistantDaemonPayload, replaceAssistantDaemonDraft]);
+
+  const handleCreateAssistantDaemonAcpClient = useCallback(async (name: string, kind: string) => {
+    setAssistantDaemonBusy(true);
+    try {
+      const result = await window.ipcRenderer.assistantDaemon.createAcpClient({
+        name: String(name || '').trim() || 'External Agent',
+        kind: String(kind || '').trim() || 'generic_agent',
+      });
+      const status = result?.status as AssistantDaemonStatus | undefined;
+      if (status) {
+        setAssistantDaemonStatus(status);
+        replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
+      } else {
+        await loadAssistantDaemonStatus({ suppressAlert: true });
+      }
+      setAssistantDaemonAcpToken(String(result?.token || ''));
+    } catch (error) {
+      console.error('Failed to create ACP client', error);
+      void appAlert(`创建 ACP 客户端失败：${String(error)}`);
+    } finally {
+      setAssistantDaemonBusy(false);
+    }
+  }, [loadAssistantDaemonStatus, replaceAssistantDaemonDraft]);
+
+  const handleRevokeAssistantDaemonAcpClient = useCallback(async (clientId: string) => {
+    const safeClientId = String(clientId || '').trim();
+    if (!safeClientId) return;
+    setAssistantDaemonBusy(true);
+    try {
+      const result = await window.ipcRenderer.assistantDaemon.revokeAcpClient({ clientId: safeClientId });
+      const status = result?.status as AssistantDaemonStatus | undefined;
+      if (status) {
+        setAssistantDaemonStatus(status);
+        replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
+      } else {
+        await loadAssistantDaemonStatus({ suppressAlert: true });
+      }
+    } catch (error) {
+      console.error('Failed to revoke ACP client', error);
+      void appAlert(`撤销 ACP 客户端失败：${String(error)}`);
+    } finally {
+      setAssistantDaemonBusy(false);
+    }
+  }, [loadAssistantDaemonStatus, replaceAssistantDaemonDraft]);
 
   const handleStartAssistantDaemon = useCallback(async () => {
     setAssistantDaemonBusy(true);
@@ -6345,6 +6434,7 @@ export function Settings({
     { id: 'platforms', labelKey: 'settings.tabs.platforms', icon: Store },
     { id: 'skills', labelKey: 'settings.tabs.skills', icon: Star },
     { id: 'mcp', labelKey: 'settings.tabs.mcp', icon: Server },
+    { id: 'remote', labelKey: 'settings.tabs.remote', icon: MessageSquareText },
     { id: 'profile', labelKey: 'settings.tabs.profile', icon: FileText },
     { id: 'tools', labelKey: 'settings.tabs.tools', icon: Wrench },
     { id: 'experimental', labelKey: 'settings.tabs.experimental', icon: FlaskConical },
@@ -6440,6 +6530,28 @@ export function Settings({
               />
             )}
 
+            {activeTab === 'remote' && (
+              <RemoteConnectionSettingsSection
+                assistantDaemonStatus={assistantDaemonStatus}
+                assistantDaemonDraft={assistantDaemonDraft}
+                setAssistantDaemonDraft={setAssistantDaemonDraft}
+                assistantDaemonLogs={assistantDaemonLogs}
+                assistantDaemonBusy={assistantDaemonBusy}
+                assistantDaemonAcpToken={assistantDaemonAcpToken}
+                assistantDaemonWeixinLogin={assistantDaemonWeixinLogin}
+                assistantDaemonWeixinLoginBusy={assistantDaemonWeixinLoginBusy}
+                handleReloadAssistantDaemonStatus={loadAssistantDaemonStatus}
+                handleSaveAssistantDaemonConfig={handleSaveAssistantDaemonConfig}
+                handleCreateAssistantDaemonAcpClient={handleCreateAssistantDaemonAcpClient}
+                handleRevokeAssistantDaemonAcpClient={handleRevokeAssistantDaemonAcpClient}
+                handleStartAssistantDaemon={handleStartAssistantDaemon}
+                handleStopAssistantDaemon={handleStopAssistantDaemon}
+                handleStartAssistantDaemonWeixinLogin={handleStartAssistantDaemonWeixinLogin}
+                handleCheckAssistantDaemonWeixinLogin={handleCheckAssistantDaemonWeixinLogin}
+                handleClearAssistantDaemonWeixinLogin={handleClearAssistantDaemonWeixinLogin}
+              />
+            )}
+
             {activeTab === 'platforms' && (
               <EcommercePlatformsSettingsSection
                 settings={ecommercePlatformsSettings}
@@ -6452,11 +6564,6 @@ export function Settings({
               <div className="space-y-10">
                 {/* LLM Connection Config */}
                 <section className="space-y-6">
-                  <div className="mb-6">
-                    <h2 className="text-2xl font-bold tracking-normal text-text-primary">{t('settings.ai.title')}</h2>
-                    <p className="mt-2 text-sm text-text-secondary">管理模型调用与积分使用</p>
-                  </div>
-
                   {officialAiPanelEnabled && (
                     <div ref={officialAiPanelRef} className="space-y-4 scroll-mt-6">
                       {OfficialAiPanelComponent ? (

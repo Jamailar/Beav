@@ -127,6 +127,14 @@ const sortAdvisorSessionItems = (items: ContextChatSessionListItem[]): ContextCh
     });
 };
 
+const advisorSessionAcpLabel = (session: ContextChatSessionListItem): string => {
+    const metadata = session.metadata && typeof session.metadata === 'object'
+        ? session.metadata as Record<string, unknown>
+        : null;
+    if (String(metadata?.source || '').trim() !== 'acp') return '';
+    return String(metadata?.sourceLabel || 'ACP: External Agent').trim();
+};
+
 const formatAdvisorSessionTime = (value?: string): string => {
     const text = String(value || '').trim();
     if (!text) return '';
@@ -972,6 +980,7 @@ function AdvisorHistoryPanel({
                                     const title = session.chatSession?.title?.trim() || '未命名会话';
                                     const time = formatAdvisorSessionTime(session.chatSession?.updatedAt);
                                     const summary = session.summary?.trim();
+                                    const acpLabel = advisorSessionAcpLabel(session);
 
                                     return (
                                         <div
@@ -993,12 +1002,19 @@ function AdvisorHistoryPanel({
 
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0 flex-1">
-                                                    <h4 className={clsx(
-                                                        'truncate text-[13px] font-bold leading-tight transition-colors',
-                                                        isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
-                                                    )}>
-                                                        {title}
-                                                    </h4>
+                                                    <div className="flex min-w-0 items-center gap-1.5">
+                                                        <h4 className={clsx(
+                                                            'truncate text-[13px] font-bold leading-tight transition-colors',
+                                                            isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
+                                                        )}>
+                                                            {title}
+                                                        </h4>
+                                                        {acpLabel && (
+                                                            <span className="shrink-0 rounded border border-border bg-white/50 px-1.5 py-0.5 text-[9px] font-semibold text-text-tertiary">
+                                                                {acpLabel}
+                                                            </span>
+                                                        )}
+                                                    </div>
 
                                                     <div className="mt-0.5 flex items-center gap-1.5 text-[9px] font-bold text-text-tertiary/60 uppercase tracking-tighter">
                                                         <span>{time}</span>

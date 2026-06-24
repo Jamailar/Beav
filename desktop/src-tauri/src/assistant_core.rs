@@ -5,7 +5,7 @@ use crate::knowledge;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::Stdio;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -379,7 +379,15 @@ pub(crate) fn emit_assistant_log(app: &AppHandle, line: &str) {
 }
 
 pub(crate) fn emit_assistant_status(app: &AppHandle, state: &AssistantStateRecord) {
-    let _ = app.emit("assistant:daemon-status", assistant_state_value(state));
+    let mut value = assistant_state_value(state);
+    if let Ok(acp_value) = with_store(&app.state::<AppState>(), |store| {
+        Ok(crate::acp_gateway_public_value(&store))
+    }) {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("acpGateway".to_string(), acp_value);
+        }
+    }
+    let _ = app.emit("assistant:daemon-status", value);
 }
 
 pub(crate) fn http_json_response(
@@ -904,6 +912,189 @@ pub(crate) fn execute_assistant_message(
     }))
 }
 
+fn handle_assistant_connection(app: AppHandle, mut stream: TcpStream, addr: SocketAddr) {
+    let request = match read_http_request(&mut stream, knowledge::knowledge_http_body_limit()) {
+        Ok(request) => request,
+        Err(error) => {
+            emit_assistant_log(
+                &app,
+                &format!(
+                    "assistant daemon request read failed from {}: {}",
+                    addr, error
+                ),
+            );
+            let _ = http_json_response(
+                &mut stream,
+                400,
+                "Bad Request",
+                json!({ "success": false, "error": error }),
+            );
+            return;
+        }
+    };
+    let first_line = request.lines().next().unwrap_or_default().to_string();
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .to_string();
+    emit_assistant_log(
+        &app,
+        &format!("assistant daemon request from {}: {}", addr, first_line),
+    );
+    let assistant_snapshot = with_store(&app.state::<AppState>(), |store| {
+        Ok(assistant_store::snapshot(&store))
+    })
+    .unwrap_or_else(|_| AssistantStateRecord::default());
+    let (raw_headers, body) = parse_http_request_parts(&request);
+    let (method, _path, headers) = parse_http_request_meta(&raw_headers);
+    if crate::is_acp_gateway_path(&path) {
+        emit_assistant_log(&app, "assistant daemon matched route kind: acp");
+        let acp_local_only = with_store(&app.state::<AppState>(), |store| {
+            Ok(store.acp_gateway.local_only)
+        })
+        .unwrap_or(true);
+        let response = if acp_local_only && !addr.ip().is_loopback() {
+            http_json_response(
+                &mut stream,
+                403,
+                "Forbidden",
+                json!({
+                    "success": false,
+                    "error": {
+                        "code": "acp_local_only",
+                        "message": "RedBox ACP gateway only accepts loopback clients."
+                    }
+                }),
+            )
+        } else {
+            match crate::handle_acp_gateway_http_request(&app, &method, &path, &headers, &body) {
+                Ok((status, status_text, body)) => {
+                    if status == 204 {
+                        http_empty_response(&mut stream, status, status_text)
+                    } else {
+                        http_json_response(&mut stream, status, status_text, body)
+                    }
+                }
+                Err(error) => http_json_response(
+                    &mut stream,
+                    400,
+                    "Bad Request",
+                    json!({ "success": false, "error": error }),
+                ),
+            }
+        };
+        if let Err(error) = response {
+            emit_assistant_log(
+                &app,
+                &format!("assistant daemon ACP response failed: {}", error),
+            );
+        }
+        return;
+    }
+    if is_browser_ipc_path(&path) {
+        let response = match handle_browser_ipc_http_request(&app, &method, &path, &headers, &body)
+        {
+            Ok((status, status_text, body)) => {
+                if status == 204 {
+                    http_empty_response(&mut stream, status, status_text)
+                } else {
+                    http_json_response(&mut stream, status, status_text, body)
+                }
+            }
+            Err(error) => http_json_response(
+                &mut stream,
+                400,
+                "Bad Request",
+                json!({ "success": false, "error": error }),
+            ),
+        };
+        if let Err(error) = response {
+            emit_assistant_log(
+                &app,
+                &format!("assistant daemon browser IPC response failed: {}", error),
+            );
+        }
+        return;
+    }
+    if is_accounts_api_path(&path) {
+        emit_assistant_log(&app, "assistant daemon matched route kind: accounts-api");
+        let response = match handle_accounts_http_request(&app, &method, &path, &body) {
+            Ok((status, status_text, body)) => {
+                if status == 204 {
+                    http_empty_response(&mut stream, status, status_text)
+                } else {
+                    http_json_response(&mut stream, status, status_text, body)
+                }
+            }
+            Err(error) => http_json_response(
+                &mut stream,
+                400,
+                "Bad Request",
+                json!({ "success": false, "error": error }),
+            ),
+        };
+        if let Err(error) = response {
+            emit_assistant_log(
+                &app,
+                &format!("assistant daemon accounts response failed: {}", error),
+            );
+        }
+        return;
+    }
+    if is_knowledge_api_path(&path, &assistant_snapshot) {
+        emit_assistant_log(&app, "assistant daemon matched route kind: knowledge-api");
+        let response =
+            match handle_knowledge_http_request(&app, &assistant_snapshot, &method, &path, &body) {
+                Ok((status, status_text, body)) => {
+                    if status == 204 {
+                        http_empty_response(&mut stream, status, status_text)
+                    } else {
+                        http_json_response(&mut stream, status, status_text, body)
+                    }
+                }
+                Err(error) => http_json_response(
+                    &mut stream,
+                    400,
+                    "Bad Request",
+                    json!({ "success": false, "error": error }),
+                ),
+            };
+        if let Err(error) = response {
+            emit_assistant_log(
+                &app,
+                &format!(
+                    "assistant daemon failed to write knowledge response: {}",
+                    error
+                ),
+            );
+        }
+        return;
+    }
+    let route_kind = assistant_route_kind_for_path(&path, &assistant_snapshot);
+    emit_assistant_log(
+        &app,
+        &format!("assistant daemon matched route kind: {}", route_kind),
+    );
+    let result =
+        execute_assistant_message(&app, route_kind, &headers, &body).unwrap_or_else(|error| {
+            json!({
+                "success": false,
+                "routeKind": route_kind,
+                "error": error
+            })
+        });
+    let _ = http_ok_json(
+        &mut stream,
+        json!({
+            "endpoint": first_line,
+            "path": path,
+            "routeKind": route_kind,
+            "result": result
+        }),
+    );
+}
+
 pub(crate) fn run_assistant_listener(
     app: AppHandle,
     host: String,
@@ -922,159 +1113,11 @@ pub(crate) fn run_assistant_listener(
     let join = thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             match listener.accept() {
-                Ok((mut stream, addr)) => {
-                    let request = match read_http_request(
-                        &mut stream,
-                        knowledge::knowledge_http_body_limit(),
-                    ) {
-                        Ok(request) => request,
-                        Err(error) => {
-                            emit_assistant_log(
-                                &app,
-                                &format!(
-                                    "assistant daemon request read failed from {}: {}",
-                                    addr, error
-                                ),
-                            );
-                            let _ = http_json_response(
-                                &mut stream,
-                                400,
-                                "Bad Request",
-                                json!({ "success": false, "error": error }),
-                            );
-                            continue;
-                        }
-                    };
-                    let first_line = request.lines().next().unwrap_or_default().to_string();
-                    let path = first_line
-                        .split_whitespace()
-                        .nth(1)
-                        .unwrap_or("/")
-                        .to_string();
-                    emit_assistant_log(
-                        &app,
-                        &format!("assistant daemon request from {}: {}", addr, first_line),
-                    );
-                    let assistant_snapshot = with_store(&app.state::<AppState>(), |store| {
-                        Ok(assistant_store::snapshot(&store))
-                    })
-                    .unwrap_or_else(|_| AssistantStateRecord::default());
-                    let (raw_headers, body) = parse_http_request_parts(&request);
-                    let (method, _path, headers) = parse_http_request_meta(&raw_headers);
-                    if is_browser_ipc_path(&path) {
-                        let response = match handle_browser_ipc_http_request(
-                            &app, &method, &path, &headers, &body,
-                        ) {
-                            Ok((status, status_text, body)) => {
-                                if status == 204 {
-                                    http_empty_response(&mut stream, status, status_text)
-                                } else {
-                                    http_json_response(&mut stream, status, status_text, body)
-                                }
-                            }
-                            Err(error) => http_json_response(
-                                &mut stream,
-                                400,
-                                "Bad Request",
-                                json!({ "success": false, "error": error }),
-                            ),
-                        };
-                        if let Err(error) = response {
-                            emit_assistant_log(
-                                &app,
-                                &format!("assistant daemon browser IPC response failed: {}", error),
-                            );
-                        }
-                        continue;
-                    }
-                    if is_accounts_api_path(&path) {
-                        emit_assistant_log(
-                            &app,
-                            "assistant daemon matched route kind: accounts-api",
-                        );
-                        let response =
-                            match handle_accounts_http_request(&app, &method, &path, &body) {
-                                Ok((status, status_text, body)) => {
-                                    if status == 204 {
-                                        http_empty_response(&mut stream, status, status_text)
-                                    } else {
-                                        http_json_response(&mut stream, status, status_text, body)
-                                    }
-                                }
-                                Err(error) => http_json_response(
-                                    &mut stream,
-                                    400,
-                                    "Bad Request",
-                                    json!({ "success": false, "error": error }),
-                                ),
-                            };
-                        if let Err(error) = response {
-                            emit_assistant_log(
-                                &app,
-                                &format!("assistant daemon accounts response failed: {}", error),
-                            );
-                        }
-                        continue;
-                    }
-                    if is_knowledge_api_path(&path, &assistant_snapshot) {
-                        emit_assistant_log(
-                            &app,
-                            "assistant daemon matched route kind: knowledge-api",
-                        );
-                        let response = match handle_knowledge_http_request(
-                            &app,
-                            &assistant_snapshot,
-                            &method,
-                            &path,
-                            &body,
-                        ) {
-                            Ok((status, status_text, body)) => {
-                                if status == 204 {
-                                    http_empty_response(&mut stream, status, status_text)
-                                } else {
-                                    http_json_response(&mut stream, status, status_text, body)
-                                }
-                            }
-                            Err(error) => http_json_response(
-                                &mut stream,
-                                400,
-                                "Bad Request",
-                                json!({ "success": false, "error": error }),
-                            ),
-                        };
-                        if let Err(error) = response {
-                            emit_assistant_log(
-                                &app,
-                                &format!(
-                                    "assistant daemon failed to write knowledge response: {}",
-                                    error
-                                ),
-                            );
-                        }
-                        continue;
-                    }
-                    let route_kind = assistant_route_kind_for_path(&path, &assistant_snapshot);
-                    emit_assistant_log(
-                        &app,
-                        &format!("assistant daemon matched route kind: {}", route_kind),
-                    );
-                    let result = execute_assistant_message(&app, route_kind, &headers, &body)
-                        .unwrap_or_else(|error| {
-                            json!({
-                                "success": false,
-                                "routeKind": route_kind,
-                                "error": error
-                            })
-                        });
-                    let _ = http_ok_json(
-                        &mut stream,
-                        json!({
-                            "endpoint": first_line,
-                            "path": path,
-                            "routeKind": route_kind,
-                            "result": result
-                        }),
-                    );
+                Ok((stream, addr)) => {
+                    let app_for_request = app.clone();
+                    thread::spawn(move || {
+                        handle_assistant_connection(app_for_request, stream, addr);
+                    });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(200));

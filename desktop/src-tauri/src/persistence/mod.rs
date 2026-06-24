@@ -868,6 +868,13 @@ pub fn default_store() -> AppStore {
         collab_tasks: Vec::new(),
         collab_mailbox_messages: Vec::new(),
         collab_progress_reports: Vec::new(),
+        acp_gateway: crate::AcpGatewayStateRecord::default(),
+        acp_clients: Vec::new(),
+        acp_sessions: Vec::new(),
+        acp_runs: Vec::new(),
+        acp_messages: Vec::new(),
+        acp_artifacts: Vec::new(),
+        acp_audit_events: Vec::new(),
         review_dockets: Vec::new(),
         review_decisions: Vec::new(),
         cli_tools: Vec::new(),
@@ -980,6 +987,7 @@ pub fn load_store(path: &PathBuf) -> AppStore {
     let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
     store.debug_logs.clear();
     assistant_store::reset_runtime_state_after_load(&mut store);
+    let acp_runs_repaired = crate::repair_acp_runs_after_load(&mut store) > 0;
     let embedded_session_artifacts = take_session_artifacts_from_store(&mut store);
 
     // Prefer per-session JSONL if available, fall back to legacy disk artifacts
@@ -1018,6 +1026,7 @@ pub fn load_store(path: &PathBuf) -> AppStore {
     crate::session_manager::enforce_default_retention(&mut store);
     if skills_migrated
         || assistant_daemon_migrated
+        || acp_runs_repaired
         || migrated_session_artifacts
         || loaded_from_legacy
     {

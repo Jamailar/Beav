@@ -1735,7 +1735,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
     const [mediaNextCursor, setMediaNextCursor] = useState<string | null>(null);
     const [isLoadingMoreMedia, setIsLoadingMoreMedia] = useState(false);
-    const [libraryTab, setLibraryTab] = useState<AssetLibraryTab>('assets');
+    const [libraryTab, setLibraryTab] = useState<AssetLibraryTab>('media');
     const [loading, setLoading] = useState(true);
     const [working, setWorking] = useState(false);
     const [error, setError] = useState('');
@@ -3918,8 +3918,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
             <div className={clsx('flex items-center gap-1 border-b border-[rgb(var(--color-border))] pb-2', isModalVariant ? 'mx-5' : 'mx-8')}>
                     {([
-                        { id: 'assets' as const, label: '资产', icon: Package, count: subjects.length },
                         { id: 'media' as const, label: '媒体', icon: Clapperboard, count: mediaAssets.length },
+                        { id: 'assets' as const, label: '资产', icon: Package, count: subjects.length },
                     ]).map((item) => {
                         const Icon = item.icon;
                         const active = activeLibraryTab === item.id;

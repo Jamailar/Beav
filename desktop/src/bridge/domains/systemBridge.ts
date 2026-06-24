@@ -1,6 +1,30 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { BridgeCore, Listener } from '../types';
 
+interface AppUpdateNotice {
+  currentVersion: string;
+  latestVersion: string;
+  htmlUrl: string;
+  name: string;
+  publishedAt: string;
+  body: string;
+  installable?: boolean;
+}
+
+interface AppUpdateCheckResult {
+  success: boolean;
+  hasUpdate: boolean;
+  notice?: AppUpdateNotice | null;
+  error?: string;
+}
+
+interface AppUpdateInstallResult {
+  success: boolean;
+  status?: string;
+  version?: string;
+  error?: string;
+}
+
 export function createSystemBridge(core: BridgeCore) {
   return {
     files: {
@@ -131,9 +155,26 @@ export function createSystemBridge(core: BridgeCore) {
       offStatus: (listener: Listener) => core.off('app:startup-migration-status', listener),
     },
     getAppVersion: () => core.invokeChannel('app:get-version'),
-    checkAppUpdate: (force = false) => core.invokeChannel('app:check-update', { force }),
+    checkAppUpdate: (force = false) => core.invokeCommandGuarded<AppUpdateCheckResult>(
+      'app_check_update',
+      { force },
+      {
+        fallbackChannel: 'app:check-update',
+        fallback: { success: true, hasUpdate: false },
+      },
+    ),
+    installAppUpdate: () => core.invokeCommandGuarded<AppUpdateInstallResult>(
+      'app_install_update',
+      undefined,
+      {
+        fallbackChannel: 'app:install-update',
+        fallback: { success: false, error: 'App updater unavailable' },
+      },
+    ),
     onAppUpdateAvailable: (listener: Listener) => core.on('app:update-available', listener),
     offAppUpdateAvailable: (listener: Listener) => core.off('app:update-available', listener),
+    onAppUpdateInstallProgress: (listener: Listener) => core.on('app:update-install-progress', listener),
+    offAppUpdateInstallProgress: (listener: Listener) => core.off('app:update-install-progress', listener),
     openAppReleasePage: (url?: string) => core.invokeChannel('app:open-release-page', { url }),
     openExternalUrl: (url: string) => core.invokeChannel('app:open-external-url', { url }),
     openPath: (path: string) => core.invokeChannel('app:open-path', { path }),
