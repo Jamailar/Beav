@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
 use crate::AppState;
 
@@ -139,6 +140,16 @@ fn append_message_value(
         Ok(result)
     })
     .map_err(AcpHttpError::internal)??;
+    emit_runtime_event(
+        app,
+        "runtime:acp-message-stored",
+        value
+            .get("session")
+            .and_then(|session| session.get("chatSessionId"))
+            .and_then(Value::as_str),
+        None,
+        value.clone(),
+    );
     let _ = app.emit("acp:message-created", value.clone());
     Ok(value)
 }

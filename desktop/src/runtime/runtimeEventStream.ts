@@ -187,6 +187,10 @@ export interface RuntimeEventStreamHandlers {
     outcome: UnknownRecord;
     raw: UnknownRecord;
   }) => void;
+  onAcpConversationChanged?: (payload: RuntimeScopedPayload & {
+    eventType: Extract<RuntimeEventType, 'runtime:acp-message-stored' | 'runtime:acp-run-created' | 'runtime:acp-run-started' | 'runtime:acp-run-completed'>;
+    raw: UnknownRecord;
+  }) => void;
 }
 
 function toRecord(value: unknown): UnknownRecord {
@@ -294,6 +298,10 @@ function normalizeRuntimeEventType(value: unknown): RuntimeUnifiedEvent['eventTy
     case 'runtime:collab-report-submitted':
     case 'runtime:collab-message-delivered':
     case 'runtime:collab-report-tick':
+    case 'runtime:acp-message-stored':
+    case 'runtime:acp-run-created':
+    case 'runtime:acp-run-started':
+    case 'runtime:acp-run-completed':
       return eventType;
     default:
       return null;
@@ -570,6 +578,21 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       ...runtimeMeta,
       collabSessionId: toText(payload.collabSessionId || payload.sessionId),
       outcome: toRecord(payload.outcome),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (
+    envelope.eventType === 'runtime:acp-message-stored'
+    || envelope.eventType === 'runtime:acp-run-created'
+    || envelope.eventType === 'runtime:acp-run-started'
+    || envelope.eventType === 'runtime:acp-run-completed'
+  ) {
+    handlers.onAcpConversationChanged?.({
+      sessionId,
+      ...runtimeMeta,
+      eventType: envelope.eventType,
       raw: payload,
     });
     return;

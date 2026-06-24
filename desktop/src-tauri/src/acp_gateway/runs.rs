@@ -303,6 +303,16 @@ pub(crate) fn create_run_http(
         Ok(result)
     })
     .map_err(AcpHttpError::internal)??;
+    emit_runtime_event(
+        app,
+        "runtime:acp-run-created",
+        Some(&outcome.0.chat_session_id),
+        None,
+        json!({
+            "run": run_public_value(&outcome.0),
+            "session": outcome.1.clone(),
+        }),
+    );
     if outcome.0.status == "awaiting_approval" {
         register_acp_run_approval(&state, &outcome.0)?;
     } else {
