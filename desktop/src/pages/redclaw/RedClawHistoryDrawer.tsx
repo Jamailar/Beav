@@ -1202,7 +1202,7 @@ export function RedClawHistorySidebarSection({
                                                         />
                                                     )}
                                                     {acpLabel && (
-                                                        <span className="min-w-0 truncate rounded border border-border bg-surface-secondary/60 px-1.5 py-0.5 text-[9px] font-semibold text-text-tertiary">
+                                                        <span className="min-w-0 truncate rounded border border-text-tertiary/55 bg-transparent px-1.5 py-0.5 text-[9px] font-semibold text-text-secondary">
                                                             {acpLabel}
                                                         </span>
                                                     )}
