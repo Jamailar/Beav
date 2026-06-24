@@ -839,7 +839,9 @@ export function RedClawHistorySidebarSection({
             ? session.metadata as Record<string, unknown>
             : null;
         if (String(metadata?.source || '').trim() !== 'acp') return '';
-        return String(metadata?.sourceLabel || 'ACP: External Agent').trim();
+        return String(metadata?.sourceLabel || metadata?.externalClientName || 'External Agent')
+            .replace(/^ACP\s*:\s*/i, '')
+            .trim();
     };
 
     const openSessionContextMenu = (
@@ -1202,7 +1204,7 @@ export function RedClawHistorySidebarSection({
                                                         />
                                                     )}
                                                     {acpLabel && (
-                                                        <span className="min-w-0 truncate rounded border border-text-tertiary/55 bg-transparent px-1.5 py-0.5 text-[9px] font-semibold text-text-secondary">
+                                                        <span className="min-w-0 truncate rounded border border-emerald-300/70 bg-transparent px-1.5 py-0.5 text-[9px] font-semibold text-emerald-200">
                                                             {acpLabel}
                                                         </span>
                                                     )}
