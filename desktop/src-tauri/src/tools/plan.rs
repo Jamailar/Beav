@@ -605,7 +605,20 @@ fn pinned_direct_app_cli_actions(
             "skills.invoke",
             "mcp.inspect",
         ]
-    } else if wants_host_cli || (!media_intent && matches!(runtime_mode, "redclaw" | "knowledge")) {
+    } else if !media_intent && runtime_mode == "redclaw" {
+        &[
+            "web.fetch",
+            "web.search",
+            "video.analyze",
+            "media.edit",
+            "team.guide.create",
+            "media.transcribe",
+            "image.generate",
+            "skills.invoke",
+            "mcp.inspect",
+            "task.manage",
+        ]
+    } else if wants_host_cli || (!media_intent && runtime_mode == "knowledge") {
         &[
             "web.fetch",
             "web.search",
@@ -1429,7 +1442,7 @@ mod tests {
     }
 
     #[test]
-    fn redclaw_task_mutations_are_deferred_by_default() {
+    fn redclaw_task_manage_is_direct_but_legacy_task_actions_stay_hidden() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",
             task_intent: Some("scheduled-task"),
@@ -1439,8 +1452,8 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("task.read"));
         assert!(!plan.has_direct_app_cli_action("task.preview"));
         assert!(!plan.has_direct_app_cli_action("task.list"));
-        assert!(!plan.has_direct_app_cli_action("task.manage"));
-        assert!(plan.has_deferred_app_cli_action("task.manage"));
+        assert!(plan.has_direct_app_cli_action("task.manage"));
+        assert!(!plan.has_deferred_app_cli_action("task.manage"));
         for action in [
             "redclaw.task.preview",
             "redclaw.task.list",

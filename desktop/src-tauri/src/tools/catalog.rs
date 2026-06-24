@@ -1386,19 +1386,22 @@ fn task_manage_input_schema() -> Value {
                 json!({
                     "type": "string",
                     "description": "Task management operation.",
-                    "enum": ["create", "confirm", "update", "cancel"]
+                    "enum": ["create", "createAndConfirm", "confirm", "update", "cancel"]
                 }),
             ),
             (
                 "previewToken",
-                string_schema("Preview token returned by task.preview."),
+                string_schema("Preview token returned by task.preview. If omitted for operation=create, the runtime first runs task.read preview and creates a pending draft."),
             ),
             ("draftId", string_schema("Draft id returned by task.manage create.")),
             (
                 "jobDefinitionId",
                 string_schema("Target job definition id for update/cancel."),
             ),
-            ("confirm", bool_schema("Whether to activate a pending draft.")),
+            (
+                "confirm",
+                bool_schema("Set true only after explicit user confirmation; operation=create will then run preview, create a draft, and activate it."),
+            ),
             (
                 "patch",
                 json!({
@@ -1422,7 +1425,7 @@ fn task_manage_input_schema() -> Value {
         ],
         &["operation"],
         Some(
-            "Run one atomic RedClaw task management operation after preview or explicit user request. Prefer this consolidated action over redclaw.task.* compatibility actions.",
+            "Run one atomic RedClaw task management operation. Use create after task.read preview; if no previewToken is available, create runs a real policy preview and creates a pending draft. Set confirm=true or operation=createAndConfirm only after explicit user confirmation to activate the draft.",
         ),
     )
 }
@@ -5006,7 +5009,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "task.manage",
         namespace: "task",
-        description: "Run one atomic RedClaw task management operation after preview or explicit user request. Use this consolidated action instead of redclaw.task.* compatibility actions.",
+        description: "Run one atomic RedClaw task management operation. create can run policy preview and draft creation when no previewToken exists; pass confirm=true only after explicit user confirmation.",
         input_schema: task_manage_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
