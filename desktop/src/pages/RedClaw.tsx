@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { Bot, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, PanelRight, Plus, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { APP_BRAND } from '../config/brand';
-import { Chat } from './Chat';
+import { Chat, clearFixedSessionWarmSnapshot } from './Chat';
 import { AdvisorModal, type Advisor, type AdvisorProfile } from './Advisors';
 import { TeamWorkbench } from './team-workbench/TeamWorkbench';
 import type { TeamWorkbenchSession } from './team-workbench/teamWorkbenchTypes';
@@ -935,7 +935,7 @@ export function RedClaw({
                 surface: 'redclaw',
                 speakerLabel: REDCLAW_DISPLAY_NAME,
             })),
-            ...externalAgentSessions.map((session): RedClawHistoryListItem => ({
+            ...externalAgentSessions.slice(0, 3).map((session): RedClawHistoryListItem => ({
                 ...session,
                 surface: 'external',
                 speakerLabel: 'External Agent',
@@ -1557,6 +1557,10 @@ export function RedClaw({
             setSelectedRoomId(session.roomId);
             setActiveAiSurface('room');
             return;
+        }
+        if (session.surface === 'external') {
+            clearFixedSessionWarmSnapshot(session.id);
+            setChatRefreshKey((value) => value + 1);
         }
         switchSession(session.id);
     }, [clearSessionActivity, onOpenChatSurface, setHistorySessionUnread, switchSession]);
