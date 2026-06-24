@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 const DEFAULT_BASE_URL = 'http://127.0.0.1:31937/acp/v1';
 
 function usage() {
   return `RedBox ACP client
 
 Usage:
+  node desktop/scripts/redbox-acp-client.mjs discover [--discovery-file PATH]
   node desktop/scripts/redbox-acp-client.mjs manifest [--base-url URL] [--token TOKEN]
   node desktop/scripts/redbox-acp-client.mjs guide [--base-url URL] [--json]
   node desktop/scripts/redbox-acp-client.mjs session create --title TEXT [--objective TEXT] [--client-name NAME]
@@ -16,7 +21,8 @@ Usage:
   node desktop/scripts/redbox-acp-client.mjs artifact --artifact-id ID
 
 Options:
-  --base-url URL       Defaults to REDBOX_ACP_BASE_URL or ${DEFAULT_BASE_URL}
+  --base-url URL       Defaults to REDBOX_ACP_BASE_URL, discovery file, or ${DEFAULT_BASE_URL}
+  --discovery-file PATH Defaults to REDBOX_ACP_DISCOVERY_FILE or the RedBox app config path
   --token TOKEN        Defaults to REDBOX_ACP_TOKEN
   --client-name NAME   Defaults to Codex
   --client-kind KIND   Defaults to generic_agent
@@ -51,8 +57,55 @@ function parseArgs(argv) {
   return args;
 }
 
+function discoveryFileCandidates(explicitPath = '') {
+  const candidates = [];
+  const add = (item) => {
+    if (item && !candidates.includes(item)) candidates.push(item);
+  };
+  add(explicitPath);
+  add(process.env.REDBOX_ACP_DISCOVERY_FILE);
+  const home = os.homedir();
+  if (process.platform === 'darwin') {
+    add(path.join(home, 'Library', 'Application Support', 'RedBox', 'acp-gateway.json'));
+  } else if (process.platform === 'win32') {
+    add(path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'RedBox', 'acp-gateway.json'));
+  } else {
+    add(path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'RedBox', 'acp-gateway.json'));
+  }
+  return candidates;
+}
+
+function readDiscoveryFile(explicitPath = '') {
+  for (const candidate of discoveryFileCandidates(explicitPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      return { path: candidate, data };
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  return null;
+}
+
+function baseUrlFromDiscovery(discovery) {
+  const data = discovery?.data;
+  const endpointUrl = typeof data?.endpointUrl === 'string' ? data.endpointUrl.trim() : '';
+  if (endpointUrl) return endpointUrl;
+  const baseUrl = typeof data?.baseUrl === 'string' ? data.baseUrl.trim().replace(/\/+$/, '') : '';
+  if (baseUrl) return `${baseUrl}/acp/v1`;
+  return '';
+}
+
 function cleanBaseUrl(value) {
-  const raw = String(value || process.env.REDBOX_ACP_BASE_URL || DEFAULT_BASE_URL).trim();
+  const discovery = value || process.env.REDBOX_ACP_BASE_URL
+    ? null
+    : readDiscoveryFile();
+  const raw = String(
+    value
+      || process.env.REDBOX_ACP_BASE_URL
+      || baseUrlFromDiscovery(discovery)
+      || DEFAULT_BASE_URL,
+  ).trim();
   return raw.replace(/\/+$/, '');
 }
 
@@ -126,11 +179,51 @@ function printJson(data) {
   process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
 }
 
+async function discover(args) {
+  const discovery = readDiscoveryFile(value(args, 'discoveryFile'));
+  if (discovery) {
+    printJson({
+      success: true,
+      source: 'file',
+      path: discovery.path,
+      ...discovery.data,
+    });
+    return;
+  }
+  try {
+    const manifest = await request({ ...args, baseUrl: value(args, 'baseUrl', DEFAULT_BASE_URL) }, 'GET', '/.well-known/redbox-agent.json');
+    printJson({
+      success: true,
+      source: 'default-port-manifest',
+      discoveryFileCandidates: discoveryFileCandidates(value(args, 'discoveryFile')),
+      baseUrl: manifest?.protocol?.baseUrl || baseRoot(DEFAULT_BASE_URL),
+      endpointUrl: manifest?.protocol?.baseUrl ? `${manifest.protocol.baseUrl}/acp/v1` : DEFAULT_BASE_URL,
+      manifestUrl: manifest?.endpoints?.wellKnown,
+      guideUrl: manifest?.endpoints?.guide,
+      manifest,
+    });
+  } catch (error) {
+    printJson({
+      success: false,
+      source: 'not-found',
+      error: error.message,
+      discoveryFileCandidates: discoveryFileCandidates(value(args, 'discoveryFile')),
+      defaultEndpointUrl: DEFAULT_BASE_URL,
+      defaultManifestUrl: `${baseRoot(DEFAULT_BASE_URL)}/.well-known/redbox-agent.json`,
+    });
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const [command, subcommand] = args._;
   if (!command || command === 'help' || command === '--help') {
     process.stdout.write(usage());
+    return;
+  }
+
+  if (command === 'discover') {
+    await discover(args);
     return;
   }
 

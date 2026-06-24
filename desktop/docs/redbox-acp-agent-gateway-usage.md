@@ -16,7 +16,39 @@ Default endpoint:
 http://127.0.0.1:31937/acp/v1
 ```
 
+The port can be changed in RedBox settings. External agents should not hard-code it when discovery data is available.
+
 ## Discovery
+
+Stable local discovery file:
+
+```bash
+# macOS
+~/Library/Application Support/RedBox/acp-gateway.json
+
+# Windows
+%APPDATA%\RedBox\acp-gateway.json
+
+# Linux
+$XDG_CONFIG_HOME/RedBox/acp-gateway.json
+# or ~/.config/RedBox/acp-gateway.json
+```
+
+RedBox updates this file when the assistant daemon starts or stops. It contains:
+
+- `endpointUrl`: the current ACP base endpoint, such as `http://127.0.0.1:31937/acp/v1`
+- `manifestUrl`: machine-readable capability contract
+- `guideUrl`: LLM-readable conversation procedure
+- `listening`: whether the local daemon was listening when the file was written
+- `authRequired`: whether the caller must pass `REDBOX_ACP_TOKEN` / `Authorization: Bearer <token>`
+
+Recommended discovery flow:
+
+1. Read `REDBOX_ACP_DISCOVERY_FILE` if it is set.
+2. Otherwise read the platform default `acp-gateway.json`.
+3. If the file is absent, try the default local endpoint.
+4. Read `manifestUrl`, then `guideUrl`.
+5. Use `endpointUrl + /runs` for normal turns.
 
 Machine-readable manifest:
 
@@ -43,9 +75,12 @@ node desktop/scripts/redbox-acp-client.mjs
 From the repo root:
 
 ```bash
+node desktop/scripts/redbox-acp-client.mjs discover
 node desktop/scripts/redbox-acp-client.mjs manifest
 node desktop/scripts/redbox-acp-client.mjs guide
 ```
+
+The helper automatically prefers the discovery file before falling back to `http://127.0.0.1:31937/acp/v1`.
 
 With token enforcement:
 
@@ -121,7 +156,7 @@ Endpoint: http://127.0.0.1:31937/acp/v1
 Manifest: http://127.0.0.1:31937/.well-known/redbox-agent.json
 Guide: http://127.0.0.1:31937/acp/v1/guide
 
-First read the manifest and guide. Create or reuse an ACP session, send creator tasks as messages or runs, poll run events with cursor/limit, and reuse returned sessionId/acpSessionId for follow-up turns. Use RedBox for self-media material context, topic briefs, manuscript planning, cover/video planning, and project packaging.
+Prefer discovering the current endpoint from ~/Library/Application Support/RedBox/acp-gateway.json. If it is absent, use the default local endpoint above. First read the manifest and guide. Create or reuse an ACP session, send creator tasks as messages or runs, poll run events with cursor/limit, and reuse returned sessionId/acpSessionId for follow-up turns. Use RedBox for self-media material context, topic briefs, manuscript planning, cover/video planning, and project packaging.
 ```
 
 If token enforcement is enabled, provide the token through the shell environment rather than embedding it in prompts:
@@ -138,7 +173,7 @@ For P0, external agents should expect:
 - approval status: `awaiting_approval` with `run.approval.id` and `run.approval.requestedCapability`
 - event polling through `nextCursor` and `hasMore`
 - artifact references through `artifactRefs`
-- a user-visible RedBox conversation row labeled `ACP: <client>`
+- a user-visible RedBox conversation row with a source label such as `<client>`
 - no auto-created Team / Workboard row; external-agent communication belongs in the conversation list
 
 When Creator Agent returns JSON or fenced JSON with `artifact` / `artifacts`, RedBox creates structured artifact refs and also keeps the full text response as a `text_response` artifact.

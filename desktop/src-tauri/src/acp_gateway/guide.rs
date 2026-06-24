@@ -17,6 +17,14 @@ Base URL: `{base_url}`
 
 ## Discover
 
+Preferred local discovery file:
+
+- macOS: `~/Library/Application Support/RedBox/acp-gateway.json`
+- Windows: `%APPDATA%\RedBox\acp-gateway.json`
+- Linux: `$XDG_CONFIG_HOME/RedBox/acp-gateway.json` or `~/.config/RedBox/acp-gateway.json`
+
+Read that file first when available. It contains the current `manifestUrl`, `guideUrl`, and `endpointUrl`, so external agents do not need to assume a fixed port.
+
 - `GET /.well-known/redbox-agent.json`
 - `GET /acp/v1/manifest`
 - `GET /acp/v1/guide`
@@ -57,7 +65,7 @@ POST /acp/v1/runs
 }}
 ```
 
-If `sessionId` is omitted, RedBox auto-creates a session. The conversation appears in the RedBox chat list with an `ACP: <client>` label.
+If `sessionId` is omitted, RedBox auto-creates a session. The conversation appears in the RedBox chat list with a source label such as `<client>`.
 
 Poll:
 
@@ -89,10 +97,10 @@ pub(crate) fn guide_value(store: &AppStore) -> Value {
         "contentType": "text/markdown",
         "guide": guide_markdown(store),
         "copyPrompts": {
-            "codex": "Read RedBox ACP manifest at http://127.0.0.1:31937/.well-known/redbox-agent.json, then use /acp/v1/runs to talk to RedBox Creator Agent. Set client.name=Codex.",
-            "hermes": "Use RedBox local ACP at http://127.0.0.1:31937/acp/v1. Read /guide first. Set client.name=Hermes.",
-            "openclaw": "Connect to RedBox Creator Agent through /acp/v1/runs. Omit sessionId to auto-create an ACP-labeled RedBox session. Set client.name=OpenClaw.",
-            "generic": "Discover RedBox at /.well-known/redbox-agent.json, read /acp/v1/guide, then POST /acp/v1/runs with client.name and prompt."
+            "codex": "Read ~/Library/Application Support/RedBox/acp-gateway.json when available, then read manifestUrl and guideUrl. Use /acp/v1/runs to talk to RedBox Creator Agent. Set client.name=Codex.",
+            "hermes": "Discover RedBox from acp-gateway.json or http://127.0.0.1:31937/acp/v1. Read /guide first. Set client.name=Hermes.",
+            "openclaw": "Connect to RedBox Creator Agent through discovered endpointUrl + /runs. Omit sessionId to auto-create an ACP-labeled RedBox session. Set client.name=OpenClaw.",
+            "generic": "Discover RedBox from acp-gateway.json, then read manifestUrl and guideUrl, then POST endpointUrl + /runs with client.name and prompt."
         }
     })
 }
@@ -106,6 +114,7 @@ mod tests {
         let store = crate::persistence::default_store();
         let guide = guide_markdown(&store);
 
+        assert!(guide.contains("acp-gateway.json"));
         assert!(guide.contains("GET /.well-known/redbox-agent.json"));
         assert!(guide.contains("POST /acp/v1/runs"));
         assert!(guide.contains("sessionId"));

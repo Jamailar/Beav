@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 
 use crate::AppStore;
 
-fn assistant_base_url(store: &AppStore) -> String {
+pub(crate) fn assistant_base_url(store: &AppStore) -> String {
     let host = store.assistant_state.host.trim();
     if host.is_empty() || store.assistant_state.port <= 0 {
         return "http://127.0.0.1:31937".to_string();
@@ -72,7 +72,7 @@ pub(crate) fn manifest_value(store: &AppStore) -> Value {
         "sessionRouting": {
             "autoCreate": "Omit sessionId/acpSessionId to create a new ACP session, a Chat projection, and a collaboration session.",
             "explicitAttach": "Pass acpSessionId/sessionId to continue an ACP session, or attachTo.type=collab_session with attachTo.id to bind a collaboration session.",
-            "chatProjection": "Every ACP session appears in RedBox chat history with metadata.source=acp and sourceLabel such as ACP: Codex."
+            "chatProjection": "Every ACP session appears in RedBox chat history with metadata.source=acp and sourceLabel such as Codex."
         }
     })
 }
@@ -94,7 +94,7 @@ mod tests {
         );
         assert_eq!(
             manifest["sessionRouting"]["chatProjection"],
-            "Every ACP session appears in RedBox chat history with metadata.source=acp and sourceLabel such as ACP: Codex."
+            "Every ACP session appears in RedBox chat history with metadata.source=acp and sourceLabel such as Codex."
         );
         assert!(manifest["capabilities"]
             .as_array()
