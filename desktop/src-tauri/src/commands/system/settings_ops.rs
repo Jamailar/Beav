@@ -114,7 +114,9 @@ fn merged_settings_payload(current: &Value, payload: &Value) -> Value {
         }
     }
     if let Some(object) = next.as_object_mut() {
-        object.insert("visual_index_enabled".to_string(), json!(true));
+        object
+            .entry("visual_index_enabled".to_string())
+            .or_insert_with(|| json!(false));
         object.insert("video_analysis_enabled".to_string(), json!(true));
     }
     next
@@ -267,6 +269,32 @@ mod tests {
             Some("/Volumes/RedBox Workspace")
         );
         assert_eq!(merged.get("theme").and_then(Value::as_str), Some("light"));
+    }
+
+    #[test]
+    fn merged_settings_payload_defaults_visual_index_to_disabled() {
+        let merged = merged_settings_payload(&json!({}), &json!({ "theme": "dark" }));
+
+        assert_eq!(
+            merged.get("visual_index_enabled").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn merged_settings_payload_preserves_enabled_visual_index() {
+        let current = json!({
+            "visual_index_enabled": true,
+            "theme": "light"
+        });
+
+        let merged = merged_settings_payload(&current, &json!({ "theme": "dark" }));
+
+        assert_eq!(
+            merged.get("visual_index_enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(merged.get("theme").and_then(Value::as_str), Some("dark"));
     }
 
     #[test]

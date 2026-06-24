@@ -15,6 +15,8 @@ use crate::{
         migration::{self, MigrationDecision},
         schema::ensure_catalog_ready,
     },
+    persistence::with_store,
+    store::settings as settings_store,
     AppState,
 };
 
@@ -114,6 +116,16 @@ fn finish_build(state: &State<'_, AppState>, result: Result<(), String>) -> Resu
         }
     }
     Ok(rerun)
+}
+
+fn visual_index_enabled(state: &State<'_, AppState>) -> bool {
+    with_store(state, |store| {
+        Ok(settings_store::settings_snapshot(&store)
+            .get("visual_index_enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false))
+    })
+    .unwrap_or(false)
 }
 
 fn spawn_rebuild(app: AppHandle, kind: RebuildJobKind) {
@@ -236,6 +248,9 @@ pub(crate) fn schedule_canonical_reparse(app: &AppHandle) {
 
 pub(crate) fn schedule_visual_backfill(app: &AppHandle, reason: &str) {
     let state = app.state::<AppState>();
+    if !visual_index_enabled(&state) {
+        return;
+    }
     let reason = if reason.trim().is_empty() {
         "visual_backfill"
     } else {
@@ -273,6 +288,9 @@ pub(crate) fn schedule_visual_backfill(app: &AppHandle, reason: &str) {
             schedule_visual_backfill(&app, &reason);
             return;
         }
+        if !visual_index_enabled(&state) {
+            return;
+        }
         match needed {
             Ok(false) => {
                 schedule_visual_retry_wakeup(&app, "visual-backfill-deferred");
@@ -295,6 +313,9 @@ pub(crate) fn schedule_visual_backfill(app: &AppHandle, reason: &str) {
 
 fn schedule_visual_retry_wakeup(app: &AppHandle, reason: &str) {
     let state = app.state::<AppState>();
+    if !visual_index_enabled(&state) {
+        return;
+    }
     let next_retry_at = match next_visual_retry_at(&state) {
         Ok(Some(value)) => value,
         Ok(None) => return,

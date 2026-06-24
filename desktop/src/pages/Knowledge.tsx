@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square, Info } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import type { PendingChatMessage } from '../features/app-shell/types';
@@ -64,6 +64,7 @@ interface SettingsShape {
     image_size?: string;
     image_quality?: string;
     active_space_id?: string;
+    visual_index_enabled?: boolean;
 }
 
 const BROWSER_PLUGIN_DOWNLOAD_URL = APP_BRAND.downloadUrl || 'https://redbox.ziz.hk/download';
@@ -104,6 +105,9 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const [visibleItemCount, setVisibleItemCount] = useState(KNOWLEDGE_RENDER_BATCH_SIZE);
     const [isAllTagsDrawerOpen, setIsAllTagsDrawerOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [isVisualIndexEnabled, setIsVisualIndexEnabled] = useState(false);
+    const [isVisualIndexSettingLoading, setIsVisualIndexSettingLoading] = useState(true);
+    const [isVisualIndexSettingSaving, setIsVisualIndexSettingSaving] = useState(false);
     const [showSubtitle, setShowSubtitle] = useState(false);
     const [showTranscript, setShowTranscript] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
@@ -502,6 +506,35 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         }
     }, []);
 
+    const loadVisualIndexSetting = useCallback(async () => {
+        try {
+            const settings = await window.ipcRenderer.getSettings() as SettingsShape | undefined;
+            setIsVisualIndexEnabled(Boolean(settings?.visual_index_enabled));
+        } catch (error) {
+            console.error('Failed to load visual index setting:', error);
+        } finally {
+            setIsVisualIndexSettingLoading(false);
+        }
+    }, []);
+
+    const handleToggleVisualIndex = useCallback(async () => {
+        if (isVisualIndexSettingSaving) return;
+        const nextEnabled = !isVisualIndexEnabled;
+        setIsVisualIndexEnabled(nextEnabled);
+        setIsVisualIndexSettingSaving(true);
+        try {
+            await window.ipcRenderer.saveSettings({ visual_index_enabled: nextEnabled });
+            await refreshIndexStatus();
+        } catch (error) {
+            console.error('Failed to save visual index setting:', error);
+            setIsVisualIndexEnabled(!nextEnabled);
+            void appAlert('图像理解索引设置保存失败');
+        } finally {
+            setIsVisualIndexSettingSaving(false);
+            setIsVisualIndexSettingLoading(false);
+        }
+    }, [isVisualIndexEnabled, isVisualIndexSettingSaving, refreshIndexStatus]);
+
     const applyCatalogPage = useCallback((items: KnowledgeCatalogSummary[], append: boolean) => {
         const { notes: nextNotes, videos: nextVideos, docs: nextDocs } = projectCatalogPage(items);
         const mergeById = <T extends { id: string }>(current: T[], incoming: T[]) => {
@@ -638,6 +671,17 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     useEffect(() => {
         void loadAllKnowledge();
     }, [loadAllKnowledge]);
+
+    useEffect(() => {
+        void loadVisualIndexSetting();
+        const handleSettingsUpdated = () => {
+            void loadVisualIndexSetting();
+        };
+        window.ipcRenderer.onSettingsUpdated(handleSettingsUpdated);
+        return () => {
+            window.ipcRenderer.offSettingsUpdated(handleSettingsUpdated);
+        };
+    }, [loadVisualIndexSetting]);
 
     // 每次从其他页面切回知识库时，强制刷新当前列表，避免页面显示旧缓存。
     useEffect(() => {
@@ -1944,6 +1988,110 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         youtubeSummaryPendingCount,
     ]);
 
+    const visualIndexSettingControl = useMemo(() => (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-surface-secondary/45 px-3 py-2">
+            <div className="min-w-0 flex flex-1 items-center gap-2">
+                <Image className="h-4 w-4 shrink-0 text-text-tertiary" />
+                <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="text-[12px] font-bold text-text-primary">图像理解索引</span>
+                        <span className={clsx(
+                            'inline-flex h-5 items-center rounded-full px-2 text-[10px] font-bold',
+                            isVisualIndexEnabled
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-surface-tertiary/70 text-text-tertiary'
+                        )}>
+                            {isVisualIndexEnabled ? '开启 · 会产生额外消耗' : '关闭 · 不调用视觉模型'}
+                        </span>
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] font-medium text-text-tertiary">
+                        用视觉模型理解知识库图片，让 AI 能搜索和引用图片里的内容。
+                    </div>
+                </div>
+                <div className="group relative shrink-0">
+                    <button
+                        type="button"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-tertiary/70 hover:text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/20"
+                        aria-label="图像理解索引说明"
+                    >
+                        <Info className="h-3.5 w-3.5" />
+                    </button>
+                    <div className="pointer-events-none absolute left-1/2 top-full z-40 mt-2 w-[280px] -translate-x-1/2 rounded-xl border border-border bg-surface-elevated px-3 py-2 text-[11px] font-medium leading-5 text-text-secondary opacity-0 shadow-xl shadow-black/10 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                        开启后，知识库会自动分析图片、PDF 页面截图和图文素材，用于后续搜索、引用和 AI 任务检索。这个过程会调用视觉模型，因此会产生额外 AI 消耗。关闭后不会继续自动分析新图片，已生成的索引仍可使用。
+                    </div>
+                </div>
+            </div>
+            <button
+                type="button"
+                role="switch"
+                aria-checked={isVisualIndexEnabled}
+                aria-label="图像理解索引"
+                onClick={() => void handleToggleVisualIndex()}
+                disabled={isVisualIndexSettingLoading || isVisualIndexSettingSaving}
+                className="ui-switch-track shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+                data-size="lg"
+                data-state={isVisualIndexEnabled ? 'on' : 'off'}
+            >
+                <span className="ui-switch-thumb" />
+            </button>
+        </div>
+    ), [
+        handleToggleVisualIndex,
+        isVisualIndexEnabled,
+        isVisualIndexSettingLoading,
+        isVisualIndexSettingSaving,
+    ]);
+
+    const emptyVisualIndexSettingControl = useMemo(() => (
+        <div className="mx-auto w-full max-w-[480px] rounded-2xl border border-border/70 bg-surface-secondary/45 px-4 py-3 text-left">
+            <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex items-start gap-2.5">
+                    <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-surface-elevated text-text-tertiary">
+                        <Image className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <span className="text-[12px] font-extrabold text-text-primary">图像理解索引</span>
+                            <span className={clsx(
+                                'inline-flex h-5 items-center rounded-full px-2 text-[9px] font-bold',
+                                isVisualIndexEnabled
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-surface-tertiary/70 text-text-tertiary'
+                            )}>
+                                {isVisualIndexEnabled ? '开启 · 会产生额外消耗' : '关闭 · 默认不消耗'}
+                            </span>
+                        </div>
+                        <p className="mt-1 text-[11px] font-medium leading-5 text-text-tertiary">
+                            开启后会调用视觉模型自动分析知识库图片、PDF 页面截图和图文素材，让 AI 能搜索和引用图片里的内容；这会产生额外 AI 消耗。
+                        </p>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isVisualIndexEnabled}
+                    aria-label="图像理解索引"
+                    onClick={() => void handleToggleVisualIndex()}
+                    disabled={isVisualIndexSettingLoading || isVisualIndexSettingSaving}
+                    className="ui-switch-track mt-0.5 shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+                    data-size="lg"
+                    data-state={isVisualIndexEnabled ? 'on' : 'off'}
+                >
+                    <span className="ui-switch-thumb" />
+                </button>
+            </div>
+            <div className="mt-2 flex items-start gap-1.5 text-[10px] font-medium leading-5 text-text-tertiary">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>关闭后不会自动分析新图片，已生成的视觉索引仍可继续使用。</span>
+            </div>
+        </div>
+    ), [
+        handleToggleVisualIndex,
+        isVisualIndexEnabled,
+        isVisualIndexSettingLoading,
+        isVisualIndexSettingSaving,
+    ]);
+
     useEffect(() => {
         if (!onTitleBarContentChange) return;
         onTitleBarContentChange(null);
@@ -2464,6 +2612,9 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                             <li><span className="font-bold text-text-primary">3.</span> 开启开发者模式，选择“加载已解压的扩展程序”。</li>
                                         </ol>
                                     </div>
+                                    <div className="mt-7 w-full">
+                                        {emptyVisualIndexSettingControl}
+                                    </div>
                                 </div>
                             ) : (
                                 <div className="text-center text-text-tertiary text-xs py-16">
@@ -2916,6 +3067,12 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     {!hasMoreRenderedItems && isLoadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5" />}
                                     {hasMoreRenderedItems ? '显示更多' : isLoadingMore ? '加载中...' : '加载更多'}
                                 </button>
+                            </div>
+                        )}
+
+                        {!isEmbedded && filteredKnowledgeItems.length > 0 && (
+                            <div className="mx-auto max-w-[560px] pt-2">
+                                {visualIndexSettingControl}
                             </div>
                         )}
 

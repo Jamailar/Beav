@@ -783,6 +783,27 @@ function GeneralSettingsSectionInner({
                 onRefresh={handleRefreshFileIndexDashboard}
             />
 
+            <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-text-primary">图像自动索引</div>
+                        <div className="mt-1 text-xs text-text-tertiary">关闭时不自动调用视觉模型处理知识库图片。</div>
+                    </div>
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.visual_index_enabled}
+                        aria-label="图像自动索引"
+                        onClick={() => setFormData((prev: any) => ({ ...prev, visual_index_enabled: !prev.visual_index_enabled }))}
+                        className="ui-switch-track shrink-0"
+                        data-size="lg"
+                        data-state={formData.visual_index_enabled ? 'on' : 'off'}
+                    >
+                        <span className="ui-switch-thumb" />
+                    </button>
+                </div>
+            </div>
+
             <div className={clsx(
                 'overflow-hidden rounded-lg border border-border bg-surface-secondary/30 transition-colors',
                 isNotificationExpanded && 'border-accent-primary/30',
