@@ -3950,6 +3950,12 @@ export function Chat({
       onCliVerificationFinished: ({ executionId, status, summary }) => {
         handleCliVerificationFinished(null, { executionId, status, summary });
       },
+      onAcpConversationChanged: ({ eventType }) => {
+        const sessionId = currentSessionIdRef.current;
+        if (!isActiveRef.current || !sessionId) return;
+        debugUi('acp_conversation_changed:reload_messages', { sessionId, eventType });
+        void selectSession(sessionId);
+      },
     });
 
     return () => {
