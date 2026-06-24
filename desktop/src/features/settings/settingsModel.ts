@@ -246,7 +246,7 @@ export type AiModelRouteConfig = {
 export type AiModelRoutes = Record<AiModelRouteScope, AiModelRouteConfig>;
 
 export const DEFAULT_VIDEO_ANALYSIS_ENABLED = true;
-export const DEFAULT_VISUAL_INDEX_ENABLED = true;
+export const DEFAULT_VISUAL_INDEX_ENABLED = false;
 
 export const DEFAULT_AI_MODEL_ROUTES: AiModelRoutes = {
   chat: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },

@@ -2293,9 +2293,6 @@ export function Settings({
     const nextSourceId = source?.id || (nextMode === 'official' ? OFFICIAL_AUTO_SOURCE_ID : '');
     updateAiModelRoute(scope, { mode: nextMode, sourceId: nextSourceId, model: '' });
     if (!source) {
-      if (scope === 'visualIndex') {
-        setFormData((prev) => ({ ...prev, visual_index_enabled: true }));
-      }
       if (scope === 'videoAnalysis') {
         setFormData((prev) => ({ ...prev, video_analysis_enabled: true }));
       }
@@ -2314,7 +2311,6 @@ export function Settings({
     if (scope === 'image') handleLinkedSourceChange('image', source.id);
     if (scope === 'voiceTts') handleLinkedSourceChange('voice', source.id);
     if (scope === 'visualIndex') {
-      setFormData((prev) => ({ ...prev, visual_index_enabled: true }));
       handleLinkedSourceChange('visual', source.id);
     }
     if (scope === 'videoAnalysis') {
@@ -3847,7 +3843,7 @@ export function Settings({
           embedding_endpoint: settings.embedding_endpoint || '',
           embedding_key: settings.embedding_key || '',
           embedding_model: nextModelRoutes.embedding.model || '',
-          visual_index_enabled: DEFAULT_VISUAL_INDEX_ENABLED,
+          visual_index_enabled: Boolean(settings.visual_index_enabled),
           visual_index_provider: settings.visual_index_provider || 'openai-compatible',
           visual_index_endpoint: settings.visual_index_endpoint || '',
           visual_index_api_key: settings.visual_index_api_key || '',
@@ -5745,7 +5741,7 @@ export function Settings({
         embedding_model: routeEmbeddingModel,
         embedding_endpoint: String(resolvedEmbeddingSource?.baseURL || formData.embedding_endpoint || resolvedApiEndpoint).trim(),
         embedding_key: String(resolvedEmbeddingSource?.apiKey || formData.embedding_key || '').trim(),
-        visual_index_enabled: true,
+        visual_index_enabled: Boolean(formData.visual_index_enabled),
         visual_index_provider: normalizedVisualIndexProvider,
         visual_index_endpoint: normalizedVisualIndexEndpoint,
         visual_index_api_key: normalizedVisualIndexApiKey,
