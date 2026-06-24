@@ -102,6 +102,72 @@ fn create_acp_session_record(
     }
 }
 
+fn acp_prompt_title_from_payload(payload: &Value) -> Option<String> {
+    prompt_from_payload(payload)
+        .map(|value| crate::session_title_from_message(&value))
+        .filter(|value| !value.trim().is_empty() && value != "New Chat")
+}
+
+fn acp_prompt_title_from_history(store: &AppStore, acp_session_id: &str) -> Option<String> {
+    store
+        .acp_messages
+        .iter()
+        .filter(|item| item.session_id == acp_session_id && item.direction == "inbound")
+        .min_by(|left, right| left.created_at.cmp(&right.created_at))
+        .map(|item| crate::session_title_from_message(&item.content))
+        .filter(|value| !value.trim().is_empty() && value != "New Chat")
+}
+
+fn is_acp_source_title(title: &str, client: &AcpRequestClient) -> bool {
+    let normalized = title.trim();
+    normalized == "External Agent Conversation"
+        || normalized == "外部 Agent 对话"
+        || normalized == format!("{} 与 RedBox 对话", client.name.trim())
+}
+
+fn repair_acp_source_title_if_needed(
+    store: &mut AppStore,
+    session: &AcpSessionRecord,
+    client: &AcpRequestClient,
+    payload: &Value,
+) -> Result<(), AcpHttpError> {
+    if !is_acp_source_title(&session.title, client) {
+        return Ok(());
+    }
+    let Some(next_title) = acp_prompt_title_from_history(store, &session.id)
+        .or_else(|| acp_prompt_title_from_payload(payload))
+        .or_else(|| payload_string(payload, "title"))
+        .filter(|value| !is_acp_source_title(value, client))
+    else {
+        return Ok(());
+    };
+    if let Some(chat_session) = store
+        .chat_sessions
+        .iter_mut()
+        .find(|item| item.id == session.chat_session_id)
+    {
+        chat_session.title = next_title.clone();
+        chat_session.updated_at = crate::now_iso();
+    }
+    if let Some(collab_session) = store
+        .collab_sessions
+        .iter_mut()
+        .find(|item| item.id == session.collab_session_id)
+    {
+        collab_session.title = next_title.clone();
+        collab_session.updated_at = crate::now_i64();
+    }
+    if let Some(acp_session) = store
+        .acp_sessions
+        .iter_mut()
+        .find(|item| item.id == session.id)
+    {
+        acp_session.title = next_title;
+        acp_session.updated_at = crate::now_i64();
+    }
+    Ok(())
+}
+
 pub(crate) fn session_public_value(store: &AppStore, session: &AcpSessionRecord) -> Value {
     let chat_session = store
         .chat_sessions
@@ -177,9 +243,15 @@ pub(crate) fn create_or_attach_acp_session(
             .cloned()
             .ok_or_else(|| {
                 AcpHttpError::not_found("acp_session_not_found", "ACP session not found.")
-            })?;
+        })?;
         ensure_acp_creator_member_id(store, &session.collab_session_id)?;
-        return Ok(session);
+        repair_acp_source_title_if_needed(store, &session, client, payload)?;
+        return Ok(store
+            .acp_sessions
+            .iter()
+            .find(|item| item.id == acp_session_id)
+            .cloned()
+            .unwrap_or(session));
     }
 
     if let Some(collab_session_id) = collab_session_id_from_payload(payload) {
@@ -249,10 +321,8 @@ pub(crate) fn create_or_attach_acp_session(
     }
 
     let acp_id = make_acp_id("acp-session");
-    let title = payload_string(payload, "title")
-        .or_else(|| {
-            prompt_from_payload(payload).map(|value| crate::session_title_from_message(&value))
-        })
+    let title = acp_prompt_title_from_payload(payload)
+        .or_else(|| payload_string(payload, "title"))
         .unwrap_or_else(|| "External Agent Conversation".to_string());
     let objective = payload_string(payload, "objective")
         .or_else(|| prompt_from_payload(payload))
@@ -496,6 +566,58 @@ mod tests {
             .any(|item| item.id == session.collab_session_id
                 && item.source == "acp"
                 && item.coordinator_member_id.is_some()));
+    }
+
+    #[test]
+    fn auto_created_acp_session_prefers_prompt_title_over_source_label() {
+        let mut store = crate::persistence::default_store();
+        let payload = json!({
+            "title": "Codex 与 RedBox 对话",
+            "prompt": "请帮我整理三条选题方向"
+        });
+
+        let session = create_or_attach_acp_session(&mut store, &payload, &test_client()).unwrap();
+
+        assert_eq!(session.title, "请帮我整理三条选题方向".chars().take(15).collect::<String>());
+        let chat_session = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session.chat_session_id)
+            .unwrap();
+        assert_eq!(chat_session.title, session.title);
+    }
+
+    #[test]
+    fn existing_acp_source_title_is_repaired_from_first_inbound_message() {
+        let mut store = crate::persistence::default_store();
+        let payload = json!({ "title": "Codex 与 RedBox 对话" });
+        let session = create_or_attach_acp_session(&mut store, &payload, &test_client()).unwrap();
+        append_inbound_message(
+            &mut store,
+            &session.id,
+            &json!({ "prompt": "请创建三个稿件分类" }),
+            &test_client(),
+            None,
+        )
+        .unwrap();
+
+        let repaired = create_or_attach_acp_session(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "prompt": "后续消息不应该覆盖第一条标题"
+            }),
+            &test_client(),
+        )
+        .unwrap();
+
+        assert_eq!(repaired.title, "请创建三个稿件分类");
+        let chat_session = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == repaired.chat_session_id)
+            .unwrap();
+        assert_eq!(chat_session.title, repaired.title);
     }
 
     #[test]
