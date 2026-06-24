@@ -530,6 +530,7 @@ export function RedClaw({
     }, []);
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
     const [sessionList, setSessionList] = useState<ContextChatSessionListItem[]>([]);
+    const [externalAgentSessions, setExternalAgentSessions] = useState<ContextChatSessionListItem[]>([]);
     const [sessionActivityById, setSessionActivityById] = useState<Record<string, RedClawHistorySessionActivity>>({});
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -659,6 +660,7 @@ export function RedClaw({
         };
         sessionListRef.current = sessionListRef.current.map(updateItem);
         setSessionList((prev) => prev.map(updateItem));
+        setExternalAgentSessions((prev) => prev.map(updateItem));
     }, []);
 
     const setHistorySessionUnread = useCallback((sessionId: string | null | undefined, unread: boolean) => {
@@ -804,6 +806,55 @@ export function RedClaw({
         sessionListRef.current = sessionList;
     }, [sessionList]);
 
+    const normalizeExternalAgentSession = useCallback((item: ContextChatSessionListItem): ContextChatSessionListItem => {
+        const rawTitle = String(
+            item.chatSession?.title
+            || (item as unknown as { title?: string }).title
+            || '外部 Agent 对话'
+        ).trim() || '外部 Agent 对话';
+        const rawUpdatedAt = String(
+            item.chatSession?.updatedAt
+            || (item as unknown as { updatedAt?: string }).updatedAt
+            || item.chatSession?.createdAt
+            || Date.now()
+        );
+        const rawCreatedAt = String(
+            item.chatSession?.createdAt
+            || (item as unknown as { createdAt?: string }).createdAt
+            || rawUpdatedAt
+        );
+        return {
+            ...item,
+            id: String(item.id || item.chatSession?.id || '').trim(),
+            metadata: item.metadata || null,
+            chatSession: {
+                id: String(item.chatSession?.id || item.id || '').trim(),
+                title: rawTitle,
+                updatedAt: rawUpdatedAt,
+                createdAt: rawCreatedAt,
+            },
+        };
+    }, []);
+
+    const loadExternalAgentSessions = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.sessions.list() as ContextChatSessionListItem[];
+            const items = Array.isArray(result)
+                ? sortContextSessionItems(result
+                    .filter((item) => {
+                        const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+                            ? item.metadata as Record<string, unknown>
+                            : {};
+                        return String(metadata.source || '').trim() === 'acp' && !item.archived;
+                    })
+                    .map(normalizeExternalAgentSession))
+                : [];
+            setExternalAgentSessions(items);
+        } catch (error) {
+            console.error('Failed to load external agent sessions:', error);
+        }
+    }, [normalizeExternalAgentSession]);
+
     useEffect(() => {
         return subscribeRuntimeEventStream({
             eventTypes: [
@@ -834,15 +885,19 @@ export function RedClaw({
             onChatDone: ({ sessionId, status }) => {
                 if (status === 'completed') {
                     markSessionComplete(sessionId);
+                    void loadExternalAgentSessions();
                 } else {
                     clearRunningSessionActivity(sessionId);
                 }
             },
-            onChatResponseEnd: ({ sessionId }) => markSessionComplete(sessionId),
+            onChatResponseEnd: ({ sessionId }) => {
+                markSessionComplete(sessionId);
+                void loadExternalAgentSessions();
+            },
             onChatCancelled: ({ sessionId }) => clearRunningSessionActivity(sessionId),
             onChatError: ({ sessionId }) => clearRunningSessionActivity(sessionId),
         });
-    }, [clearRunningSessionActivity, markSessionComplete, markSessionRunning]);
+    }, [clearRunningSessionActivity, loadExternalAgentSessions, markSessionComplete, markSessionRunning]);
 
     useEffect(() => {
         if (teamRooms.length === 0) {
@@ -880,8 +935,13 @@ export function RedClaw({
                 surface: 'redclaw',
                 speakerLabel: REDCLAW_DISPLAY_NAME,
             })),
+            ...externalAgentSessions.map((session): RedClawHistoryListItem => ({
+                ...session,
+                surface: 'external',
+                speakerLabel: 'External Agent',
+            })),
         ].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
-    ), [sessionList]);
+    ), [externalAgentSessions, sessionList]);
     const activeChatSessionId = activeAiSurface === 'room' ? null : activeSessionId;
     useEffect(() => {
         if (isActive && activeChatSessionId) {
@@ -1076,6 +1136,7 @@ export function RedClaw({
             setActiveSpaceName(nextSpaceName);
             setSessionList(items);
             sessionListRef.current = items;
+            void loadExternalAgentSessions();
             activeSessionIdRef.current = nextActiveSessionId;
             setActiveSessionId(nextActiveSessionId);
             hasSessionSnapshotRef.current = true;
@@ -1099,7 +1160,7 @@ export function RedClaw({
                 setHistoryLoading(false);
             }
         }
-    }, [debugUi]);
+    }, [debugUi, loadExternalAgentSessions]);
 
     const initSession = useCallback(async () => {
         if (!hasSessionSnapshotRef.current) {
@@ -1230,10 +1291,11 @@ export function RedClaw({
     useEffect(() => {
         if (!shouldLoadHistory) return;
         void initSession();
+        void loadExternalAgentSessions();
         if (isActive) {
             void loadRunnerStatus(true);
         }
-    }, [initSession, isActive, loadRunnerStatus, shouldLoadHistory]);
+    }, [initSession, isActive, loadExternalAgentSessions, loadRunnerStatus, shouldLoadHistory]);
 
     useEffect(() => {
         if (!isActive || !activeSessionId) return;
@@ -1660,9 +1722,10 @@ export function RedClaw({
 
     const archiveUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem) => {
         const targetSessionId = String(session?.id || '').trim();
-        if (!targetSessionId || session.surface !== 'redclaw') return;
+        if (!targetSessionId || (session.surface !== 'redclaw' && session.surface !== 'external')) return;
         try {
             await window.ipcRenderer.chat.archiveSession(targetSessionId);
+            setExternalAgentSessions((prev) => prev.filter((item) => item.id !== targetSessionId));
             const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
             sessionListRef.current = remaining;
             setSessionList(remaining);
