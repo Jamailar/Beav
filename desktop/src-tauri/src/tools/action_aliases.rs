@@ -35,10 +35,9 @@ pub fn canonical_app_cli_action_for_policy<'a>(action: &'a str) -> &'a str {
         "redclawprofilebundle" | "redclawprofileread" => "profile.read",
         "redclawprofileupdate" | "redclawprofilecompletestyledefinition" => "profile.manage",
         "redclawtaskpreview" | "redclawtasklist" | "redclawtaskstats" | "taskpreview"
-        | "tasklist" => "task.read",
-        "redclawtaskcreate" | "redclawtaskconfirm" | "redclawtaskupdate" | "redclawtaskcancel" => {
-            "task.manage"
-        }
+        | "tasklist" | "taskstats" => "task.read",
+        "redclawtaskcreate" | "redclawtaskconfirm" | "redclawtaskupdate" | "redclawtaskcancel"
+        | "taskcreate" | "taskconfirm" | "taskupdate" | "taskcancel" => "task.manage",
         "assetcreate" | "assetscreate" | "subjectcreate" | "subjectscreate" => "assets.manage",
         "assetupdate" | "assetsupdate" | "subjectupdate" | "subjectsupdate" => "assets.manage",
         "assetdelete" | "assetsdelete" | "subjectdelete" | "subjectsdelete" => "assets.manage",
@@ -130,6 +129,13 @@ fn app_cli_action_alias(action: &str) -> Option<(&'static str, Option<&'static s
         "spacerename" | "spacesrename" => Some(("spaces.manage", Some("rename"))),
         "spacedelete" | "spacesdelete" => Some(("spaces.manage", Some("delete"))),
         "spaceensure" | "spacesensure" => Some(("spaces.manage", Some("ensure"))),
+        "taskpreview" => Some(("task.read", Some("preview"))),
+        "tasklist" => Some(("task.read", Some("list"))),
+        "taskstats" => Some(("task.read", Some("stats"))),
+        "taskcreate" => Some(("task.manage", Some("create"))),
+        "taskconfirm" => Some(("task.manage", Some("confirm"))),
+        "taskupdate" => Some(("task.manage", Some("update"))),
+        "taskcancel" => Some(("task.manage", Some("cancel"))),
         _ => None,
     }
 }

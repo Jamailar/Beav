@@ -966,6 +966,42 @@ mod tests {
     }
 
     #[test]
+    fn router_prepares_task_create_operate_without_legacy_workflow_error() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "task",
+                    "operation": "create",
+                    "input": {
+                        "name": "每日早间新闻简报",
+                        "cron": "0 8 * * *",
+                        "ownerScope": "current_space",
+                        "actionType": "资讯简报",
+                        "prompt": "每天早上汇总当天重要新闻"
+                    }
+                }),
+            )
+            .expect("task create should route to consolidated task.manage");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("task.manage"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/operation"),
+            Some(&json!("create"))
+        );
+        assert_eq!(prepared.arguments.get("command"), None);
+    }
+
+    #[test]
     fn router_prepares_direct_team_guide_operate() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",

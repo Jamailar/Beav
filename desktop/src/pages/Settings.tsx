@@ -1380,6 +1380,24 @@ export function Settings({
     return String(matchingModels[0]?.id || currentDefault || sourceModels[0]?.id || '').trim();
   }, [getSourceModelList]);
 
+  const pickCapabilityModelForSource = useCallback((
+    source: AiSourceConfig | null,
+    preferredModel: string,
+    capability: ModelCapability,
+  ): string => {
+    if (!source) return '';
+    const normalizedPreferredModel = String(preferredModel || '').trim();
+    const matchingModels = filterAiModelsByCapability(getSourceModelList(source), capability);
+    if (normalizedPreferredModel && matchingModels.some((item) => item.id === normalizedPreferredModel)) {
+      return normalizedPreferredModel;
+    }
+    const currentDefault = String(source.model || '').trim();
+    if (currentDefault && matchingModels.some((item) => item.id === currentDefault)) {
+      return currentDefault;
+    }
+    return String(matchingModels[0]?.id || '').trim();
+  }, [getSourceModelList]);
+
   const filterVisualIndexModels = useCallback((models: AiModelDescriptor[]): AiModelDescriptor[] => {
     const multimodalChatModels = models.filter((model) => (
       model.capabilities.includes('chat') && model.inputCapabilities.includes('image')
@@ -1606,14 +1624,8 @@ export function Settings({
   }, [filterVideoAnalysisModels, getSourceModelList, selectedVideoAnalysisSource]);
 
   const imageSourceModels = useMemo(() => {
-    const models = selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
-    const currentModel = String(formData.image_model || '').trim();
-    if (!currentModel || models.some((model) => model.id === currentModel)) {
-      return models;
-    }
-    const descriptor = toAiModelDescriptor({ id: currentModel, capabilities: ['image'] });
-    return descriptor ? [descriptor, ...models] : models;
-  }, [formData.image_model, getSourceModelList, selectedImageSource]);
+    return selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
+  }, [getSourceModelList, selectedImageSource]);
 
   const voiceTtsSourceModels = useMemo(() => {
     const sourceModels = selectedVoiceSource ? getSourceModelList(selectedVoiceSource) : [];
@@ -3753,6 +3765,23 @@ export function Settings({
         const routeModelFirst = (routeModel: string, legacyModel: unknown) => (
           String(routeModel || legacyModel || '').trim()
         );
+        const resolvedImageSource = sourceList.find((source) => source.id === resolvedImageSourceId) || null;
+        const loadedImageRouting = resolvedImageSource
+          ? inferImageRoutingFromSource(resolvedImageSource)
+          : {
+            provider: settings.image_provider || 'openai-compatible',
+            template: settings.image_provider_template || '',
+          };
+        const loadedImageProvider = loadedImageRouting.provider || settings.image_provider || 'openai-compatible';
+        const loadedImageTemplate = inferImageTemplateByProvider(
+          loadedImageProvider,
+          loadedImageRouting.template || settings.image_provider_template || '',
+        );
+        const loadedImageModel = pickCapabilityModelForSource(
+          resolvedImageSource,
+          routeModelFirst(loadedModelRoutes.image.model, settings.image_model),
+          'image',
+        );
         const nextModelRoutes: AiModelRoutes = {
           ...loadedModelRoutes,
           chat: {
@@ -3793,7 +3822,7 @@ export function Settings({
             ...loadedModelRoutes.image,
             mode: routeSourceMode(resolvedImageSourceId, loadedModelRoutes.image.mode),
             sourceId: resolvedImageSourceId,
-            model: routeModelFirst(loadedModelRoutes.image.model, settings.image_model),
+            model: loadedImageModel,
           },
           visualIndex: {
             ...loadedModelRoutes.visualIndex,
@@ -3905,26 +3934,18 @@ export function Settings({
           rerank_api_key: settings.rerank_api_key || '',
           rerank_model: settings.rerank_model || '',
           rerank_timeout_seconds: String(settings.rerank_timeout_seconds || 30),
-          image_provider: settings.image_provider || 'openai-compatible',
+          image_provider: loadedImageProvider,
           image_endpoint: settings.image_endpoint || resolveDefaultImageEndpoint(
-            settings.image_provider || 'openai-compatible',
-            settings.image_provider_template || 'openai-images'
+            loadedImageProvider,
+            loadedImageTemplate || 'openai-images'
           ),
           image_api_key: settings.image_api_key || '',
-          image_provider_template: inferImageTemplateByProvider(
-            settings.image_provider || 'openai-compatible',
-            settings.image_provider_template || ''
-          ),
+          image_provider_template: loadedImageTemplate,
           image_model: (() => {
-            const loadedProvider = settings.image_provider || 'openai-compatible';
-            const loadedTemplate = inferImageTemplateByProvider(
-              loadedProvider,
-              settings.image_provider_template || ''
-            );
-            if (loadedTemplate === 'dashscope-wan-native') {
+            if (loadedImageTemplate === 'dashscope-wan-native') {
               return DASHSCOPE_LOCKED_IMAGE_MODEL;
             }
-            return nextModelRoutes.image.model || '';
+            return loadedImageModel;
           })(),
           voice_endpoint: settings.voice_endpoint || settings.tts_endpoint || '',
           voice_api_key: settings.voice_api_key || settings.tts_api_key || '',
@@ -3990,7 +4011,7 @@ export function Settings({
       if (requestId !== settingsLoadRequestRef.current) return;
       console.error("Failed to load settings", e);
     }
-  }, [clearAiSourceDraftDirty, isDeprecatedEmptyOpenAiSource, loadMcpRuntimeData, persistDeveloperModeState, setCurrentSpaceState]);
+  }, [clearAiSourceDraftDirty, inferImageRoutingFromSource, isDeprecatedEmptyOpenAiSource, loadMcpRuntimeData, persistDeveloperModeState, pickCapabilityModelForSource, setCurrentSpaceState]);
 
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
@@ -5613,6 +5634,17 @@ export function Settings({
       const resolvedVideoAnalysisSource = getAiSourceById(videoAnalysisSourceId) || defaultSource || null;
       const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
       const resolvedVoiceSource = getAiSourceById(voiceSourceId) || officialAiSource || defaultSource || null;
+      const resolvedImageRouting = resolvedImageSource
+        ? inferImageRoutingFromSource(resolvedImageSource)
+        : {
+          provider: formData.image_provider || 'openai-compatible',
+          template: formData.image_provider_template || '',
+        };
+      const resolvedImageProvider = resolvedImageRouting.provider || formData.image_provider || 'openai-compatible';
+      const resolvedImageProviderTemplate = inferImageTemplateByProvider(
+        resolvedImageProvider,
+        resolvedImageRouting.template || formData.image_provider_template || '',
+      );
       const resolvedTranscriptionModel = String(formData.transcription_model || pickBestModelForSource(resolvedTranscriptionSource) || '').trim();
       const resolvedEmbeddingModel = String(formData.embedding_model || pickBestModelForSource(resolvedEmbeddingSource) || '').trim();
       const resolvedVisualIndexModel = String(formData.visual_index_model || pickBestVisualIndexModelForSource(resolvedVisualIndexSource) || '').trim();
@@ -5623,7 +5655,12 @@ export function Settings({
           ? requestedVideoAnalysisModel
           : pickBestVideoAnalysisModelForSource(resolvedVideoAnalysisSource),
       ).trim();
-      const resolvedImageModel = String(formData.image_model || pickBestModelForSource(resolvedImageSource) || '').trim();
+      const requestedImageModel = String(formData.image_model || aiModelRoutes.image.model || '').trim();
+      const resolvedImageModel = String(
+        resolvedImageProviderTemplate === 'dashscope-wan-native'
+          ? DASHSCOPE_LOCKED_IMAGE_MODEL
+          : pickCapabilityModelForSource(resolvedImageSource, requestedImageModel, 'image'),
+      ).trim();
       const resolvedVoiceTtsModel = String(formData.voice_tts_model || aiModelRoutes.voiceTts.model || formData.tts_model || DEFAULT_VOICE_TTS_MODEL).trim();
       const resolvedVoiceCloneModel = cloneModelForVoiceTtsModel(
         resolvedVoiceTtsModel,
@@ -5732,12 +5769,7 @@ export function Settings({
         resolvedEmbeddingSource,
         (source) => pickBestModelForSource(source, '', 'embedding'),
       );
-      const routeImageModel = routeModel(
-        'image',
-        resolvedImageModel,
-        resolvedImageSource,
-        (source) => pickBestModelForSource(source, '', 'image'),
-      );
+      const routeImageModel = resolvedImageModel;
       const routeVisualIndexModel = resolvedVisualIndexModel;
       const routeVideoAnalysisModel = resolvedVideoAnalysisModel;
       const routeVoiceTtsModel = routeModel(
@@ -5857,8 +5889,8 @@ export function Settings({
         rerank_api_key: String(formData.rerank_api_key || '').trim(),
         rerank_model: String(formData.rerank_model || '').trim(),
         rerank_timeout_seconds: rerankTimeoutSeconds,
-        image_provider: formData.image_provider,
-        image_provider_template: formData.image_provider_template,
+        image_provider: resolvedImageProvider,
+        image_provider_template: resolvedImageProviderTemplate,
         image_endpoint: String(resolvedImageSource?.baseURL || formData.image_endpoint || '').trim(),
         image_api_key: String(resolvedImageSource?.apiKey || formData.image_api_key || '').trim(),
         image_model: routeImageModel,
@@ -6032,10 +6064,13 @@ export function Settings({
     if (aiModelRoutes[scope].mode === 'official') {
       const officialModel = String(aiModelRoutes[scope].model || '').trim();
       const legacyModel = currentRouteModelValue(scope);
+      if (scope === 'image') {
+        return pickCapabilityModelForSource(officialAiSource, officialModel || legacyModel, 'image') || fallbackOfficialRouteModel(scope);
+      }
       return officialModel || legacyModel || fallbackOfficialRouteModel(scope);
     }
     return currentRouteModelValue(scope);
-  }, [aiModelRoutes, currentRouteModelValue, fallbackOfficialRouteModel]);
+  }, [aiModelRoutes, currentRouteModelValue, fallbackOfficialRouteModel, officialAiSource, pickCapabilityModelForSource]);
 
   const routeModelSelectOptions = useCallback((models: AiModelDescriptor[], value: string) => {
     const normalizedValue = String(value || '').trim();

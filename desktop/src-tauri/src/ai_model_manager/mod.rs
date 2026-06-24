@@ -139,6 +139,84 @@ fn scope_allows_source_model_fallback(scope: AiModelScope) -> bool {
     )
 }
 
+fn model_id_from_value(value: &Value) -> String {
+    if let Some(id) = value.as_str() {
+        return id.trim().to_string();
+    }
+    value
+        .get("id")
+        .or_else(|| value.get("model"))
+        .or_else(|| value.get("modelName"))
+        .or_else(|| value.get("model_name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn source_models_with_capability(source: &Value, capability: &str) -> Vec<String> {
+    let mut models = Vec::<String>::new();
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut add_model = |model: &Value| {
+        let id = model_id_from_value(model);
+        if id.is_empty() || !seen.insert(id.clone()) {
+            return;
+        }
+        let metadata = if model.is_object() {
+            model.clone()
+        } else {
+            json!({ "id": id })
+        };
+        if crate::official_support::official_model_capabilities(&metadata)
+            .iter()
+            .any(|item| item == capability)
+        {
+            models.push(id);
+        }
+    };
+
+    if let Some(items) = source.get("modelsMeta").and_then(Value::as_array) {
+        for item in items {
+            add_model(item);
+        }
+    }
+    if let Some(items) = source.get("models").and_then(Value::as_array) {
+        for item in items {
+            add_model(item);
+        }
+    }
+    if let Some(model) = source.get("model") {
+        add_model(model);
+    }
+    models
+}
+
+fn sanitize_model_for_source_scope(
+    scope: AiModelScope,
+    source: Option<&Value>,
+    model_name: &str,
+) -> String {
+    let normalized_model = model_name.trim();
+    if scope != AiModelScope::Image {
+        return normalized_model.to_string();
+    }
+    let Some(source) = source else {
+        return normalized_model.to_string();
+    };
+    if !source_is_official(source) {
+        return normalized_model.to_string();
+    }
+
+    let image_models = source_models_with_capability(source, "image");
+    if image_models.is_empty() {
+        return normalized_model.to_string();
+    }
+    if image_models.iter().any(|item| item == normalized_model) {
+        return normalized_model.to_string();
+    }
+    image_models[0].clone()
+}
+
 fn route_source<'a>(
     sources: &'a [Value],
     route: &Value,
@@ -309,6 +387,7 @@ impl AiModelManager {
                     .flatten()
             })
             .unwrap_or_default();
+        let model_name = sanitize_model_for_source_scope(scope, source.as_ref(), &model_name);
         let source_protocol_value = source.as_ref().map(source_protocol).unwrap_or_default();
         let protocol = override_string(request_override, &["protocol"])
             .or_else(|| (!source_protocol_value.is_empty()).then_some(source_protocol_value))
@@ -589,6 +668,39 @@ mod tests {
 
         let route = AiModelManager::resolve(&settings, AiModelScope::Chat, None).unwrap();
         assert_eq!(route.model_name, "provider-chat-model");
+    }
+
+    #[test]
+    fn official_image_route_rejects_stale_custom_model() {
+        let settings = json!({
+            "default_ai_source_id": "redbox_official_auto",
+            "image_model": "gemini-3-pro-image-preview",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "redbox_official_auto",
+                "presetId": "redbox-official",
+                "baseURL": "https://api.ziz.hk/redbox/v1",
+                "apiKey": "",
+                "model": "qwen3.5-plus",
+                "models": ["qwen3.5-plus", "gpt-image-2"],
+                "modelsMeta": [
+                    { "id": "qwen3.5-plus", "capabilities": ["chat"] },
+                    { "id": "gpt-image-2", "capabilities": ["image"] }
+                ],
+                "protocol": "openai"
+            })]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "image": {
+                    "mode": "official",
+                    "sourceId": "redbox_official_auto",
+                    "model": "gemini-3-pro-image-preview"
+                }
+            })).unwrap()
+        });
+
+        let route = AiModelManager::resolve(&settings, AiModelScope::Image, None).unwrap();
+
+        assert!(route.is_official);
+        assert_eq!(route.model_name, "gpt-image-2");
     }
 
     #[test]

@@ -1080,7 +1080,7 @@ fn normalize_model_capability_name(value: &str) -> Option<String> {
     Some(capability.to_string())
 }
 
-fn official_model_capabilities(item: &Value) -> Vec<String> {
+pub(crate) fn official_model_capabilities(item: &Value) -> Vec<String> {
     let id = item
         .get("id")
         .and_then(Value::as_str)

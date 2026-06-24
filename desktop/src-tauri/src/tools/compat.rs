@@ -745,38 +745,43 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("memory.manage"),
             )
         }
-        ("redclaw.task" | "redclaw_task" | "redclaw-task", "preview" | "draft") => {
-            app_cli_action_call(
-                "task.read",
-                payload_with_operation(payload, "preview"),
-                Some("Operate"),
-                Some("redclaw.task.preview"),
-            )
-        }
-        ("redclaw.task" | "redclaw_task" | "redclaw-task", "list" | "read") => app_cli_action_call(
+        (
+            "task" | "tasks" | "redclaw.task" | "redclaw_task" | "redclaw-task",
+            "preview" | "draft",
+        ) => app_cli_action_call(
             "task.read",
-            payload_with_operation(payload, "list"),
+            payload_with_operation(payload, "preview"),
             Some("Operate"),
-            Some("redclaw.task.list"),
+            Some("task.preview"),
         ),
-        ("redclaw.task" | "redclaw_task" | "redclaw-task", "stats" | "statistics") => {
+        ("task" | "tasks" | "redclaw.task" | "redclaw_task" | "redclaw-task", "list" | "read") => {
             app_cli_action_call(
                 "task.read",
-                payload_with_operation(payload, "stats"),
+                payload_with_operation(payload, "list"),
                 Some("Operate"),
-                Some("redclaw.task.stats"),
+                Some("task.list"),
             )
         }
         (
-            "redclaw.task" | "redclaw_task" | "redclaw-task",
-            "create" | "confirm" | "update" | "cancel",
+            "task" | "tasks" | "redclaw.task" | "redclaw_task" | "redclaw-task",
+            "stats" | "statistics",
+        ) => app_cli_action_call(
+            "task.read",
+            payload_with_operation(payload, "stats"),
+            Some("Operate"),
+            Some("task.stats"),
+        ),
+        (
+            "task" | "tasks" | "redclaw.task" | "redclaw_task" | "redclaw-task",
+            "create" | "createandconfirm" | "create-confirm" | "create_confirm" | "confirm"
+            | "update" | "cancel",
         ) => {
             let operation = operation.as_str();
             app_cli_action_call(
                 "task.manage",
                 payload_with_operation(payload, operation),
                 Some("Operate"),
-                Some("redclaw.task.manage"),
+                Some("task.manage"),
             )
         }
         ("session" | "session.resources" | "session_resources", "list" | "search") => {
@@ -3320,7 +3325,7 @@ mod tests {
     }
 
     #[test]
-    fn redbox_task_legacy_resource_is_not_mapped() {
+    fn normalizes_task_resource_to_consolidated_task_actions() {
         let normalized = normalize_tool_call(
             "Operate",
             &json!({
@@ -3334,15 +3339,48 @@ mod tests {
         );
 
         assert_eq!(normalized.name, "workflow");
-        assert_eq!(normalized.arguments.get("action"), None);
-        assert_eq!(normalized.arguments.get("command"), Some(&json!("help")));
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("task.manage"))
+        );
+        assert_eq!(normalized.arguments.get("command"), None);
         assert_eq!(
             normalized
                 .arguments
-                .get("__compat")
-                .and_then(|value| value.get("legacyCommand")),
-            Some(&json!("unknown"))
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("create"))
         );
+    }
+
+    #[test]
+    fn normalizes_task_create_and_confirm_to_task_manage() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "task",
+                "operation": "createAndConfirm",
+                "input": {
+                    "name": "每日早间新闻简报",
+                    "cron": "0 8 * * *",
+                    "prompt": "每天早上汇总新闻"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("task.manage"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("createandconfirm"))
+        );
+        assert_eq!(normalized.arguments.get("command"), None);
     }
 
     #[test]

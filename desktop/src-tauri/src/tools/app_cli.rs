@@ -992,7 +992,15 @@ impl<'a> AppCliExecutor<'a> {
             })?;
         let request = consolidated_action_payload(payload);
         let token = match operation.as_str() {
-            "create" => "task-create",
+            "create" => {
+                if payload_string_alias(&request, &["previewToken", "preview_token"]).is_none() {
+                    return self.handle_task_create_from_intent(&request, false);
+                }
+                "task-create"
+            }
+            "createandconfirm" | "createconfirmed" | "createconfirm" => {
+                return self.handle_task_create_from_intent(&request, true);
+            }
             "confirm" => "task-confirm",
             "update" => "task-update",
             "cancel" | "delete" | "disable" => "task-cancel",
@@ -1008,6 +1016,85 @@ impl<'a> AppCliExecutor<'a> {
         };
         let tokens = vec![token.to_string()];
         self.handle_redclaw(&tokens, &request)
+    }
+
+    fn handle_task_create_from_intent(
+        &self,
+        request: &Value,
+        force_confirm: bool,
+    ) -> Result<Value, String> {
+        let preview = self.call_channel("redclaw:task-preview", request.clone())?;
+        let preview_token = preview
+            .get("previewToken")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("task.manage"),
+                    "PREVIEW_TOKEN_MISSING",
+                    "task preview did not return a previewToken",
+                    false,
+                    Some(json!({ "preview": preview.clone() })),
+                )
+            })?;
+        let mut create_payload = request.as_object().cloned().unwrap_or_default();
+        create_payload.insert("previewToken".to_string(), json!(preview_token));
+        let created = self.call_channel("redclaw:task-create", Value::Object(create_payload))?;
+        let should_confirm = force_confirm
+            || payload_bool(
+                request,
+                &[
+                    "confirm",
+                    "confirmed",
+                    "activate",
+                    "userConfirmed",
+                    "userConfirmedTask",
+                ],
+            )
+            .unwrap_or(false);
+        if !should_confirm {
+            return Ok(json!({
+                "success": true,
+                "createdDraft": true,
+                "requiresConfirmation": true,
+                "preview": preview,
+                "create": created,
+                "draftId": created.get("draftId").cloned().unwrap_or(Value::Null),
+                "definition": created.get("definition").cloned().unwrap_or(Value::Null),
+            }));
+        }
+        let draft_id = created
+            .get("draftId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("task.manage"),
+                    "DRAFT_ID_MISSING",
+                    "task create did not return a draftId",
+                    false,
+                    Some(json!({ "create": created.clone() })),
+                )
+            })?;
+        let confirmed = self.call_channel(
+            "redclaw:task-confirm",
+            json!({
+                "draftId": draft_id,
+                "confirm": true,
+            }),
+        )?;
+        Ok(json!({
+            "success": true,
+            "createdDraft": true,
+            "confirmed": true,
+            "preview": preview,
+            "create": created,
+            "confirm": confirmed,
+            "result": confirmed.get("result").cloned().unwrap_or(Value::Null),
+        }))
     }
 
     fn handle_skills_manage(&self, payload: &Value) -> Result<Value, String> {
@@ -4193,10 +4280,15 @@ mod tests {
             ("redclaw.task.stats", "task.read"),
             ("task.preview", "task.read"),
             ("task.list", "task.read"),
+            ("task.stats", "task.read"),
             ("redclaw.task.create", "task.manage"),
             ("redclaw.task.confirm", "task.manage"),
             ("redclaw.task.update", "task.manage"),
             ("redclaw.task.cancel", "task.manage"),
+            ("task.create", "task.manage"),
+            ("task.confirm", "task.manage"),
+            ("task.update", "task.manage"),
+            ("task.cancel", "task.manage"),
         ] {
             assert_eq!(canonical_app_cli_action_for_policy(legacy), canonical);
         }
@@ -4246,6 +4338,26 @@ mod tests {
         assert_eq!(
             normalized.pointer("/payload/reason"),
             Some(&json!("重新创建任务"))
+        );
+    }
+
+    #[test]
+    fn normalized_structured_arguments_canonicalizes_short_task_create() {
+        let normalized = normalized_structured_arguments(&json!({
+            "action": "task.create",
+            "name": "每日早间新闻简报",
+            "cron": "0 8 * * *",
+            "prompt": "每天早上汇总新闻"
+        }));
+
+        assert_eq!(normalized.get("action"), Some(&json!("task.manage")));
+        assert_eq!(
+            normalized.pointer("/payload/operation"),
+            Some(&json!("create"))
+        );
+        assert_eq!(
+            normalized.pointer("/payload/name"),
+            Some(&json!("每日早间新闻简报"))
         );
     }
 
