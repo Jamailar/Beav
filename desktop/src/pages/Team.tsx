@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, ChevronDown, MessageSquareText, Plus, Users } from 'lucide-react';
+import { Bot, ChevronDown, Plus, Users } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Advisors, type AdvisorCreateMode, type AdvisorProfile } from './Advisors';
 import type { TeamSection } from '../features/app-shell/types';
@@ -15,8 +15,6 @@ interface TeamProps {
 
 const TEAM_SECTION_STORAGE_KEY = 'redbox:team-section:v1';
 
-type CollabSourceFilter = 'all' | 'local' | 'external';
-
 function readInitialTeamSection(): TeamSection {
   if (typeof window === 'undefined') return 'team-workbench';
   const saved = String(window.localStorage.getItem(TEAM_SECTION_STORAGE_KEY) || '').trim();
@@ -25,21 +23,13 @@ function readInitialTeamSection(): TeamSection {
 }
 
 function visibleCollabSessions(sessions: TeamWorkbenchSession[]): TeamWorkbenchSession[] {
-  return sessions.filter((session) => !['archived', 'completed'].includes(String(session.status || '').toLowerCase()));
-}
-
-function collabSessionAcpLabel(session: TeamWorkbenchSession): string {
-  const metadata = session.metadata && typeof session.metadata === 'object'
-    ? session.metadata as Record<string, unknown>
-    : {};
-  if (String(session.source || '').trim() !== 'acp' && String(metadata.source || '').trim() !== 'acp') return '';
-  return String(metadata.sourceLabel || metadata.externalClientName || 'ACP: External Agent').trim() || 'ACP: External Agent';
-}
-
-function collabSessionMatchesSource(session: TeamWorkbenchSession, filter: CollabSourceFilter): boolean {
-  if (filter === 'all') return true;
-  const isExternal = Boolean(collabSessionAcpLabel(session));
-  return filter === 'external' ? isExternal : !isExternal;
+  return sessions.filter((session) => {
+    if (['archived', 'completed'].includes(String(session.status || '').toLowerCase())) return false;
+    const metadata = session.metadata && typeof session.metadata === 'object'
+      ? session.metadata as Record<string, unknown>
+      : {};
+    return String(session.source || '').trim() !== 'acp' && String(metadata.source || '').trim() !== 'acp';
+  });
 }
 
 function renderAdvisorAvatarPreview(advisor: AdvisorProfile, compact = false) {
@@ -67,7 +57,6 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
   const [collabSessions, setCollabSessions] = useState<TeamWorkbenchSession[]>([]);
   const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null);
   const [selectedCollabSessionId, setSelectedCollabSessionId] = useState<string | null>(null);
-  const [collabSourceFilter, setCollabSourceFilter] = useState<CollabSourceFilter>('all');
   const [advisorCreateRequestKey, setAdvisorCreateRequestKey] = useState(0);
   const [advisorCreateMode, setAdvisorCreateMode] = useState<AdvisorCreateMode>('manual');
   const [isCreatePickerOpen, setIsCreatePickerOpen] = useState(false);
@@ -165,38 +154,20 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
     () => advisors.find((advisor) => advisor.id === selectedAdvisorId) || null,
     [advisors, selectedAdvisorId],
   );
-  const hasExternalCollabSessions = useMemo(
-    () => collabSessions.some((session) => Boolean(collabSessionAcpLabel(session))),
-    [collabSessions],
-  );
-  const displayedCollabSessions = useMemo(
-    () => collabSessions.filter((session) => collabSessionMatchesSource(session, collabSourceFilter)),
-    [collabSessions, collabSourceFilter],
-  );
   const selectedCollabSession = useMemo(
     () => collabSessions.find((session) => session.id === selectedCollabSessionId) || null,
     [collabSessions, selectedCollabSessionId],
   );
 
   useEffect(() => {
-    if (!hasExternalCollabSessions && collabSourceFilter !== 'all') {
-      setCollabSourceFilter('all');
-    }
-  }, [collabSourceFilter, hasExternalCollabSessions]);
-
-  useEffect(() => {
     if (collabSessions.length === 0) {
       setSelectedCollabSessionId(null);
       return;
     }
-    if (displayedCollabSessions.length === 0) {
-      setSelectedCollabSessionId(null);
-      return;
+    if (!selectedCollabSessionId || !collabSessions.some((session) => session.id === selectedCollabSessionId)) {
+      setSelectedCollabSessionId(collabSessions[0].id);
     }
-    if (!selectedCollabSessionId || !displayedCollabSessions.some((session) => session.id === selectedCollabSessionId)) {
-      setSelectedCollabSessionId(displayedCollabSessions[0].id);
-    }
-  }, [collabSessions.length, displayedCollabSessions, selectedCollabSessionId]);
+  }, [collabSessions, selectedCollabSessionId]);
   const openAdvisorCreate = (mode: AdvisorCreateMode = 'manual') => {
     setActiveSection('members');
     setAdvisorCreateMode(mode);
@@ -293,43 +264,14 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
               <ChevronDown className="h-4 w-4" strokeWidth={1.75} />
             </button>
 
-            {hasExternalCollabSessions && (
-              <div className="grid grid-cols-3 gap-1 rounded-xl border border-border bg-surface-primary p-1">
-                {([
-                  ['all', '全部'],
-                  ['local', '本地'],
-                  ['external', '外部'],
-                ] as Array<[CollabSourceFilter, string]>).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setCollabSourceFilter(id)}
-                    className={clsx(
-                      'h-7 rounded-lg px-2 text-xs transition-colors',
-                      collabSourceFilter === id
-                        ? 'bg-accent-primary/10 text-accent-primary'
-                        : 'text-text-tertiary hover:bg-surface-secondary hover:text-text-primary',
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-
             {collabSessions.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-border px-4 py-5 text-center text-xs text-text-tertiary">
                 暂无团队
               </div>
-            ) : displayedCollabSessions.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-border px-4 py-5 text-center text-xs text-text-tertiary">
-                没有匹配团队
-              </div>
             ) : (
               <div className="space-y-1.5">
-                {displayedCollabSessions.map((session) => {
+                {collabSessions.map((session) => {
                   const isSelected = activeSection === 'team-workbench' && selectedCollabSessionId === session.id;
-                  const acpLabel = collabSessionAcpLabel(session);
                   return (
                     <button
                       key={session.id}
@@ -352,15 +294,6 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium text-text-primary">{session.title}</div>
                           <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                            {acpLabel && (
-                              <span
-                                className="inline-flex max-w-[8.5rem] items-center gap-1 rounded-md border border-accent-primary/20 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary"
-                                title={acpLabel}
-                              >
-                                <MessageSquareText className="h-3 w-3 shrink-0" />
-                                <span className="truncate">{acpLabel}</span>
-                              </span>
-                            )}
                             <span className="truncate text-xs text-text-tertiary">{session.status}</span>
                           </div>
                         </div>
