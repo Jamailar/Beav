@@ -2948,12 +2948,8 @@ pub fn handle_chat_sessions_wander_channel(
                         .cloned()
                         .map(|item| (item.session_id.clone(), item))
                         .collect();
-                let transcript_items: Vec<Value> = transcript_index
-                    .iter()
-                    .map(crate::runtime::transcript_session_meta_value)
-                    .collect();
                 let items = with_store(state, |store| {
-                    let mut items: Vec<Value> = if transcript_items.is_empty() {
+                    let mut items: Vec<Value> = if transcript_index.is_empty() {
                         list_sessions(&store)
                             .into_iter()
                             .map(|session| {
@@ -2963,7 +2959,21 @@ pub fn handle_chat_sessions_wander_channel(
                             })
                             .collect()
                     } else {
-                        let mut merged = transcript_items;
+                        let mut merged = transcript_index
+                            .iter()
+                            .map(|meta| {
+                                store
+                                    .chat_sessions
+                                    .iter()
+                                    .find(|session| session.id == meta.session_id)
+                                    .map(|session| {
+                                        session_list_item_value(&store, session, Some(meta))
+                                    })
+                                    .unwrap_or_else(|| {
+                                        crate::runtime::transcript_session_meta_value(meta)
+                                    })
+                            })
+                            .collect::<Vec<_>>();
                         let known_ids = merged
                             .iter()
                             .filter_map(|item| item.get("id").and_then(Value::as_str))
