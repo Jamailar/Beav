@@ -47,6 +47,7 @@ pub fn handle_system_channel(
         | "logs:dismiss-report"
         | "logs:set-upload-consent"
         | "logs:append-renderer"
+        | "logs:create-auto-report"
         | "clipboard:read-text"
         | "clipboard:write-html" => (|| -> Result<Value, String> {
             match channel {
@@ -82,6 +83,7 @@ pub fn handle_system_channel(
                 "logs:dismiss-report" => logging_ops::dismiss_report(payload),
                 "logs:set-upload-consent" => logging_ops::set_upload_consent(state, payload),
                 "logs:append-renderer" => renderer_log::append_renderer_log(payload),
+                "logs:create-auto-report" => renderer_log::create_auto_report(app, state, payload),
                 "clipboard:read-text" => clipboard_ops::read_text(),
                 "clipboard:write-html" => clipboard_ops::write_html(payload),
                 _ => unreachable!("channel prefiltered"),

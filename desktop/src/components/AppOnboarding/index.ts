@@ -1,2 +1,7 @@
 export { AppOnboarding } from './AppOnboarding';
-export { hasSeenAppOnboarding, markAppOnboardingSeen } from './constants';
+export {
+  getAppAcquisitionSource,
+  hasSeenAppOnboarding,
+  markAppOnboardingSeen,
+  setAppAcquisitionSource,
+} from './constants';

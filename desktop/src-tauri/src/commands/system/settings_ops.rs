@@ -190,6 +190,11 @@ pub(super) fn save_settings(
     if payload_requests_visual_index_backfill(payload) {
         crate::knowledge_index::jobs::schedule_visual_backfill(app, "settings-visual-index");
     }
+    if payload_string(payload, "analytics_consent").as_deref() == Some("none") {
+        let _ = crate::analytics::clear_queue(state);
+    } else if payload_string(payload, "analytics_consent").as_deref() == Some("approved") {
+        let _ = crate::analytics::flush_pending_now(app, state);
+    }
     Ok(json!({ "success": true }))
 }
 

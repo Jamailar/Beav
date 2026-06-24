@@ -261,6 +261,50 @@ pub fn create_startup_recovery_report_if_needed(
     create_startup_recovery_report(runtime.root(), state, &config).map(Some)
 }
 
+fn diagnostics_upload_approved(settings: &Value) -> bool {
+    settings
+        .get("diagnostics_upload_consent")
+        .and_then(Value::as_str)
+        .map(|value| value == "approved")
+        .unwrap_or(true)
+}
+
+pub fn upload_report_if_allowed(
+    state: &State<'_, AppState>,
+    report_id: &str,
+) -> Result<Option<Value>, String> {
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
+    if !diagnostics_upload_approved(&settings) {
+        return Ok(None);
+    }
+    match upload_pending_report(state, report_id) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => {
+            emit_legacy_line(
+                LogSource::UploadQueue,
+                LogLevel::Warn,
+                "diagnostics",
+                "auto_upload_failed",
+                format!("diagnostics auto upload failed for {report_id}: {error}"),
+                json!({ "reportId": report_id, "error": error }),
+                None,
+            );
+            Ok(None)
+        }
+    }
+}
+
+pub fn create_auto_report_from_trigger(
+    state: &State<'_, AppState>,
+    trigger: &str,
+    summary: &str,
+    metadata: Value,
+) -> Result<(DiagnosticReportRecord, Option<Value>), String> {
+    let report = create_report_from_trigger(state, trigger, summary, false, metadata)?;
+    let upload = upload_report_if_allowed(state, &report.id)?;
+    Ok((report, upload))
+}
+
 pub fn export_bundle_for_report(
     state: &State<'_, AppState>,
     report_id: &str,

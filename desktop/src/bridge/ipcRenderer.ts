@@ -1,6 +1,7 @@
 import { createAccountsBridge } from './domains/accountsBridge';
 import { createAdvisorsBridge } from './domains/advisorsBridge';
 import { createAiConfigBridge } from './domains/aiConfigBridge';
+import { createAnalyticsBridge } from './domains/analyticsBridge';
 import { createArchivesBridge } from './domains/archivesBridge';
 import { createAssistantControlBridge } from './domains/assistantControlBridge';
 import { createAudioVoiceBridge } from './domains/audioVoiceBridge';
@@ -54,6 +55,7 @@ function createIpcRenderer() {
 
     ...createSpacesBridge(core),
     ...createAdvisorsBridge(core),
+    ...createAnalyticsBridge(core),
 
     ...createKnowledgeBridge(core),
     ...createAccountsBridge(core),

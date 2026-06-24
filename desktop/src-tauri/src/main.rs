@@ -5,6 +5,7 @@ mod accounts;
 mod agent;
 mod agent_hub;
 mod ai_model_manager;
+mod analytics;
 mod app_shared;
 mod app_state;
 mod assistant_core;

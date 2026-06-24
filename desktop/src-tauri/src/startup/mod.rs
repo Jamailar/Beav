@@ -225,7 +225,13 @@ pub(crate) fn run_setup_restore_sequence(
     let _ = app.emit("indexing:status", default_indexing_stats());
     let state = app.state::<AppState>();
     if let Ok(Some(report)) = logging::create_startup_recovery_report_if_needed(&state) {
-        let _ = app.emit("diagnostics:report-pending", json!(report));
+        let uploaded = logging::upload_report_if_allowed(&state, &report.id)
+            .ok()
+            .flatten()
+            .is_some();
+        if !uploaded {
+            let _ = app.emit("diagnostics:report-pending", json!(report));
+        }
     }
     if let Err(error) = knowledge_index::initialize(app.handle(), &state) {
         logging::emit_legacy_line(
