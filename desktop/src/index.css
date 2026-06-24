@@ -196,6 +196,34 @@ select {
   transition-timing-function: ease;
 }
 
+.app-onboarding-acquisition-options-invalid {
+  animation: redbox-acquisition-required-shake 420ms ease-in-out;
+}
+
+.app-onboarding-acquisition-options-invalid button {
+  border-color: rgb(var(--color-status-error) / 0.42);
+  box-shadow: 0 0 0 3px rgb(var(--color-status-error) / 0.08), 0 14px 40px rgba(245, 63, 63, 0.08);
+}
+
+@keyframes redbox-acquisition-required-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  18% {
+    transform: translateX(-8px);
+  }
+  36% {
+    transform: translateX(7px);
+  }
+  54% {
+    transform: translateX(-5px);
+  }
+  72% {
+    transform: translateX(3px);
+  }
+}
+
 input,
 textarea,
 select {
@@ -2426,26 +2454,36 @@ select {
 }
 
 .redclaw-history-scroll {
-  scrollbar-color: rgb(255 247 243 / 0.2) transparent;
+  scrollbar-color: rgb(216 106 112 / 0.28) transparent;
   scrollbar-width: thin;
+  scrollbar-gutter: auto;
 }
 
 .redclaw-history-scroll::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 6px;
+  height: 6px;
+  background: transparent;
 }
 
 .redclaw-history-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
+.redclaw-history-scroll::-webkit-scrollbar-track-piece,
+.redclaw-history-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 .redclaw-history-scroll::-webkit-scrollbar-thumb {
-  background: rgb(255 247 243 / 0.18);
+  background: rgb(216 106 112 / 0.26);
+  background-clip: padding-box;
+  border: 2px solid transparent;
   border-radius: 999px;
 }
 
 .redclaw-history-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgb(255 247 243 / 0.28);
+  background: rgb(224 128 134 / 0.42);
+  background-clip: padding-box;
 }
 
 .redclaw-rename-dialog-backdrop {

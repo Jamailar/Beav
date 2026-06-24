@@ -8,6 +8,7 @@
 - Windows 原生打包
 - 远端或本机的 `cargo-xwin` Windows NSIS 交叉打包
 - Linux 原生打包
+- Tauri 原生 updater 签名资产
 
 ## 命令入口
 
@@ -56,7 +57,8 @@ pnpm release:oss -- --repo <owner/name>
 3. 默认按 `package.json.version` 生成 `vX.Y.Z` tag
 4. 将该 tag 推送到开源 remote，默认 remote 名为 `export-sanitized`
 5. 自动生成 `artifacts/release/vX.Y.Z-release-notes.md`
-6. 通过 `gh release create` 在 GitHub 开源仓库创建 release，并上传安装包
+6. 通过 `gh release create` 在 GitHub 开源仓库创建 release，并上传安装包和 updater 签名资产
+7. RedBoxweb 同步任务把安装包、updater 包和签名镜像到 OSS manifest，桌面端一键更新只读取该 manifest
 
 默认前提：
 
@@ -73,6 +75,33 @@ pnpm release:oss -- --repo <owner/name>
 - `--draft`：创建草稿 release
 - `--prerelease`：标记为预发布
 - `--skip-build`：跳过打包，直接使用现有 `artifacts/release/*.json` 和安装包
+
+## Tauri 一键更新资产
+
+桌面端使用 Tauri v2 updater。这个链路必须使用现成的 `tauri-plugin-updater`，不要自研安装器替换系统级安装流程；自研部分只负责发布资产命名、OSS manifest 和应用内最小 UI。
+
+构建要求：
+
+- `desktop/src-tauri/tauri.conf.json` 启用 `bundle.createUpdaterArtifacts`。
+- `plugins.updater.pubkey` 固定写入公开签名 key。
+- 私钥不进入仓库。默认本机路径是 `~/.tauri/redbox-updater.key`，也可以显式设置 `TAURI_SIGNING_PRIVATE_KEY` 或 `TAURI_SIGNING_PRIVATE_KEY_PATH`。
+- Windows 远程构建机也必须有同一把 updater 私钥，默认路径同样是 `~/.tauri/redbox-updater.key`。
+
+发布产物：
+
+- macOS：`*.app.tar.gz` 和同名 `*.app.tar.gz.sig`
+- Windows NSIS：`*-setup.exe.zip` 和同名 `*-setup.exe.zip.sig`
+- Linux AppImage：`*.AppImage.tar.gz` 和同名 `*.AppImage.tar.gz.sig`
+
+发布脚本会把这些 updater 资产写入平台 summary，并由 `pnpm release:oss` 上传到 GitHub release。RedBoxweb 同步任务随后镜像到 OSS 的 `updaters/<tag>/`，并把 `.sig` 内容写进 `manifests/latest.json` 的 `updaterAssets`。
+
+客户端更新流程：
+
+1. 前端弹出已有的更新提示弹窗。
+2. 用户点击“安装更新”。
+3. Rust command 调用 Tauri updater 检查 `/api/updates/tauri`。
+4. updater 校验 manifest 里的签名后下载并安装。
+5. macOS / Linux 安装完成后自动重启；Windows passive installer 完成后由安装器接管。
 
 ## macOS
 
@@ -161,7 +190,11 @@ pnpm release:all -- --mac-notary-retries 5 --mac-notary-retry-delay-ms 8000
 
 - `src-tauri/target/<target>/release/bundle/macos/RedBox.app`
 - `src-tauri/target/<target>/release/bundle/dmg/RedBox_<version>_<arch>.dmg`
+- `src-tauri/target/<target>/release/bundle/macos/RedBox.app.tar.gz`
+- `src-tauri/target/<target>/release/bundle/macos/RedBox.app.tar.gz.sig`
 - `artifacts/installers/macos/RedBox_<version>_<arch>.dmg`
+- `artifacts/installers/macos/RedBox_<version>_<arch>.app.tar.gz`
+- `artifacts/installers/macos/RedBox_<version>_<arch>.app.tar.gz.sig`
 - `artifacts/release/mac-build-summary.json`
 
 ### 可选参数
@@ -212,7 +245,7 @@ pnpm release:win
 1. `rsync` 当前仓库到 `ssh jamdebian:/home/jam/build/redbox-tauri-win-release`
 2. 在远端执行 `pnpm install --frozen-lockfile`
 3. 在远端以 `REDBOX_WINDOWS_MODE=local` 触发本地交叉打包
-4. 从远端拉回 `.exe/.zip/.yml/.blockmap` 到 `artifacts/installers/windows/`
+4. 从远端拉回 `.exe/.zip/.sig/.yml/.blockmap` 到 `artifacts/installers/windows/`
 5. 本地写入 `artifacts/release/windows-build-summary.json`
 
 可覆盖的远端参数：
@@ -285,13 +318,15 @@ REDBOX_REQUIRE_WINDOWS_SIGN=1 pnpm release:win
 ### 产物
 
 - `artifacts/installers/windows/*-setup.exe`
+- `artifacts/installers/windows/*-setup.exe.zip`
+- `artifacts/installers/windows/*-setup.exe.zip.sig`
 - `artifacts/release/windows-build-summary.json`
 
 ## Linux
 
 ### 目标
 
-`pnpm release:linux` 默认生成 Linux x64 桌面端 `.deb` 安装包。
+`pnpm release:linux` 默认生成 Linux x64 桌面端 `.deb` 安装包，并同时生成 Tauri updater 使用的 AppImage 压缩包与签名。
 
 在 Linux 主机上默认原生打包；在 macOS / 非 Linux 主机上默认通过 `ssh jamdebian` 远程构建并拉回产物。
 
@@ -308,7 +343,7 @@ pnpm release:linux
 1. `rsync` 当前仓库到 `ssh jamdebian:/home/jam/build/redbox-tauri-linux-release`
 2. 在远端执行 `pnpm install --frozen-lockfile`
 3. 在远端以 `REDBOX_LINUX_MODE=local` 触发 Linux 原生打包
-4. 从远端拉回 `.deb` 到 `artifacts/installers/linux/`
+4. 从远端拉回 `.deb`、`*.AppImage.tar.gz` 和 `*.AppImage.tar.gz.sig` 到 `artifacts/installers/linux/`
 5. 本地写入 `artifacts/release/linux-build-summary.json`
 
 ### Linux 主机原生打包
@@ -326,7 +361,11 @@ pnpm release:linux -- --mode local
 ### 产物
 
 - `src-tauri/target/<target>/release/bundle/deb/*.deb`
+- `src-tauri/target/<target>/release/bundle/appimage/*.AppImage.tar.gz`
+- `src-tauri/target/<target>/release/bundle/appimage/*.AppImage.tar.gz.sig`
 - `artifacts/installers/linux/*.deb`
+- `artifacts/installers/linux/*.AppImage.tar.gz`
+- `artifacts/installers/linux/*.AppImage.tar.gz.sig`
 - `artifacts/release/linux-build-summary.json`
 
 ## 用户需要手动准备的密钥

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod accounts;
+mod acp_gateway;
 mod agent;
 mod agent_hub;
 mod ai_model_manager;
@@ -88,6 +89,7 @@ use std::sync::{
 };
 use tauri::Manager;
 
+pub(crate) use acp_gateway::*;
 pub(crate) use app_shared::*;
 pub(crate) use app_state::{
     AppState, AssistantRuntime, AssistantSidecarRuntime, GLOBAL_APP_HANDLE, GLOBAL_DEBUG_STORE,
@@ -127,6 +129,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             store_path,
             store: shared_store,
@@ -177,6 +180,8 @@ fn main() {
             commands::notifications::notifications_list_remote,
             commands::notifications::notifications_mark_remote_read,
             commands::notifications::notifications_mark_all_remote_read,
+            commands::system::app_update::app_check_update,
+            commands::system::app_update::app_install_update,
             commands::redclaw::redclaw_runner_status
         ])
         .setup(startup::run_setup_restore_sequence)

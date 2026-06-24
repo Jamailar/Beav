@@ -1,7 +1,7 @@
 ---
 doc_type: architecture
 status: current
-last_updated: 2026-04-29
+last_updated: 2026-06-21
 scope: repository
 ---
 
@@ -650,8 +650,8 @@ scope: repository
 | 官网首页 | `RedBoxweb/app/page.tsx` | 品牌表达、核心价值陈述、能力展示 |
 | 下载页 | `RedBoxweb/app/download/page.tsx` | 展示 macOS / Windows 安装包下载入口 |
 | 公共组件 | `RedBoxweb/app/components/*` | Header、视觉区块 |
-| 更新源读取 | `RedBoxweb/app/lib/downloads.ts`、`manifest.ts`、`updates.ts` | 读取 latest manifest，选出主下载资产并构造更新响应 |
-| 版本同步 | `RedBoxweb/app/lib/release-sync.ts` | 从源仓库版本资产拉取安装包并镜像到 OSS |
+| 更新源读取 | `RedBoxweb/app/lib/downloads.ts`、`manifest.ts`、`updates.ts` | 读取 latest manifest，选出主下载资产、插件资产和 Tauri updater 签名资产并构造更新响应 |
+| 版本同步 | `RedBoxweb/app/lib/release-sync.ts` | 从源仓库版本资产拉取安装包、updater 包、签名和插件包并镜像到 OSS |
 | 测试 | `RedBoxweb/tests/release-sync.test.ts` | 验证 release asset 解析与同步流程 |
 
 ### 7.2 功能模块
@@ -671,8 +671,10 @@ scope: repository
 
 **Release 镜像模块**
 
-- `release-sync.ts` 只镜像 `.dmg`、`.zip`、`.exe`
-- 会忽略 `latest.yml`、`.blockmap`
+- `release-sync.ts` 镜像普通安装包 `.dmg`、`.zip`、`.exe`
+- Tauri updater 专用资产单独进入 `updaterAssets`：macOS `.app.tar.gz`、Windows `-setup.exe.zip` / `.nsis.zip` / `.msi.zip`、Linux `.AppImage.tar.gz`
+- updater 资产必须存在同名 `.sig`，同步任务会读取签名文本并写入 manifest
+- 会忽略 `latest.yml`、`.blockmap`，也不会把 updater 包混进普通下载资产
 - 当 manifest tag 未变化时跳过同步
 - 所有资产上传成功后才写 `latest.json`
 

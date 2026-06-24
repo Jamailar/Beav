@@ -13,6 +13,7 @@ type GeneratedBrandConfig = {
   githubRepoUrl?: string;
   founderXHandle?: string;
   founderXUrl?: string;
+  developerWechatQrSrc?: string;
   theme?: AppBrandTheme;
 };
 
@@ -103,5 +104,6 @@ export const APP_BRAND = {
   githubRepoUrl: String(config.githubRepoUrl || ''),
   founderXHandle: String(config.founderXHandle || ''),
   founderXUrl: String(config.founderXUrl || ''),
+  developerWechatQrSrc: String(config.developerWechatQrSrc || ''),
   theme: config.theme || {},
 } as const;

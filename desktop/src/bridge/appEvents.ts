@@ -21,6 +21,11 @@ export function subscribeAppUpdateAvailable(listener: Listener): () => void {
   return () => window.ipcRenderer.offAppUpdateAvailable(listener);
 }
 
+export function subscribeAppUpdateInstallProgress(listener: Listener): () => void {
+  window.ipcRenderer.onAppUpdateInstallProgress(listener);
+  return () => window.ipcRenderer.offAppUpdateInstallProgress(listener);
+}
+
 export function subscribeYoutubeFetchInfoProgress(listener: Listener): () => void {
   window.ipcRenderer.onFetchYoutubeInfoProgress(listener);
   return () => window.ipcRenderer.offFetchYoutubeInfoProgress(listener);

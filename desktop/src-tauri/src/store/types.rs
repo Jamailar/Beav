@@ -267,6 +267,144 @@ pub(crate) struct YoutubeVideoRecord {
     pub(crate) folder_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct AcpGatewayStateRecord {
+    pub(crate) enabled: bool,
+    pub(crate) require_token: bool,
+    pub(crate) local_only: bool,
+    pub(crate) endpoint_path: String,
+    pub(crate) manifest_path: String,
+    pub(crate) guide_path: String,
+    pub(crate) default_runtime_mode: String,
+    pub(crate) default_client_label: String,
+    pub(crate) last_error: Option<String>,
+    pub(crate) active_run_count: i64,
+}
+
+impl Default for AcpGatewayStateRecord {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            require_token: false,
+            local_only: true,
+            endpoint_path: "/acp/v1".to_string(),
+            manifest_path: "/acp/v1/manifest".to_string(),
+            guide_path: "/acp/v1/guide".to_string(),
+            default_runtime_mode: "default".to_string(),
+            default_client_label: "External Agent".to_string(),
+            last_error: None,
+            active_run_count: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct AcpClientRecord {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) kind: String,
+    pub(crate) token_hash: Option<String>,
+    pub(crate) token_preview: Option<String>,
+    pub(crate) allowed_scopes: Vec<String>,
+    pub(crate) disabled: bool,
+    pub(crate) metadata: Option<Value>,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) last_seen_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct AcpSessionRecord {
+    pub(crate) id: String,
+    pub(crate) external_session_id: Option<String>,
+    pub(crate) external_client_id: Option<String>,
+    pub(crate) external_client_name: Option<String>,
+    pub(crate) external_client_kind: Option<String>,
+    pub(crate) source_label: String,
+    pub(crate) collab_session_id: String,
+    pub(crate) chat_session_id: String,
+    pub(crate) project_ref: Option<Value>,
+    pub(crate) title: String,
+    pub(crate) objective: String,
+    pub(crate) status: String,
+    pub(crate) metadata: Option<Value>,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) last_message_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct AcpRunRecord {
+    pub(crate) id: String,
+    pub(crate) session_id: String,
+    pub(crate) collab_session_id: String,
+    pub(crate) chat_session_id: String,
+    pub(crate) status: String,
+    pub(crate) status_reason: Option<String>,
+    pub(crate) input_message_id: Option<String>,
+    pub(crate) output_message_id: Option<String>,
+    pub(crate) prompt: String,
+    pub(crate) response: Option<String>,
+    pub(crate) artifact_ids: Vec<String>,
+    pub(crate) metadata: Option<Value>,
+    pub(crate) cancel_requested: bool,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) started_at: Option<i64>,
+    pub(crate) completed_at: Option<i64>,
+    pub(crate) last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct AcpMessageRecord {
+    pub(crate) id: String,
+    pub(crate) session_id: String,
+    pub(crate) run_id: Option<String>,
+    pub(crate) direction: String,
+    pub(crate) role: String,
+    pub(crate) sender_kind: String,
+    pub(crate) sender_label: String,
+    pub(crate) content: String,
+    pub(crate) content_type: String,
+    pub(crate) attachment_refs: Vec<String>,
+    pub(crate) payload: Option<Value>,
+    pub(crate) chat_message_id: Option<String>,
+    pub(crate) collab_message_id: Option<String>,
+    pub(crate) created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct AcpArtifactRecord {
+    pub(crate) id: String,
+    pub(crate) session_id: String,
+    pub(crate) run_id: Option<String>,
+    pub(crate) kind: String,
+    pub(crate) title: String,
+    pub(crate) summary: Option<String>,
+    pub(crate) refs: Vec<String>,
+    pub(crate) payload: Option<Value>,
+    pub(crate) created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct AcpAuditEventRecord {
+    pub(crate) id: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) run_id: Option<String>,
+    pub(crate) event_type: String,
+    pub(crate) status: String,
+    pub(crate) message: Option<String>,
+    pub(crate) payload: Option<Value>,
+    pub(crate) created_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct AppStore {
@@ -302,6 +440,13 @@ pub(crate) struct AppStore {
     pub(crate) collab_tasks: Vec<CollabTaskRecord>,
     pub(crate) collab_mailbox_messages: Vec<CollabMailboxMessageRecord>,
     pub(crate) collab_progress_reports: Vec<CollabProgressReportRecord>,
+    pub(crate) acp_gateway: AcpGatewayStateRecord,
+    pub(crate) acp_clients: Vec<AcpClientRecord>,
+    pub(crate) acp_sessions: Vec<AcpSessionRecord>,
+    pub(crate) acp_runs: Vec<AcpRunRecord>,
+    pub(crate) acp_messages: Vec<AcpMessageRecord>,
+    pub(crate) acp_artifacts: Vec<AcpArtifactRecord>,
+    pub(crate) acp_audit_events: Vec<AcpAuditEventRecord>,
     pub(crate) review_dockets: Vec<ReviewDocketRecord>,
     pub(crate) review_decisions: Vec<ReviewDecisionRecord>,
     pub(crate) cli_tools: Vec<cli_runtime::CliToolRecord>,

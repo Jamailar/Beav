@@ -9,6 +9,7 @@ const elements = {
   accountBindingAction: document.getElementById('account-binding-action'),
   refresh: document.getElementById('refresh'),
   openSettings: document.getElementById('open-settings'),
+  updatePanel: document.getElementById('update-panel'),
   updateBadge: document.getElementById('update-badge'),
   updateSummary: document.getElementById('update-summary'),
   updateMeta: document.getElementById('update-meta'),
@@ -25,6 +26,7 @@ const elements = {
   captureTitle: document.getElementById('capture-title'),
   captureSubtitle: document.getElementById('capture-subtitle'),
   captureActions: document.getElementById('capture-actions'),
+  captureOptions: document.getElementById('capture-options'),
   captureStatus: document.getElementById('capture-status'),
   bloggerNotesPanel: document.getElementById('blogger-notes-panel'),
   bloggerNotesModePill: document.getElementById('blogger-notes-mode-pill'),
@@ -65,6 +67,7 @@ let currentSettings = {
   xhsBloggerNoteLimit: 50,
   xhsIntervalMaxSeconds: 6,
   xhsBloggerCollectionMode: 'api',
+  xhsSaveCommentsWithNote: true,
 };
 
 function debugLog(scope, details) {
@@ -118,6 +121,10 @@ function bindEvents() {
     if (!button) return;
     void runCaptureAction(button.dataset.action || '');
   });
+  elements.captureOptions.addEventListener('change', (event) => {
+    if (event.target?.id !== 'xhs-save-comments-inline') return;
+    void updateXhsSaveCommentsSetting(Boolean(event.target.checked));
+  });
   elements.platformIcon.addEventListener('error', () => {
     elements.platformIcon.classList.add('hidden');
     elements.platformFallback.classList.remove('hidden');
@@ -156,6 +163,7 @@ async function sendRawMessage(message) {
 async function refreshUpdateStatus(forceCheck) {
   if (updateChecking) return;
   updateChecking = true;
+  elements.updatePanel.classList.remove('hidden');
   elements.checkUpdate.disabled = true;
   elements.updateBadge.textContent = forceCheck ? '检查中' : '读取中';
   elements.updateBadge.className = 'update-badge';
@@ -194,6 +202,7 @@ function renderUpdateStatus(update, errorText = '') {
   const lastError = errorText || update?.lastError || '';
 
   if (lastError) {
+    elements.updatePanel.classList.remove('hidden');
     elements.updateBadge.textContent = '检查失败';
     elements.updateBadge.className = 'update-badge error';
     elements.updateSummary.textContent = `当前版本 ${currentVersion}`;
@@ -202,6 +211,7 @@ function renderUpdateStatus(update, errorText = '') {
   }
 
   if (update?.checkStatus === 'checking') {
+    elements.updatePanel.classList.remove('hidden');
     elements.updateBadge.textContent = '检查中';
     elements.updateBadge.className = 'update-badge';
     elements.updateSummary.textContent = `当前版本 ${currentVersion}`;
@@ -210,6 +220,7 @@ function renderUpdateStatus(update, errorText = '') {
   }
 
   if (update?.hasUpdate) {
+    elements.updatePanel.classList.remove('hidden');
     elements.updateBadge.textContent = '有新版本';
     elements.updateBadge.className = 'update-badge available';
     elements.updateSummary.textContent = `发现 ${latestVersion}，当前 ${currentVersion}`;
@@ -217,6 +228,7 @@ function renderUpdateStatus(update, errorText = '') {
     return;
   }
 
+  elements.updatePanel.classList.add('hidden');
   elements.updateBadge.textContent = '已是最新';
   elements.updateBadge.className = 'update-badge';
   elements.updateSummary.textContent = `当前版本 ${currentVersion}`;
@@ -488,6 +500,8 @@ function renderCaptureActions(nextContext) {
   elements.captureTitle.textContent = config.title;
   elements.captureSubtitle.textContent = config.subtitle;
   elements.captureActions.replaceChildren();
+  elements.captureOptions.replaceChildren();
+  elements.captureOptions.classList.add('hidden');
 
   for (const item of config.actions) {
     const meta = getCaptureActionMeta(item.action);
@@ -501,6 +515,21 @@ function renderCaptureActions(nextContext) {
     elements.captureActions.appendChild(button);
   }
 
+  if (config.variant === 'xhs-note') {
+    const label = document.createElement('label');
+    label.className = 'capture-switch-row';
+    const checkbox = document.createElement('input');
+    checkbox.id = 'xhs-save-comments-inline';
+    checkbox.type = 'checkbox';
+    checkbox.checked = currentSettings?.xhsSaveCommentsWithNote !== false;
+    checkbox.disabled = Boolean(capturePendingAction) || !isHealthy;
+    const text = document.createElement('span');
+    text.textContent = '保存评论区';
+    label.append(checkbox, text);
+    elements.captureOptions.appendChild(label);
+    elements.captureOptions.classList.remove('hidden');
+  }
+
   if (captureFeedback) {
     renderCaptureStatus(captureFeedback.message, captureFeedback.status);
     return;
@@ -510,6 +539,40 @@ function renderCaptureActions(nextContext) {
     return;
   }
   renderCaptureStatus(config.hint || '点击按钮后任务会进入下方队列', 'idle');
+}
+
+async function updateXhsSaveCommentsSetting(enabled) {
+  const previous = currentSettings?.xhsSaveCommentsWithNote !== false;
+  currentSettings = {
+    ...currentSettings,
+    xhsSaveCommentsWithNote: enabled,
+  };
+  renderCaptureActions(context);
+  try {
+    const response = await sendMessage({
+      type: 'settings:update',
+      settings: {
+        ...currentSettings,
+        xhsSaveCommentsWithNote: enabled,
+      },
+    });
+    currentSettings = {
+      ...currentSettings,
+      ...(response?.settings || {}),
+    };
+    captureFeedback = null;
+    renderCaptureActions(context);
+  } catch (error) {
+    currentSettings = {
+      ...currentSettings,
+      xhsSaveCommentsWithNote: previous,
+    };
+    captureFeedback = {
+      status: 'error',
+      message: `设置保存失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+    renderCaptureActions(context);
+  }
 }
 
 async function runCaptureAction(action) {

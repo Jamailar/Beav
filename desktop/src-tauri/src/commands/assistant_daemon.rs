@@ -10,6 +10,17 @@ use std::sync::{
 };
 use tauri::{AppHandle, State};
 
+fn assistant_daemon_status_value(store: &AppStore) -> Value {
+    let mut value = assistant_state_value(&assistant_store::snapshot(store));
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "acpGateway".to_string(),
+            crate::acp_gateway_public_value(store),
+        );
+    }
+    value
+}
+
 pub fn ensure_assistant_daemon_running(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -79,8 +90,8 @@ pub fn ensure_assistant_daemon_running(
     };
 
     let updated = with_store_mut(state, |store| {
-        let snapshot = assistant_store::mark_listener_running(store, sidecar_status);
-        Ok(assistant_state_value(&snapshot))
+        assistant_store::mark_listener_running(store, sidecar_status);
+        Ok(assistant_daemon_status_value(store))
     })?;
     let snapshot = with_store(state, |store| Ok(assistant_store::snapshot(&store)))?;
     emit_assistant_status(app, &snapshot);
@@ -99,6 +110,8 @@ pub fn handle_assistant_daemon_channel(
             | "assistant:daemon-set-config"
             | "assistant:daemon-start"
             | "assistant:daemon-stop"
+            | "assistant:daemon-acp-client-create"
+            | "assistant:daemon-acp-client-revoke"
             | "assistant:daemon-weixin-login-start"
             | "assistant:daemon-weixin-login-wait"
             | "background-workers:get-pool-state"
@@ -111,8 +124,7 @@ pub fn handle_assistant_daemon_channel(
             "assistant:daemon-status" => with_store(state, |store| {
                 let started_at = now_ms();
                 let request_id = format!("assistant:daemon-status:{}", started_at);
-                let snapshot = assistant_store::snapshot(&store);
-                let value = assistant_state_value(&snapshot);
+                let value = assistant_daemon_status_value(&store);
                 log_timing_event(
                     state,
                     "settings",
@@ -139,7 +151,15 @@ pub fn handle_assistant_daemon_channel(
                         knowledge_api: payload_field(payload, "knowledgeApi").cloned(),
                     };
                     let snapshot = assistant_store::apply_config(store, patch, enable_listening);
-                    Ok(assistant_state_value(&snapshot))
+                    crate::apply_acp_gateway_config(store, payload_field(payload, "acpGateway"));
+                    let mut value = assistant_state_value(&snapshot);
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert(
+                            "acpGateway".to_string(),
+                            crate::acp_gateway_public_value(store),
+                        );
+                    }
+                    Ok(value)
                 })?;
                 if enable_listening {
                     if let Some(updated) = ensure_assistant_daemon_running(app, state, false)? {
@@ -163,12 +183,47 @@ pub fn handle_assistant_daemon_channel(
                 }
                 let _ = stop_assistant_sidecar(state);
                 let status = with_store_mut(state, |store| {
-                    let snapshot = assistant_store::mark_stopped(store);
-                    Ok(assistant_state_value(&snapshot))
+                    assistant_store::mark_stopped(store);
+                    Ok(assistant_daemon_status_value(store))
                 })?;
                 let snapshot = with_store(state, |store| Ok(assistant_store::snapshot(&store)))?;
                 emit_assistant_status(app, &snapshot);
                 Ok(status)
+            }
+            "assistant:daemon-acp-client-create" => {
+                let name = payload_string(payload, "name")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "External Agent".to_string());
+                let kind = payload_string(payload, "kind")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "generic_agent".to_string());
+                let result = with_store_mut(state, |store| {
+                    let (client, token) = crate::create_acp_client(store, &name, &kind);
+                    Ok(json!({
+                        "success": true,
+                        "client": client,
+                        "token": token,
+                        "status": assistant_daemon_status_value(store)
+                    }))
+                })?;
+                let snapshot = with_store(state, |store| Ok(assistant_store::snapshot(&store)))?;
+                emit_assistant_status(app, &snapshot);
+                Ok(result)
+            }
+            "assistant:daemon-acp-client-revoke" => {
+                let client_id = payload_string(payload, "clientId")
+                    .ok_or_else(|| "缺少 clientId".to_string())?;
+                let result = with_store_mut(state, |store| {
+                    let client = crate::revoke_acp_client(store, &client_id)?;
+                    Ok(json!({
+                        "success": true,
+                        "client": client,
+                        "status": assistant_daemon_status_value(store)
+                    }))
+                })?;
+                let snapshot = with_store(state, |store| Ok(assistant_store::snapshot(&store)))?;
+                emit_assistant_status(app, &snapshot);
+                Ok(result)
             }
             "assistant:daemon-weixin-login-start" => {
                 let result = with_store_mut(state, |store| {

@@ -2,6 +2,7 @@ use crate::mcp::McpToolInfo;
 use serde_json::{json, Value};
 
 use crate::payload_string;
+use crate::tools::action_aliases::canonicalize_app_cli_arguments;
 use crate::tools::catalog::descriptor_by_name;
 use crate::tools::compat::{canonical_tool_name, is_legacy_tool_alias, normalize_tool_call};
 use crate::tools::plan::ToolRegistryPlan;
@@ -218,12 +219,17 @@ impl ToolRouter {
                 )
                 .to_json_string(Some(normalized_name), None));
         }
+        let normalized_arguments = if normalized_name == "workflow" {
+            canonicalize_app_cli_arguments(&normalized_call.arguments)
+        } else {
+            normalized_call.arguments
+        };
         if normalized_name == "workflow" {
-            self.ensure_app_cli_action_allowed(&normalized_call.arguments)?;
+            self.ensure_app_cli_action_allowed(&normalized_arguments)?;
         }
         Ok(PreparedToolCall {
             name: normalized_name.to_string(),
-            arguments: normalized_call.arguments,
+            arguments: normalized_arguments,
             plan_fingerprint: self.plan.fingerprint.clone(),
             mcp_tool: None,
             mcp_resource: None,
@@ -548,6 +554,105 @@ mod tests {
         assert_eq!(
             prepared.arguments.get("action"),
             Some(&json!("image.generate"))
+        );
+    }
+
+    #[test]
+    fn router_canonicalizes_legacy_asset_update_before_action_allowlist() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "workflow",
+                &json!({
+                    "action": "asset.update",
+                    "payload": {
+                        "id": "asset-1",
+                        "name": "护综308知识点干货"
+                    }
+                }),
+            )
+            .expect("legacy asset update should prepare through assets.manage");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("assets.manage"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/operation"),
+            Some(&json!("update"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/__compat/legacyCommand"),
+            Some(&json!("asset.update"))
+        );
+    }
+
+    #[test]
+    fn router_canonicalizes_legacy_asset_category_create_before_action_allowlist() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "workflow",
+                &json!({
+                    "action": "asset.categories.create",
+                    "payload": { "name": "择校&备考经验" }
+                }),
+            )
+            .expect("legacy category create should prepare through assets.manage");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("assets.manage"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/operation"),
+            Some(&json!("category.create"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/name"),
+            Some(&json!("择校&备考经验"))
+        );
+    }
+
+    #[test]
+    fn router_canonicalizes_legacy_spaces_create_before_action_allowlist() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "workflow",
+                &json!({
+                    "action": "spaces.create",
+                    "payload": { "name": "护理考研账号" }
+                }),
+            )
+            .expect("legacy spaces create should prepare through spaces.manage");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("spaces.manage"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/operation"),
+            Some(&json!("create"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/name"),
+            Some(&json!("护理考研账号"))
         );
     }
 

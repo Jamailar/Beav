@@ -3,6 +3,8 @@ use serde_json::{json, Value};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_updater::{Update, UpdaterExt};
+use time::format_description::well_known::Rfc3339;
 
 use crate::app_brand_display_name;
 
@@ -14,6 +16,7 @@ const APP_UPDATE_CHECK_MIN_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60)
 #[derive(Default)]
 struct AppUpdateCheckState {
     in_flight: bool,
+    install_in_flight: bool,
     last_checked_at: Option<Instant>,
     last_notified_version: String,
 }
@@ -54,6 +57,10 @@ struct LatestAppUpdate {
 
 fn app_update_state() -> &'static Mutex<AppUpdateCheckState> {
     APP_UPDATE_CHECK_STATE.get_or_init(|| Mutex::new(AppUpdateCheckState::default()))
+}
+
+fn app_update_debug_log_enabled() -> bool {
+    std::env::var("REDBOX_APP_UPDATE_DEBUG").ok().as_deref() == Some("1")
 }
 
 fn normalize_version_tag(raw: &str) -> String {
@@ -199,6 +206,266 @@ fn maybe_emit_app_update_available(
     }
 }
 
+fn update_raw_string(update: &Update, keys: &[&str]) -> String {
+    for key in keys {
+        if let Some(value) = update.raw_json.get(*key).and_then(Value::as_str) {
+            let normalized = value.trim();
+            if !normalized.is_empty() {
+                return normalized.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn format_update_date(update: &Update) -> String {
+    update
+        .date
+        .and_then(|date| date.format(&Rfc3339).ok())
+        .unwrap_or_default()
+}
+
+fn native_update_notice_payload(update: &Update) -> Value {
+    let current_version = normalize_version_tag(&update.current_version);
+    let latest_version = normalize_version_tag(&update.version);
+    let release_url = update_raw_string(update, &["release_url", "releaseUrl", "htmlUrl"]);
+    let mut name = update_raw_string(update, &["name", "releaseName"]);
+    if name.is_empty() {
+        name = format!("{} v{}", app_brand_display_name(), latest_version);
+    }
+
+    json!({
+        "currentVersion": current_version,
+        "latestVersion": latest_version,
+        "htmlUrl": if is_http_url(&release_url) {
+            release_url
+        } else {
+            APP_UPDATE_DOWNLOAD_PAGE_URL.to_string()
+        },
+        "name": name,
+        "publishedAt": format_update_date(update),
+        "body": update.body.clone().unwrap_or_default(),
+        "installable": true,
+    })
+}
+
+async fn check_app_update_native(
+    app: &AppHandle,
+    force: bool,
+    force_notify: bool,
+) -> Result<Value, String> {
+    let now = Instant::now();
+    {
+        let mut state = app_update_state()
+            .lock()
+            .map_err(|_| "App update state lock is poisoned".to_string())?;
+        if state.in_flight {
+            return Ok(json!({
+                "success": false,
+                "hasUpdate": false,
+                "inFlight": true,
+                "message": "Update check already in flight",
+            }));
+        }
+        if !force
+            && state
+                .last_checked_at
+                .map(|last_checked_at| {
+                    now.duration_since(last_checked_at) < APP_UPDATE_CHECK_MIN_INTERVAL
+                })
+                .unwrap_or(false)
+        {
+            return Ok(json!({
+                "success": true,
+                "hasUpdate": false,
+                "throttled": true,
+                "message": "Update check skipped due to interval throttling",
+            }));
+        }
+        state.in_flight = true;
+        state.last_checked_at = Some(now);
+    }
+
+    let result: Result<Value, String> = async {
+        let update = app
+            .updater()
+            .map_err(|error| error.to_string())?
+            .check()
+            .await
+            .map_err(|error| error.to_string())?;
+
+        if let Some(update) = update {
+            let latest_version = normalize_version_tag(&update.version);
+            let notice = native_update_notice_payload(&update);
+            maybe_emit_app_update_available(app, &notice, &latest_version, force_notify);
+            Ok(json!({
+                "success": true,
+                "hasUpdate": true,
+                "notice": notice,
+            }))
+        } else {
+            Ok(json!({
+                "success": true,
+                "hasUpdate": false,
+            }))
+        }
+    }
+    .await;
+
+    if let Ok(mut state) = app_update_state().lock() {
+        state.in_flight = false;
+    }
+
+    match result {
+        Ok(value) => Ok(value),
+        Err(message) => {
+            if app_update_debug_log_enabled() {
+                eprintln!("[AppUpdate] native check failed: {message}");
+            }
+            Ok(json!({
+                "success": false,
+                "hasUpdate": false,
+                "message": message,
+            }))
+        }
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn app_check_update(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
+    let force = force.unwrap_or(false);
+    check_app_update_native(&app, force, force).await
+}
+
+async fn install_app_update_inner(app: &AppHandle) -> Result<Value, String> {
+    let _ = app.emit(
+        "app:update-install-progress",
+        json!({ "status": "checking" }),
+    );
+    let update = app
+        .updater()
+        .map_err(|error| error.to_string())?
+        .check()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let Some(update) = update else {
+        let payload = json!({
+            "status": "idle",
+            "hasUpdate": false,
+        });
+        let _ = app.emit("app:update-install-progress", payload.clone());
+        return Ok(json!({
+            "success": false,
+            "hasUpdate": false,
+            "error": "No installable update is available",
+        }));
+    };
+
+    let version = normalize_version_tag(&update.version);
+    let _ = app.emit(
+        "app:update-install-progress",
+        json!({
+            "status": "downloading",
+            "version": version.clone(),
+            "downloaded": 0,
+            "contentLength": null,
+        }),
+    );
+
+    let mut downloaded = 0_u64;
+    let progress_app = app.clone();
+    let finish_app = app.clone();
+    update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                downloaded = downloaded.saturating_add(chunk_length as u64);
+                let _ = progress_app.emit(
+                    "app:update-install-progress",
+                    json!({
+                        "status": "downloading",
+                        "version": version.clone(),
+                        "downloaded": downloaded,
+                        "contentLength": content_length,
+                    }),
+                );
+            },
+            move || {
+                let _ = finish_app.emit(
+                    "app:update-install-progress",
+                    json!({
+                        "status": "installing",
+                    }),
+                );
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let _ = app.emit(
+        "app:update-install-progress",
+        json!({
+            "status": "installed",
+        }),
+    );
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        app.restart();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Ok(json!({
+            "success": true,
+            "installed": true,
+        }))
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn app_install_update(app: AppHandle) -> Result<Value, String> {
+    {
+        let mut state = app_update_state()
+            .lock()
+            .map_err(|_| "App update state lock is poisoned".to_string())?;
+        if state.install_in_flight {
+            return Ok(json!({
+                "success": false,
+                "inFlight": true,
+                "error": "Update installation already in flight",
+            }));
+        }
+        state.install_in_flight = true;
+    }
+
+    let result = install_app_update_inner(&app).await;
+
+    if let Ok(mut state) = app_update_state().lock() {
+        state.install_in_flight = false;
+    }
+
+    match result {
+        Ok(value) => Ok(value),
+        Err(message) => {
+            if app_update_debug_log_enabled() {
+                eprintln!("[AppUpdate] install failed: {message}");
+            }
+            let _ = app.emit(
+                "app:update-install-progress",
+                json!({
+                    "status": "failed",
+                    "error": message,
+                }),
+            );
+            Ok(json!({
+                "success": false,
+                "error": message,
+            }))
+        }
+    }
+}
+
 pub(super) fn check_app_update(
     app: &AppHandle,
     force: bool,
@@ -274,7 +541,9 @@ pub(super) fn check_app_update(
     match result {
         Ok(value) => Ok(value),
         Err(message) => {
-            eprintln!("[AppUpdate] check failed: {message}");
+            if app_update_debug_log_enabled() {
+                eprintln!("[AppUpdate] check failed: {message}");
+            }
             Ok(json!({
                 "success": false,
                 "hasUpdate": false,

@@ -7,6 +7,44 @@ const TASK_BRIEF_MAX_ARRAY_ITEMS: usize = 40;
 const TASK_BRIEF_MAX_OBJECT_FIELDS: usize = 80;
 const TASK_BRIEF_MAX_DEPTH: usize = 5;
 
+fn value_success_is_false(value: &Value) -> bool {
+    value.get("success").and_then(Value::as_bool) == Some(false)
+}
+
+fn find_space_in_list(list: &Value, id: Option<&str>, name: Option<&str>) -> Option<Value> {
+    let normalized_id = id.map(str::trim).filter(|value| !value.is_empty());
+    let normalized_name = name.map(str::trim).filter(|value| !value.is_empty());
+    list.get("spaces")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|item| {
+            let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+            let item_name = item.get("name").and_then(Value::as_str).unwrap_or_default();
+            normalized_id.map(|value| item_id == value).unwrap_or(false)
+                || normalized_name
+                    .map(|value| item_name.eq_ignore_ascii_case(value))
+                    .unwrap_or(false)
+        })
+        .cloned()
+}
+
+fn find_category_by_name(list: &Value, name: &str) -> Option<Value> {
+    let normalized = name.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    list.get("categories")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|item| {
+            item.get("name")
+                .and_then(Value::as_str)
+                .map(|value| value.trim().eq_ignore_ascii_case(normalized))
+                .unwrap_or(false)
+        })
+        .cloned()
+}
+
 impl<'a> AppCliExecutor<'a> {
     pub(super) fn handle_session_resources(
         &self,
@@ -602,6 +640,178 @@ impl<'a> AppCliExecutor<'a> {
             ),
             _ => Err(format!("unsupported spaces action: {action}")),
         }
+    }
+
+    pub(super) fn handle_spaces_manage(&self, payload: &Value) -> Result<Value, String> {
+        let operation = payload_string(payload, "operation")
+            .map(|value| normalized_app_cli_action_key(&value))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("spaces.manage"),
+                    "OPERATION_REQUIRED",
+                    "spaces.manage requires an operation",
+                    false,
+                    None,
+                )
+            })?;
+        let request = consolidated_action_payload(payload);
+        match operation.as_str() {
+            "list" => self.call_channel("spaces:list", json!({})),
+            "get" => self.handle_spaces_manage_get(&request),
+            "create" => self.call_channel(
+                "spaces:create",
+                json!({
+                    "name": payload_string_alias(&request, &["name", "spaceName"])
+                        .ok_or_else(|| "spaces.manage create requires name".to_string())?
+                }),
+            ),
+            "switch" => self.call_channel(
+                "spaces:switch",
+                json!({
+                    "spaceId": payload_string_alias(&request, &["spaceId", "id"])
+                        .ok_or_else(|| "spaces.manage switch requires spaceId".to_string())?
+                }),
+            ),
+            "rename" => self.call_channel(
+                "spaces:rename",
+                json!({
+                    "id": payload_string_alias(&request, &["id", "spaceId"])
+                        .ok_or_else(|| "spaces.manage rename requires id".to_string())?,
+                    "name": payload_string_alias(&request, &["name"])
+                        .ok_or_else(|| "spaces.manage rename requires name".to_string())?
+                }),
+            ),
+            "delete" => self.call_channel(
+                "spaces:delete",
+                json!({
+                    "id": payload_string_alias(&request, &["id", "spaceId"])
+                        .ok_or_else(|| "spaces.manage delete requires id".to_string())?
+                }),
+            ),
+            "ensure" => self.handle_spaces_manage_ensure(&request),
+            _ => Err(app_cli_error_json(
+                Some("spaces.manage"),
+                "UNSUPPORTED_OPERATION",
+                &format!("unsupported spaces.manage operation: {operation}"),
+                false,
+                None,
+            )),
+        }
+    }
+
+    fn handle_spaces_manage_get(&self, payload: &Value) -> Result<Value, String> {
+        let id = payload_string_alias(payload, &["id", "spaceId"]);
+        let name = payload_string_alias(payload, &["name", "spaceName"]);
+        if id.is_none() && name.is_none() {
+            return Err("spaces.manage get requires id or name".to_string());
+        }
+        let list = self.call_channel("spaces:list", json!({}))?;
+        let space = find_space_in_list(&list, id.as_deref(), name.as_deref());
+        Ok(json!({ "success": space.is_some(), "space": space }))
+    }
+
+    fn handle_spaces_manage_ensure(&self, payload: &Value) -> Result<Value, String> {
+        let name = payload_string_alias(payload, &["name", "spaceName"])
+            .ok_or_else(|| "spaces.manage ensure requires name".to_string())?;
+        let activate = payload_bool(payload, &["activate"]).unwrap_or(true);
+        let list = self.call_channel("spaces:list", json!({}))?;
+        if let Some(space) = find_space_in_list(&list, None, Some(&name)) {
+            let space_id = space
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let mut switch_result = Value::Null;
+            if activate && !space_id.is_empty() {
+                switch_result =
+                    self.call_channel("spaces:switch", json!({ "spaceId": space_id.clone() }))?;
+                if value_success_is_false(&switch_result) {
+                    return Ok(json!({
+                        "success": false,
+                        "created": false,
+                        "space": space,
+                        "switch": switch_result
+                    }));
+                }
+            }
+            return Ok(json!({
+                "success": true,
+                "created": false,
+                "activated": activate,
+                "space": space,
+                "activeSpaceId": if activate { json!(space_id) } else { list.get("activeSpaceId").cloned().unwrap_or(Value::Null) },
+                "switch": switch_result
+            }));
+        }
+        let created = self.call_channel("spaces:create", json!({ "name": name }))?;
+        if value_success_is_false(&created) {
+            return Ok(json!({
+                "success": false,
+                "created": false,
+                "space": Value::Null,
+                "create": created
+            }));
+        }
+        Ok(json!({
+            "success": true,
+            "created": true,
+            "activated": true,
+            "space": created.get("space").cloned().unwrap_or(Value::Null),
+            "activeSpaceId": created.get("activeSpaceId").cloned().unwrap_or(Value::Null),
+            "create": created
+        }))
+    }
+
+    pub(super) fn handle_workspace_setup(&self, payload: &Value) -> Result<Value, String> {
+        let space_name = payload_string_alias(payload, &["spaceName", "name"])
+            .ok_or_else(|| "workspace.setup requires spaceName".to_string())?;
+        let activate = payload_bool(payload, &["activate"]).unwrap_or(true);
+        let mut category_names = value_string_list(payload_field(payload, "assetCategories"), 20);
+        if category_names.is_empty() {
+            category_names = value_string_list(payload_field(payload, "categories"), 20);
+        }
+        dedupe_string_list(&mut category_names, 20);
+
+        let space_result = self.handle_spaces_manage(&json!({
+            "operation": "ensure",
+            "name": space_name,
+            "activate": activate
+        }))?;
+        if value_success_is_false(&space_result) {
+            return Ok(json!({
+                "success": false,
+                "space": space_result,
+                "categories": []
+            }));
+        }
+
+        let existing_categories = self.call_channel("subjects:categories:list", json!({}))?;
+        let mut category_results = Vec::<Value>::new();
+        for name in category_names {
+            if find_category_by_name(&existing_categories, &name).is_some() {
+                category_results.push(json!({
+                    "name": name,
+                    "status": "existing"
+                }));
+                continue;
+            }
+            let created =
+                self.call_channel("subjects:categories:create", json!({ "name": name }))?;
+            category_results.push(json!({
+                "name": name,
+                "status": if value_success_is_false(&created) { "failed" } else { "created" },
+                "result": created
+            }));
+        }
+        let success = category_results
+            .iter()
+            .all(|item| item.get("status").and_then(Value::as_str) != Some("failed"));
+        Ok(json!({
+            "success": success,
+            "space": space_result,
+            "categories": category_results
+        }))
     }
 
     pub(super) fn handle_subjects(

@@ -291,6 +291,19 @@ fn persist_runtime_event_record<R: Runtime>(
     });
 }
 
+fn project_acp_runtime_event<R: Runtime>(
+    app: &AppHandle<R>,
+    event_type: &str,
+    session_id: Option<&str>,
+    payload: &Value,
+) {
+    let state = app.state::<AppState>();
+    let _ = try_with_store_mut(&state, |store| {
+        crate::project_runtime_event_to_acp_audit(store, event_type, session_id, payload);
+        Ok(())
+    });
+}
+
 pub fn emit_runtime_event<R: Runtime>(
     app: &AppHandle<R>,
     event_type: &str,
@@ -320,6 +333,9 @@ pub fn emit_runtime_event_with_lineage<R: Runtime>(
         parent_runtime_id,
         &payload,
     );
+    project_acp_runtime_event(app, event_type, session_id, &payload);
+    let state = app.state::<AppState>();
+    crate::analytics::observe_runtime_event(&state, event_type, &payload);
     let _ = app.emit(
         "runtime:event",
         RuntimeEventEnvelope::new(

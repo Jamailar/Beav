@@ -11,6 +11,7 @@
   "githubRepoUrl": "https://github.com/Jamailar/RedBox",
   "founderXHandle": "@JambaHailar",
   "founderXUrl": "https://x.com/JambaHailar",
+  "developerWechatQrSrc": "/branding/developer-wechat-qr.jpg",
   "theme": {
     "light": {
       "accentPrimary": "162 120 75",

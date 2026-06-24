@@ -459,6 +459,27 @@ h1 {
   opacity: 0.55;
 }
 
+.capture-options {
+  display: grid;
+  gap: 6px;
+}
+
+.capture-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #404040;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.capture-switch-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: #c2410c;
+}
+
 .capture-status {
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 7px;

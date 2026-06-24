@@ -215,6 +215,8 @@ async function collectReleaseAssets() {
         'portableZipArtifactPath',
         'debArtifactPath',
         'zipPath',
+        'updaterArtifactPath',
+        'updaterSignatureArtifactPath',
       ]) {
         await registerAsset(artifact?.[key]);
       }
@@ -226,6 +228,8 @@ async function collectReleaseAssets() {
       'portableZipArtifactPath',
       'debArtifactPath',
       'zipPath',
+      'updaterArtifactPath',
+      'updaterSignatureArtifactPath',
     ]) {
       await registerAsset(summary?.[key]);
     }

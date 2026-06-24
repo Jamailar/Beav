@@ -221,6 +221,33 @@ type AssistantDaemonStatus = {
         endpointPath: string;
         webhookUrl: string;
     };
+    acpGateway?: {
+        enabled: boolean;
+        requireToken: boolean;
+        localOnly: boolean;
+        endpointPath: string;
+        manifestPath: string;
+        guidePath: string;
+        defaultRuntimeMode: string;
+        defaultClientLabel: string;
+        lastError?: string | null;
+        activeRunCount: number;
+        baseUrl: string;
+        manifestUrl: string;
+        guideUrl: string;
+        clients: Array<{
+            id: string;
+            name: string;
+            kind: string;
+            tokenPreview?: string | null;
+            allowedScopes: string[];
+            disabled: boolean;
+            createdAt: number;
+            updatedAt: number;
+            lastSeenAt?: number | null;
+            metadata?: Record<string, unknown> | null;
+        }>;
+    };
     weixin: {
         enabled: boolean;
         endpointPath: string;
@@ -313,6 +340,16 @@ type AssistantDaemonDraft = {
         endpointPath: string;
         authToken: string;
     };
+    acpGateway: {
+        enabled: boolean;
+        requireToken: boolean;
+        localOnly: boolean;
+        endpointPath: string;
+        manifestPath: string;
+        guidePath: string;
+        defaultRuntimeMode: string;
+        defaultClientLabel: string;
+    };
     weixin: {
         enabled: boolean;
         endpointPath: string;
@@ -373,10 +410,13 @@ interface RemoteConnectionSettingsSectionProps {
     setAssistantDaemonDraft: Dispatch<SetStateAction<AssistantDaemonDraft>>;
     assistantDaemonLogs: string[];
     assistantDaemonBusy: boolean;
+    assistantDaemonAcpToken: string;
     assistantDaemonWeixinLogin: AssistantDaemonWeixinLoginState | null;
     assistantDaemonWeixinLoginBusy: boolean;
     handleReloadAssistantDaemonStatus: () => Promise<void>;
     handleSaveAssistantDaemonConfig: () => Promise<void>;
+    handleCreateAssistantDaemonAcpClient: (name: string, kind: string) => Promise<void>;
+    handleRevokeAssistantDaemonAcpClient: (clientId: string) => Promise<void>;
     handleStartAssistantDaemon: () => Promise<void>;
     handleStopAssistantDaemon: () => Promise<void>;
     handleStartAssistantDaemonWeixinLogin: () => Promise<void>;
@@ -1306,7 +1346,7 @@ interface RemoteChannelCardProps {
     children: ReactNode;
 }
 
-type ApiSectionId = 'overview' | 'daemon' | 'listen' | 'status' | 'logs';
+type ApiSectionId = 'overview' | 'acp' | 'daemon' | 'listen' | 'status' | 'logs';
 
 interface ApiSectionCardProps {
     title: string;
@@ -1445,10 +1485,13 @@ function RemoteConnectionSettingsSectionInner({
     setAssistantDaemonDraft,
     assistantDaemonLogs,
     assistantDaemonBusy,
+    assistantDaemonAcpToken,
     assistantDaemonWeixinLogin,
     assistantDaemonWeixinLoginBusy,
     handleReloadAssistantDaemonStatus,
     handleSaveAssistantDaemonConfig,
+    handleCreateAssistantDaemonAcpClient,
+    handleRevokeAssistantDaemonAcpClient,
     handleStartAssistantDaemon,
     handleStopAssistantDaemon,
     handleStartAssistantDaemonWeixinLogin,
@@ -1459,15 +1502,42 @@ function RemoteConnectionSettingsSectionInner({
     const [expandedChannelId, setExpandedChannelId] = useState<RemoteChannelId | null>('weixin');
     const [expandedApiSections, setExpandedApiSections] = useState<Record<ApiSectionId, boolean>>({
         overview: true,
+        acp: true,
         daemon: true,
         listen: true,
         status: true,
         logs: true,
     });
+    const [acpClientName, setAcpClientName] = useState('Codex');
     const assistantDaemonLogText = useMemo(
         () => (assistantDaemonLogs.length ? assistantDaemonLogs.join('\n') : '暂无 daemon 日志。'),
         [assistantDaemonLogs],
     );
+    const acpBaseUrl = useMemo(() => {
+        const host = String(assistantDaemonDraft.host || '').trim() || '127.0.0.1';
+        const port = String(assistantDaemonDraft.port || '').trim() || '31937';
+        return `http://${host}:${port}`;
+    }, [assistantDaemonDraft.host, assistantDaemonDraft.port]);
+    const acpManifestUrl = `${acpBaseUrl}/.well-known/redbox-agent.json`;
+    const acpGuideUrl = `${acpBaseUrl}/acp/v1/guide`;
+    const acpClients = assistantDaemonStatus?.acpGateway?.clients || [];
+    const acpCopyPrompts = useMemo(() => ([
+        {
+            id: 'codex',
+            label: 'Codex',
+            text: `Read RedBox ACP manifest at ${acpManifestUrl}, then use /acp/v1/runs to talk to RedBox Creator Agent. Set client.name=Codex.`,
+        },
+        {
+            id: 'hermes',
+            label: 'Hermes',
+            text: `Use RedBox local ACP at ${acpBaseUrl}/acp/v1. Read /guide first. Set client.name=Hermes.`,
+        },
+        {
+            id: 'openclaw',
+            label: 'OpenClaw',
+            text: `Connect to RedBox Creator Agent through ${acpBaseUrl}/acp/v1/runs. Omit sessionId to auto-create an ACP-labeled RedBox session. Set client.name=OpenClaw.`,
+        },
+    ]), [acpBaseUrl, acpManifestUrl]);
     const handleToggleExpandedChannel = (id: RemoteChannelId) => {
         setExpandedChannelId((current) => current === id ? null : id);
     };
@@ -1565,6 +1635,143 @@ function RemoteConnectionSettingsSectionInner({
                             <span className="inline-flex items-center rounded-full border border-border bg-surface-secondary/50 px-2.5 py-1 text-[10px] font-medium text-text-secondary">
                                 监听 {String(assistantDaemonDraft.host || '').trim() || '127.0.0.1'}:{String(assistantDaemonDraft.port || '').trim() || '31937'}
                             </span>
+                        </div>
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="Agent Communication Protocol"
+                        eyebrow="ACP"
+                        description="给 Codex、Hermes、OpenClaw 等外部 Agent 的本地对话入口。"
+                        expanded={expandedApiSections.acp}
+                        onToggle={() => handleToggleApiSection('acp')}
+                    >
+                        <div className="mb-3 grid gap-2 md:grid-cols-3">
+                            <div className="flex items-center justify-between rounded-[16px] border border-border bg-surface-secondary/20 px-3.5 py-3">
+                                <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium text-text-primary">ACP 网关</div>
+                                    <div className="mt-1 text-[11px] text-text-tertiary">{assistantDaemonDraft.acpGateway.enabled ? '已启用' : '未启用'}</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssistantDaemonDraft((prev) => ({
+                                        ...prev,
+                                        acpGateway: { ...prev.acpGateway, enabled: !prev.acpGateway.enabled },
+                                    }))}
+                                    className="ui-switch-track"
+                                    data-size="md"
+                                    data-state={assistantDaemonDraft.acpGateway.enabled ? 'on' : 'off'}
+                                    aria-label="ACP 网关开关"
+                                >
+                                    <span className="ui-switch-thumb" />
+                                </button>
+                            </div>
+                            <div className="flex items-center justify-between rounded-[16px] border border-border bg-surface-secondary/20 px-3.5 py-3">
+                                <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium text-text-primary">Token</div>
+                                    <div className="mt-1 text-[11px] text-text-tertiary">{assistantDaemonDraft.acpGateway.requireToken ? '写入需验证' : '本机免 token'}</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssistantDaemonDraft((prev) => ({
+                                        ...prev,
+                                        acpGateway: { ...prev.acpGateway, requireToken: !prev.acpGateway.requireToken },
+                                    }))}
+                                    className="ui-switch-track"
+                                    data-size="md"
+                                    data-state={assistantDaemonDraft.acpGateway.requireToken ? 'on' : 'off'}
+                                    aria-label="ACP Token 验证"
+                                >
+                                    <span className="ui-switch-thumb" />
+                                </button>
+                            </div>
+                            <div className="flex items-center justify-between rounded-[16px] border border-border bg-surface-secondary/20 px-3.5 py-3">
+                                <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium text-text-primary">Local only</div>
+                                    <div className="mt-1 text-[11px] text-text-tertiary">{assistantDaemonDraft.acpGateway.localOnly ? '仅本机' : '允许监听地址访问'}</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssistantDaemonDraft((prev) => ({
+                                        ...prev,
+                                        acpGateway: { ...prev.acpGateway, localOnly: !prev.acpGateway.localOnly },
+                                    }))}
+                                    className="ui-switch-track"
+                                    data-size="md"
+                                    data-state={assistantDaemonDraft.acpGateway.localOnly ? 'on' : 'off'}
+                                    aria-label="ACP 本机访问限制"
+                                >
+                                    <span className="ui-switch-thumb" />
+                                </button>
+                            </div>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                            <div className="rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">manifest</div>
+                                <div className="mt-1.5 break-all font-mono text-[12px] text-text-primary">{acpManifestUrl}</div>
+                                <div className="mt-2">
+                                    <DiagnosticCopyButton text={acpManifestUrl} label="复制" />
+                                </div>
+                            </div>
+                            <div className="rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">guide</div>
+                                <div className="mt-1.5 break-all font-mono text-[12px] text-text-primary">{acpGuideUrl}</div>
+                                <div className="mt-2">
+                                    <DiagnosticCopyButton text={acpGuideUrl} label="复制" />
+                                </div>
+                            </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            {acpCopyPrompts.map((prompt) => (
+                                <DiagnosticCopyButton key={prompt.id} text={prompt.text} label={`复制 ${prompt.label}`} />
+                            ))}
+                        </div>
+                        <div className="mt-4 rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                                <input
+                                    type="text"
+                                    value={acpClientName}
+                                    onChange={(event) => setAcpClientName(event.target.value)}
+                                    className="min-w-0 flex-1 rounded border border-border bg-surface-primary px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                    placeholder="Client name"
+                                />
+                                <button
+                                    type="button"
+                                    disabled={assistantDaemonBusy}
+                                    onClick={() => void handleCreateAssistantDaemonAcpClient(acpClientName, 'generic_agent')}
+                                    className="inline-flex items-center justify-center rounded-full bg-accent-primary px-3.5 py-2 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                >
+                                    新建 Token
+                                </button>
+                            </div>
+                            {assistantDaemonAcpToken && (
+                                <div className="mt-3 rounded border border-emerald-300 bg-emerald-500/10 p-3">
+                                    <div className="mb-2 text-[11px] font-medium text-emerald-700">仅显示一次</div>
+                                    <div className="break-all font-mono text-[11px] text-text-primary">{assistantDaemonAcpToken}</div>
+                                    <div className="mt-2">
+                                        <DiagnosticCopyButton text={assistantDaemonAcpToken} label="复制 Token" />
+                                    </div>
+                                </div>
+                            )}
+                            <div className="mt-3 space-y-2">
+                                {acpClients.length === 0 ? (
+                                    <div className="text-[11px] text-text-tertiary">暂无 ACP client。</div>
+                                ) : acpClients.map((client) => (
+                                    <div key={client.id} className="flex items-center justify-between gap-3 rounded border border-border bg-surface-primary/60 px-3 py-2">
+                                        <div className="min-w-0">
+                                            <div className="truncate text-xs font-medium text-text-primary">{client.name}</div>
+                                            <div className="mt-0.5 truncate font-mono text-[10px] text-text-tertiary">{client.tokenPreview || client.id}</div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            disabled={assistantDaemonBusy || client.disabled}
+                                            onClick={() => void handleRevokeAssistantDaemonAcpClient(client.id)}
+                                            className="shrink-0 rounded border border-border px-2 py-1 text-[10px] text-text-tertiary transition-colors hover:border-red-300 hover:text-red-600 disabled:opacity-50"
+                                        >
+                                            {client.disabled ? '已撤销' : '撤销'}
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </ApiSectionCard>
 
@@ -2544,6 +2751,7 @@ interface ToolsSettingsSectionProps {
             contextId?: string;
             isContextBound?: boolean;
         } | null;
+        metadata?: Record<string, unknown> | null;
         transcriptCount: number;
         checkpointCount: number;
         chatSession?: { id: string; title?: string; updatedAt?: string } | null;
@@ -2785,7 +2993,12 @@ export function ToolsSettingsSection({
         id: string;
         runtimeMode?: string;
         contextBinding?: { contextType?: string | null } | null;
+        metadata?: Record<string, unknown> | null;
     }) => {
+        const metadata = session.metadata || {};
+        if (String(metadata.source || '').trim() === 'acp') {
+            return String(metadata.sourceLabel || 'ACP: External Agent').trim() || 'ACP: External Agent';
+        }
         const runtimeMode = String(session.runtimeMode || '').trim();
         const contextType = String(session.contextBinding?.contextType || '').trim();
         if (runtimeMode === 'wander' || contextType === 'wander' || session.id.startsWith('session_wander_')) {
@@ -2926,6 +3139,12 @@ export function ToolsSettingsSection({
             `session: ${selectedRuntimeSession.id}`,
             `title: ${selectedRuntimeSession.chatSession?.title || selectedRuntimeSession.id}`,
             `source: ${runtimeSessionSourceLabel(selectedRuntimeSession)}`,
+            String(selectedRuntimeSession.metadata?.source || '').trim() === 'acp'
+                ? `acpSessionId: ${String(selectedRuntimeSession.metadata?.acpSessionId || '')}`
+                : '',
+            String(selectedRuntimeSession.metadata?.source || '').trim() === 'acp'
+                ? `externalClient: ${String(selectedRuntimeSession.metadata?.externalClientName || selectedRuntimeSession.metadata?.sourceLabel || '')}`
+                : '',
             selectedRuntimeSession.runtimeMode ? `runtimeMode: ${selectedRuntimeSession.runtimeMode}` : '',
             selectedRuntimeSession.contextBinding?.contextType ? `contextType: ${selectedRuntimeSession.contextBinding.contextType}` : '',
             selectedRuntimeSession.contextBinding?.contextId ? `contextId: ${selectedRuntimeSession.contextBinding.contextId}` : '',

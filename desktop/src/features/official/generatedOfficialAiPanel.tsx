@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BadgeCheck, Box, Check, Crown, Gem, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
+import { BadgeCheck, Box, Check, ChevronDown, Crown, Gem, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
 import { useOfficialAuthState } from '../../hooks/useOfficialAuthState';
 import { useMembership } from '../membership/useMembership';
 import { extractAlipayPayQrContent } from '../../pages/settings/shared';
+import { LegalDocumentDialog } from '../legal/LegalDocumentDialog';
+import { LEGAL_DOCUMENTS, type LegalDocumentId } from '../legal/legalDocuments';
 
 type LoginTab = 'wechat' | 'sms';
 type NoticeType = 'idle' | 'success' | 'error';
@@ -284,6 +286,8 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
   const [founderSponsorStatusText, setFounderSponsorStatusText] = useState('');
   const [notice, setNotice] = useState('');
   const [noticeType, setNoticeType] = useState<NoticeType>('idle');
+  const [activeLegalDocumentId, setActiveLegalDocumentId] = useState<LegalDocumentId | null>(null);
+  const [callRecordsExpanded, setCallRecordsExpanded] = useState(false);
   const [smsForm, setSmsForm] = useState({ phone: '', code: '', inviteCode: '' });
   const [wechatQrUrl, setWechatQrUrl] = useState('');
   const [wechatLoginUrl, setWechatLoginUrl] = useState('');
@@ -1075,6 +1079,24 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                 {wechatExpiresAt > 0 ? (
                   <p className="text-[10px] font-bold text-text-tertiary">二维码有效期至：{new Date(wechatExpiresAt).toLocaleTimeString()}</p>
                 ) : null}
+                <div className="text-[11px] leading-5 text-text-tertiary">
+                  登录即表示同意
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalDocumentId('terms')}
+                    className="mx-1 font-bold text-accent-primary hover:underline"
+                  >
+                    用户协议
+                  </button>
+                  和
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalDocumentId('privacy')}
+                    className="ml-1 font-bold text-accent-primary hover:underline"
+                  >
+                    隐私政策
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="space-y-2.5">
@@ -1125,6 +1147,24 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                     className="px-4 py-2 text-xs font-bold border border-black/[0.05] dark:border-white/[0.05] rounded-xl hover:bg-black/[0.02] dark:hover:bg-white/[0.02] active:scale-95 transition-all disabled:opacity-50"
                   >
                     注册新账号
+                  </button>
+                </div>
+                <div className="pt-1 text-[11px] leading-5 text-text-tertiary">
+                  登录或注册即表示同意
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalDocumentId('terms')}
+                    className="mx-1 font-bold text-accent-primary hover:underline"
+                  >
+                    用户协议
+                  </button>
+                  和
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalDocumentId('privacy')}
+                    className="ml-1 font-bold text-accent-primary hover:underline"
+                  >
+                    隐私政策
                   </button>
                 </div>
               </div>
@@ -1196,7 +1236,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                     ) : null}
                   </div>
                   <div className="mt-1 truncate text-xs font-medium text-text-tertiary">
-                    {isFounderSponsorMember ? '永久有效 · 已解锁无限空间和会员专属功能' : '免费账号 · 可升级创始赞助会员'}
+                    {isFounderSponsorMember ? '永久身份 · AI 调用仍按积分消耗' : '免费账号 · 可升级创始赞助会员'}
                   </div>
                 </div>
               </div>
@@ -1260,7 +1300,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                         <span className="rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[11px] font-black text-amber-700 dark:text-amber-200">¥199 · 永久有效</span>
                       </div>
                       <div className="mt-1 text-xs font-medium leading-5 text-text-secondary">
-                        含 22,000 官方积分，解锁无限空间创建、无限登录设备和会员专属功能。
+                        解锁会员身份与特权功能；AI 调用、图片和视频生成仍按实际使用消耗积分。
                       </div>
                       {founderSponsorStatusText || founderSponsorOrderNo ? (
                         <div className="mt-2 truncate text-[11px] font-medium text-amber-700 dark:text-amber-200" title={founderSponsorOrderNo || founderSponsorStatusText}>
@@ -1367,19 +1407,37 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                   </div>
 
                   <div className="flex flex-col items-center gap-2">
-                  <button
-                  type="button"
-                  onClick={() => void handleCreateOrderAndPay()}
-                  disabled={paymentControlsDisabled || !rechargeAmount || Number(rechargeAmount) <= 0}
-                    className="inline-flex h-10 min-w-[208px] items-center justify-center gap-1.5 rounded-lg bg-accent-primary px-4 text-sm font-black text-white shadow-[0_16px_34px_-16px_rgb(var(--color-accent-primary)/0.8)] transition-all hover:brightness-105 active:scale-[0.99] disabled:opacity-45"
-                  >
-                    <Zap className="h-4 w-4 fill-current" />
-                    立即充值
-                  </button>
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-text-tertiary">
-                    <LockKeyhole className="h-3 w-3" />
-                    安全支付，积分秒到账
-                  </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleCreateOrderAndPay()}
+                      disabled={paymentControlsDisabled || !rechargeAmount || Number(rechargeAmount) <= 0}
+                      className="inline-flex h-10 min-w-[208px] items-center justify-center gap-1.5 rounded-lg bg-accent-primary px-4 text-sm font-black text-white shadow-[0_16px_34px_-16px_rgb(var(--color-accent-primary)/0.8)] transition-all hover:brightness-105 active:scale-[0.99] disabled:opacity-45"
+                    >
+                      <Zap className="h-4 w-4 fill-current" />
+                      立即充值
+                    </button>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-text-tertiary">
+                      <LockKeyhole className="h-3 w-3" />
+                      安全支付，积分秒到账
+                    </span>
+                    <div className="text-center text-[11px] leading-5 text-text-tertiary">
+                      充值或购买会员即表示同意
+                      <button
+                        type="button"
+                        onClick={() => setActiveLegalDocumentId('terms')}
+                        className="mx-1 font-bold text-accent-primary hover:underline"
+                      >
+                        用户协议
+                      </button>
+                      和
+                      <button
+                        type="button"
+                        onClick={() => setActiveLegalDocumentId('privacy')}
+                        className="ml-1 font-bold text-accent-primary hover:underline"
+                      >
+                        隐私政策
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1415,12 +1473,18 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
 
           <div className="rounded-xl border border-black/[0.06] bg-white p-5 shadow-sm dark:border-white/[0.06] dark:bg-surface-primary">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCallRecordsExpanded((expanded) => !expanded)}
+                aria-expanded={callRecordsExpanded}
+                className="flex min-w-0 items-center gap-2 rounded-lg pr-2 text-left transition-colors hover:text-text-primary"
+              >
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-blue-500">
                   <Table2 className="h-4 w-4" />
                 </div>
                 <span className="text-base font-bold text-text-primary">调用记录</span>
-              </div>
+                <ChevronDown className={clsx('h-4 w-4 shrink-0 text-text-tertiary transition-transform', callRecordsExpanded && 'rotate-180')} />
+              </button>
               <button
                 type="button"
                 onClick={() => void refreshProfileAndPoints()}
@@ -1431,50 +1495,54 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                 <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
               </button>
             </div>
-            {!callRecords.length ? (
-              <div className="text-xs text-text-tertiary py-6 text-center font-medium">暂无调用记录明细（或后端服务暂未开放接口）。</div>
-            ) : (
-              <div className="mt-4 max-h-80 overflow-auto rounded-xl border border-black/[0.06] dark:border-white/[0.06]">
-                <table className="w-full text-xs text-left border-collapse">
-                  <thead className="bg-black/[0.015] text-text-tertiary font-bold border-b border-black/[0.04] dark:bg-white/[0.01] dark:border-white/[0.04]">
-                    <tr>
-                      <th className="px-5 py-3 font-bold">时间</th>
-                      <th className="px-5 py-3 font-bold">模型</th>
-                      <th className="px-5 py-3 text-right font-bold">积分消耗</th>
-                      <th className="px-5 py-3 text-right font-bold">Tokens</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-black/[0.03] dark:divide-white/[0.03]">
-                    {callRecords.slice(0, 30).map((record) => (
-                      <tr key={record.id} className="hover:bg-black/[0.005] dark:hover:bg-white/[0.005] transition-colors">
-                        <td className="px-5 py-3 text-sm font-medium text-text-secondary">{new Date(record.createdAt).toLocaleString()}</td>
-                        <td className="px-5 py-3 text-sm font-medium text-text-secondary">
-                          <span className="inline-flex flex-wrap items-center gap-1.5">
-                            <span>{record.model || '-'}</span>
-                            {record.purpose === 'knowledge_visual_index' && (
-                              <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
-                                知识库图像索引
+            {callRecordsExpanded ? (
+              <>
+                {!callRecords.length ? (
+                  <div className="text-xs text-text-tertiary py-6 text-center font-medium">暂无调用记录明细（或后端服务暂未开放接口）。</div>
+                ) : (
+                  <div className="mt-4 max-h-80 overflow-auto rounded-xl border border-black/[0.06] dark:border-white/[0.06]">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead className="bg-black/[0.015] text-text-tertiary font-bold border-b border-black/[0.04] dark:bg-white/[0.01] dark:border-white/[0.04]">
+                        <tr>
+                          <th className="px-5 py-3 font-bold">时间</th>
+                          <th className="px-5 py-3 font-bold">模型</th>
+                          <th className="px-5 py-3 text-right font-bold">积分消耗</th>
+                          <th className="px-5 py-3 text-right font-bold">Tokens</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-black/[0.03] dark:divide-white/[0.03]">
+                        {callRecords.slice(0, 30).map((record) => (
+                          <tr key={record.id} className="hover:bg-black/[0.005] dark:hover:bg-white/[0.005] transition-colors">
+                            <td className="px-5 py-3 text-sm font-medium text-text-secondary">{new Date(record.createdAt).toLocaleString()}</td>
+                            <td className="px-5 py-3 text-sm font-medium text-text-secondary">
+                              <span className="inline-flex flex-wrap items-center gap-1.5">
+                                <span>{record.model || '-'}</span>
+                                {record.purpose === 'knowledge_visual_index' && (
+                                  <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                                    知识库图像索引
+                                  </span>
+                                )}
                               </span>
-                            )}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3 text-right text-sm font-bold text-accent-primary">{record.points}</td>
-                        <td className="px-5 py-3 text-right text-sm font-medium text-text-tertiary">{record.tokens}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {onOpenPricing ? (
-              <button
-                type="button"
-                onClick={onOpenPricing}
-                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-black/[0.08] bg-white/70 px-4 py-3 text-sm font-bold text-text-secondary transition-all hover:border-accent-primary/20 hover:bg-accent-primary/5 hover:text-text-primary active:scale-[0.99] dark:border-white/[0.08] dark:bg-white/[0.02]"
-              >
-                <Table2 className="h-4 w-4 text-text-tertiary" />
-                查看完整价格表
-              </button>
+                            </td>
+                            <td className="px-5 py-3 text-right text-sm font-bold text-accent-primary">{record.points}</td>
+                            <td className="px-5 py-3 text-right text-sm font-medium text-text-tertiary">{record.tokens}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {onOpenPricing ? (
+                  <button
+                    type="button"
+                    onClick={onOpenPricing}
+                    className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-black/[0.08] bg-white/70 px-4 py-3 text-sm font-bold text-text-secondary transition-all hover:border-accent-primary/20 hover:bg-accent-primary/5 hover:text-text-primary active:scale-[0.99] dark:border-white/[0.08] dark:bg-white/[0.02]"
+                  >
+                    <Table2 className="h-4 w-4 text-text-tertiary" />
+                    查看完整价格表
+                  </button>
+                ) : null}
+              </>
             ) : null}
           </div>
         </>
@@ -1510,6 +1578,11 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
           </button>
         </div>
       ) : null}
+
+      <LegalDocumentDialog
+        document={activeLegalDocumentId ? LEGAL_DOCUMENTS[activeLegalDocumentId] : null}
+        onClose={() => setActiveLegalDocumentId(null)}
+      />
     </div>
   );
 };

@@ -9,6 +9,7 @@ import {
   browserPluginSourceDir,
   bundleRootForTarget,
   copyArtifactToDir,
+  copyArtifactToDirAs,
   ensureCommandExists,
   ensureRustTargets,
   findNewestFile,
@@ -51,27 +52,85 @@ async function removeLegacyAppImages(dirPath) {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   await Promise.all(
     entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.AppImage'))
+      .filter((entry) => entry.isFile() && (
+        entry.name.endsWith('.AppImage')
+        || entry.name.endsWith('.AppImage.tar.gz')
+        || entry.name.endsWith('.AppImage.tar.gz.sig')
+      ))
       .map((entry) => fs.rm(path.join(dirPath, entry.name), { force: true })),
   );
 }
 
 async function resolveLinuxArtifacts(bundleRoot) {
   const debDir = path.join(bundleRoot, 'deb');
+  const appImageDir = path.join(bundleRoot, 'appimage');
   const debPath = await findNewestFile(debDir, (filePath) => filePath.endsWith('.deb'));
-  return { debPath };
+  const updaterArchivePath = await findNewestFile(
+    appImageDir,
+    (filePath) => filePath.toLowerCase().endsWith('.appimage.tar.gz'),
+  );
+  const updaterSignaturePath = updaterArchivePath && (await pathExists(`${updaterArchivePath}.sig`))
+    ? `${updaterArchivePath}.sig`
+    : null;
+  return { debPath, updaterArchivePath, updaterSignaturePath };
+}
+
+function linuxUpdaterArchLabel(target) {
+  if (target.startsWith('aarch64-')) return 'aarch64';
+  if (target.startsWith('armv7-')) return 'armv7';
+  if (target.startsWith('i686-')) return 'i686';
+  return 'x86_64';
+}
+
+function linuxUpdaterArtifactFilename(productName, version, target, suffix) {
+  return `${productName}_${version}_${linuxUpdaterArchLabel(target)}.AppImage.tar.gz${suffix}`;
+}
+
+function linuxUpdaterFilenameMatchesTarget(filePath, target) {
+  const filename = path.basename(filePath).toLowerCase();
+  const arch = linuxUpdaterArchLabel(target);
+  if (arch === 'x86_64') {
+    return filename.includes('x86_64') || filename.includes('amd64') || filename.includes('x64');
+  }
+  return filename.includes(arch);
+}
+
+function withDefaultTauriSigningEnv(env) {
+  const nextEnv = { ...env };
+  if (!nextEnv.TAURI_SIGNING_PRIVATE_KEY && !nextEnv.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+    nextEnv.TAURI_SIGNING_PRIVATE_KEY_PATH = path.join(process.env.HOME || '', '.tauri', 'redbox-updater.key');
+  }
+  return nextEnv;
 }
 
 async function resolveFetchedLinuxArtifactsForTarget(localDir, target) {
   const bundleRoot = bundleRootForTarget(target);
-  const { debPath } = await resolveLinuxArtifacts(bundleRoot);
+  const { debPath, updaterArchivePath, updaterSignaturePath } = await resolveLinuxArtifacts(bundleRoot);
   const localDebPath =
     debPath && (await pathExists(path.join(localDir, path.basename(debPath))))
       ? path.join(localDir, path.basename(debPath))
       : await findNewestFile(localDir, (filePath) => filePath.endsWith('.deb'));
+  const localUpdaterArchivePath =
+    updaterArchivePath && (await pathExists(path.join(localDir, path.basename(updaterArchivePath))))
+      ? path.join(localDir, path.basename(updaterArchivePath))
+      : await findNewestFile(localDir, (filePath) => (
+        filePath.toLowerCase().endsWith('.appimage.tar.gz')
+        && linuxUpdaterFilenameMatchesTarget(filePath, target)
+      ));
+  const localUpdaterSignaturePath =
+    updaterSignaturePath && (await pathExists(path.join(localDir, path.basename(updaterSignaturePath))))
+      ? path.join(localDir, path.basename(updaterSignaturePath))
+      : localUpdaterArchivePath && (await pathExists(`${localUpdaterArchivePath}.sig`))
+        ? `${localUpdaterArchivePath}.sig`
+        : await findNewestFile(localDir, (filePath) => (
+          filePath.toLowerCase().endsWith('.appimage.tar.gz.sig')
+          && linuxUpdaterFilenameMatchesTarget(filePath, target)
+        ));
 
   return {
     debPath: localDebPath,
+    updaterArchivePath: localUpdaterArchivePath,
+    updaterSignaturePath: localUpdaterSignaturePath,
   };
 }
 
@@ -82,7 +141,7 @@ async function buildLocalTarget(target, pluginInfo) {
   const overrideConfig = {
     bundle: {
       ...(tauriConfig.bundle || {}),
-      targets: ['deb'],
+      targets: ['deb', 'appimage'],
     },
   };
 
@@ -93,7 +152,7 @@ async function buildLocalTarget(target, pluginInfo) {
     await runCommand(
       'pnpm',
       ['tauri', 'build', '--ci', '--config', tempConfig.configPath, '--target', target],
-      { cwd: repoRoot },
+      { cwd: repoRoot, env: withDefaultTauriSigningEnv(process.env) },
     );
 
     const releaseRoot = path.join(repoRoot, 'src-tauri', 'target', target, 'release');
@@ -107,20 +166,38 @@ async function buildLocalTarget(target, pluginInfo) {
     );
 
     const bundleRoot = bundleRootForTarget(target);
-    const { debPath } = await resolveLinuxArtifacts(bundleRoot);
+    const { debPath, updaterArchivePath, updaterSignaturePath } = await resolveLinuxArtifacts(bundleRoot);
     if (!debPath) {
       throw new Error(`Unable to locate generated Linux .deb artifact in ${bundleRoot}`);
+    }
+    if (!updaterArchivePath || !updaterSignaturePath) {
+      throw new Error(`Unable to locate generated Linux updater archive/signature in ${bundleRoot}`);
     }
 
     const debArtifactPath = debPath
       ? await copyArtifactToDir(debPath, installerArtifactsDir('linux'))
       : null;
+    const packageJson = await readPackageJson();
+    const updaterArtifactPath = await copyArtifactToDirAs(
+      updaterArchivePath,
+      installerArtifactsDir('linux'),
+      linuxUpdaterArtifactFilename(packageJson.productName || 'RedBox', packageJson.version, target, ''),
+    );
+    const updaterSignatureArtifactPath = await copyArtifactToDirAs(
+      updaterSignaturePath,
+      installerArtifactsDir('linux'),
+      linuxUpdaterArtifactFilename(packageJson.productName || 'RedBox', packageJson.version, target, '.sig'),
+    );
 
     return {
       target,
       mode: 'native-linux',
       debPath,
       debArtifactPath,
+      updaterArchivePath,
+      updaterSignaturePath,
+      updaterArtifactPath,
+      updaterSignatureArtifactPath,
     };
   } finally {
     await tempConfig.cleanup();
@@ -156,6 +233,10 @@ async function buildLocally(targets) {
     mode: 'native-linux',
     debPath: artifacts[0]?.debPath || null,
     debArtifactPath: artifacts[0]?.debArtifactPath || null,
+    updaterArchivePath: artifacts[0]?.updaterArchivePath || null,
+    updaterSignaturePath: artifacts[0]?.updaterSignaturePath || null,
+    updaterArtifactPath: artifacts[0]?.updaterArtifactPath || null,
+    updaterSignatureArtifactPath: artifacts[0]?.updaterSignatureArtifactPath || null,
     installerPath: artifacts[0]?.debArtifactPath || null,
     artifacts,
   };
@@ -170,6 +251,8 @@ async function buildLocally(targets) {
       console.log(`  deb: ${artifact.debPath}`);
       console.log(`  deb copy: ${artifact.debArtifactPath}`);
     }
+    console.log(`  updater: ${artifact.updaterArtifactPath}`);
+    console.log(`  updater signature: ${artifact.updaterSignatureArtifactPath}`);
   }
   console.log(`- summary: ${summaryPath}`);
 }
@@ -228,6 +311,7 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
     shellQuote([
       `cd ${shellQuote(remoteWorkdir)}`,
       'source "$HOME/.cargo/env" >/dev/null 2>&1 || true',
+      'export TAURI_SIGNING_PRIVATE_KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/redbox-updater.key}"',
       'node ./scripts/tauri-preflight.mjs',
       'pnpm install --frozen-lockfile',
       `env ${remoteEnv.join(' ')} node ${shellQuote(remoteScriptPath)}`,
@@ -245,6 +329,8 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
       '-az',
       '--include=*/',
       '--include=*.deb',
+      '--include=*.AppImage.tar.gz',
+      '--include=*.AppImage.tar.gz.sig',
       '--exclude=*',
       `${remoteHost}:${remoteWorkdir}/artifacts/installers/linux/`,
       `${localLinuxDir}/`,
@@ -254,9 +340,15 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
 
   const artifacts = [];
   for (const target of targets) {
-    const { debPath } = await resolveFetchedLinuxArtifactsForTarget(localLinuxDir, target);
+    const { debPath, updaterArchivePath, updaterSignaturePath } = await resolveFetchedLinuxArtifactsForTarget(
+      localLinuxDir,
+      target,
+    );
     if (!debPath) {
       throw new Error(`Unable to locate fetched Linux .deb artifact for ${target} in ${localLinuxDir}`);
+    }
+    if (!updaterArchivePath || !updaterSignaturePath) {
+      throw new Error(`Unable to locate fetched Linux updater archive/signature for ${target} in ${localLinuxDir}`);
     }
     artifacts.push({
       target,
@@ -265,6 +357,10 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
       remoteWorkdir,
       debPath,
       debArtifactPath: debPath,
+      updaterArchivePath,
+      updaterSignaturePath,
+      updaterArtifactPath: updaterArchivePath,
+      updaterSignatureArtifactPath: updaterSignaturePath,
     });
   }
 
@@ -279,6 +375,10 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
     remoteWorkdir,
     debPath: artifacts[0]?.debPath || null,
     debArtifactPath: artifacts[0]?.debArtifactPath || null,
+    updaterArchivePath: artifacts[0]?.updaterArchivePath || null,
+    updaterSignaturePath: artifacts[0]?.updaterSignaturePath || null,
+    updaterArtifactPath: artifacts[0]?.updaterArtifactPath || null,
+    updaterSignatureArtifactPath: artifacts[0]?.updaterSignatureArtifactPath || null,
     installerPath: artifacts[0]?.debArtifactPath || null,
     artifacts,
   };
@@ -292,6 +392,8 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
     if (artifact.debArtifactPath) {
       console.log(`  deb: ${artifact.debArtifactPath}`);
     }
+    console.log(`  updater: ${artifact.updaterArtifactPath}`);
+    console.log(`  updater signature: ${artifact.updaterSignatureArtifactPath}`);
   }
   console.log(`- summary: ${summaryPath}`);
 }

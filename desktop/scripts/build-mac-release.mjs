@@ -9,6 +9,7 @@ import {
   bundleRootForTarget,
   captureCommand,
   copyArtifactToDir,
+  copyArtifactToDirAs,
   ensureRustTargets,
   ensureCommandExists,
   envFlag,
@@ -107,6 +108,10 @@ function buildSigningOnlyEnv(signingIdentity) {
     ...process.env,
     APPLE_SIGNING_IDENTITY: signingIdentity,
   };
+
+  if (!env.TAURI_SIGNING_PRIVATE_KEY && !env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+    env.TAURI_SIGNING_PRIVATE_KEY_PATH = path.join(process.env.HOME || '', '.tauri', 'redbox-updater.key');
+  }
 
   delete env.APPLE_API_ISSUER;
   delete env.APPLE_API_KEY;
@@ -257,7 +262,25 @@ async function resolveArtifacts({ productName, version, target }) {
     throw new Error(`Unable to locate generated dmg in ${bundleRoot}`);
   }
 
-  return { bundleRoot, appPath, dmgPath };
+  const updaterPath = await findNewestFile(macosDir, (filePath) => filePath.endsWith('.app.tar.gz'));
+  if (!updaterPath) {
+    throw new Error(`Unable to locate generated macOS updater archive in ${macosDir}`);
+  }
+
+  const updaterSignaturePath = `${updaterPath}.sig`;
+  try {
+    await fs.access(updaterSignaturePath);
+  } catch {
+    throw new Error(`Unable to locate generated macOS updater signature: ${updaterSignaturePath}`);
+  }
+
+  return { bundleRoot, appPath, dmgPath, updaterPath, updaterSignaturePath };
+}
+
+function macUpdaterArchLabel(target) {
+  if (target.startsWith('aarch64-')) return 'aarch64';
+  if (target.startsWith('x86_64-')) return 'x86_64';
+  return target.replace(/[^a-zA-Z0-9._-]+/g, '-');
 }
 
 async function buildTarget({
@@ -276,10 +299,15 @@ async function buildTarget({
   logStep(`Building signed macOS app and dmg for ${target}`);
   await runCommand('pnpm', buildArgs, { cwd: repoRoot, env: buildEnv });
 
-  const { appPath, dmgPath } = await resolveArtifacts({ productName, version, target });
+  const { appPath, dmgPath, updaterPath, updaterSignaturePath } = await resolveArtifacts({
+    productName,
+    version,
+    target,
+  });
 
   logStep(`Generated app (${target}): ${path.relative(repoRoot, appPath)}`);
   logStep(`Generated dmg (${target}): ${path.relative(repoRoot, dmgPath)}`);
+  logStep(`Generated updater archive (${target}): ${path.relative(repoRoot, updaterPath)}`);
 
   logStep(`Verifying bundled browser plugin for ${target}`);
   const bundledPlugin = await assertMacAppIncludesBrowserPlugin(appPath, pluginInfo);
@@ -328,13 +356,29 @@ async function buildTarget({
   }
 
   const installerPath = await copyArtifactToDir(dmgPath, installerArtifactsDir('macos'));
+  const updaterFilename = `${productName}_${version}_${macUpdaterArchLabel(target)}.app.tar.gz`;
+  const updaterArtifactPath = await copyArtifactToDirAs(
+    updaterPath,
+    installerArtifactsDir('macos'),
+    updaterFilename,
+  );
+  const updaterSignatureArtifactPath = await copyArtifactToDirAs(
+    updaterSignaturePath,
+    installerArtifactsDir('macos'),
+    `${updaterFilename}.sig`,
+  );
   logStep(`Copied macOS installer (${target}): ${path.relative(repoRoot, installerPath)}`);
+  logStep(`Copied macOS updater (${target}): ${path.relative(repoRoot, updaterArtifactPath)}`);
 
   return {
     target,
     appPath,
     dmgPath,
+    updaterPath,
+    updaterSignaturePath,
     installerPath,
+    updaterArtifactPath,
+    updaterSignatureArtifactPath,
   };
 }
 
@@ -429,7 +473,11 @@ async function main() {
     target: artifacts[0]?.target || null,
     appPath: artifacts[0]?.appPath || null,
     dmgPath: artifacts[0]?.dmgPath || null,
+    updaterPath: artifacts[0]?.updaterPath || null,
+    updaterSignaturePath: artifacts[0]?.updaterSignaturePath || null,
     installerPath: artifacts[0]?.installerPath || null,
+    updaterArtifactPath: artifacts[0]?.updaterArtifactPath || null,
+    updaterSignatureArtifactPath: artifacts[0]?.updaterSignatureArtifactPath || null,
     artifacts,
   };
 
@@ -443,6 +491,8 @@ async function main() {
     console.log(`- ${artifact.target}`);
     console.log(`  app: ${artifact.appPath}`);
     console.log(`  dmg: ${artifact.dmgPath}`);
+    console.log(`  updater: ${artifact.updaterArtifactPath}`);
+    console.log(`  updater signature: ${artifact.updaterSignatureArtifactPath}`);
     console.log(`  installer copy: ${artifact.installerPath}`);
   }
   console.log(`- summary: ${summaryPath}`);

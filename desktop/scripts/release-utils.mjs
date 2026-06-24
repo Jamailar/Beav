@@ -456,6 +456,13 @@ export async function copyArtifactToDir(sourcePath, targetDir) {
   return destinationPath;
 }
 
+export async function copyArtifactToDirAs(sourcePath, targetDir, filename) {
+  await ensureDir(targetDir);
+  const destinationPath = path.join(targetDir, filename);
+  await fs.copyFile(sourcePath, destinationPath);
+  return destinationPath;
+}
+
 export async function writeTempJsonConfig(prefix, value) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
   const configPath = path.join(tempDir, 'tauri.override.json');
