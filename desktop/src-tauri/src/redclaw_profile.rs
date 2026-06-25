@@ -51,6 +51,74 @@ pub(crate) fn read_text_if_exists(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
+fn migrate_legacy_redbox_default_profile_content(
+    content: &str,
+    ai_name: &str,
+    brand_name: &str,
+) -> Option<String> {
+    if !content.contains("RedBox") {
+        return None;
+    }
+
+    let replacements = [
+        (
+            "你是 RedBox，服务于 RedBox 的多平台内容创作执行 Agent。".to_string(),
+            format!("你是 {ai_name}，服务于 {brand_name} 的多平台内容创作执行 Agent。"),
+        ),
+        ("## RedBox 规则".to_string(), format!("## {ai_name} 规则")),
+        (
+            "默认由 RedBox 自己直接完成".to_string(),
+            format!("默认由 {ai_name} 自己直接完成"),
+        ),
+        (
+            "不要把团队创建误当成 RedBox 定时任务或 task draft".to_string(),
+            format!("不要把团队创建误当成 {ai_name} 定时任务或 task draft"),
+        ),
+        (
+            "Soul.md：维护 RedBox 的协作语气、反馈方式、执行风格。".to_string(),
+            format!("Soul.md：维护 {ai_name} 的协作语气、反馈方式、执行风格。"),
+        ),
+        (
+            "Agent.md：维护 RedBox 的工作契约、流程和规则，不为一次性任务随意改写。".to_string(),
+            format!("Agent.md：维护 {ai_name} 的工作契约、流程和规则，不为一次性任务随意改写。"),
+        ),
+        ("- Name: RedBox".to_string(), format!("- Name: {ai_name}")),
+        (
+            "- Signature: RedBox".to_string(),
+            format!("- Signature: {ai_name}"),
+        ),
+        (
+            "这是 RedBox 在当前空间的首次设定引导。".to_string(),
+            format!("这是 {ai_name} 在当前空间的首次设定引导。"),
+        ),
+        (
+            "每次 RedBox 会话都应优先参考。".to_string(),
+            format!("每次 {ai_name} 会话都应优先参考。"),
+        ),
+    ];
+
+    let mut next = content.to_string();
+    for (from, to) in replacements {
+        next = next.replace(&from, &to);
+    }
+
+    (next != content).then_some(next)
+}
+
+fn migrate_legacy_redbox_default_profile_doc(path: &Path) -> Result<(), String> {
+    let Ok(content) = fs::read_to_string(path) else {
+        return Ok(());
+    };
+    if let Some(next) = migrate_legacy_redbox_default_profile_content(
+        &content,
+        app_ai_display_name(),
+        app_brand_display_name(),
+    ) {
+        fs::write(path, next).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn build_default_agent_profile_doc() -> String {
     let ai_name = app_ai_display_name();
     let brand_name = app_brand_display_name();
@@ -2002,6 +2070,10 @@ pub(crate) fn ensure_redclaw_profile_files(state: &State<'_, AppState>) -> Resul
         ensure_file_if_missing(&bootstrap_path, &build_default_bootstrap_profile_doc())?;
     }
 
+    for profile_path in [&agent_path, &identity_path, &creator_path, &bootstrap_path] {
+        migrate_legacy_redbox_default_profile_doc(profile_path)?;
+    }
+
     Ok(())
 }
 
@@ -2071,4 +2143,50 @@ pub(crate) fn update_redclaw_profile_doc(
         "path": file_path.display().to_string(),
         "content": content
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migrate_legacy_redbox_default_profile_content;
+
+    #[test]
+    fn migrates_legacy_redbox_default_profile_identity() {
+        let input = [
+            "# Agent.md",
+            "",
+            "你是 RedBox，服务于 RedBox 的多平台内容创作执行 Agent。",
+            "",
+            "## RedBox 规则",
+            "- 先判断工作形态：默认由 RedBox 自己直接完成；只有任务明显需要研究、选题、文案、媒体、发布、质检等多角色接力时，才自动激活临时团队。",
+            "- 创建 team/session 时必须使用一次 `team.guide.create`；不要把团队创建误当成 RedBox 定时任务或 task draft。",
+            "- Soul.md：维护 RedBox 的协作语气、反馈方式、执行风格。",
+            "- Agent.md：维护 RedBox 的工作契约、流程和规则，不为一次性任务随意改写。",
+            "- Name: RedBox",
+            "- Signature: RedBox",
+            "这是 RedBox 在当前空间的首次设定引导。",
+            "- 本文档是用户长期自媒体策略档案，每次 RedBox 会话都应优先参考。",
+        ]
+        .join("\n");
+
+        let migrated = migrate_legacy_redbox_default_profile_content(&input, "Beav", "Beav")
+            .expect("legacy default profile should migrate");
+
+        assert!(migrated.contains("你是 Beav，服务于 Beav 的多平台内容创作执行 Agent。"));
+        assert!(migrated.contains("## Beav 规则"));
+        assert!(migrated.contains("默认由 Beav 自己直接完成"));
+        assert!(migrated.contains("不要把团队创建误当成 Beav 定时任务或 task draft"));
+        assert!(migrated.contains("- Name: Beav"));
+        assert!(migrated.contains("- Signature: Beav"));
+        assert!(migrated.contains("这是 Beav 在当前空间的首次设定引导。"));
+        assert!(migrated.contains("每次 Beav 会话都应优先参考。"));
+    }
+
+    #[test]
+    fn leaves_unrelated_redbox_mentions_unchanged() {
+        let input = "RedBox Browser Control keeps its compatibility protocol name.";
+        assert_eq!(
+            migrate_legacy_redbox_default_profile_content(input, "Beav", "Beav"),
+            None
+        );
+    }
 }
