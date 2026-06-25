@@ -2736,6 +2736,10 @@ select {
 .border-border\/70 { border-color: rgb(var(--color-border) / 0.7) !important; }
 .border-border\/80 { border-color: rgb(var(--color-border) / 0.8) !important; }
 
+.app-space-menu {
+  background-color: rgb(var(--color-surface-primary) / 1);
+}
+
 [data-brand='redbox'] .app-sidebar-shell {
   --redbox-sidebar-text-primary: rgb(255 247 243 / 0.96);
   --redbox-sidebar-text-secondary: rgb(246 235 232 / 0.76);
