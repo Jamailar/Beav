@@ -51,6 +51,7 @@ pub(crate) fn interactive_runtime_context_bundle(
         explicit_knowledge_section,
         explicit_asset_section,
         active_media_task_section,
+        team_creation_intent_section,
         has_member_speaker,
         host_runtime_context_section,
         subagent_role_overlay_section,
@@ -110,6 +111,7 @@ pub(crate) fn interactive_runtime_context_bundle(
             explicit_knowledge_prompt_section(metadata),
             explicit_asset_prompt_section(metadata),
             crate::media_task_context::active_media_task_prompt_section(&store, session_id),
+            team_creation_intent_prompt_section(metadata),
             has_active_member_speaker(metadata),
             render_host_runtime_context_section(&host_context),
             subagent_role_overlay_section(metadata),
@@ -124,6 +126,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 "runtime_mode={runtime_mode}; {}",
                 compact_host_runtime_context(&host_context)
             ),
+            String::new(),
             String::new(),
             String::new(),
             String::new(),
@@ -199,6 +202,9 @@ pub(crate) fn interactive_runtime_context_bundle(
         if !active_media_task_section.trim().is_empty() {
             sections.push(active_media_task_section.trim().to_string());
         }
+        if !team_creation_intent_section.trim().is_empty() {
+            sections.push(team_creation_intent_section.trim().to_string());
+        }
         if !prompt_suffix.trim().is_empty() {
             sections.push(prompt_suffix.trim().to_string());
         }
@@ -262,6 +268,10 @@ pub(crate) fn interactive_runtime_context_bundle(
             if !active_media_task_section.trim().is_empty() {
                 rendered.push_str("\n\n");
                 rendered.push_str(active_media_task_section.trim());
+            }
+            if !team_creation_intent_section.trim().is_empty() {
+                rendered.push_str("\n\n");
+                rendered.push_str(team_creation_intent_section.trim());
             }
             return RuntimeContextBundle::new(
                 rendered.clone(),
@@ -453,6 +463,10 @@ pub(crate) fn interactive_runtime_context_bundle(
             rendered.push_str("\n\n");
             rendered.push_str(active_media_task_section.trim());
         }
+        if !team_creation_intent_section.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(team_creation_intent_section.trim());
+        }
         return RuntimeContextBundle::new(
             rendered.clone(),
             build_runtime_context_bundle_summary(
@@ -486,6 +500,10 @@ Host runtime context: {}\n{}",
         render_host_runtime_context_section(&current_host_runtime_context()),
         team_coordinator_prompt()
     );
+    if !team_creation_intent_section.trim().is_empty() {
+        fallback.push_str("\n\n");
+        fallback.push_str(team_creation_intent_section.trim());
+    }
     if !active_speaker_section.trim().is_empty() {
         if !explicit_knowledge_section.trim().is_empty() {
             fallback.push_str("\n\n");
@@ -737,6 +755,55 @@ fn explicit_asset_prompt_section(metadata: Option<&Value>) -> String {
     }
 }
 
+fn task_hint_value<'a>(metadata: Option<&'a Value>, key: &str) -> Option<&'a Value> {
+    metadata
+        .and_then(|value| value.get("taskHints"))
+        .and_then(|value| value.get(key))
+        .or_else(|| metadata.and_then(|value| value.get(key)))
+}
+
+fn task_hint_string(metadata: Option<&Value>, key: &str) -> Option<String> {
+    task_hint_value(metadata, key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn task_hint_bool(metadata: Option<&Value>, key: &str) -> bool {
+    task_hint_value(metadata, key)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn team_creation_intent_prompt_section(metadata: Option<&Value>) -> String {
+    let intent = task_hint_string(metadata, "intent")
+        .or_else(|| task_hint_string(metadata, "taskIntent"))
+        .unwrap_or_default();
+    if intent != "team_creation" || !task_hint_bool(metadata, "teamAutoCreateConfirmed") {
+        return String::new();
+    }
+    let objective = task_hint_string(metadata, "teamObjective").unwrap_or_default();
+    [
+        "Team creation modal intent:",
+        "- The user submitted the Create Team modal and authorized automatic member planning from the objective.",
+        "- Treat this typed modal submission as confirmation for exactly one team creation. Do not ask the user to choose members.",
+        "- Generate the internal members, responsibilities, deliverables, and starter tasks yourself from the objective.",
+        "- Then call exactly one `Operate(resource=\"team.guide\", operation=\"create\", input={...})` with `summary`, `members`, `tasks`, `autoOpen=true`, and `userConfirmedTeamPlan=true`.",
+        "- Use internal runtime members only. Do not create external ACP/CLI members.",
+        if objective.is_empty() {
+            ""
+        } else {
+            "Confirmed objective:"
+        },
+        objective.as_str(),
+    ]
+    .into_iter()
+    .filter(|line| !line.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 fn active_speaker_prompt_section(
     metadata: Option<&Value>,
     advisors: &[crate::AdvisorRecord],
@@ -914,7 +981,7 @@ fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
 }
 
 fn team_coordinator_prompt() -> &'static str {
-    "\nTeam coordinator rules:\n- Default to completing the user's work yourself. Do not propose a team merely because a task is complex, multi-file, or creative.\n- When the user explicitly asks to create a team or collaborate through multiple roles, first present a compact table with member, responsibility, and deliverable, then end the turn and wait for the user's confirmation.\n- Before confirmation, do not call any team creation, member creation, or orchestration action.\n- After the user confirms the proposed team, create it with exactly one `Operate(resource=\"team.guide\", operation=\"create\", input={...})` call. Include `members`, `tasks`, `autoOpen=true`, and `userConfirmedTeamPlan=true`.\n- Do not chain `team.session.create`, `team.member.spawn`, or `team.task.create` for the normal team-creation flow; those lower-level actions are compatibility and advanced maintenance tools.\n- Team members are internal runtime members only. Do not create external ACP/CLI members and do not ask the user to install an external agent for team collaboration.\n- If `team.guide.create` returns `nextStep`, follow it and end the turn without repeating team creation."
+    "\nTeam coordinator rules:\n- Default to completing the user's work yourself. Do not propose a team merely because a task is complex, multi-file, or creative.\n- When the user explicitly asks to create a team or collaborate through multiple roles, first present a compact table with member, responsibility, and deliverable, then end the turn and wait for the user's confirmation.\n- Before confirmation, do not call any team creation, member creation, or orchestration action.\n- If the active task has a typed `team_creation` modal intent with automatic member planning confirmed, that modal submission is the user's confirmation for exactly one team creation; generate the members and tasks yourself without asking the user to choose members.\n- After the user confirms the proposed team, create it with exactly one `Operate(resource=\"team.guide\", operation=\"create\", input={...})` call. Include `members`, `tasks`, `autoOpen=true`, and `userConfirmedTeamPlan=true`.\n- Do not chain `team.session.create`, `team.member.spawn`, or `team.task.create` for the normal team-creation flow; those lower-level actions are compatibility and advanced maintenance tools.\n- Team members are internal runtime members only. Do not create external ACP/CLI members and do not ask the user to install an external agent for team collaboration.\n- If `team.guide.create` returns `nextStep`, follow it and end the turn without repeating team creation."
 }
 
 pub(crate) fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {

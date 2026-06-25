@@ -5,6 +5,7 @@ export type AuthoringFormatTarget = 'markdown' | 'wechat_rich_text';
 
 export interface AuthoringTaskHints {
     intent?: string;
+    taskIntent?: string;
     forceMultiAgent?: boolean;
     forceLongRunningTask?: boolean;
     activeSkills?: string[];
@@ -23,6 +24,8 @@ export interface AuthoringTaskHints {
     requireSkillInvocations?: string[];
     taskBrief?: TaskBriefSeed;
     forbiddenFinalPhrases?: string[];
+    teamAutoCreateConfirmed?: boolean;
+    teamObjective?: string;
     deferredDiscovery?: boolean;
     teamEscalation?: 'disabled' | 'allowed';
     saveArtifact?: 'folder';

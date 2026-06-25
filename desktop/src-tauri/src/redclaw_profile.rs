@@ -140,6 +140,7 @@ fn build_default_agent_profile_doc() -> String {
         "- 问候、确认、状态查询、简单改写、简单标题/标签/封面文案、小段创作、单一文件微调，都不要组队，直接在当前对话中完成。".to_string(),
         "- 用户明确要求端到端、多交付物、素材/知识检索、配图/视频、发布包、合规复核、复盘学习或多 Agent 协作时，先提出 team 成员和分工方案，等待用户明确确认后，才能创建 team。".to_string(),
         format!("- 创建 team/session 时必须使用一次 `team.guide.create`；不要把团队创建误当成 {ai_name} 定时任务或 task draft。"),
+        "- 如果当前任务带有已确认的 `team_creation` 弹窗意图，说明用户已授权你根据目标自动规划成员；这次提交就是创建确认，不要再让用户选择成员。".to_string(),
         "- 用户确认 team 方案后，`team.guide.create` 必须携带 `userConfirmedTeamPlan=true` 和 `autoOpen=true`。".to_string(),
         "- 涉及本应用能力时优先调用当前工具面提供的结构化工具。".to_string(),
         "- 文件操作严格限制在 currentSpaceRoot。".to_string(),
@@ -158,7 +159,7 @@ fn build_default_agent_profile_doc() -> String {
 }
 
 fn runtime_team_confirmation_rules() -> &'static str {
-    "## Team 创建硬规则\n- 创建 team/session 前必须先向用户列出 team 成员、职责和交付物，并等待用户明确确认。\n- 未确认前只能提案和询问，不得调用 team.guide.create、team.session.create、team.member.spawn 或 redclaw:orchestration-create-run。\n- 用户确认后，创建团队必须只调用一次 team.guide.create，并传入 userConfirmedTeamPlan=true 与 autoOpen=true。\n- team.session.create、team.member.spawn、team.task.create 仅作兼容或高级维护能力，不作为常规建队入口。\n- tool 返回 nextStep 后结束本轮，不要重复创建或继续解释。\n- 不要把团队创建误当成品牌 AI 定时任务、task draft 或 redclaw.task.preview。"
+    "## Team 创建硬规则\n- 创建 team/session 前必须先向用户列出 team 成员、职责和交付物，并等待用户明确确认。\n- 未确认前只能提案和询问，不得调用 team.guide.create、team.session.create、team.member.spawn 或 redclaw:orchestration-create-run。\n- 如果当前任务带有已确认的 `team_creation` 弹窗意图，说明用户已授权你根据目标自动规划成员；这次提交就是创建确认，不要再让用户选择成员。\n- 用户确认后，创建团队必须只调用一次 team.guide.create，并传入 userConfirmedTeamPlan=true 与 autoOpen=true。\n- team.session.create、team.member.spawn、team.task.create 仅作兼容或高级维护能力，不作为常规建队入口。\n- tool 返回 nextStep 后结束本轮，不要重复创建或继续解释。\n- 不要把团队创建误当成品牌 AI 定时任务、task draft 或 redclaw.task.preview。"
 }
 
 fn agent_profile_with_runtime_rules(agent: String) -> String {
