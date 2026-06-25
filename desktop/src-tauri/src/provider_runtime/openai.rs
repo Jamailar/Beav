@@ -32,9 +32,20 @@ pub(crate) fn should_prefer_non_streaming_openai_turn(
     runtime_mode: &str,
     config: &ResolvedChatConfig,
 ) -> bool {
+    should_prefer_non_streaming_openai_turn_for_platform(runtime_mode, config, cfg!(windows))
+}
+
+fn should_prefer_non_streaming_openai_turn_for_platform(
+    runtime_mode: &str,
+    config: &ResolvedChatConfig,
+    is_windows: bool,
+) -> bool {
     let Some(key) = openai_stream_degrade_key(runtime_mode, config) else {
         return false;
     };
+    if is_windows {
+        return true;
+    }
     openai_stream_degrade_store()
         .lock()
         .ok()
@@ -302,11 +313,13 @@ fn extract_openai_responses_response(
 }
 
 fn should_attempt_json_fallback(error: &LlmTransportError, allow_text_fallback: bool) -> bool {
-    allow_text_fallback
-        && !matches!(
-            error.kind,
-            TransportErrorKind::Cancelled | TransportErrorKind::Status
-        )
+    if !allow_text_fallback || matches!(error.kind, TransportErrorKind::Cancelled) {
+        return false;
+    }
+    if matches!(error.kind, TransportErrorKind::Status) {
+        return matches!(error.http_status, Some(500..=599));
+    }
+    true
 }
 
 pub(crate) fn run_openai_provider_turn(
@@ -378,11 +391,11 @@ pub(crate) fn run_openai_provider_turn(
             })
         }
         Err(stream_error) => {
-            if !should_attempt_json_fallback(&stream_error, allow_text_fallback) {
-                return Err(provider_error_from_transport(&stream_error));
-            }
             if is_stream_degrade_error(&stream_error) {
                 record_openai_stream_failure(runtime_mode, config);
+            }
+            if !should_attempt_json_fallback(&stream_error, allow_text_fallback) {
+                return Err(provider_error_from_transport(&stream_error));
             }
             append_debug_log_state(
                 state,
@@ -467,6 +480,7 @@ mod tests {
         extract_openai_json_assistant_response, extract_openai_responses_response,
         openai_tool_arguments_value, record_openai_stream_failure, record_openai_stream_success,
         should_attempt_json_fallback, should_prefer_non_streaming_openai_turn,
+        should_prefer_non_streaming_openai_turn_for_platform,
     };
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
     use crate::runtime::ResolvedChatConfig;
@@ -483,10 +497,21 @@ mod tests {
     }
 
     #[test]
-    fn status_errors_do_not_attempt_provider_json_fallback() {
+    fn auth_status_errors_do_not_attempt_provider_json_fallback() {
         let error =
             LlmTransportError::with_status(TransportMode::Auto, 401, "invalid api key", None);
         assert!(!should_attempt_json_fallback(&error, true));
+    }
+
+    #[test]
+    fn server_status_errors_attempt_provider_json_fallback() {
+        let error = LlmTransportError::with_status(
+            TransportMode::Auto,
+            500,
+            "This operation was aborted",
+            Some("{\"error\":{\"message\":\"This operation was aborted\"}}".to_string()),
+        );
+        assert!(should_attempt_json_fallback(&error, true));
     }
 
     #[test]
@@ -601,6 +626,25 @@ mod tests {
         assert!(!should_prefer_non_streaming_openai_turn("wander", &config));
         record_openai_stream_success("redclaw", &config);
         assert!(!should_prefer_non_streaming_openai_turn("redclaw", &config));
+    }
+
+    #[test]
+    fn windows_redclaw_qwen_turns_prefer_non_streaming_delivery() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
+            base_url: "https://api.ziz.hk/beav/v1".to_string(),
+            api_key: Some("rbx-live-1".to_string()),
+            model_name: "qwen3.5-plus".to_string(),
+            reasoning_effort: None,
+        };
+
+        assert!(should_prefer_non_streaming_openai_turn_for_platform(
+            "redclaw", &config, true
+        ));
+        assert!(!should_prefer_non_streaming_openai_turn_for_platform(
+            "wander", &config, true
+        ));
     }
 
     #[test]

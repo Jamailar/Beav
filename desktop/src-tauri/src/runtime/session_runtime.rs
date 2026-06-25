@@ -79,10 +79,10 @@ use reference_resolver::{
 };
 pub use resources::{session_resources_prompt_for_session, session_resources_value_for_session};
 pub use transcript_api::{
-    duplicate_session_bundle, list_transcript_sessions, load_session_bundle_messages,
-    load_session_bundle_chat_messages, merge_chat_messages_with_bundle_history,
-    remove_session_bundle, save_session_bundle_messages, transcript_resume_messages,
-    transcript_session_meta_by_id, transcript_session_meta_value,
+    duplicate_session_bundle, list_transcript_sessions, load_session_bundle_chat_messages,
+    load_session_bundle_messages, merge_chat_messages_with_bundle_history, remove_session_bundle,
+    save_session_bundle_messages, transcript_resume_messages, transcript_session_meta_by_id,
+    transcript_session_meta_value,
 };
 pub(crate) use transcript_store::load_transcript_entries;
 use transcript_store::{

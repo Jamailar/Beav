@@ -1346,7 +1346,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                       className={clsx(
                         'relative flex min-h-[96px] flex-col items-center justify-center rounded-lg border px-3 py-3.5 text-center transition-all active:scale-[0.99]',
                         isSelected
-                          ? 'border-accent-primary bg-[linear-gradient(135deg,rgb(var(--color-accent-primary)/0.08),rgb(255_255_255/0.9))] text-accent-primary shadow-[0_18px_34px_-22px_rgb(var(--color-accent-primary)/0.58)] ring-1 ring-accent-primary/[0.16] dark:bg-surface-primary'
+                          ? 'border-accent-primary bg-[linear-gradient(135deg,rgb(var(--color-accent-primary)/0.08),rgb(var(--color-surface-primary)/0.9))] text-accent-primary shadow-[0_18px_34px_-22px_rgb(var(--color-accent-primary)/0.58)] ring-1 ring-accent-primary/[0.16] dark:bg-[linear-gradient(135deg,rgb(var(--color-accent-primary)/0.24),rgb(var(--color-surface-secondary)/0.88))]'
                           : 'border-black/[0.08] bg-white/64 text-text-primary hover:border-accent-primary/[0.26] hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.025]'
                       )}
                     >
@@ -1384,7 +1384,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                 </div>
               </div>
 
-              <div className="mt-3.5 grid gap-3 rounded-xl border border-accent-primary/[0.12] bg-[linear-gradient(135deg,rgb(255_255_255/0.74),rgb(var(--color-accent-primary)/0.035))] p-3 dark:bg-white/[0.03] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+              <div className="mt-3.5 grid gap-3 rounded-xl border border-accent-primary/[0.12] bg-[linear-gradient(135deg,rgb(var(--color-surface-primary)/0.74),rgb(var(--color-accent-primary)/0.035))] p-3 dark:bg-[linear-gradient(135deg,rgb(var(--color-surface-secondary)/0.86),rgb(var(--color-accent-primary)/0.10))] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
                 <div className="text-xs font-medium leading-5 text-text-secondary">
                   <div>充值 ¥{normalizeRechargeAmountInput(rechargeAmount) || '0'}</div>
                   <div>按 1 元 = {Number(pointsPerYuan).toLocaleString()} 积分计算</div>
@@ -1479,7 +1479,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                 aria-expanded={callRecordsExpanded}
                 className="flex min-w-0 items-center gap-2 rounded-lg pr-2 text-left transition-colors hover:text-text-primary"
               >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-blue-500">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-primary/10 text-accent-primary">
                   <Table2 className="h-4 w-4" />
                 </div>
                 <span className="text-base font-bold text-text-primary">调用记录</span>

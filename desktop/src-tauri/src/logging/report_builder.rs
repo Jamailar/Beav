@@ -12,6 +12,7 @@ use tauri::State;
 const MIN_UPLOAD_LOG_SLICE_BYTES: usize = 16 * 1024;
 const UPLOAD_BUNDLE_RESERVED_BYTES: usize = 256 * 1024;
 const ADVANCED_CONTEXT_RESERVED_BYTES: usize = 256 * 1024;
+const BASE64_NOISE_RUN_CHARS: usize = 512;
 
 fn current_log_path(root: &Path, sink_name: &str) -> PathBuf {
     root.join("logs")
@@ -60,10 +61,60 @@ fn log_slice(root: &Path, sink_name: &str, config: &LoggingConfig) -> String {
     lines.join("\n")
 }
 
+fn has_long_base64_run(value: &str) -> bool {
+    let mut current = 0usize;
+    let mut longest = 0usize;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '=' | '-' | '_') {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest >= BASE64_NOISE_RUN_CHARS
+}
+
+fn is_feedback_media_log_noise(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("data:image/")
+        || lower.contains("data:audio/")
+        || lower.contains("data:video/")
+        || lower.contains(";base64,")
+    {
+        return true;
+    }
+    if lower.contains("chat.attachment")
+        || lower.contains("attachment.inline")
+        || lower.contains("chat-attachments")
+        || lower.contains("media/imports")
+        || lower.contains("\"thumbnaildataurl\"")
+        || lower.contains("\"inlinedataurl\"")
+        || lower.contains("\"base64data\"")
+    {
+        return true;
+    }
+    has_long_base64_run(line)
+}
+
+fn filter_feedback_log_slice(value: &str) -> String {
+    value
+        .lines()
+        .filter(|line| !is_feedback_media_log_noise(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn feedback_log_text(root: &Path, config: &LoggingConfig) -> String {
     let limit = upload_log_slice_limit(config, false);
-    let host_logs = redact_text_for_upload(&log_slice(root, "host", config), limit / 2);
-    let renderer_logs = redact_text_for_upload(&log_slice(root, "renderer", config), limit / 2);
+    let host_logs = redact_text_for_upload(
+        &filter_feedback_log_slice(&log_slice(root, "host", config)),
+        limit / 2,
+    );
+    let renderer_logs = redact_text_for_upload(
+        &filter_feedback_log_slice(&log_slice(root, "renderer", config)),
+        limit / 2,
+    );
     format!(
         "[host]\n{}\n\n[renderer]\n{}",
         host_logs.trim(),
@@ -110,6 +161,14 @@ fn redaction_manifest() -> Value {
     })
 }
 
+fn authoring_evidence_from_report(report: &DiagnosticReportRecord) -> Option<&Value> {
+    report
+        .metadata
+        .get("context")
+        .and_then(|value| value.get("authoringEvidence"))
+        .filter(|value| value.is_object())
+}
+
 fn upload_log_slice_limit(config: &LoggingConfig, include_advanced_context: bool) -> usize {
     let reserved_bytes = UPLOAD_BUNDLE_RESERVED_BYTES
         + if include_advanced_context {
@@ -154,9 +213,14 @@ pub fn build_report_bundle(
         config.upload_raw_body_limit,
     );
 
-    let host_logs = redact_text_for_upload(&log_slice(root, "host", config), upload_log_limit);
-    let renderer_logs =
-        redact_text_for_upload(&log_slice(root, "renderer", config), upload_log_limit);
+    let host_logs = redact_text_for_upload(
+        &filter_feedback_log_slice(&log_slice(root, "host", config)),
+        upload_log_limit,
+    );
+    let renderer_logs = redact_text_for_upload(
+        &filter_feedback_log_slice(&log_slice(root, "renderer", config)),
+        upload_log_limit,
+    );
 
     zip.start_file("report.json", options)
         .map_err(|error| error.to_string())?;
@@ -189,6 +253,20 @@ pub fn build_report_bundle(
     )
     .map_err(|error| error.to_string())?;
 
+    if let Some(authoring_evidence) = authoring_evidence_from_report(report) {
+        zip.start_file("authoring-evidence.json", options)
+            .map_err(|error| error.to_string())?;
+        zip.write_all(
+            serde_json::to_string_pretty(&redact_json_for_upload(
+                authoring_evidence,
+                config.upload_raw_body_limit,
+            ))
+            .map_err(|error| error.to_string())?
+            .as_bytes(),
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
     if report.include_advanced_context {
         zip.start_file("advanced-context.json", options)
             .map_err(|error| error.to_string())?;
@@ -218,8 +296,12 @@ pub fn build_report_bundle(
 
 #[cfg(test)]
 mod tests {
-    use super::upload_log_slice_limit;
+    use super::{
+        authoring_evidence_from_report, filter_feedback_log_slice, upload_log_slice_limit,
+    };
     use crate::logging::config::LoggingConfig;
+    use crate::logging::event::DiagnosticReportRecord;
+    use serde_json::json;
 
     #[test]
     fn upload_target_caps_per_sink_log_budget() {
@@ -246,6 +328,55 @@ mod tests {
         };
 
         assert_eq!(upload_log_slice_limit(&config, false), 128 * 1024);
+    }
+
+    #[test]
+    fn feedback_log_filter_removes_media_payload_noise() {
+        let base64_noise = "A".repeat(600);
+        let raw = format!(
+            "{}\n{}\n{}\n{}",
+            r#"{"level":"error","category":"tool","message":"manuscripts.writeCurrent failed"}"#,
+            r#"{"level":"debug","category":"chat.attachment.thumbnail","event":"attachment.inline.result","fields":{"attachment":{"localUrl":"file:///C:/Users/me/.redbox/media/a.jpg"}}}"#,
+            r#"{"level":"info","message":"preview","thumbnailDataUrl":"data:image/png;base64,QUJD"}"#,
+            base64_noise
+        );
+
+        let filtered = filter_feedback_log_slice(&raw);
+
+        assert!(filtered.contains("manuscripts.writeCurrent failed"));
+        assert!(!filtered.contains("chat.attachment.thumbnail"));
+        assert!(!filtered.contains("thumbnailDataUrl"));
+        assert!(!filtered.contains(&base64_noise));
+    }
+
+    #[test]
+    fn report_authoring_evidence_is_extracted_from_metadata_context() {
+        let report = DiagnosticReportRecord {
+            id: "diagnostic-report-1".to_string(),
+            trigger: "user_feedback".to_string(),
+            status: "pending".to_string(),
+            created_at: "2026-06-24T09:00:00Z".to_string(),
+            updated_at: "2026-06-24T09:00:00Z".to_string(),
+            summary: "feedback".to_string(),
+            include_advanced_context: false,
+            last_error: None,
+            uploaded_at: None,
+            last_attempt_at: None,
+            dedupe_key: None,
+            bundle_file_name: None,
+            metadata: json!({
+                "context": {
+                    "authoringEvidence": {
+                        "schema": "redbox.authoringToolEvidence.v1",
+                        "selectedSessionId": "session-1"
+                    }
+                }
+            }),
+        };
+
+        let evidence = authoring_evidence_from_report(&report).unwrap();
+
+        assert_eq!(evidence["selectedSessionId"], "session-1");
     }
 }
 

@@ -1240,7 +1240,7 @@ pub(crate) fn official_sync_source_into_settings(
         .collect::<Vec<_>>();
     let source = json!({
         "id": "redbox_official_auto",
-        "name": format!("{} Official", app_brand_display_name()),
+        "name": format!("{}官方", app_brand_display_name()),
         "presetId": "redbox-official",
         "baseURL": official_base_url,
         "apiKey": api_key,
@@ -1849,7 +1849,7 @@ mod tests {
         let official_cn_base_url = official_base_url_for_realm("cn");
         let official_sources = vec![json!({
             "id": "redbox_official_auto",
-            "name": format!("{} Official", app_brand_display_name()),
+            "name": format!("{}官方", app_brand_display_name()),
             "presetId": "redbox-official",
             "baseURL": official_cn_base_url.clone(),
             "apiKey": "old-official-key",
@@ -1901,7 +1901,7 @@ mod tests {
         let official_cn_base_url = official_base_url_for_realm("cn");
         let official_sources = vec![json!({
             "id": "redbox_official_auto",
-            "name": format!("{} Official", app_brand_display_name()),
+            "name": format!("{}官方", app_brand_display_name()),
             "presetId": "redbox-official",
             "baseURL": official_cn_base_url.clone(),
             "apiKey": "old-official-key",

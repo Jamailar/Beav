@@ -26,11 +26,46 @@ export interface AiSourceConfig {
 
 export const DEFAULT_AI_PRESET_ID = 'openai';
 
-export const OFFICIAL_AUTO_SOURCE_ID = `${APP_BRAND.variant}_official_auto`;
+// Stable persisted/runtime contract. Display branding can vary, but the backend
+// official auth/model pipeline still uses this source id as the canonical key.
+export const OFFICIAL_AUTO_SOURCE_ID = 'redbox_official_auto';
+
+export const LEGACY_OFFICIAL_AUTO_SOURCE_IDS = Array.from(new Set([
+  OFFICIAL_AUTO_SOURCE_ID,
+  `${APP_BRAND.variant}_official_auto`,
+]));
+
+export const isOfficialAutoSourceId = (sourceId: string): boolean => {
+  const normalized = String(sourceId || '').trim().toLowerCase();
+  return LEGACY_OFFICIAL_AUTO_SOURCE_IDS.some((id) => id.toLowerCase() === normalized);
+};
+
+export const canonicalizeOfficialAutoSourceId = (sourceId: string): string => {
+  const normalized = String(sourceId || '').trim();
+  return isOfficialAutoSourceId(normalized) ? OFFICIAL_AUTO_SOURCE_ID : normalized;
+};
+
+export const OFFICIAL_AI_SOURCE_DISPLAY_NAME = `${APP_BRAND.displayName}官方`;
+
+export const createOfficialAiSource = (overrides: Partial<AiSourceConfig> = {}): AiSourceConfig => {
+  const { id: _ignoredId, presetId: _ignoredPresetId, ...rest } = overrides;
+  return {
+    id: OFFICIAL_AUTO_SOURCE_ID,
+    name: OFFICIAL_AI_SOURCE_DISPLAY_NAME,
+    presetId: 'redbox-official',
+    baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL,
+    apiKey: '',
+    models: [],
+    modelsMeta: [],
+    model: '',
+    protocol: 'openai',
+    ...rest,
+  };
+};
 
 // Presets aligned with common OpenAI-compatible providers (referencing AionUi design).
 export const AI_SOURCE_PRESETS: AiSourcePreset[] = [
-  { id: 'redbox-official', label: `${APP_BRAND.displayName} Official`, baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL, protocol: 'openai' },
+  { id: 'redbox-official', label: OFFICIAL_AI_SOURCE_DISPLAY_NAME, baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL, protocol: 'openai' },
   { id: 'openai', label: 'OpenAI', baseURL: 'https://api.openai.com/v1', protocol: 'openai' },
   { id: 'anthropic', label: 'Anthropic', baseURL: 'https://api.anthropic.com/v1', protocol: 'anthropic' },
   { id: 'gemini', label: 'Gemini', baseURL: 'https://generativelanguage.googleapis.com/v1beta', protocol: 'gemini' },

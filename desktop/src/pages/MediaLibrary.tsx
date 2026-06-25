@@ -1073,7 +1073,7 @@ export function MediaLibrary({
     }, []);
 
     return (
-        <div className="h-full flex flex-col">
+        <div className="min-h-full flex flex-col bg-background text-text-primary">
             <div className="border-b border-border px-4 py-2 bg-surface-secondary/45">
                 <div className="flex items-center gap-2 min-w-0">
                     <div className="w-7 h-7 rounded-md bg-accent-primary/15 border border-accent-primary/20 text-accent-primary flex items-center justify-center shrink-0">
@@ -1207,7 +1207,7 @@ export function MediaLibrary({
                 </div>
             </div>
 
-            <div className="flex-1 overflow-auto p-6">
+            <div className="flex-1 overflow-auto bg-background p-6">
                 {loading && filteredAssets.length === 0 && assets.length === 0 ? (
                     <div className="text-sm text-text-tertiary">正在加载媒体库...</div>
                 ) : error ? (

@@ -243,7 +243,7 @@ pub(crate) fn create_or_attach_acp_session(
             .cloned()
             .ok_or_else(|| {
                 AcpHttpError::not_found("acp_session_not_found", "ACP session not found.")
-        })?;
+            })?;
         ensure_acp_creator_member_id(store, &session.collab_session_id)?;
         repair_acp_source_title_if_needed(store, &session, client, payload)?;
         return Ok(store
@@ -578,7 +578,13 @@ mod tests {
 
         let session = create_or_attach_acp_session(&mut store, &payload, &test_client()).unwrap();
 
-        assert_eq!(session.title, "请帮我整理三条选题方向".chars().take(15).collect::<String>());
+        assert_eq!(
+            session.title,
+            "请帮我整理三条选题方向"
+                .chars()
+                .take(15)
+                .collect::<String>()
+        );
         let chat_session = store
             .chat_sessions
             .iter()

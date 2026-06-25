@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "RedBox",
+  "productName": "Beav",
   "version": "../package.json",
-  "identifier": "com.redconvert.redbox",
+  "identifier": "com.redconvert.beav",
   "build": {
     "beforeDevCommand": "pnpm tauri:before-dev",
     "beforeBuildCommand": "pnpm build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "RedBox",
+        "title": "Beav",
         "width": 1280,
         "height": 820,
         "minWidth": 1180,
@@ -77,9 +77,9 @@
       "binaries/ffprobe"
     ],
     "icon": [
-      "../branding/variants/redbox/icons/icon.png",
-      "../branding/variants/redbox/icons/icon.icns",
-      "../branding/variants/redbox/icons/icon.ico"
+      "../branding/variants/beav/icons/icon.png",
+      "../branding/variants/beav/icons/icon.icns",
+      "../branding/variants/beav/icons/icon.ico"
     ]
   },
   "plugins": {

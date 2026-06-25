@@ -7,7 +7,7 @@ import {
   assertBundledGuideResources,
   assertDirectoryIncludesBrowserPlugin,
   artifactsRoot,
-  browserPluginSourceDir,
+  browserPluginProjectDir,
   bundleRootForTarget,
   copyArtifactToDir,
   ensureRustTargets,
@@ -88,13 +88,24 @@ function isWindowsUpdaterArchive(filePath) {
   return base.endsWith('-setup.exe.zip') || base.endsWith('.nsis.zip') || base.endsWith('.msi.zip');
 }
 
-function withDefaultTauriSigningEnv(env) {
-  if (env.TAURI_SIGNING_PRIVATE_KEY || env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+async function withDefaultTauriSigningEnv(env) {
+  if (env.TAURI_SIGNING_PRIVATE_KEY) {
     return env;
+  }
+  const signingKeyPath = String(
+    env.TAURI_SIGNING_PRIVATE_KEY_PATH || path.join(os.homedir(), '.tauri', 'redbox-updater.key'),
+  ).trim();
+  const signingKey = await fs.readFile(signingKeyPath, 'utf8').catch(() => '');
+  if (signingKey.trim()) {
+    return {
+      ...env,
+      TAURI_SIGNING_PRIVATE_KEY: signingKey,
+      TAURI_SIGNING_PRIVATE_KEY_PATH: signingKeyPath,
+    };
   }
   return {
     ...env,
-    TAURI_SIGNING_PRIVATE_KEY_PATH: path.join(os.homedir(), '.tauri', 'redbox-updater.key'),
+    TAURI_SIGNING_PRIVATE_KEY_PATH: signingKeyPath,
   };
 }
 
@@ -109,7 +120,9 @@ async function resolveWindowsArtifacts(bundleRoot) {
     nsisDir,
     (filePath) => filePath.endsWith('.zip') && !isWindowsUpdaterArchive(filePath),
   );
-  const updaterArchivePath = await findNewestFile(nsisDir, isWindowsUpdaterArchive);
+  const updaterArchivePath =
+    (await findNewestFile(nsisDir, isWindowsUpdaterArchive)) ||
+    (setupPath && (await pathExists(`${setupPath}.sig`)) ? setupPath : null);
   const updaterSignaturePath = updaterArchivePath ? `${updaterArchivePath}.sig` : null;
   if (!updaterArchivePath || !(await pathExists(updaterSignaturePath))) {
     throw new Error(`Unable to locate generated Windows updater archive and signature in ${nsisDir}`);
@@ -127,7 +140,9 @@ async function resolveFetchedWindowsArtifacts(localDir) {
     localDir,
     (filePath) => filePath.endsWith('.zip') && !isWindowsUpdaterArchive(filePath),
   );
-  const updaterArchivePath = await findNewestFile(localDir, isWindowsUpdaterArchive);
+  const updaterArchivePath =
+    (await findNewestFile(localDir, isWindowsUpdaterArchive)) ||
+    (setupPath && (await pathExists(`${setupPath}.sig`)) ? setupPath : null);
   const updaterSignaturePath = updaterArchivePath ? `${updaterArchivePath}.sig` : null;
   return { setupPath, portableExePath, portableZipPath, updaterArchivePath, updaterSignaturePath };
 }
@@ -156,10 +171,12 @@ async function resolveFetchedWindowsArtifactsForTarget(localDir, target) {
     localDir,
     (filePath) => filePath.endsWith('.zip') && !isWindowsUpdaterArchive(filePath) && fileMatchesTarget(filePath),
   );
-  const updaterArchivePath = await findNewestFile(
-    localDir,
-    (filePath) => isWindowsUpdaterArchive(filePath) && fileMatchesTarget(filePath),
-  );
+  const updaterArchivePath =
+    (await findNewestFile(
+      localDir,
+      (filePath) => isWindowsUpdaterArchive(filePath) && fileMatchesTarget(filePath),
+    )) ||
+    (setupPath && (await pathExists(`${setupPath}.sig`)) ? setupPath : null);
   const updaterSignaturePath = updaterArchivePath ? `${updaterArchivePath}.sig` : null;
   if (!updaterArchivePath || !(await pathExists(updaterSignaturePath))) {
     throw new Error(`Unable to locate fetched Windows updater archive and signature for ${target} in ${localDir}`);
@@ -172,6 +189,23 @@ async function writeSummary(summary) {
   await fs.mkdir(path.dirname(summaryPath), { recursive: true });
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
   return summaryPath;
+}
+
+async function resolveCurrentBrandVariant() {
+  const envBrand = String(process.env.REDBOX_BRAND || process.env.APP_BRAND || '').trim();
+  if (envBrand) {
+    return envBrand;
+  }
+  const generatedBrandPath = path.join(repoRoot, 'src', 'config', 'brand.generated.json');
+  const raw = await fs.readFile(generatedBrandPath, 'utf8').catch(() => '');
+  if (!raw) {
+    return '';
+  }
+  try {
+    return String(JSON.parse(raw).variant || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 async function createWindowsClangWrappers({
@@ -335,11 +369,16 @@ async function buildLocally({ targets, runner, signCommand, requireSigning }) {
   logStep(
     `Using browser plugin ${pluginInfo.version} (${pluginInfo.fileCount} files, ${pluginInfo.digest.slice(0, 12)})`,
   );
-  await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd: repoRoot });
+  const brandVariant = await resolveCurrentBrandVariant();
+  const brandEnv = brandVariant
+    ? { ...process.env, REDBOX_BRAND: brandVariant, APP_BRAND: brandVariant }
+    : process.env;
+
+  await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd: repoRoot, env: brandEnv });
 
   const hostIsWindows = process.platform === 'win32';
   let clangWrappers = null;
-  let buildEnv = withDefaultTauriSigningEnv(process.env);
+  let buildEnv = await withDefaultTauriSigningEnv(brandEnv);
   if (hostIsWindows) {
     logStep('Using native Windows build path');
   } else {
@@ -358,7 +397,7 @@ async function buildLocally({ targets, runner, signCommand, requireSigning }) {
       realClangxxPath,
       realClangClPath,
     });
-    buildEnv = prependPathEnv(process.env, clangWrappers.wrapperDir);
+    buildEnv = prependPathEnv(buildEnv, clangWrappers.wrapperDir);
     if (!String(process.env.XWIN_ARCH || '').trim()) {
       const xwinArchList = [...new Set(
         targets
@@ -457,6 +496,13 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
   const remotePluginDir = remoteSiblingDir(remoteWorkdir, 'Plugin');
   const localWinDir = installerArtifactsDir('windows');
   const pluginInfo = await getBrowserPluginInfo();
+  const brandVariant = await resolveCurrentBrandVariant();
+  const remoteBrandExports = brandVariant
+    ? [
+        `export REDBOX_BRAND=${shellQuote(brandVariant)}`,
+        `export APP_BRAND=${shellQuote(brandVariant)}`,
+      ]
+    : [];
 
   logStep(`Syncing source to ${remoteHost}:${remoteWorkdir}`);
   logStep(
@@ -485,8 +531,10 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
     [
       '-az',
       '--delete',
+      '--exclude=node_modules',
+      '--exclude=dist',
       '--exclude=.DS_Store',
-      `${browserPluginSourceDir}/`,
+      `${browserPluginProjectDir}/`,
       `${remoteHost}:${remotePluginDir}/`,
     ],
     { cwd: repoRoot },
@@ -515,9 +563,11 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
     shellQuote(
       [
         `cd ${shellQuote(remoteWorkdir)}`,
+        ...remoteBrandExports,
         'source "$HOME/.cargo/env" >/dev/null 2>&1 || true',
         'node ./scripts/tauri-preflight.mjs',
         'pnpm install --frozen-lockfile',
+        `cd ${shellQuote(remotePluginDir)} && pnpm install --frozen-lockfile && cd ${shellQuote(remoteWorkdir)}`,
         'rustup target add aarch64-pc-windows-msvc x86_64-pc-windows-msvc i686-pc-windows-msvc',
         'export TAURI_SIGNING_PRIVATE_KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/redbox-updater.key}"',
         remoteCleanupNsisDirs,

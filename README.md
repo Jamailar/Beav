@@ -63,6 +63,8 @@
 
 ## 项目概览
 
+> **品牌更名说明**：从 **2.5.0** 开始，RedBox 正式更名为 **Beav**。历史文档、旧版本下载包、仓库路径和部分协议名称中仍可能保留 RedBox / RedConvert 命名；它们指向的是同一款产品的不同阶段。
+
 **RedBox (RedConvert)** 是一个面向 Codex、Hermes、OpenClaw 等通用 AI Agent 用户的本地自媒体素材库与创作工具。它不试图替代你正在使用的 Agent，而是为这些 Agent 提供可采集、可检索、可引用、可生成、可剪辑、可导出的创作资产底座。
 
 你可以把小红书、YouTube、网页、公众号、图片、视频、评论区和本地文档沉淀到 RedBox，再让通用 Agent 通过本地工具接口检索素材、组织选题、写稿、生成封面、处理视频、导出项目包。内置 Chat / RedClaw 仍然可用，但新的核心定位是：**让任何通用 Agent 拥有一个面向自媒体创作的本地资产工作区**。
@@ -171,6 +173,10 @@ RedBox 的长期方向是成为通用 Agent 的本地自媒体创作资源层。
 - [GitHub Discussions](https://github.com/Jamailar/RedBox/discussions)
 
 ## 更新日志
+
+### v2.5.0
+
+从 2.5.0 开始，RedBox 正式更名为 **Beav**。Beav 延续原 RedBox / RedConvert 的本地素材库、Agent 接入、媒体资产管理、稿件与封面、视频处理和自动化能力；旧名称仍会在历史版本、文档链接、仓库路径或兼容协议中保留一段时间。
 
 ### v2.4.0 (2026-06-20)
 

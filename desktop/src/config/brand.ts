@@ -14,6 +14,7 @@ type GeneratedBrandConfig = {
   founderXHandle?: string;
   founderXUrl?: string;
   developerWechatQrSrc?: string;
+  visibleSettingsTabs?: string[];
   theme?: AppBrandTheme;
 };
 
@@ -105,5 +106,8 @@ export const APP_BRAND = {
   founderXHandle: String(config.founderXHandle || ''),
   founderXUrl: String(config.founderXUrl || ''),
   developerWechatQrSrc: String(config.developerWechatQrSrc || ''),
+  visibleSettingsTabs: Array.isArray(config.visibleSettingsTabs)
+    ? config.visibleSettingsTabs.map((tab) => String(tab || '').trim()).filter(Boolean)
+    : [],
   theme: config.theme || {},
 } as const;

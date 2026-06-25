@@ -1,4 +1,4 @@
-import { OFFICIAL_AUTO_SOURCE_ID } from '../../config/aiSources';
+import { OFFICIAL_AUTO_SOURCE_ID, canonicalizeOfficialAutoSourceId } from '../../config/aiSources';
 import type { McpServerConfig, RuntimePerfPreset } from '../../pages/settings/shared';
 import { createDefaultMcpServer } from '../../pages/settings/shared';
 
@@ -385,7 +385,7 @@ export function normalizeAiModelRoutes(value: unknown): AiModelRoutes {
         : mode === 'inherit'
           ? 'official'
           : DEFAULT_AI_MODEL_ROUTES[key].mode,
-      sourceId: String(route.sourceId || '').trim() || DEFAULT_AI_MODEL_ROUTES[key].sourceId,
+      sourceId: canonicalizeOfficialAutoSourceId(String(route.sourceId || '').trim()) || DEFAULT_AI_MODEL_ROUTES[key].sourceId,
       model: String(route.model || '').trim() || DEFAULT_AI_MODEL_ROUTES[key].model,
     };
   }

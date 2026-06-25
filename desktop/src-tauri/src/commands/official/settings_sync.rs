@@ -152,7 +152,7 @@ fn clear_official_source_binding(settings: &mut Value, previous_official_token: 
             if let Some(object) = source.as_object_mut() {
                 object.insert(
                     "name".to_string(),
-                    json!(format!("{} Official", app_brand_display_name())),
+                    json!(format!("{}官方", app_brand_display_name())),
                 );
                 object.insert("presetId".to_string(), json!("redbox-official"));
                 object.insert("baseURL".to_string(), json!(official_base_url.clone()));

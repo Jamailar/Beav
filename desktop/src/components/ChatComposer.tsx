@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { enforceModelCapabilityPolicy, getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
-import { OFFICIAL_AUTO_SOURCE_ID } from '../config/aiSources';
+import { canonicalizeOfficialAutoSourceId, isOfficialAutoSourceId } from '../config/aiSources';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { ChatComposerFrame, getChatComposerPalette, type ChatComposerTheme, type ChatComposerVariant } from './ChatComposerFrame';
 
@@ -740,7 +740,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
   if (!settings) return [];
 
   const options: ChatModelOption[] = [];
-  const defaultSourceId = String(settings.default_ai_source_id || '').trim();
+  const defaultSourceId = canonicalizeOfficialAutoSourceId(String(settings.default_ai_source_id || '').trim());
   const chatRoute = (() => {
     try {
       const routes = JSON.parse(String(settings.ai_model_routes_json || '{}')) as Record<string, unknown>;
@@ -752,11 +752,11 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
       return {};
     }
   })();
-  const routeSourceId = String(chatRoute.sourceId || chatRoute.source_id || '').trim();
+  const routeSourceId = canonicalizeOfficialAutoSourceId(String(chatRoute.sourceId || chatRoute.source_id || '').trim());
   const routeModel = String(chatRoute.model || chatRoute.modelName || chatRoute.model_name || '').trim();
   const selectedDefaultSourceId = routeSourceId || defaultSourceId;
   const selectedDefaultModel = routeModel || String(settings.model_name || '').trim();
-  const prefersOfficialDefault = defaultSourceId.toLowerCase() === OFFICIAL_AUTO_SOURCE_ID;
+  const prefersOfficialDefault = isOfficialAutoSourceId(defaultSourceId);
   let hasExplicitDefaultSource = false;
 
   try {
@@ -764,7 +764,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
     if (Array.isArray(parsed)) {
       for (const item of parsed) {
         if (!item || typeof item !== 'object') continue;
-        const sourceId = String(item.id || '').trim();
+        const sourceId = canonicalizeOfficialAutoSourceId(String(item.id || '').trim());
         const presetId = String(item.presetId || item.preset_id || '').trim();
         if (sourceId && sourceId === selectedDefaultSourceId) {
           hasExplicitDefaultSource = true;

@@ -1188,10 +1188,10 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
               <div className={clsx(
                 'mt-4 rounded-xl border px-4 py-3 text-[13px] font-medium leading-relaxed',
                 paymentState === 'error'
-                  ? 'border-red-200 bg-red-50 text-red-700'
+                  ? 'border-status-error/25 bg-status-error/10 text-status-error'
                   : paymentState === 'paid'
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'border-[#e7dbc9] bg-white/72 text-[#756b60]'
+                    ? 'border-status-success/25 bg-status-success/10 text-status-success'
+                    : 'border-border bg-surface-primary/72 text-text-secondary'
               )}>
                 {paymentMessage ? <div>{paymentMessage}</div> : null}
                 {orderNo ? <div className="mt-1 truncate text-[11px] opacity-80" title={orderNo}>{t('layout.founderSponsor.orderNo', { orderNo })}</div> : null}

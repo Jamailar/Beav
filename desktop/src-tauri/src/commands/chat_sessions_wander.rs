@@ -3,8 +3,8 @@ use crate::commands::chat_state::diagnostics_session_defaults;
 use crate::member_skill::{attach_member_skill_metadata, detach_member_skill_metadata};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
-    load_session_bundle_chat_messages, merge_chat_messages_with_bundle_history,
+    append_compact_boundary_entry, list_transcript_sessions, load_session_bundle_chat_messages,
+    merge_chat_messages_with_bundle_history, session_context_usage_value,
     tool_results_value_for_session, trace_value_for_session, transcript_resume_messages,
     transcript_session_meta_by_id, update_session_context_record, SessionTranscriptFileMeta,
 };

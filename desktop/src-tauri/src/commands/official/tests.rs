@@ -410,7 +410,7 @@ fn merge_official_settings_preserves_custom_default_route_from_stale_update() {
         "ai_sources_json": serde_json::to_string(&vec![
             json!({
                 "id": "redbox_official_auto",
-                "name": format!("{} Official", app_brand_display_name()),
+                "name": format!("{}官方", app_brand_display_name()),
                 "presetId": "redbox-official",
                 "baseURL": official_cn_base_url,
                 "apiKey": "",
@@ -450,7 +450,7 @@ fn merge_official_settings_preserves_custom_default_route_from_stale_update() {
         .unwrap(),
         "ai_sources_json": serde_json::to_string(&vec![json!({
             "id": "redbox_official_auto",
-            "name": format!("{} Official", app_brand_display_name()),
+            "name": format!("{}官方", app_brand_display_name()),
             "presetId": "redbox-official",
             "baseURL": official_base_url_for_realm("cn"),
             "apiKey": "official-key",
@@ -570,7 +570,7 @@ fn clear_official_auth_state_resets_official_source_and_falls_back_default_sourc
         "ai_sources_json": serde_json::to_string(&vec![
             json!({
                 "id": "redbox_official_auto",
-                "name": format!("{} Official", app_brand_display_name()),
+                "name": format!("{}官方", app_brand_display_name()),
                 "presetId": "redbox-official",
                 "baseURL": official_cn_base_url,
                 "apiKey": "official-token",

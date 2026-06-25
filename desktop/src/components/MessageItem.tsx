@@ -1565,7 +1565,7 @@ export const MessageItem = memo(({
             return (
               <div className="group/user flex w-full flex-col items-end">
                 {(videoCard || displayText) && (
-                  <div className="chat-user-bubble max-w-full px-4 py-2.5 text-[15px] leading-relaxed text-white shadow-sm">
+                  <div className="chat-user-bubble max-w-full px-4 py-2.5 text-[15px] leading-relaxed shadow-sm">
                     {videoCard && (
                       <div className={displayText ? 'mb-3' : ''}>
                         {renderYoutubeCard(videoCard)}

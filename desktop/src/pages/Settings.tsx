@@ -7,8 +7,12 @@ import {
   type AiSourceConfig,
   DEFAULT_AI_PRESET_ID,
   OFFICIAL_AUTO_SOURCE_ID,
+  OFFICIAL_AI_SOURCE_DISPLAY_NAME,
+  canonicalizeOfficialAutoSourceId,
+  createOfficialAiSource,
   findAiPresetById,
-  inferPresetIdByEndpoint
+  inferPresetIdByEndpoint,
+  isOfficialAutoSourceId
 } from '../config/aiSources';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { AdvisorModal, AdvisorSettingsPanel, type Advisor } from './Advisors';
@@ -1312,15 +1316,29 @@ export function Settings({
     aiSourceDraftDirtyRef.current = false;
   }, []);
 
+  const officialAiSourcePlaceholder = useMemo(() => createOfficialAiSource(), []);
+
   const defaultAiSource = useMemo(() => {
-    if (!aiSources.length) return null;
-    return aiSources.find((source) => source.id === defaultAiSourceId) || aiSources[0];
-  }, [aiSources, defaultAiSourceId]);
+    const normalizedDefaultId = canonicalizeOfficialAutoSourceId(defaultAiSourceId);
+    if (!aiSources.length) {
+      return isOfficialAutoSourceId(normalizedDefaultId) ? officialAiSourcePlaceholder : null;
+    }
+    const matchedSource = aiSources.find((source) => source.id === normalizedDefaultId);
+    if (matchedSource) return matchedSource;
+    if (isOfficialAutoSourceId(normalizedDefaultId)) return officialAiSourcePlaceholder;
+    return aiSources[0] || null;
+  }, [aiSources, defaultAiSourceId, officialAiSourcePlaceholder]);
 
   const activeAiSource = useMemo(() => {
-    if (!aiSources.length) return null;
-    return aiSources.find((source) => source.id === activeAiSourceId) || defaultAiSource || aiSources[0];
-  }, [aiSources, activeAiSourceId, defaultAiSource]);
+    const normalizedActiveId = canonicalizeOfficialAutoSourceId(activeAiSourceId);
+    if (!aiSources.length) {
+      return isOfficialAutoSourceId(normalizedActiveId) ? officialAiSourcePlaceholder : defaultAiSource;
+    }
+    const matchedSource = aiSources.find((source) => source.id === normalizedActiveId);
+    if (matchedSource) return matchedSource;
+    if (isOfficialAutoSourceId(normalizedActiveId)) return officialAiSourcePlaceholder;
+    return defaultAiSource || aiSources[0];
+  }, [aiSources, activeAiSourceId, defaultAiSource, officialAiSourcePlaceholder]);
 
   const addModelModalSource = useMemo(() => {
     if (!addModelModalSourceId) return null;
@@ -1356,10 +1374,11 @@ export function Settings({
   }, []);
 
   const getAiSourceById = useCallback((sourceId: string): AiSourceConfig | null => {
-    const normalizedSourceId = String(sourceId || '').trim();
+    const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
     if (!normalizedSourceId) return null;
-    return aiSources.find((source) => source.id === normalizedSourceId) || null;
-  }, [aiSources]);
+    return aiSources.find((source) => source.id === normalizedSourceId)
+      || (isOfficialAutoSourceId(normalizedSourceId) ? officialAiSourcePlaceholder : null);
+  }, [aiSources, officialAiSourcePlaceholder]);
 
   const pickBestModelForSource = useCallback((
     source: AiSourceConfig | null,
@@ -1811,7 +1830,11 @@ export function Settings({
     const sourceId = String(source.id || '').trim().toLowerCase();
     const sourceName = String(source.name || '').trim().toLowerCase();
     const presetId = String(source.presetId || '').trim().toLowerCase();
-    return sourceId === OFFICIAL_AUTO_SOURCE_ID || sourceName === 'redbox official' || sourceName === `${APP_BRAND.displayName} official`.toLowerCase() || presetId === 'redbox-official';
+    return isOfficialAutoSourceId(sourceId)
+      || sourceName === 'redbox official'
+      || sourceName === `${APP_BRAND.displayName} official`.toLowerCase()
+      || sourceName === OFFICIAL_AI_SOURCE_DISPLAY_NAME.toLowerCase()
+      || presetId === 'redbox-official';
   }, []);
 
   const hasOfficialManagedSource = useMemo(
@@ -1824,20 +1847,10 @@ export function Settings({
       return aiSources;
     }
     return [
-      {
-        id: OFFICIAL_AUTO_SOURCE_ID,
-        name: `${APP_BRAND.displayName} Official`,
-        presetId: 'redbox-official',
-        baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL,
-        apiKey: '',
-        models: [],
-        modelsMeta: [],
-        model: '',
-        protocol: 'openai',
-      },
+      officialAiSourcePlaceholder,
       ...aiSources,
     ];
-  }, [aiSources, hasOfficialManagedSource, officialAiPanelEnabled]);
+  }, [aiSources, hasOfficialManagedSource, officialAiPanelEnabled, officialAiSourcePlaceholder]);
 
   const officialAuthStatus = String((officialAuthState as { status?: string } | null)?.status || '').trim();
   const officialAuthKnown = officialAuthBootstrapped;
@@ -2091,9 +2104,11 @@ export function Settings({
     sources: AiSourceConfig[] = aiSources,
     resolvedDefaultSourceId: string = defaultAiSourceId,
   ) => {
-    const sanitizedSources: AiSourceConfig[] = sources
+    const normalizedDefaultSourceId = canonicalizeOfficialAutoSourceId(resolvedDefaultSourceId);
+    let sanitizedSources: AiSourceConfig[] = sources
       .map((source) => ({
         ...source,
+        id: canonicalizeOfficialAutoSourceId(source.id),
         name: source.name.trim(),
         presetId: source.presetId.trim() || 'custom',
         baseURL: source.baseURL.trim(),
@@ -2119,16 +2134,24 @@ export function Settings({
       }))
       .filter((source) => !isDeprecatedEmptyOpenAiSource(source));
 
-    const defaultSource = sanitizedSources.find((source) => source.id === resolvedDefaultSourceId) || sanitizedSources[0];
+    if (
+      isOfficialAutoSourceId(normalizedDefaultSourceId)
+      && !sanitizedSources.some((source) => isOfficialManagedSource(source))
+    ) {
+      sanitizedSources = [officialAiSourcePlaceholder, ...sanitizedSources];
+    }
+
+    const defaultSource = sanitizedSources.find((source) => source.id === normalizedDefaultSourceId)
+      || (isOfficialAutoSourceId(normalizedDefaultSourceId) ? officialAiSourcePlaceholder : sanitizedSources[0]);
     return {
       sanitizedSources,
-      resolvedDefaultSourceId,
+      resolvedDefaultSourceId: normalizedDefaultSourceId,
       defaultSource,
       resolvedApiEndpoint: String(defaultSource?.baseURL || '').trim(),
       resolvedApiKey: String(defaultSource?.apiKey || '').trim(),
       resolvedModelName: String(defaultSource?.model || '').trim(),
     };
-  }, [aiSources, defaultAiSourceId, isDeprecatedEmptyOpenAiSource]);
+  }, [aiSources, defaultAiSourceId, isDeprecatedEmptyOpenAiSource, isOfficialManagedSource, officialAiSourcePlaceholder]);
 
   const persistAiSourcesSnapshot = useCallback(async (
     sources: AiSourceConfig[] = aiSources,
@@ -2242,17 +2265,18 @@ export function Settings({
   };
 
   const handleToggleAiSourceExpand = (sourceId: string) => {
+    const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
     setAiSourceExpandState((prev) => {
-      const currentExpanded = prev[sourceId] ?? false;
+      const currentExpanded = prev[normalizedSourceId] ?? false;
       if (currentExpanded) {
-        return { ...prev, [sourceId]: false };
+        return { ...prev, [normalizedSourceId]: false };
       }
-      return aiSources.reduce<Record<string, boolean>>((acc, source) => {
-        acc[source.id] = source.id === sourceId;
+      return displayedAiSources.reduce<Record<string, boolean>>((acc, source) => {
+        acc[source.id] = source.id === normalizedSourceId;
         return acc;
       }, {});
     });
-    setActiveAiSourceId(sourceId);
+    setActiveAiSourceId(normalizedSourceId);
   };
 
   const handleToggleAiSourceModelExpand = (sourceId: string) => {
@@ -2263,7 +2287,7 @@ export function Settings({
   };
 
   const ensureDisplayedAiSourcePersisted = (sourceId: string) => {
-    const normalizedSourceId = String(sourceId || '').trim();
+    const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
     if (!normalizedSourceId) return;
     const displayedSource = displayedAiSources.find((source) => source.id === normalizedSourceId);
     if (!displayedSource) return;
@@ -3683,8 +3707,8 @@ export function Settings({
           return normalizedDefaultId;
         };
 
-        const requestedDefaultSourceId = String(settings.default_ai_source_id || '').trim();
-        const prefersOfficialDefault = requestedDefaultSourceId.toLowerCase() === OFFICIAL_AUTO_SOURCE_ID;
+        const requestedDefaultSourceId = canonicalizeOfficialAutoSourceId(String(settings.default_ai_source_id || '').trim());
+        const prefersOfficialDefault = isOfficialAutoSourceId(requestedDefaultSourceId);
         let sourceList = parseAiSources(settings.ai_sources_json).filter((source) => !isDeprecatedEmptyOpenAiSource(source));
         if (!sourceList.length && !prefersOfficialDefault && (settings.api_endpoint || settings.api_key || settings.model_name)) {
           const inferredPresetId = inferPresetIdByEndpoint(settings.api_endpoint || '');
@@ -3705,7 +3729,9 @@ export function Settings({
         const normalizedDefaultId = sourceList.some((source) => source.id === loadedDefaultId)
           ? loadedDefaultId
           : (loadedDefaultId === OFFICIAL_AUTO_SOURCE_ID ? OFFICIAL_AUTO_SOURCE_ID : (sourceList[0]?.id || OFFICIAL_AUTO_SOURCE_ID));
-        const resolvedDefaultSource = sourceList.find((source) => source.id === normalizedDefaultId) || sourceList[0] || null;
+        const resolvedDefaultSource = sourceList.find((source) => source.id === normalizedDefaultId)
+          || (isOfficialAutoSourceId(normalizedDefaultId) ? officialAiSourcePlaceholder : sourceList[0])
+          || null;
         const resolvedTranscriptionSourceId = resolveLinkedSourceIdFromList({
           endpoint: String(settings.transcription_endpoint || settings.api_endpoint || '').trim(),
           apiKey: String(settings.transcription_key || settings.api_key || '').trim(),
@@ -3752,8 +3778,8 @@ export function Settings({
         );
         const loadedModelRoutes = normalizeAiModelRoutes(settings.ai_model_routes_json);
         const routeSourceMode = (sourceId: string, fallback: AiModelRouteMode = 'custom'): AiModelRouteMode => {
-          const normalizedSourceId = String(sourceId || '').trim();
-          if (normalizedSourceId === OFFICIAL_AUTO_SOURCE_ID) return 'official';
+          const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
+          if (isOfficialAutoSourceId(normalizedSourceId)) return 'official';
           if (fallback === 'disabled') return 'disabled';
           return normalizedSourceId ? 'custom' : fallback;
         };
@@ -3861,8 +3887,8 @@ export function Settings({
           if (!preserveViewState) {
             return normalizedDefaultId;
           }
-          const currentActiveId = String(prevActiveId || '').trim();
-          if (currentActiveId === OFFICIAL_AUTO_SOURCE_ID) {
+          const currentActiveId = canonicalizeOfficialAutoSourceId(prevActiveId);
+          if (isOfficialAutoSourceId(currentActiveId)) {
             return currentActiveId;
           }
           if (currentActiveId && sourceList.some((source) => source.id === currentActiveId)) {
@@ -3995,8 +4021,9 @@ export function Settings({
         setAiSources([]);
         setDefaultAiSourceId(OFFICIAL_AUTO_SOURCE_ID);
         setActiveAiSourceId((prevActiveId) => {
-          if (preserveViewState && String(prevActiveId || '').trim() === OFFICIAL_AUTO_SOURCE_ID) {
-            return prevActiveId;
+          const currentActiveId = canonicalizeOfficialAutoSourceId(prevActiveId);
+          if (preserveViewState && isOfficialAutoSourceId(currentActiveId)) {
+            return currentActiveId;
           }
           return OFFICIAL_AUTO_SOURCE_ID;
         });
@@ -4011,7 +4038,7 @@ export function Settings({
       if (requestId !== settingsLoadRequestRef.current) return;
       console.error("Failed to load settings", e);
     }
-  }, [clearAiSourceDraftDirty, inferImageRoutingFromSource, isDeprecatedEmptyOpenAiSource, loadMcpRuntimeData, persistDeveloperModeState, pickCapabilityModelForSource, setCurrentSpaceState]);
+  }, [clearAiSourceDraftDirty, inferImageRoutingFromSource, isDeprecatedEmptyOpenAiSource, loadMcpRuntimeData, officialAiSourcePlaceholder, persistDeveloperModeState, pickCapabilityModelForSource, setCurrentSpaceState]);
 
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
@@ -5730,7 +5757,12 @@ export function Settings({
         const mode = aiModelRoutes[scope].mode;
         if (mode === 'disabled') return '';
         const explicitModel = String(value || aiModelRoutes[scope].model || '').trim();
-        if (explicitModel) return explicitModel;
+        if (explicitModel) {
+          if (mode === 'official') {
+            return String(fallbackPicker(fallbackSource, explicitModel) || '').trim();
+          }
+          return explicitModel;
+        }
         return String(fallbackPicker(fallbackSource) || '').trim();
       };
       const routeChatModel = (scope: AiModelRouteScope, value: string) => routeModel(
@@ -5743,19 +5775,17 @@ export function Settings({
         route: AiModelRouteConfig,
         sourceId: string,
       ): AiModelRouteConfig => {
-        const normalizedSourceId = String(sourceId || '').trim();
+        const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
         if (route.mode === 'disabled') {
           return { ...route, sourceId: normalizedSourceId };
         }
-        if (normalizedSourceId === OFFICIAL_AUTO_SOURCE_ID) {
-          return { ...route, mode: 'official', sourceId: normalizedSourceId };
+        if (isOfficialAutoSourceId(normalizedSourceId) || route.mode === 'official') {
+          return { ...route, mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID };
         }
         if (normalizedSourceId) {
           return { ...route, mode: 'custom', sourceId: normalizedSourceId };
         }
-        return route.mode === 'official'
-          ? { ...route, sourceId: OFFICIAL_AUTO_SOURCE_ID }
-          : { ...route, sourceId: normalizedSourceId };
+        return { ...route, sourceId: normalizedSourceId };
       };
       const routeTranscriptionModel = routeModel(
         'transcription',
@@ -6046,28 +6076,28 @@ export function Settings({
     if (scope === 'transcription') return pickBestModelForSource(officialAiSource, preferredModel, 'transcription') || pickFirstOfficialModel('transcription');
     if (scope === 'embedding') return pickBestModelForSource(officialAiSource, preferredModel, 'embedding') || pickFirstOfficialModel('embedding') || 'text-embedding-3-small';
     if (scope === 'image') return pickBestModelForSource(officialAiSource, preferredModel, 'image') || pickFirstOfficialModel('image');
-    if (scope === 'visualIndex') return preferredModel || pickFirstOfficialVisualModel();
+    if (scope === 'visualIndex') return pickBestVisualIndexModelForSource(officialAiSource, preferredModel) || pickFirstOfficialVisualModel();
     if (scope === 'videoAnalysis') return pickFirstOfficialVideoModel();
-    if (scope === 'chat') return String(formData.model_name || defaultAiSource?.model || '').trim() || pickFirstOfficialModel('chat');
-    return preferredModel || pickFirstOfficialModel('chat');
+    if (scope === 'chat') return pickBestModelForSource(officialAiSource, preferredModel, 'chat') || pickFirstOfficialModel('chat');
+    return pickBestModelForSource(officialAiSource, preferredModel, 'chat') || pickFirstOfficialModel('chat');
   }, [
-    defaultAiSource?.model,
     filterVideoAnalysisModels,
     filterVisualIndexModels,
-    formData.model_name,
     getSourceModelList,
     officialAiSource,
     pickBestModelForSource,
+    pickBestVisualIndexModelForSource,
   ]);
 
   const effectiveRouteModelValue = useCallback((scope: AiModelRouteScope): string => {
     if (aiModelRoutes[scope].mode === 'official') {
       const officialModel = String(aiModelRoutes[scope].model || '').trim();
       const legacyModel = currentRouteModelValue(scope);
+      const preferredModel = officialModel || legacyModel;
       if (scope === 'image') {
-        return pickCapabilityModelForSource(officialAiSource, officialModel || legacyModel, 'image') || fallbackOfficialRouteModel(scope);
+        return pickCapabilityModelForSource(officialAiSource, preferredModel, 'image') || fallbackOfficialRouteModel(scope);
       }
-      return officialModel || legacyModel || fallbackOfficialRouteModel(scope);
+      return fallbackOfficialRouteModel(scope, preferredModel);
     }
     return currentRouteModelValue(scope);
   }, [aiModelRoutes, currentRouteModelValue, fallbackOfficialRouteModel, officialAiSource, pickCapabilityModelForSource]);
@@ -6462,7 +6492,7 @@ export function Settings({
     );
   }, [handleToggleSettingsSkill, handleUninstallSettingsSkill, settingsSkillBusyName]);
 
-  const tabs: Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }> = [
+  const allTabs = useMemo<Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }>>(() => [
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
     { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
     { id: 'team', labelKey: 'settings.tabs.team', icon: Users },
@@ -6473,7 +6503,19 @@ export function Settings({
     { id: 'profile', labelKey: 'settings.tabs.profile', icon: FileText },
     { id: 'tools', labelKey: 'settings.tabs.tools', icon: Wrench },
     { id: 'experimental', labelKey: 'settings.tabs.experimental', icon: FlaskConical },
-  ];
+  ], []);
+
+  const tabs = useMemo(() => {
+    const visibleTabs = new Set(APP_BRAND.visibleSettingsTabs);
+    if (visibleTabs.size === 0) return allTabs;
+    const filteredTabs = allTabs.filter((tab) => visibleTabs.has(tab.id));
+    return filteredTabs.length > 0 ? filteredTabs : allTabs;
+  }, [allTabs]);
+
+  useEffect(() => {
+    if (tabs.some((tab) => tab.id === activeTab)) return;
+    setActiveTab(tabs[0]?.id || 'general');
+  }, [activeTab, tabs]);
 
   return (
     <div className="flex h-full min-w-0 text-text-primary">
@@ -6999,11 +7041,12 @@ export function Settings({
                             value={defaultAiSourceId}
                             sources={displayedAiSources}
                             onChange={(nextSourceId) => {
+                              const normalizedSourceId = canonicalizeOfficialAutoSourceId(nextSourceId);
                               markAiSourceDraftDirty();
-                              ensureDisplayedAiSourcePersisted(nextSourceId);
-                              setDefaultAiSourceId(nextSourceId);
-                              setActiveAiSourceId(nextSourceId);
-                              setAiSourceExpandState((prev) => ({ ...prev, [nextSourceId]: true }));
+                              ensureDisplayedAiSourcePersisted(normalizedSourceId);
+                              setDefaultAiSourceId(normalizedSourceId);
+                              setActiveAiSourceId(normalizedSourceId);
+                              setAiSourceExpandState((prev) => ({ ...prev, [normalizedSourceId]: true }));
                             }}
                           />
                         </div>
