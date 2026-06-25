@@ -83,6 +83,7 @@ pub(super) fn apply_official_settings_update(
             crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
         }))
     })?;
+    let settings_changed = merged_settings != previous_settings;
     crate::analytics::observe_official_settings_update(
         state,
         &previous_settings,
@@ -100,6 +101,12 @@ pub(super) fn apply_official_settings_update(
                 format!("source={source} error={error}"),
             );
         }
+    }
+    if !settings_changed {
+        if let Some(payload) = data_payload {
+            emit_redbox_auth_data_updated(app, payload);
+        }
+        return Ok(());
     }
     let _ = auth::sync_auth_runtime_from_settings(Some(app), state, &merged_settings);
     let _ = app.emit(

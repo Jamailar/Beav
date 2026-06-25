@@ -34,6 +34,31 @@ const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 24] = [
     "video_model",
 ];
 
+fn is_model_route_setting_key(key: &str) -> bool {
+    matches!(
+        key,
+        "model_name"
+            | "model_name_wander"
+            | "model_name_chatroom"
+            | "model_name_knowledge"
+            | "model_name_redclaw"
+            | "ai_model_routes_json"
+    )
+}
+
+fn has_meaningful_model_route_setting(settings: &Value, key: &str) -> bool {
+    if key == "ai_model_routes_json" {
+        return payload_string(settings, key)
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .map(|object| !object.is_empty())
+            .unwrap_or(false);
+    }
+    payload_string(settings, key)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
 pub(super) fn is_official_ai_request(
     settings: &Value,
     request_url: &str,
@@ -333,6 +358,9 @@ pub(super) fn merge_official_settings(settings: &mut Value, source: &Value) {
                     | "ai_model_routes_json"
             )
         {
+            continue;
+        }
+        if is_model_route_setting_key(key) && has_meaningful_model_route_setting(settings, key) {
             continue;
         }
         if let Some(value) = source_object.get(key) {

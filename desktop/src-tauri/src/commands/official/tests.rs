@@ -510,6 +510,69 @@ fn merge_official_settings_preserves_custom_default_route_from_stale_update() {
 }
 
 #[test]
+fn merge_official_settings_preserves_official_default_route_from_stale_update() {
+    let official_cn_base_url = official_base_url_for_realm("cn");
+    let user_routes = json!({
+        "chat": { "mode": "official", "sourceId": "redbox_official_auto", "model": "qwen3.7-plus" },
+        "redclaw": { "mode": "official", "sourceId": "redbox_official_auto", "model": "qwen3.7-plus" },
+        "image": { "mode": "official", "sourceId": "redbox_official_auto", "model": "gpt-image-2" },
+    });
+    let mut settings = json!({
+        "default_ai_source_id": "redbox_official_auto",
+        "api_endpoint": official_cn_base_url,
+        "api_key": "official-key",
+        "model_name": "qwen3.7-plus",
+        "model_name_redclaw": "qwen3.7-plus",
+        "ai_model_routes_json": serde_json::to_string(&user_routes).unwrap(),
+        "ai_sources_json": serde_json::to_string(&vec![json!({
+            "id": "redbox_official_auto",
+            "name": format!("{}官方", app_brand_display_name()),
+            "presetId": "redbox-official",
+            "baseURL": official_base_url_for_realm("cn"),
+            "apiKey": "official-key",
+            "model": "qwen3.7-plus",
+            "models": ["qwen3.5-plus", "qwen3.7-plus"],
+            "protocol": "openai",
+        })]).unwrap(),
+    });
+    let stale_official_update = json!({
+        "model_name": "qwen3.5-plus",
+        "model_name_redclaw": "qwen3.5-plus",
+        "ai_model_routes_json": serde_json::to_string(&json!({
+            "chat": { "mode": "official", "sourceId": "redbox_official_auto", "model": "qwen3.5-plus" },
+            "redclaw": { "mode": "official", "sourceId": "redbox_official_auto", "model": "qwen3.5-plus" },
+        })).unwrap(),
+        "ai_sources_json": serde_json::to_string(&vec![json!({
+            "id": "redbox_official_auto",
+            "name": format!("{}官方", app_brand_display_name()),
+            "presetId": "redbox-official",
+            "baseURL": official_base_url_for_realm("cn"),
+            "apiKey": "official-key",
+            "model": "qwen3.5-plus",
+            "models": ["qwen3.5-plus", "qwen3.7-plus"],
+            "protocol": "openai",
+        })]).unwrap(),
+    });
+
+    merge_official_settings(&mut settings, &stale_official_update);
+
+    let routes = payload_string(&settings, "ai_model_routes_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(|| json!({}));
+    assert_eq!(
+        payload_string(&settings, "model_name").as_deref(),
+        Some("qwen3.7-plus")
+    );
+    assert_eq!(
+        payload_string(&settings, "model_name_redclaw").as_deref(),
+        Some("qwen3.7-plus")
+    );
+    assert_eq!(routes["chat"]["model"], json!("qwen3.7-plus"));
+    assert_eq!(routes["redclaw"]["model"], json!("qwen3.7-plus"));
+    assert_eq!(routes["image"]["model"], json!("gpt-image-2"));
+}
+
+#[test]
 fn official_account_summary_separates_login_state_and_ai_key_presence() {
     let settings = json!({
         "redbox_auth_session_json": serde_json::to_string(&json!({

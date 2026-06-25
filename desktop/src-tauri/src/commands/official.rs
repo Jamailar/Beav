@@ -22,16 +22,17 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::{
     app_brand_display_name, app_brand_slug, append_debug_trace_state, auth,
     create_official_payment_form, emit_redbox_auth_session_updated, make_id,
-    normalize_official_auth_session, now_iso, now_ms, official_access_token_from_settings,
-    official_account_summary_local, official_ai_api_key_from_settings,
-    official_base_url_from_settings, official_fallback_products, official_realm_from_settings,
-    official_realms_payload, official_response_items, official_settings_api_keys,
-    official_settings_call_records_list, official_settings_models, official_settings_orders,
-    official_settings_pricing, official_settings_session, official_settings_wechat_login,
-    official_sync_source_into_settings, official_unwrap_response_payload, open_payment_form,
-    payload_field, payload_string, run_official_public_json_request,
-    run_official_public_json_request_response, upsert_official_settings_session,
-    write_settings_json_array, write_settings_json_value, AppState,
+    normalize_official_auth_session, normalize_official_model_catalog, now_iso, now_ms,
+    official_access_token_from_settings, official_account_summary_local,
+    official_ai_api_key_from_settings, official_base_url_from_settings, official_fallback_products,
+    official_realm_from_settings, official_realms_payload, official_response_items,
+    official_settings_api_keys, official_settings_call_records_list, official_settings_models,
+    official_settings_orders, official_settings_pricing, official_settings_session,
+    official_settings_wechat_login, official_sync_source_into_settings,
+    official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
+    run_official_public_json_request, run_official_public_json_request_response,
+    upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
+    AppState,
 };
 use api_keys::ensure_official_ai_api_key_in_settings;
 #[cfg(test)]
