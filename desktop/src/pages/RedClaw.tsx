@@ -575,8 +575,8 @@ export function RedClaw({
     const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null);
     const [advisorCreateModalOpen, setAdvisorCreateModalOpen] = useState(false);
     const [roomCreateModalOpen, setRoomCreateModalOpen] = useState(false);
-    const [roomCreateName, setRoomCreateName] = useState('');
-    const [roomCreateAdvisorIds, setRoomCreateAdvisorIds] = useState<string[]>([]);
+    const [roomCreateObjective, setRoomCreateObjective] = useState('');
+    const [roomCreatePendingMessage, setRoomCreatePendingMessage] = useState<PendingChatMessage | null>(null);
     const [isCreatingRoom, setIsCreatingRoom] = useState(false);
     const [roomCreateError, setRoomCreateError] = useState('');
     const [isRedClawChatExecuting, setIsRedClawChatExecuting] = useState(false);
@@ -1671,94 +1671,68 @@ export function RedClaw({
     }, []);
 
     const createRoomFromRedClaw = useCallback(() => {
-        const visibleAdvisorIds = advisors
-            .filter((advisor) => advisor.redclawVisible !== false)
-            .map((advisor) => advisor.id);
-        const defaultAdvisorIds = selectedAdvisorId && visibleAdvisorIds.includes(selectedAdvisorId)
-            ? [selectedAdvisorId]
-            : visibleAdvisorIds.slice(0, 3);
-        setRoomCreateName('');
-        setRoomCreateAdvisorIds(defaultAdvisorIds);
+        setRoomCreateObjective('');
         setRoomCreateError('');
         setRoomCreateModalOpen(true);
-    }, [advisors, selectedAdvisorId]);
+    }, []);
 
     const closeRoomCreateModal = useCallback(() => {
         if (isCreatingRoom) return;
         setRoomCreateModalOpen(false);
-        setRoomCreateName('');
-        setRoomCreateAdvisorIds([]);
+        setRoomCreateObjective('');
         setRoomCreateError('');
     }, [isCreatingRoom]);
 
-    const toggleRoomCreateAdvisor = useCallback((advisorId: string) => {
-        setRoomCreateAdvisorIds((current) => current.includes(advisorId)
-            ? current.filter((id) => id !== advisorId)
-            : [...current, advisorId]);
-    }, []);
-
     const submitRoomCreate = useCallback(async () => {
-        const name = roomCreateName.trim();
-        if (!name) {
-            setRoomCreateError('请输入团队名称');
-            return;
-        }
-        if (roomCreateAdvisorIds.length === 0) {
-            setRoomCreateError('请至少选择一位成员');
+        const objective = roomCreateObjective.trim();
+        if (!objective) {
+            setRoomCreateError('请输入团队目标');
             return;
         }
         setIsCreatingRoom(true);
         setRoomCreateError('');
         try {
-            const session = await window.ipcRenderer.teamRuntime.createSession({
-                title: name,
-                objective: `团队 ${name} 的协作任务`,
-                source: 'team-workbench',
-                runtimeMode: 'team',
-                metadata: {
-                    advisorIds: roomCreateAdvisorIds,
-                    surface: 'redclaw',
-                },
-            }) as TeamWorkbenchSession;
-            for (const advisorId of roomCreateAdvisorIds) {
-                const advisor = advisors.find((item) => item.id === advisorId);
-                if (!advisor) continue;
-                await window.ipcRenderer.teamRuntime.addMember({
-                    sessionId: session.id,
-                    displayName: advisor.name || '成员',
-                    roleId: advisor.id,
-                    backend: 'redbox-runtime',
-                    status: 'idle',
-                    capabilities: ['discussion', 'creation'],
-                    metadata: {
-                        advisorId: advisor.id,
-                        avatar: advisor.avatar,
-                        personality: advisor.personality,
-                    },
-                });
+            onOpenChatSurface?.();
+            setActiveAiSurface('redclaw');
+            const sessionId = await createNewSession(`创建团队：${objective.slice(0, 18)}`);
+            if (!sessionId) {
+                throw new Error('创建对话失败，请稍后重试');
             }
-            const room = teamRoomFromSession({
-                ...session,
-                metadata: {
-                    ...(session.metadata || {}),
-                    advisorIds: roomCreateAdvisorIds,
-                    surface: 'redclaw',
+            setRoomCreatePendingMessage({
+                content: [
+                    '这是用户在“新建团队”弹窗提交的团队目标。',
+                    '用户已确认由你根据目标自动规划团队成员、职责、交付物和初始任务，并创建团队；不需要再让用户选择成员。',
+                    '',
+                    `团队目标：${objective}`,
+                ].join('\n'),
+                displayContent: `创建团队：${objective}`,
+                sessionRouting: 'current',
+                taskHints: {
+                    intent: 'team_creation',
+                    taskIntent: 'team_creation',
+                    teamAutoCreateConfirmed: true,
+                    teamObjective: objective,
+                    allowedAppCliActions: ['team.guide.create'],
                 },
             });
-            setTeamRooms((prev) => [...prev.filter((item) => item.id !== room.id), room]);
-            setSelectedRoomId(room.id);
-            onOpenChatSurface?.();
-            setActiveAiSurface('room');
             setRoomCreateModalOpen(false);
-            setRoomCreateName('');
-            setRoomCreateAdvisorIds([]);
+            setRoomCreateObjective('');
         } catch (error) {
             console.error('Failed to create RedClaw room:', error);
             setRoomCreateError(error instanceof Error ? error.message : '创建团队失败');
         } finally {
             setIsCreatingRoom(false);
         }
-    }, [advisors, onOpenChatSurface, roomCreateAdvisorIds, roomCreateName]);
+    }, [createNewSession, onOpenChatSurface, roomCreateObjective]);
+
+    const activeRedClawPendingMessage = roomCreatePendingMessage || resolvedPendingMessage;
+    const handleRedClawPendingMessageConsumed = useCallback(() => {
+        if (roomCreatePendingMessage) {
+            setRoomCreatePendingMessage(null);
+            return;
+        }
+        onPendingMessageConsumed?.();
+    }, [onPendingMessageConsumed, roomCreatePendingMessage]);
 
     const archiveUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem) => {
         const targetSessionId = String(session?.id || '').trim();
@@ -2376,8 +2350,8 @@ export function RedClaw({
                                         fixedSessionId={activeChatSessionId}
                                         fixedSessionDraft={!activeChatSessionId}
                                         onEnsureSessionForSend={ensureActiveChatSessionForSend}
-                                        pendingMessage={activeAiSurface === 'redclaw' ? resolvedPendingMessage : null}
-                                        onMessageConsumed={onPendingMessageConsumed}
+                                        pendingMessage={activeAiSurface === 'redclaw' ? activeRedClawPendingMessage : null}
+                                        onMessageConsumed={handleRedClawPendingMessageConsumed}
                                         showClearButton={false}
                                         fixedSessionBannerText=""
                                         showWelcomeShortcuts={true}
@@ -2469,53 +2443,21 @@ export function RedClaw({
                                         </div>
 
                                         <div className="space-y-3">
-                                            <input
+                                            <textarea
                                                 autoFocus
-                                                value={roomCreateName}
-                                                onChange={(event) => setRoomCreateName(event.target.value)}
+                                                value={roomCreateObjective}
+                                                onChange={(event) => setRoomCreateObjective(event.target.value)}
                                                 onKeyDown={(event) => {
-                                                    if (event.key === 'Enter') {
+                                                    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
                                                         event.preventDefault();
                                                         void submitRoomCreate();
                                                     } else if (event.key === 'Escape') {
                                                         closeRoomCreateModal();
                                                     }
                                                 }}
-                                                className="h-10 w-full rounded-xl border border-border bg-surface-secondary/40 px-3 text-sm text-text-primary outline-none transition focus:border-accent-primary/60 focus:bg-surface-primary focus:ring-2 focus:ring-accent-primary/10"
-                                                placeholder="团队名称"
+                                                className="h-28 w-full resize-none rounded-xl border border-border bg-surface-secondary/40 px-3 py-3 text-sm text-text-primary outline-none transition placeholder:text-text-tertiary focus:border-accent-primary/60 focus:bg-surface-primary focus:ring-2 focus:ring-accent-primary/10"
+                                                placeholder="团队目标"
                                             />
-
-                                            <div className="max-h-56 overflow-y-auto rounded-xl border border-border/80 p-1 custom-scrollbar">
-                                                {advisors.filter((advisor) => advisor.redclawVisible !== false).length === 0 ? (
-                                                    <div className="px-3 py-4 text-center text-xs text-text-tertiary">暂无可选成员</div>
-                                                ) : advisors.filter((advisor) => advisor.redclawVisible !== false).map((advisor) => {
-                                                    const checked = roomCreateAdvisorIds.includes(advisor.id);
-                                                    return (
-                                                        <button
-                                                            key={advisor.id}
-                                                            type="button"
-                                                            onClick={() => toggleRoomCreateAdvisor(advisor.id)}
-                                                            className={clsx(
-                                                                'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors',
-                                                                checked ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary/70'
-                                                            )}
-                                                        >
-                                                            <span className={clsx(
-                                                                'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                                                                checked ? 'border-accent-primary bg-accent-primary' : 'border-border bg-surface-primary'
-                                                            )}>
-                                                                {checked && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
-                                                            </span>
-                                                            <span className="min-w-0 flex-1">
-                                                                <span className="block truncate text-sm font-medium text-text-primary">{advisor.name || '未命名成员'}</span>
-                                                                {advisor.personality && (
-                                                                    <span className="mt-0.5 block truncate text-[11px] text-text-tertiary">{advisor.personality}</span>
-                                                                )}
-                                                            </span>
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
 
                                             {roomCreateError && (
                                                 <div className="rounded-lg border border-red-500/25 bg-red-500/[0.08] px-3 py-2 text-xs text-red-600">
