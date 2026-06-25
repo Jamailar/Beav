@@ -6,6 +6,7 @@ import {
   artifactsRoot,
   assertBundledGuideResources,
   assertDirectoryIncludesBrowserPlugin,
+  browserPluginProjectDir,
   browserPluginSourceDir,
   bundleRootForTarget,
   copyArtifactToDir,
@@ -294,8 +295,10 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
     [
       '-az',
       '--delete',
+      '--exclude=node_modules',
+      '--exclude=dist',
       '--exclude=.DS_Store',
-      `${browserPluginSourceDir}/`,
+      `${browserPluginProjectDir}/`,
       `${remoteHost}:${remotePluginDir}/`,
     ],
     { cwd: repoRoot },
@@ -314,6 +317,7 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
       'export TAURI_SIGNING_PRIVATE_KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/redbox-updater.key}"',
       'node ./scripts/tauri-preflight.mjs',
       'pnpm install --frozen-lockfile',
+      `cd ${shellQuote(remotePluginDir)} && pnpm install --frozen-lockfile && cd ${shellQuote(remoteWorkdir)}`,
       `env ${remoteEnv.join(' ')} node ${shellQuote(remoteScriptPath)}`,
     ].join(' && ')),
   ]);
