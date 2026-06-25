@@ -371,9 +371,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                     "- ProfileRoot: {}\n",
                     bundle.profile_root.display()
                 ));
-                rendered.push_str(
-                    "- 档案文件: Agent.md / Soul.md / identity.md / user.md / CreatorProfile.md\n",
-                );
+                rendered.push_str("- 档案文件: Agent.md / Soul.md / user.md / CreatorProfile.md\n");
                 rendered.push_str("<redclaw_agent_md>\n");
                 rendered.push_str(&truncate_chars(&bundle.agent, 6000));
                 rendered.push_str("\n</redclaw_agent_md>\n");
@@ -386,9 +384,6 @@ pub(crate) fn interactive_runtime_context_bundle(
                     rendered.push_str(&truncate_chars(&bundle.soul, 6000));
                     rendered.push_str("\n</redclaw_soul_md>\n");
                 }
-                rendered.push_str("<redclaw_identity_md>\n");
-                rendered.push_str(&truncate_chars(&bundle.identity, 4000));
-                rendered.push_str("\n</redclaw_identity_md>\n");
                 rendered.push_str("<redclaw_user_md>\n");
                 rendered.push_str(&truncate_chars(&bundle.user, 8000));
                 rendered.push_str("\n</redclaw_user_md>\n");
@@ -396,13 +391,14 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str(&truncate_chars(&bundle.creator_profile, 10000));
                 rendered.push_str("\n</redclaw_creator_profile_md>\n");
                 rendered.push_str("文档职责与更新规则：\n");
-                rendered.push_str("- 工作区相对路径：redclaw/profile/Agent.md | redclaw/profile/Soul.md | redclaw/profile/identity.md | redclaw/profile/user.md | redclaw/profile/CreatorProfile.md | memory/MEMORY.md\n");
+                rendered.push_str("- 工作区相对路径：redclaw/profile/Agent.md | redclaw/profile/Soul.md | redclaw/profile/user.md | redclaw/profile/CreatorProfile.md | memory/MEMORY.md\n");
                 rendered.push_str("- 查询长期档案优先使用 `Operate(resource=\"profile\", operation=\"get|list\")`，不要先用 bash/find/PowerShell 按文件名盲扫。\n");
                 rendered.push_str("- 查询长期记忆优先使用 `Operate(resource=\"memory\", operation=\"list|search|get\")`；写入/修订长期记忆使用 `Operate(resource=\"memory\", operation=\"create|update\")`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。\n");
                 rendered.push_str(&format!("- Agent.md：{} 的工作契约、执行规则、标准流程。只有当用户明确要求修改工作方式、流程、约束、职责边界时才更新。\n", app_ai_display_name()));
                 rendered.push_str(&format!("- Soul.md：{} 的协作语气、反馈风格、人格倾向。用户明确调整沟通风格、表达方式时更新。\n", app_ai_display_name()));
-                rendered.push_str("- user.md：用户稳定画像与长期事实（目标、受众、赛道、节奏、指标）。用户明确给出新的长期事实时更新。\n");
-                rendered.push_str("- CreatorProfile.md：长期自媒体定位与策略主档案（定位、目标群体、内容风格、商业目标、运营边界）。用户明确给出这类长期变化时更新。\n");
+                rendered.push_str("- user.md：内部用户偏好摘要，作为 CreatorProfile.md 的辅助上下文；不要把它当成用户可见主档案。\n");
+                rendered.push_str("- CreatorProfile.md：用户可见的创作档案主文档（定位、目标群体、内容风格、商业目标、运营边界）。用户明确给出长期变化时优先更新它。\n");
+                rendered.push_str("- identity.md 是旧版兼容文件，不再作为主档案注入或维护。\n");
                 rendered.push_str("- 一次性任务、临时实验、单篇稿件偏好，不应改写这些长期文档。\n");
 
                 let onboarding_completed = bundle

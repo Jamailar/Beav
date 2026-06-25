@@ -1106,10 +1106,6 @@ fn redclaw_profile_complete_style_definition_input_schema() -> Value {
                 json!({ "type": "object", "additionalProperties": true }),
             ),
             (
-                "identityMarkdown",
-                string_schema("Optional replacement identity.md Markdown."),
-            ),
-            (
                 "soulMarkdown",
                 string_schema("Replacement Soul.md Markdown."),
             ),

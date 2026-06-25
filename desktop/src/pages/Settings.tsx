@@ -1237,8 +1237,7 @@ export function Settings({
         ...prev,
         [field]: value,
       };
-      const dirty = next.user !== savedRedclawProfileDraft.user
-        || next.creatorProfile !== savedRedclawProfileDraft.creatorProfile;
+      const dirty = next.creatorProfile !== savedRedclawProfileDraft.creatorProfile;
       setRedclawProfileDirtyState(dirty);
       return next;
     });
@@ -5638,21 +5637,11 @@ export function Settings({
     setStatus('saving');
     try {
       if (activeTab === 'profile') {
-        const userMarkdown = String(redclawProfileDraft.user || '').trim();
         const creatorProfileMarkdown = String(redclawProfileDraft.creatorProfile || '').trim();
-        if (!userMarkdown) {
-          throw new Error('用户画像不能为空');
-        }
         if (!creatorProfileMarkdown) {
           throw new Error('创作档案不能为空');
         }
         let savedDocCount = 0;
-        await window.ipcRenderer.redclawProfile.updateDoc({
-          docType: 'user',
-          markdown: userMarkdown,
-          reason: 'settings-user-profile-save',
-        });
-        savedDocCount += 1;
         await window.ipcRenderer.redclawProfile.updateDoc({
           docType: 'creator_profile',
           markdown: creatorProfileMarkdown,
@@ -5660,7 +5649,7 @@ export function Settings({
         });
         savedDocCount += 1;
         const nextDraft: RedclawProfileDraft = {
-          user: userMarkdown,
+          user: redclawProfileDraft.user,
           creatorProfile: creatorProfileMarkdown,
         };
         setSavedRedclawProfileDraft(nextDraft);
@@ -7770,7 +7759,7 @@ export function Settings({
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-3">
-                        <h2 className="text-lg font-medium text-text-primary">用户创作档案</h2>
+                        <h2 className="text-lg font-medium text-text-primary">创作档案</h2>
                         <button
                           type="button"
                           onClick={() => onOpenRedClawOnboarding?.()}
@@ -7837,25 +7826,9 @@ export function Settings({
                 <section className="space-y-4">
                   <div className="rounded-xl border border-border bg-surface-secondary/20 p-4">
                     <div className="mb-3">
-                      <h3 className="text-sm font-medium text-text-primary">用户画像</h3>
+                      <h3 className="text-sm font-medium text-text-primary">主档案</h3>
                       <p className="mt-1 text-xs leading-6 text-text-tertiary">
-                        对应 `user.md`。适合记录称呼、长期目标、目标用户、内容赛道、风格偏好和发布节奏。
-                      </p>
-                    </div>
-                    <textarea
-                      value={redclawProfileDraft.user}
-                      onChange={(event) => handleRedclawProfileDraftChange('user', event.target.value)}
-                      placeholder="# user.md"
-                      spellCheck={false}
-                      className="min-h-[280px] w-full rounded-lg border border-border bg-surface-primary px-4 py-3 font-mono text-sm leading-6 text-text-primary focus:border-accent-primary focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="rounded-xl border border-border bg-surface-secondary/20 p-4">
-                    <div className="mb-3">
-                      <h3 className="text-sm font-medium text-text-primary">创作档案</h3>
-                      <p className="mt-1 text-xs leading-6 text-text-tertiary">
-                        对应 `CreatorProfile.md`。适合记录内容定位、受众痛点、视觉风格、运营策略、商业目标和长期边界。
+                        记录内容定位、目标受众、表达风格、运营策略、商业目标和长期边界。
                       </p>
                     </div>
                     <textarea
