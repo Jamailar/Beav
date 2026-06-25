@@ -352,7 +352,7 @@ export async function packageBrowserPluginArchive() {
 
   const pluginInfo = await getBrowserPluginInfo();
   const pluginArtifactsDir = path.join(artifactsRoot, 'installers', 'browser-plugin');
-  const archivePath = path.join(pluginArtifactsDir, `RedBox_Browser_Extension_${pluginInfo.version}.zip`);
+  const archivePath = path.join(pluginArtifactsDir, `Beav_Browser_Extension_${pluginInfo.version}.zip`);
   const files = (await listFilesRecursive(browserPluginSourceDir))
     .filter((filePath) => path.basename(filePath) !== '.DS_Store')
     .map((filePath) => path.relative(browserPluginSourceDir, filePath).split(path.sep).join('/'))
