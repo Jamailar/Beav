@@ -131,8 +131,7 @@ fn build_default_agent_profile_doc() -> String {
         "1. 读取 Soul.md（你的行为风格）".to_string(),
         "2. 读取 user.md（用户画像和创作目标）".to_string(),
         "3. 读取 CreatorProfile.md（用户长期自媒体定位与策略档案）".to_string(),
-        "4. 读取 identity.md（你的身份设定）".to_string(),
-        "5. 读取 memory/MEMORY.md（长期记忆摘要）".to_string(),
+        "4. 读取 memory/MEMORY.md（长期记忆摘要）".to_string(),
         String::new(),
         format!("## {ai_name} 规则"),
         "- 先执行再解释，优先给出可落地动作。".to_string(),
@@ -191,20 +190,6 @@ fn build_default_soul_profile_doc() -> String {
         "## 什么时候更新本文件",
         "- 用户明确要求当前 AI 改变沟通方式、反馈力度、协作氛围时更新。",
         "- 临时任务中的一句话语气要求，不默认升格为长期人格设定。",
-    ]
-    .join("\n")
-}
-
-fn build_default_identity_profile_doc() -> String {
-    let ai_name = app_ai_display_name();
-    [
-        "# identity.md".to_string(),
-        String::new(),
-        format!("- Name: {ai_name}"),
-        "- Role: 多平台内容创作自动化 Agent".to_string(),
-        "- Vibe: 执行型、结构化、结果导向".to_string(),
-        format!("- Signature: {ai_name}"),
-        format!("- UpdatedAt: {}", now_iso()),
     ]
     .join("\n")
 }
@@ -272,7 +257,6 @@ fn build_default_bootstrap_profile_doc() -> String {
         format!("这是 {ai_name} 在当前空间的首次设定引导。"),
         String::new(),
         "目标：通过聊天收集用户偏好，完善以下文件：".to_string(),
-        "- identity.md".to_string(),
         "- user.md".to_string(),
         "- Soul.md".to_string(),
         "- CreatorProfile.md".to_string(),
@@ -1389,17 +1373,6 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
         opening_label,
     );
 
-    let identity_markdown = [
-        "# identity.md".to_string(),
-        "".to_string(),
-        format!("- Name: {}", app_ai_display_name()),
-        "- Role: 多平台内容创作自动化 Agent".to_string(),
-        format!("- Vibe: {}", label_authority(authority_posture)),
-        format!("- Signature: {}", app_ai_display_name()),
-        format!("- UpdatedAt: {}", now_iso()),
-    ]
-    .join("\n");
-
     let fallback_soul_markdown = [
         "# Soul.md".to_string(),
         "".to_string(),
@@ -1568,8 +1541,6 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
     }
 
     let profile_root = redclaw_profile_root(state)?;
-    fs::write(profile_root.join("identity.md"), identity_markdown)
-        .map_err(|error| error.to_string())?;
     fs::write(profile_root.join("Soul.md"), soul_markdown).map_err(|error| error.to_string())?;
     fs::write(profile_root.join("user.md"), user_markdown).map_err(|error| error.to_string())?;
     fs::write(
@@ -1681,13 +1652,6 @@ pub(crate) fn complete_redclaw_style_definition_from_interview(
         }
     }
 
-    if let Some(identity_markdown) = payload_markdown_field(payload, "identityMarkdown") {
-        fs::write(
-            profile_root.join("identity.md"),
-            normalize_profile_doc_markdown("identity.md", &identity_markdown)?,
-        )
-        .map_err(|error| error.to_string())?;
-    }
     let soul_markdown = payload_markdown_field(payload, "soulMarkdown")
         .ok_or_else(|| "soulMarkdown is required".to_string())?;
     let user_markdown = payload_markdown_field(payload, "userMarkdown")
@@ -1817,16 +1781,6 @@ fn finalize_redclaw_onboarding(
         REDCLAW_ONBOARDING_STEPS[4].2,
     );
 
-    let identity = [
-        "# identity.md".to_string(),
-        "".to_string(),
-        format!("- Name: {}", app_ai_display_name()),
-        "- Role: 小红书创作自动化 Agent".to_string(),
-        format!("- Vibe: {style}"),
-        format!("- Signature: {}", app_ai_display_name()),
-        format!("- UpdatedAt: {}", now_iso()),
-    ]
-    .join("\n");
     let user = [
         "# user.md".to_string(),
         "".to_string(),
@@ -1883,7 +1837,6 @@ fn finalize_redclaw_onboarding(
     .join("\n");
 
     let profile_root = redclaw_profile_root(state)?;
-    fs::write(profile_root.join("identity.md"), identity).map_err(|error| error.to_string())?;
     fs::write(profile_root.join("user.md"), user).map_err(|error| error.to_string())?;
     fs::write(profile_root.join("Soul.md"), soul).map_err(|error| error.to_string())?;
     fs::write(profile_root.join("CreatorProfile.md"), creator_profile)
@@ -2037,7 +1990,6 @@ pub(crate) fn ensure_redclaw_profile_files(state: &State<'_, AppState>) -> Resul
     let profile_root = redclaw_profile_root(state)?;
     let agent_path = profile_root.join("Agent.md");
     let soul_path = profile_root.join("Soul.md");
-    let identity_path = profile_root.join("identity.md");
     let user_path = profile_root.join("user.md");
     let creator_path = profile_root.join("CreatorProfile.md");
     let bootstrap_path = profile_root.join("BOOTSTRAP.md");
@@ -2046,7 +1998,6 @@ pub(crate) fn ensure_redclaw_profile_files(state: &State<'_, AppState>) -> Resul
 
     ensure_file_if_missing(&agent_path, &build_default_agent_profile_doc())?;
     ensure_file_if_missing(&soul_path, &build_default_soul_profile_doc())?;
-    ensure_file_if_missing(&identity_path, &build_default_identity_profile_doc())?;
     ensure_file_if_missing(&user_path, &build_default_user_profile_doc())?;
     ensure_file_if_missing(&creator_path, &build_default_creator_profile_doc())?;
     ensure_file_if_missing(
@@ -2071,7 +2022,7 @@ pub(crate) fn ensure_redclaw_profile_files(state: &State<'_, AppState>) -> Resul
         ensure_file_if_missing(&bootstrap_path, &build_default_bootstrap_profile_doc())?;
     }
 
-    for profile_path in [&agent_path, &identity_path, &creator_path, &bootstrap_path] {
+    for profile_path in [&agent_path, &creator_path, &bootstrap_path] {
         migrate_legacy_redbox_default_profile_doc(profile_path)?;
     }
 

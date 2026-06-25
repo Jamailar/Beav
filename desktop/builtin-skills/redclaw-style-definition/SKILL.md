@@ -237,6 +237,7 @@ maxPromptChars: 6200
   - `answerLedgerSummary`: 用户全部关键回答的压缩摘要。
   - `assumptions`: 你做出的推断，不能和用户原话混在一起。
 - `creatorProfileMarkdown`、`userMarkdown`、`writingStyleSkillMarkdown` 必须吸收 `answerLedgerSummary`，不能只写最后一轮摘要。
+- AI 身份来自品牌配置和 Agent/Soul 运行时规则，不生成或维护独立的 `identity.md`。
 
 ## 确认规则
 
@@ -273,10 +274,6 @@ maxPromptChars: 6200
 - `creatorProfileMarkdown`: 更新后的 `CreatorProfile.md`，写账号定位、受众、内容策略、商业目标和边界。
 - `writingStyleSkillMarkdown`: 完整 `writing-style` 技能 Markdown，必须有 frontmatter，并包含 `# Writing Style` 标题。
 - `evidenceNotes`: 数组，逐条记录用户关键回答如何影响档案和写作规则。
-
-可选：
-
-- `identityMarkdown`: 只有当前 AI 身份需要调整时提供。
 
 ## 写入要求
 
