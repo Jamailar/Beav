@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type LucideIcon,
   Bot,
@@ -39,6 +39,12 @@ interface OnboardingStepContent {
   desc: string;
   acquisitionSurvey?: boolean;
   cards?: VisualCard[];
+  brandRename?: {
+    previousName: string;
+    currentName: string;
+    previousIconSrc: string;
+    currentIconSrc: string;
+  };
   image?: {
     src: string;
     alt: string;
@@ -50,7 +56,14 @@ interface OnboardingStepContent {
   };
 }
 
-const ACQUISITION_SOURCES = [
+interface AcquisitionSourceOption {
+  value: string;
+  label: string;
+}
+
+const ACQUISITION_OTHER_VALUE = 'other';
+
+const ACQUISITION_SOURCES: AcquisitionSourceOption[] = [
   { value: 'xiaohongshu', label: '小红书' },
   { value: 'bilibili', label: 'B站' },
   { value: 'wechat_article', label: '公众号/文章' },
@@ -61,7 +74,35 @@ const ACQUISITION_SOURCES = [
   { value: 'other', label: '其他' },
 ];
 
+const ONBOARDING_DRAG_REGION_STYLE = {
+  WebkitAppRegion: 'drag',
+  appRegion: 'drag',
+} as CSSProperties & { WebkitAppRegion: 'drag'; appRegion: 'drag' };
+
+function randomizeAcquisitionSources(): AcquisitionSourceOption[] {
+  const shuffled = ACQUISITION_SOURCES.filter((source) => source.value !== ACQUISITION_OTHER_VALUE);
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  const other = ACQUISITION_SOURCES.find((source) => source.value === ACQUISITION_OTHER_VALUE);
+  return other ? [...shuffled, other] : shuffled;
+}
+
 const STEP_CONTENT: OnboardingStepContent[] = [
+  {
+    eyebrow: '品牌更名',
+    title: 'RedBox 正式更名为 Beav。',
+    desc: '产品能力和本地数据会继续保留；从 2.5.0 开始，新的应用名称和图标会统一使用 Beav。',
+    brandRename: {
+      previousName: 'RedBox',
+      currentName: 'Beav',
+      previousIconSrc: '/onboarding/brand/redbox-logo.png',
+      currentIconSrc: '/onboarding/brand/beav-logo.png',
+    },
+  },
   {
     eyebrow: '一个小问题',
     title: `你是从哪里知道 ${APP_BRAND.displayName} 的？`,
@@ -280,8 +321,35 @@ function CharacterAssetPreview({ image }: { image: { src: string; alt: string } 
   );
 }
 
+function BrandRenamePreview({
+  brandRename,
+}: {
+  brandRename: NonNullable<OnboardingStepContent['brandRename']>;
+}) {
+  return (
+    <div className="app-onboarding-brand-rename relative z-10 flex w-full max-w-[900px] items-center justify-center gap-[clamp(18px,3vw,42px)]">
+      <div className="app-onboarding-brand-card app-onboarding-brand-card-previous" aria-label={brandRename.previousName}>
+        <div className="app-onboarding-brand-icon-shell">
+          <img src={brandRename.previousIconSrc} alt={brandRename.previousName} draggable={false} />
+        </div>
+        <div className="app-onboarding-brand-name">{brandRename.previousName}</div>
+      </div>
+      <div className="app-onboarding-brand-transfer" aria-hidden="true">
+        <span />
+      </div>
+      <div className="app-onboarding-brand-card app-onboarding-brand-card-current" aria-label={brandRename.currentName}>
+        <div className="app-onboarding-brand-icon-shell">
+          <img src={brandRename.currentIconSrc} alt={brandRename.currentName} draggable={false} />
+        </div>
+        <div className="app-onboarding-brand-name">{brandRename.currentName}</div>
+      </div>
+    </div>
+  );
+}
+
 function onboardingStepKind(content: OnboardingStepContent) {
   if (content.acquisitionSurvey) return 'acquisition_survey';
+  if (content.brandRename) return 'brand_rename';
   if (content.video) return 'video';
   if (content.image) return 'image';
   if (content.cards) return 'cards';
@@ -289,10 +357,12 @@ function onboardingStepKind(content: OnboardingStepContent) {
 }
 
 function AcquisitionSurvey({
+  sources,
   selected,
   onSelect,
   invalid,
 }: {
+  sources: AcquisitionSourceOption[];
   selected: string;
   onSelect: (source: string) => void;
   invalid: boolean;
@@ -300,7 +370,7 @@ function AcquisitionSurvey({
   return (
     <div className="w-full max-w-[980px]">
       <div className={`app-onboarding-acquisition-options grid grid-cols-4 gap-3 ${invalid ? 'app-onboarding-acquisition-options-invalid' : ''}`}>
-        {ACQUISITION_SOURCES.map((source) => {
+        {sources.map((source) => {
           const active = selected === source.value;
           return (
             <button
@@ -381,6 +451,7 @@ function OnboardingFooter({
 
 export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
   const [step, setStep] = useState(0);
+  const [acquisitionSources, setAcquisitionSources] = useState<AcquisitionSourceOption[]>(() => randomizeAcquisitionSources());
   const [acquisitionSource, setAcquisitionSource] = useState('');
   const [acquisitionInvalid, setAcquisitionInvalid] = useState(false);
   const acquisitionShownRef = useRef(false);
@@ -391,9 +462,20 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
   const trackedStepRef = useRef<number | null>(null);
   const content = useMemo(() => STEP_CONTENT[step] ?? STEP_CONTENT[0], [step]);
 
+  const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
+    event.preventDefault();
+    void window.ipcRenderer.windowControls.startDragging().catch((error) => {
+      console.warn(`[${APP_BRAND.displayName}] failed to start onboarding window drag:`, error);
+    });
+  };
+
   useEffect(() => {
     if (open) {
       setStep(0);
+      setAcquisitionSources(randomizeAcquisitionSources());
       setAcquisitionSource('');
       setAcquisitionInvalid(false);
       acquisitionShownRef.current = false;
@@ -541,6 +623,13 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
       aria-modal="true"
       aria-label={`${APP_BRAND.displayName} Onboarding`}
     >
+      <div
+        data-tauri-drag-region
+        aria-hidden="true"
+        className="absolute left-0 right-0 top-0 z-50 h-[var(--app-titlebar-height)]"
+        style={ONBOARDING_DRAG_REGION_STYLE}
+        onMouseDown={startWindowDrag}
+      />
       {isAcquisitionStep ? (
         <section className="relative flex h-screen min-w-0 flex-col overflow-hidden bg-white px-[5vw] py-[7vh]">
           <div className="relative z-10 flex flex-1 flex-col items-center justify-center text-center">
@@ -553,6 +642,7 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
             </p>
             <div className="mt-[7vh] flex w-full justify-center">
               <AcquisitionSurvey
+                sources={acquisitionSources}
                 selected={acquisitionSource}
                 onSelect={handleAcquisitionSelect}
                 invalid={acquisitionInvalid}
@@ -593,6 +683,10 @@ export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
             {content.image ? (
               <div className="mt-[5vh] w-full max-w-[960px]">
                 <CharacterAssetPreview image={content.image} />
+              </div>
+            ) : content.brandRename ? (
+              <div className="mt-[6vh] flex w-full justify-center">
+                <BrandRenamePreview brandRename={content.brandRename} />
               </div>
             ) : (
               <div className="mt-[6vh] grid w-full max-w-[1180px] grid-cols-3 gap-[clamp(12px,1.4vw,22px)]">

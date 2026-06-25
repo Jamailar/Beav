@@ -205,6 +205,129 @@ select {
   box-shadow: 0 0 0 3px rgb(var(--color-status-error) / 0.08), 0 14px 40px rgba(245, 63, 63, 0.08);
 }
 
+.app-onboarding-brand-rename {
+  isolation: isolate;
+}
+
+.app-onboarding-brand-card {
+  position: relative;
+  display: flex;
+  min-height: clamp(178px, 24vh, 260px);
+  width: min(30vw, 260px);
+  min-width: 180px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-onboarding-brand-card-previous {
+  animation: app-onboarding-brand-previous 3200ms ease-in-out infinite;
+}
+
+.app-onboarding-brand-card-current {
+  animation: app-onboarding-brand-current 3200ms ease-in-out infinite;
+}
+
+.app-onboarding-brand-icon-shell {
+  display: flex;
+  height: clamp(96px, 13vw, 150px);
+  width: clamp(96px, 13vw, 150px);
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.app-onboarding-brand-card-current .app-onboarding-brand-icon-shell {
+  filter: drop-shadow(0 18px 28px rgba(229, 138, 76, 0.18));
+}
+
+.app-onboarding-brand-icon-shell img {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: contain;
+}
+
+.app-onboarding-brand-name {
+  margin-top: 22px;
+  color: rgb(var(--color-text-primary) / 1);
+  font-size: clamp(24px, 2.2vw, 40px);
+  font-weight: 800;
+  line-height: 1;
+}
+
+.app-onboarding-brand-card-previous .app-onboarding-brand-name {
+  color: rgb(var(--color-text-secondary) / 0.78);
+}
+
+.app-onboarding-brand-transfer {
+  position: relative;
+  height: 3px;
+  width: clamp(54px, 9vw, 120px);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgb(var(--color-border) / 0.4), rgb(var(--color-primary) / 0.5));
+}
+
+.app-onboarding-brand-transfer::after {
+  position: absolute;
+  top: 50%;
+  right: -2px;
+  height: 12px;
+  width: 12px;
+  border-top: 3px solid rgb(var(--color-primary) / 0.72);
+  border-right: 3px solid rgb(var(--color-primary) / 0.72);
+  content: '';
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.app-onboarding-brand-transfer span {
+  position: absolute;
+  inset: -5px auto -5px 0;
+  width: 28px;
+  border-radius: 999px;
+  background: rgb(var(--color-primary) / 0.42);
+  filter: blur(3px);
+  animation: app-onboarding-brand-transfer 1600ms ease-in-out infinite;
+}
+
+@keyframes app-onboarding-brand-previous {
+  0%,
+  100% {
+    opacity: 0.74;
+    transform: translateX(0) scale(0.96);
+  }
+  46%,
+  64% {
+    opacity: 0.54;
+    transform: translateX(-8px) scale(0.92);
+  }
+}
+
+@keyframes app-onboarding-brand-current {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  46%,
+  64% {
+    transform: translateY(-8px) scale(1.04);
+  }
+}
+
+@keyframes app-onboarding-brand-transfer {
+  0% {
+    opacity: 0;
+    transform: translateX(0) scaleX(0.7);
+  }
+  34% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(calc(clamp(54px, 9vw, 120px) - 20px)) scaleX(1);
+  }
+}
+
 @keyframes redbox-acquisition-required-shake {
   0%,
   100% {
