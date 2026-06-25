@@ -143,13 +143,18 @@ fn normalize_default_ai_route_settings(settings: &mut Value) {
         .map(str::trim)
         .unwrap_or_default()
         .to_string();
-    let model_name = source
-        .get("model")
-        .or_else(|| source.get("modelName"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_string();
+    let model_name = route_chat_model(settings);
+    let model_name = if model_name.is_empty() {
+        source
+            .get("model")
+            .or_else(|| source.get("modelName"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        model_name
+    };
 
     if let Some(object) = settings.as_object_mut() {
         if sources_changed {
@@ -358,6 +363,32 @@ mod tests {
         assert_eq!(settings["api_endpoint"], json!("https://next.example/v1"));
         assert_eq!(settings["api_key"], json!("next-key"));
         assert_eq!(settings["model_name"], json!("next-model"));
+    }
+
+    #[test]
+    fn normalize_default_ai_route_settings_prefers_chat_route_model_over_source_default() {
+        let mut settings = json!({
+            "default_ai_source_id": "next",
+            "api_endpoint": "https://old.example/v1",
+            "api_key": "old-key",
+            "model_name": "old-model",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "next",
+                "name": "Next",
+                "baseURL": "https://next.example/v1",
+                "apiKey": "next-key",
+                "model": "source-default-model"
+            })]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "chat": { "mode": "custom", "sourceId": "next", "model": "chat-route-model" }
+            })).unwrap()
+        });
+
+        normalize_default_ai_route_settings(&mut settings);
+
+        assert_eq!(settings["api_endpoint"], json!("https://next.example/v1"));
+        assert_eq!(settings["api_key"], json!("next-key"));
+        assert_eq!(settings["model_name"], json!("chat-route-model"));
     }
 
     #[test]

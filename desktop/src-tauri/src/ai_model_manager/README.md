@@ -25,7 +25,7 @@ typed runtime mode、tool action 或 `AiModelScope`。
 - `model_name`
 - `ai_sources_json`
 - `ai_model_routes_json`
-- `default_ai_source_id`
+- `default_ai_source_id`（legacy chat projection；不要作为新的用户可见“默认供应商”能力）
 - `image_*` / `video_*` / `transcription_*` / `embedding_*`
 - `visual_index_*` / `video_analysis_*`
 - `voice_tts_model` / `voice_clone_model` / `tts_model`
@@ -90,13 +90,14 @@ The only supported source for selectable models is the manager-projected setting
 - `ai_sources_json[].model`
 - route defaults in `ai_model_routes_json`
 
-Settings writes these fields as defaults only. A default model is used only when a runtime/tool request does not pass
-an explicit model override.
+Settings writes route fields as capability defaults only. A model is resolved from the explicit scope route first;
+legacy root fields are projection output for older callers, not a separate provider selection surface.
 
 Runtime and tool callers may pass a request override with `sourceId`/`source_id`, `baseURL`/`base_url`,
 `apiKey`/`api_key`, `presetId`/`preset_id`, `modelName`/`model_name`/`model`, `protocol`, `provider`,
 `providerTemplate`/`provider_template`, and `reasoningEffort`.
-`AiModelManager::resolve(...)` applies those override fields before falling back to the saved route/default source.
+`AiModelManager::resolve(...)` applies those override fields before falling back to the saved scope route. The
+legacy `default_ai_source_id` is only a migration/projection fallback when a route is missing its source.
 
 Examples:
 

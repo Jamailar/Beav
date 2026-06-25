@@ -671,6 +671,45 @@ mod tests {
     }
 
     #[test]
+    fn chat_route_source_wins_over_legacy_default_source() {
+        let settings = json!({
+            "api_endpoint": "https://api.ziz.hk/redbox/v1",
+            "default_ai_source_id": "redbox_official_auto",
+            "ai_sources_json": serde_json::to_string(&vec![
+                json!({
+                    "id": "redbox_official_auto",
+                    "presetId": "redbox-official",
+                    "baseURL": "https://api.ziz.hk/redbox/v1",
+                    "model": "official-model",
+                    "protocol": "openai"
+                }),
+                json!({
+                    "id": "custom-source",
+                    "baseURL": "https://custom.example/v1",
+                    "apiKey": "sk-custom",
+                    "model": "custom-source-model",
+                    "protocol": "openai"
+                })
+            ]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "chat": {
+                    "mode": "custom",
+                    "sourceId": "custom-source",
+                    "model": "custom-chat-model"
+                }
+            })).unwrap()
+        });
+
+        let route = AiModelManager::resolve(&settings, AiModelScope::Chat, None).unwrap();
+
+        assert_eq!(route.source_id, "custom-source");
+        assert_eq!(route.base_url, "https://custom.example/v1");
+        assert_eq!(route.api_key.as_deref(), Some("sk-custom"));
+        assert_eq!(route.model_name, "custom-chat-model");
+        assert!(!route.is_official);
+    }
+
+    #[test]
     fn official_image_route_rejects_stale_custom_model() {
         let settings = json!({
             "default_ai_source_id": "redbox_official_auto",
