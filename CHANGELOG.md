@@ -1,4 +1,37 @@
-# RedBox 更新日志
+# Beav（原RedBox）更新日志
+
+## v2.5.0 (2026-06-25)
+
+### ACP Agent Gateway：让外部 Agent 直接连接 Beav
+- Beav（原RedBox）2.5.0 的核心能力是 ACP Agent Gateway：任何支持本地 Agent / CLI / 自动化工作流的外部 Agent，都可以直接与 Beav 进行沟通，而不是只能通过人工复制粘贴素材和结果。
+- Codex、Claude Code、Hermes、WorkBuddy、OpenClaw 等 Agent 可以把 Beav 当成本地自媒体创作资源层：发现本机 Beav 服务、读取 Creator Agent manifest / guide、创建或复用会话、提交创作任务，并通过事件轮询拿到执行状态和产物引用。
+- Beav 负责保存真实素材、知识库上下文、媒体资产、稿件、封面和生成任务；外部 Agent 负责规划、推理、拆任务和调用能力。这样 Agent 不需要猜文件在哪里，也不需要把图片、视频、素材索引等重任务塞进一次聊天上下文。
+- ACP 兼容发现路径会继续保留 `REDBOX_ACP_DISCOVERY_FILE`、`RedBox/acp-gateway.json` 和本地默认端口回退，保证旧名称、旧脚本和不同 Agent 的接入方式仍可工作。
+
+### 品牌升级
+- RedBox / RedConvert 从 2.5.0 开始正式更名为 Beav（原RedBox），新的桌面端产品名和品牌入口统一切到 Beav。
+- 历史下载包、仓库路径、兼容协议、环境变量和部分旧文档仍会保留 RedBox / RedConvert 命名，避免旧版本、旧插件和外部 Agent 接入路径失效。
+- README 首图和项目介绍已更新，开源说明更明确地面向通用 AI Agent 用户，而不是只描述单点 AI 生成工具。
+
+### Agent 友好的自媒体工作流
+- README 新增推荐工作流程：建立工作空间、素材采集、知识与资产沉淀、自动选题、自动创作、自动做图、复盘复用。
+- 强调把素材、brief、稿件、图片、视频和反馈保存成结构化资产，让 Codex、Hermes、OpenClaw 等通用 Agent 可以持续读取上下文并接着创作。
+- 项目定位调整为本地自媒体素材库与创作工具：用户负责主题和边界，外部 Agent 负责规划与判断，Beav（原RedBox）负责保存素材、组织上下文和执行媒体任务。
+
+### 素材采集与内容生产
+- 浏览器插件继续作为外部素材入口，支持把网页、小红书笔记、评论区、YouTube、公众号文章、图片和选中文本送入本地素材库。
+- 新增内容选题与素材挖掘相关能力入口，围绕采集素材、评论区、高赞内容和历史稿件整理可继续创作的选题 brief。
+- 强化知识库、媒体库、稿件、封面和自由创作之间的说明关系，让“素材采集 -> 自动选题 -> 自动写稿 -> 自动做图”成为更清晰的主路径。
+
+### Agent 运行时与工具面
+- 收敛并整理 Agent 可见工具面，继续遵循 small、predictable、structured、composable 的工具设计边界。
+- 增强 runtime、session transcript、tool catalog、web search、knowledge search、app cli 等底层能力，便于 Agent 更稳定地检索素材、调用工具和复盘执行链路。
+- 补充 runtime model config、topic center、topic center bridge 等运行时与前端桥接能力，为 ACP 外部 Agent 调用、自动选题和素材工作流打基础。
+
+### 桌面端与插件版本
+- 桌面端版本已确认更新到 `2.5.0`：`desktop/package.json`、`desktop/src-tauri/Cargo.toml`、`desktop/src-tauri/Cargo.lock`、`desktop/src-tauri/tauri.conf.json` 均指向 2.5.0 或从 package.json 读取。
+- 浏览器插件版本已确认更新到 `2.5.0`：`Plugin/package.json` 与 `Plugin/src/manifest.json` 均为 2.5.0。
+- 本次是预发布版本，用于先验证品牌升级、Agent 工作流文档、素材采集路径和运行时工具面是否符合真实用户使用方式。
 
 ## v2.4.0 (2026-06-20)
 
