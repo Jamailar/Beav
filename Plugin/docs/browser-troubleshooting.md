@@ -5,7 +5,7 @@ Use `pnpm diagnose:browser-control -- --no-fail` from `Plugin/` to inspect the l
 The expected chain is:
 
 ```text
-agent browser-client or MCP server -> native-host socket -> Chrome native messaging -> RedBox Capture extension -> page/content script
+agent browser-client or MCP server -> native-host socket -> Chrome native messaging -> Beav extension -> page/content script
 ```
 
 Privacy boundary:
@@ -15,7 +15,7 @@ Privacy boundary:
 - Stable Google Chrome is not used by smoke tests unless explicitly requested with `--allow-stable-chrome`.
 - The smoke test overrides the endpoint-state path and restores native messaging manifests after it exits.
 - Clipboard reads, history search, and broad browser context reads expose local user data. They require explicit typed user intent in the App and should not be marked as no-approval tools in external MCP configs.
-- A web fetch, HTTP reader, search API, or screenshot-only flow is not browser control. Browser control is only healthy when calls flow through the RedBox MCP/native-host socket into the installed Chrome extension.
+- A web fetch, HTTP reader, search API, or screenshot-only flow is not browser control. Browser control is only healthy when calls flow through the Beav MCP/native-host socket into the installed Chrome extension.
 
 Native host launcher:
 
@@ -26,7 +26,7 @@ Native host launcher:
 
 Common failure states:
 
-- `extension_not_found`: RedBox Capture is not loaded in a known Chrome, Chromium, Edge, or Brave profile.
+- `extension_not_found`: Beav is not loaded in a known Chrome, Chromium, Edge, or Brave profile.
 - `no_native_host_manifest`: Chrome cannot launch `com.redbox.browser_control`.
 - `launcher_missing` / `launcher_not_executable`: native messaging manifest may be valid, but GUI Chrome cannot start the host launcher.
 - `host_path_uses_env_node_script`: manifest points directly at `host.mjs`; GUI Chrome may start it without a Node PATH and the host exits immediately.
@@ -51,6 +51,6 @@ For development, load `Plugin/dist/extension` as an unpacked extension, install 
 Real Chrome acceptance:
 
 - `pnpm smoke:browser-control` proves the isolated regression path only.
-- A real Chrome acceptance run must use the user's installed Google Chrome profile, the installed RedBox Capture extension, the native host launcher, and `pnpm diagnose:browser-control -- --require-connected`.
+- A real Chrome acceptance run must use the user's installed Google Chrome profile, the installed Beav extension, the native host launcher, and `pnpm diagnose:browser-control -- --require-connected`.
 - At least one MCP/tool call should verify `tabs.list`, `tab.info`, `page.queryElements`, and one controlled interaction such as `page.click` or `page.type` on a safe test page.
-- Active controlled tabs should show the in-page `RedBox 控制中` badge and an active favicon marker. If DOM actions work but the badge is missing, check `AGENT_CONTROL_BADGE`, `GET_AGENT_CONTROL_BADGE_STATE`, and tab lease events.
+- Active controlled tabs should show the in-page `Beav 控制中` badge and an active favicon marker. If DOM actions work but the badge is missing, check `AGENT_CONTROL_BADGE`, `GET_AGENT_CONTROL_BADGE_STATE`, and tab lease events.

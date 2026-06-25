@@ -8,7 +8,9 @@ pub(super) fn transcript_message_entries(
         .filter_map(|entry| match entry {
             SessionTranscriptFileEntry::Message {
                 entry_id, message, ..
-            } => Some((entry_id.clone(), message.clone())),
+            } if !is_internal_runtime_bundle_message(message) => {
+                Some((entry_id.clone(), message.clone()))
+            }
             _ => None,
         })
         .collect()
@@ -87,8 +89,15 @@ pub(super) fn sync_transcript_from_bundle(
 ) -> Result<(), String> {
     let existing_entries = load_transcript_entries(state, &bundle.session_id)?;
     let existing_messages = transcript_message_entries(&existing_entries);
-    let prefix_len = matched_bundle_message_prefix_len(&existing_messages, &bundle.messages);
-    for message in bundle.messages.iter().skip(prefix_len) {
+    let visible_bundle_messages = bundle
+        .messages
+        .iter()
+        .filter(|message| !is_internal_runtime_bundle_message(message))
+        .cloned()
+        .collect::<Vec<_>>();
+    let prefix_len =
+        matched_bundle_message_prefix_len(&existing_messages, &visible_bundle_messages);
+    for message in visible_bundle_messages.iter().skip(prefix_len) {
         append_transcript_entry(
             state,
             &bundle.session_id,
@@ -100,14 +109,14 @@ pub(super) fn sync_transcript_from_bundle(
             },
         )?;
     }
-    let summary = session_bundle_summary_from_messages(&bundle.messages);
+    let summary = session_bundle_summary_from_messages(&visible_bundle_messages);
     let mut meta = session_transcript_metadata_snapshot(
         state,
         &bundle.session_id,
         &bundle.runtime_mode,
         &bundle.protocol,
         bundle.model_name.as_deref(),
-        bundle.message_count,
+        visible_bundle_messages.len() as i64,
         &bundle.updated_at,
         &summary,
     )?;
@@ -156,5 +165,23 @@ mod tests {
         let bundle = vec![user, assistant_one, assistant_two, next_user];
 
         assert_eq!(matched_bundle_message_prefix_len(&existing, &bundle), 3);
+    }
+
+    #[test]
+    fn bundle_prefix_matching_skips_internal_skill_activation_messages() {
+        let user = json!({ "role": "user", "content": "start" });
+        let _internal = json!({
+            "role": "user",
+            "content": "系统状态更新：以下技能已激活并加入当前轮上下文：content-topic-miner。技能激活只会更新当前上下文。"
+        });
+        let assistant = json!({ "role": "assistant", "content": "done" });
+
+        let existing = vec![
+            ("entry-1".to_string(), user.clone()),
+            ("entry-2".to_string(), assistant.clone()),
+        ];
+        let bundle = vec![user, assistant];
+
+        assert_eq!(matched_bundle_message_prefix_len(&existing, &bundle), 2);
     }
 }

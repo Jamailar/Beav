@@ -120,15 +120,26 @@ fn runtime_history_asset_reference_context(metadata: Option<&Value>) -> String {
     }
 }
 
-fn is_internal_runtime_history_user_message(content: &str) -> bool {
+pub(super) fn is_internal_runtime_history_user_message(content: &str) -> bool {
     content
         == "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。"
         || content.starts_with("系统状态更新：以下技能已激活并写入当前会话：")
         || content.starts_with("系统状态更新：以下技能已激活并加入当前轮上下文：")
+        || content.starts_with("系统状态更新：以下技能已激活：")
         || content.starts_with("当前写稿工程已创建并绑定为 `")
         || content.starts_with("你刚才发送了空的 `workflow` 调用")
         || content.starts_with("当前任务是执行型创作任务")
         || content.starts_with("当前任务还没有完成这些必需动作：")
+}
+
+pub(super) fn is_internal_runtime_bundle_message(message: &Value) -> bool {
+    message.get("role").and_then(Value::as_str) == Some("user")
+        && message
+            .get("content")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .map(is_internal_runtime_history_user_message)
+            .unwrap_or(false)
 }
 
 pub(super) fn build_session_context_summary(messages: &[ChatMessageRecord]) -> String {
@@ -172,7 +183,10 @@ pub(super) fn build_session_context_summary(messages: &[ChatMessageRecord]) -> S
 pub(super) fn session_bundle_summary_from_messages(messages: &[Value]) -> String {
     messages
         .iter()
-        .find(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+        .find(|item| {
+            item.get("role").and_then(Value::as_str) == Some("user")
+                && !is_internal_runtime_bundle_message(item)
+        })
         .and_then(|item| item.get("content").and_then(Value::as_str))
         .map(|item| snippet(item, 80))
         .unwrap_or_default()

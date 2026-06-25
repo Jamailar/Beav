@@ -1053,7 +1053,9 @@ export function RedClaw({
                 }
                 if (cancelled) return;
 
+                sessionRequestIdRef.current += 1;
                 const nextItem = createContextSessionListItem(session);
+                writeRedClawLastSessionId(nextActiveSpaceId, session.id);
                 setSessionList((prev) => sortContextSessionItems([nextItem, ...prev.filter((item) => item.id !== session.id)]));
                 sessionListRef.current = sortContextSessionItems([nextItem, ...sessionListRef.current.filter((item) => item.id !== session.id)]);
                 activeSessionIdRef.current = session.id;
@@ -1461,8 +1463,10 @@ export function RedClaw({
             if (!session) {
                 throw new Error('create context session timed out');
             }
+            sessionRequestIdRef.current += 1;
             options?.onCreated?.(session.id);
             const nextItem = createContextSessionListItem(session);
+            writeRedClawLastSessionId(nextActiveSpaceId, session.id);
             flushSync(() => {
                 const nextList = sortContextSessionItems([nextItem, ...sessionListRef.current.filter((item) => item.id !== session.id)]);
                 sessionListRef.current = nextList;

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tauri::State;
 
 use crate::persistence::with_store;
@@ -45,13 +45,43 @@ fn hosted_search(
         crate::provider_compat::ProviderFamily::Anthropic => {
             anthropic_hosted_search(config, payload, query, limit)
         }
-        crate::provider_compat::ProviderFamily::OpenAiCompat
-        | crate::provider_compat::ProviderFamily::MiniMax => {
+        crate::provider_compat::ProviderFamily::OpenAiCompat => {
+            if is_qwen_search_config(config) {
+                qwen_hosted_search(config, payload, query, limit)
+            } else {
+                openai_responses_hosted_search(config, payload, query, limit)
+            }
+        }
+        crate::provider_compat::ProviderFamily::MiniMax => {
             openai_responses_hosted_search(config, payload, query, limit)
         }
         crate::provider_compat::ProviderFamily::Gemini => {
             Err("hosted web search passthrough is not implemented for Gemini protocol".to_string())
         }
+    }
+}
+
+fn is_qwen_search_config(config: &ResolvedChatConfig) -> bool {
+    let model = config.model_name.trim().to_ascii_lowercase();
+    if model.contains("gpt") {
+        return false;
+    }
+    let base_url = config.base_url.trim().to_ascii_lowercase();
+    model.contains("qwen")
+        || base_url.contains("dashscope")
+        || base_url.contains(".maas.aliyuncs.com")
+}
+
+fn qwen_hosted_search(
+    config: &ResolvedChatConfig,
+    payload: &Value,
+    query: &str,
+    limit: usize,
+) -> Result<Value, String> {
+    if qwen_uses_responses_web_search(&config.model_name) {
+        qwen_responses_hosted_search(config, payload, query, limit)
+    } else {
+        qwen_chat_completions_hosted_search(config, payload, query, limit)
     }
 }
 
@@ -61,7 +91,7 @@ fn openai_responses_hosted_search(
     query: &str,
     limit: usize,
 ) -> Result<Value, String> {
-    let endpoint = hosted_search_endpoint(config);
+    let endpoint = openai_responses_search_endpoint(config);
     let tool = openai_web_search_tool(payload);
     let response = run_curl_json_response(
         "POST",
@@ -103,8 +133,100 @@ fn openai_responses_hosted_search(
     }))
 }
 
-fn hosted_search_endpoint(config: &ResolvedChatConfig) -> String {
+fn qwen_responses_hosted_search(
+    config: &ResolvedChatConfig,
+    payload: &Value,
+    query: &str,
+    limit: usize,
+) -> Result<Value, String> {
+    let endpoint = openai_responses_search_endpoint(config);
+    let response = run_curl_json_response(
+        "POST",
+        &endpoint,
+        config.api_key.as_deref(),
+        &[],
+        Some(qwen_responses_search_body(config, payload, query, limit)),
+        Some(90),
+    )
+    .map_err(|error| format!("Qwen Responses web search request failed: {error}"))?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!(
+            "Qwen Responses web search returned HTTP {}: {}",
+            response.status,
+            text_snippet(&response.body.to_string(), 500)
+        ));
+    }
+    let answer = extract_openai_response_text(&response.body);
+    let mut sources = extract_openai_response_sources(&response.body);
+    if sources.is_empty() {
+        sources = extract_sources_from_answer_text(&answer);
+    }
+    if answer.trim().is_empty() && sources.is_empty() {
+        return Err("Qwen Responses web search returned no usable text or sources".to_string());
+    }
+    Ok(json!({
+        "success": true,
+        "provider": "dashscope.responses.web_search",
+        "query": query,
+        "answer": answer,
+        "results": sources,
+        "resultCount": sources.len(),
+        "rawResultAvailable": true,
+    }))
+}
+
+fn qwen_chat_completions_hosted_search(
+    config: &ResolvedChatConfig,
+    payload: &Value,
+    query: &str,
+    limit: usize,
+) -> Result<Value, String> {
+    let endpoint = qwen_chat_completions_search_endpoint(config);
+    let response = run_curl_json_response(
+        "POST",
+        &endpoint,
+        config.api_key.as_deref(),
+        &[],
+        Some(qwen_chat_completions_search_body(
+            config, payload, query, limit,
+        )),
+        Some(90),
+    )
+    .map_err(|error| format!("Qwen Chat Completions web search request failed: {error}"))?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!(
+            "Qwen Chat Completions web search returned HTTP {}: {}",
+            response.status,
+            text_snippet(&response.body.to_string(), 500)
+        ));
+    }
+    let answer = extract_chat_completion_text(&response.body);
+    let mut sources = extract_search_info_sources(&response.body);
+    if sources.is_empty() {
+        sources = extract_sources_from_answer_text(&answer);
+    }
+    if answer.trim().is_empty() && sources.is_empty() {
+        return Err(
+            "Qwen Chat Completions web search returned no usable text or sources".to_string(),
+        );
+    }
+    Ok(json!({
+        "success": true,
+        "provider": "dashscope.chat_completions.enable_search",
+        "query": query,
+        "answer": answer,
+        "results": sources,
+        "resultCount": sources.len(),
+        "rawResultAvailable": true,
+    }))
+}
+
+fn openai_responses_search_endpoint(config: &ResolvedChatConfig) -> String {
     format!("{}/responses", normalize_base_url(&config.base_url))
+}
+
+fn qwen_chat_completions_search_endpoint(config: &ResolvedChatConfig) -> String {
+    format!("{}/chat/completions", normalize_base_url(&config.base_url))
 }
 
 fn anthropic_hosted_search(
@@ -158,6 +280,144 @@ fn anthropic_hosted_search(
         "resultCount": sources.len(),
         "rawResultAvailable": true,
     }))
+}
+
+fn qwen_responses_search_body(
+    config: &ResolvedChatConfig,
+    payload: &Value,
+    query: &str,
+    limit: usize,
+) -> Value {
+    let mut body = json!({
+        "model": config.model_name,
+        "tools": [{ "type": "web_search" }],
+        "input": hosted_search_instruction(query, limit),
+    });
+    body["enable_thinking"] =
+        json!(payload_bool(payload, &["enableThinking", "enable_thinking"]).unwrap_or(true));
+    body
+}
+
+fn qwen_chat_completions_search_body(
+    config: &ResolvedChatConfig,
+    payload: &Value,
+    query: &str,
+    limit: usize,
+) -> Value {
+    let mut body = json!({
+        "model": config.model_name,
+        "messages": [
+            { "role": "user", "content": hosted_search_instruction(query, limit) }
+        ],
+        "enable_search": true,
+    });
+    if let Some(search_options) = qwen_chat_search_options(payload) {
+        body["search_options"] = search_options;
+    }
+    if let Some(enable_thinking) = payload_bool(payload, &["enableThinking", "enable_thinking"]) {
+        body["enable_thinking"] = json!(enable_thinking);
+    }
+    body
+}
+
+fn qwen_uses_responses_web_search(model_name: &str) -> bool {
+    let model = model_name.trim().to_ascii_lowercase();
+    model.contains("qwen3.7")
+        || model.contains("qwen3.6-plus")
+        || model.contains("qwen3.6-flash")
+        || model.contains("qwen3.5-plus")
+        || model.contains("qwen3.5-flash")
+        || model == "qwen3-max"
+        || model.starts_with("qwen3-max-")
+}
+
+fn qwen_chat_search_options(payload: &Value) -> Option<Value> {
+    let mut options = payload_field(payload, "searchOptions")
+        .or_else(|| payload_field(payload, "search_options"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    insert_bool_if_absent(
+        &mut options,
+        "forced_search",
+        payload_bool(payload, &["forcedSearch", "forced_search"]).unwrap_or(true),
+    );
+
+    if let Some(strategy) = payload_string(payload, "searchStrategy")
+        .or_else(|| payload_string(payload, "search_strategy"))
+    {
+        let normalized = strategy.trim().to_ascii_lowercase();
+        if matches!(normalized.as_str(), "turbo" | "max" | "agent" | "agent_max") {
+            options
+                .entry("search_strategy")
+                .or_insert_with(|| json!(normalized));
+        }
+    }
+
+    if let Some(freshness) = payload_field(payload, "freshness")
+        .or_else(|| payload_field(payload, "freshnessDays"))
+        .and_then(Value::as_u64)
+    {
+        let freshness = freshness.clamp(1, 365);
+        options
+            .entry("freshness")
+            .or_insert_with(|| json!(freshness));
+        options
+            .entry("search_strategy")
+            .or_insert_with(|| json!("turbo"));
+    }
+
+    if let Some(domains) = normalized_string_array(
+        payload,
+        &[
+            "assignedSiteList",
+            "assigned_site_list",
+            "allowedDomains",
+            "allowed_domains",
+        ],
+    ) {
+        options
+            .entry("assigned_site_list")
+            .or_insert_with(|| json!(domains.into_iter().take(25).collect::<Vec<_>>()));
+        options
+            .entry("search_strategy")
+            .or_insert_with(|| json!("turbo"));
+    }
+
+    if let Some(enable_extension) = payload_bool(
+        payload,
+        &["enableSearchExtension", "enable_search_extension"],
+    ) {
+        options
+            .entry("enable_search_extension")
+            .or_insert_with(|| json!(enable_extension));
+    }
+
+    if let Some(prompt_intervene) = payload_string(payload, "promptIntervene")
+        .or_else(|| payload_string(payload, "prompt_intervene"))
+    {
+        let mut intention_options = options
+            .get("intention_options")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        intention_options
+            .entry("prompt_intervene")
+            .or_insert_with(|| json!(prompt_intervene));
+        options.insert(
+            "intention_options".to_string(),
+            Value::Object(intention_options),
+        );
+    }
+
+    (!options.is_empty()).then(|| Value::Object(options))
+}
+
+fn insert_bool_if_absent(options: &mut Map<String, Value>, key: &str, value: bool) {
+    options
+        .entry(key.to_string())
+        .or_insert_with(|| json!(value));
 }
 
 fn openai_web_search_tool(payload: &Value) -> Value {
@@ -291,6 +551,46 @@ fn extract_openai_response_text(response: &Value) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn extract_chat_completion_text(response: &Value) -> String {
+    response
+        .get("choices")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|choice| choice.get("message").or_else(|| choice.get("delta")))
+        .map(|message| {
+            message
+                .get("content")
+                .map(extract_message_content_text)
+                .unwrap_or_default()
+        })
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn extract_message_content_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("text")
+                    .or_else(|| item.get("content"))
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(_) => content
+            .get("text")
+            .or_else(|| content.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    }
 }
 
 fn extract_openai_response_sources(response: &Value) -> Vec<Value> {
@@ -466,6 +766,61 @@ fn collect_annotation_sources(value: &Value, sources: &mut Vec<Value>) {
     }
 }
 
+fn extract_search_info_sources(response: &Value) -> Vec<Value> {
+    let mut sources = Vec::new();
+    let mut seen_urls = BTreeSet::new();
+    collect_search_info_sources(response, &mut sources, &mut seen_urls);
+    sources
+}
+
+fn collect_search_info_sources(
+    value: &Value,
+    sources: &mut Vec<Value>,
+    seen_urls: &mut BTreeSet<String>,
+) {
+    match value {
+        Value::Object(map) => {
+            if let Some(results) = map.get("search_results").and_then(Value::as_array) {
+                for result in results {
+                    let Some(url) = result.get("url").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if url.trim().is_empty() || !seen_urls.insert(url.to_string()) {
+                        continue;
+                    }
+                    let title = result
+                        .get("title")
+                        .or_else(|| result.get("site_name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| url_host_title(url));
+                    let snippet = result
+                        .get("snippet")
+                        .or_else(|| result.get("summary"))
+                        .or_else(|| result.get("site_name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    sources.push(json!({
+                        "title": title,
+                        "url": url,
+                        "snippet": snippet,
+                    }));
+                }
+            }
+            for child in map.values() {
+                collect_search_info_sources(child, sources, seen_urls);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_search_info_sources(item, sources, seen_urls);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn extract_anthropic_text(response: &Value) -> String {
     response
         .get("content")
@@ -611,7 +966,7 @@ Sources:
     }
 
     #[test]
-    fn non_official_openai_compatible_search_uses_responses_passthrough() {
+    fn qwen3_5_search_uses_alibaba_responses_passthrough() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
             wire_api: crate::runtime::ProviderWireApi::ChatCompat,
@@ -622,9 +977,10 @@ Sources:
         };
 
         assert_eq!(
-            hosted_search_endpoint(&config),
+            openai_responses_search_endpoint(&config),
             "https://api.ziz.hk/redbox/v1/responses"
         );
+        assert!(qwen_uses_responses_web_search(&config.model_name));
     }
 
     #[test]
@@ -639,8 +995,109 @@ Sources:
         };
 
         assert_eq!(
-            hosted_search_endpoint(&config),
+            openai_responses_search_endpoint(&config),
             "https://api.openai.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn gpt_model_names_do_not_enter_qwen_search_branch() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+            api_key: None,
+            model_name: "gpt-4.1".to_string(),
+            reasoning_effort: None,
+        };
+
+        assert!(!is_qwen_search_config(&config));
+    }
+
+    #[test]
+    fn qwen_plus_search_uses_alibaba_chat_completions_body() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+            api_key: None,
+            model_name: "qwen-plus".to_string(),
+            reasoning_effort: None,
+        };
+        let payload = json!({
+            "allowedDomains": ["https://help.aliyun.com/"],
+            "freshness": 7,
+            "promptIntervene": "仅检索阿里云模型文档"
+        });
+        let body = qwen_chat_completions_search_body(&config, &payload, "qwen 联网搜索", 4);
+
+        assert!(!qwen_uses_responses_web_search(&config.model_name));
+        assert_eq!(
+            qwen_chat_completions_search_endpoint(&config),
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        );
+        assert_eq!(body["model"], json!("qwen-plus"));
+        assert_eq!(body["enable_search"], json!(true));
+        assert_eq!(body.get("tools"), None);
+        assert_eq!(body["search_options"]["forced_search"], json!(true));
+        assert_eq!(body["search_options"]["search_strategy"], json!("turbo"));
+        assert_eq!(body["search_options"]["freshness"], json!(7));
+        assert_eq!(
+            body["search_options"]["assigned_site_list"],
+            json!(["help.aliyun.com"])
+        );
+        assert_eq!(
+            body["search_options"]["intention_options"]["prompt_intervene"],
+            json!("仅检索阿里云模型文档")
+        );
+    }
+
+    #[test]
+    fn qwen_responses_search_body_uses_alibaba_responses_shape() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+            api_key: None,
+            model_name: "qwen3.7-max".to_string(),
+            reasoning_effort: None,
+        };
+        let body = qwen_responses_search_body(&config, &json!({}), "杭州天气", 6);
+
+        assert!(qwen_uses_responses_web_search(&config.model_name));
+        assert_eq!(body["model"], json!("qwen3.7-max"));
+        assert_eq!(body["tools"], json!([{ "type": "web_search" }]));
+        assert_eq!(body["enable_thinking"], json!(true));
+        assert_eq!(body.get("tool_choice"), None);
+        assert_eq!(body.get("search_options"), None);
+    }
+
+    #[test]
+    fn extracts_qwen_chat_completion_answer_and_search_info_sources() {
+        let response = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "answer"
+                }
+            }],
+            "output": {
+                "search_info": {
+                    "search_results": [{
+                        "title": "Aliyun",
+                        "url": "https://help.aliyun.com/zh/model-studio/web-search",
+                        "snippet": "联网搜索文档"
+                    }]
+                }
+            }
+        });
+
+        assert_eq!(extract_chat_completion_text(&response), "answer");
+        let sources = extract_search_info_sources(&response);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources[0]["url"],
+            json!("https://help.aliyun.com/zh/model-studio/web-search")
         );
     }
 }

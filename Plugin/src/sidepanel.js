@@ -85,7 +85,7 @@ init().catch((error) => {
   renderPageIdentity({
     platform: 'redbox',
     name: '识别失败',
-    logo: 'R',
+    logo: 'B',
     title: '侧栏初始化失败',
     detail: '请刷新侧栏后重试',
   });
@@ -264,7 +264,7 @@ async function refreshContext() {
     renderPageIdentity({
       platform: 'redbox',
       name: '识别失败',
-      logo: 'R',
+      logo: 'B',
       title: '当前页面状态读取失败',
       detail: '请确认页面已加载完成',
     });
@@ -289,7 +289,7 @@ function renderContext(nextContext) {
 
 function renderConnection(health) {
   if (!health?.success) {
-    elements.serverStatus.textContent = health?.error || '请先打开 RedBox 桌面端';
+    elements.serverStatus.textContent = '未链接，请打开Beav';
     elements.serverStatus.className = 'status error';
     return;
   }
@@ -322,7 +322,7 @@ function renderWorkspaceAndAccounts(nextContext, healthPayload) {
   }
   if (!healthPayload?.success) {
     elements.workspaceName.textContent = '当前空间：未连接';
-    elements.boundAccountName.textContent = '未连接 RedBox';
+    elements.boundAccountName.textContent = '未连接 Beav';
     return;
   }
 
@@ -479,7 +479,7 @@ function renderPageIdentity(view) {
     elements.platformIcon.classList.add('hidden');
     elements.platformFallback.classList.remove('hidden');
   }
-  elements.platformName.textContent = view.name || 'RedBox';
+  elements.platformName.textContent = view.name || 'Beav';
   elements.pageTitle.textContent = view.title || '当前页面';
   elements.pageDetail.textContent = view.detail || '';
 }
@@ -535,7 +535,7 @@ function renderCaptureActions(nextContext) {
     return;
   }
   if (!isHealthy) {
-    renderCaptureStatus('请先打开 RedBox 桌面端', 'error');
+    renderCaptureStatus('未链接，请打开Beav', 'error');
     return;
   }
   renderCaptureStatus(config.hint || '点击按钮后任务会进入下方队列', 'idle');
@@ -909,8 +909,8 @@ function renderBloggerNotesPanel(nextContext) {
     });
   } else if (!nextContext?.health?.success) {
     renderBloggerNotesProgress({
-      label: '桌面端未连接',
-      meta: '请先打开 RedBox 桌面端',
+      label: '未链接，请打开Beav',
+      meta: '',
       status: 'error',
     });
   } else if (last?.type === 'xhs:collect-blogger-notes' && last?.status === 'cancelled') {
@@ -940,7 +940,7 @@ function getCaptureActionConfig(nextContext) {
   if (!tab.url) {
     return {
       variant: 'empty',
-      title: 'RedBox 页面采集',
+      title: 'Beav 页面采集',
       subtitle: '打开网页后自动识别',
       actions: [],
     };
@@ -949,14 +949,14 @@ function getCaptureActionConfig(nextContext) {
     if (!USER_PROFILE_FEATURE_ENABLED) {
       return {
         variant: 'xhs-profile-hidden',
-        title: 'RedBox 博主采集',
+        title: 'Beav 博主采集',
         subtitle: '小红书博主页',
         actions: [],
       };
     }
     return {
       variant: 'xhs-profile',
-      title: 'RedBox 博主采集',
+      title: 'Beav 博主采集',
       subtitle: '小红书博主页',
       actions: [
         { label: '采集博主笔记', action: 'bloggerNotes', primary: true, title: '采集当前博主主页笔记' },
@@ -966,86 +966,86 @@ function getCaptureActionConfig(nextContext) {
   if (platform === 'xhs' && pageType === 'note') {
     return {
       variant: 'xhs-note',
-      title: 'RedBox 笔记采集',
+      title: 'Beav 笔记采集',
       subtitle: '小红书笔记页',
       actions: [
-        { label: '保存笔记', action: 'save', primary: true, title: '保存当前笔记到 RedBox' },
+        { label: '保存笔记', action: 'save', primary: true, title: '保存当前笔记到 Beav' },
       ],
     };
   }
   if (platform === 'xhs') {
     return {
       variant: 'xhs-page',
-      title: 'RedBox 小红书采集',
+      title: 'Beav 小红书采集',
       subtitle: '当前页面',
       actions: [
-        { label: '保存网页', action: 'savePageLink', primary: true, title: '保存当前页面链接到 RedBox' },
+        { label: '保存网页', action: 'savePageLink', primary: true, title: '保存当前页面链接到 Beav' },
       ],
     };
   }
   if (platform === 'youtube') {
     return {
       variant: 'youtube',
-      title: 'RedBox 视频采集',
+      title: 'Beav 视频采集',
       subtitle: 'YouTube',
       actions: [
-        { label: '保存视频', action: 'saveYoutube', primary: true, title: '保存当前 YouTube 视频到 RedBox' },
+        { label: '保存视频', action: 'saveYoutube', primary: true, title: '保存当前 YouTube 视频到 Beav' },
       ],
     };
   }
   if (platform === 'douyin') {
     return {
       variant: 'douyin',
-      title: 'RedBox 视频采集',
+      title: 'Beav 视频采集',
       subtitle: '抖音',
       actions: [
-        { label: '保存视频', action: 'saveDouyin', primary: true, title: '保存当前抖音视频到 RedBox' },
+        { label: '保存视频', action: 'saveDouyin', primary: true, title: '保存当前抖音视频到 Beav' },
       ],
     };
   }
   if (platform === 'wechat' && pageType === 'article') {
     return {
       variant: 'wechat',
-      title: 'RedBox 文章采集',
+      title: 'Beav 文章采集',
       subtitle: '微信公众号',
       actions: [
-        { label: '保存文章', action: 'savePageLink', primary: true, title: '保存当前公众号文章到 RedBox' },
+        { label: '保存文章', action: 'savePageLink', primary: true, title: '保存当前公众号文章到 Beav' },
       ],
     };
   }
   if (platform === 'zhihu' && pageInfo?.kind === 'zhihu-answer') {
     return {
       variant: 'zhihu',
-      title: 'RedBox 回答采集',
+      title: 'Beav 回答采集',
       subtitle: '知乎',
       actions: [
-        { label: '保存回答', action: 'saveZhihuAnswer', primary: true, title: '保存当前知乎回答到 RedBox' },
+        { label: '保存回答', action: 'saveZhihuAnswer', primary: true, title: '保存当前知乎回答到 Beav' },
       ],
     };
   }
   if (platform === 'zhihu' && pageInfo?.kind === 'zhihu-article') {
     return {
       variant: 'zhihu',
-      title: 'RedBox 文章采集',
+      title: 'Beav 文章采集',
       subtitle: '知乎专栏',
       actions: [
-        { label: '保存文章', action: 'saveZhihuArticle', primary: true, title: '保存当前知乎专栏文章到 RedBox' },
+        { label: '保存文章', action: 'saveZhihuArticle', primary: true, title: '保存当前知乎专栏文章到 Beav' },
       ],
     };
   }
   const platformMap = {
-    bilibili: { subtitle: 'Bilibili', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveBilibili', title: '保存当前 Bilibili 内容到 RedBox' },
-    kuaishou: { subtitle: '快手', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveKuaishou', title: '保存当前快手内容到 RedBox' },
-    tiktok: { subtitle: 'TikTok', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveTiktok', title: '保存当前 TikTok 内容到 RedBox' },
-    reddit: { subtitle: 'Reddit', label: pageType === 'post' ? '保存帖子' : '保存页面', action: 'saveReddit', title: '保存当前 Reddit 内容到 RedBox' },
-    x: { subtitle: 'X', label: pageType === 'post' ? '保存推文' : '保存页面', action: 'saveX', title: '保存当前 X 内容到 RedBox' },
-    instagram: { subtitle: 'Instagram', label: pageType === 'post' || pageType === 'video' ? '保存内容' : '保存页面', action: 'saveInstagram', title: '保存当前 Instagram 内容到 RedBox' },
+    bilibili: { subtitle: 'Bilibili', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveBilibili', title: '保存当前 Bilibili 内容到 Beav' },
+    kuaishou: { subtitle: '快手', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveKuaishou', title: '保存当前快手内容到 Beav' },
+    tiktok: { subtitle: 'TikTok', label: pageType === 'video' ? '保存视频' : '保存页面', action: 'saveTiktok', title: '保存当前 TikTok 内容到 Beav' },
+    reddit: { subtitle: 'Reddit', label: pageType === 'post' ? '保存帖子' : '保存页面', action: 'saveReddit', title: '保存当前 Reddit 内容到 Beav' },
+    x: { subtitle: 'X', label: pageType === 'post' ? '保存推文' : '保存页面', action: 'saveX', title: '保存当前 X 内容到 Beav' },
+    instagram: { subtitle: 'Instagram', label: pageType === 'post' || pageType === 'video' ? '保存内容' : '保存页面', action: 'saveInstagram', title: '保存当前 Instagram 内容到 Beav' },
   };
   if (platformMap[platform]) {
     const item = platformMap[platform];
     return {
       variant: platform,
-      title: 'RedBox 页面采集',
+      title: 'Beav 页面采集',
       subtitle: item.subtitle,
       actions: [
         { label: item.label, action: item.action, primary: true, title: item.title },
@@ -1054,24 +1054,24 @@ function getCaptureActionConfig(nextContext) {
   }
   return {
     variant: 'generic',
-    title: 'RedBox 页面采集',
+    title: 'Beav 页面采集',
     subtitle: tab.hostname || '当前网页',
     actions: [
-      { label: '保存网页', action: pageInfo?.action === 'save-page-auto' ? 'savePageAuto' : 'savePageLink', primary: true, title: '保存当前网页到 RedBox' },
+      { label: '保存网页', action: pageInfo?.action === 'save-page-auto' ? 'savePageAuto' : 'savePageLink', primary: true, title: '保存当前网页到 Beav' },
     ],
   };
 }
 
 function getCaptureActionMeta(action) {
   const map = {
-    save: { type: 'save-xhs', pending: '保存中...', done: '已保存到 RedBox' },
+    save: { type: 'save-xhs', pending: '保存中...', done: '已保存到 Beav' },
     download: { type: 'xhs:download-current-note', pending: '下载中...', done: '已创建下载任务' },
     comments: { type: 'xhs:collect-current-comments', pending: '采集中...', done: '评论已写入知识库' },
     blogger: { type: 'xhs:collect-current-blogger', pending: '绑定中...', done: '已绑定账号资料' },
     bloggerNotes: { type: 'xhs:collect-blogger-notes', pending: '采集中...', done: '已采集主页笔记' },
     exportJson: { type: 'xhs:export-current-note-json', pending: '导出中...', done: '已导出 JSON' },
-    savePageAuto: { type: 'save-page-auto', pending: '保存中...', done: '已保存到 RedBox' },
-    savePageLink: { type: 'save-page-link', pending: '保存中...', done: '已保存到 RedBox' },
+    savePageAuto: { type: 'save-page-auto', pending: '保存中...', done: '已保存到 Beav' },
+    savePageLink: { type: 'save-page-link', pending: '保存中...', done: '已保存到 Beav' },
     saveYoutube: { type: 'save-youtube', pending: '保存中...', done: '已保存 YouTube 视频' },
     saveDouyin: { type: 'save-douyin', pending: '保存中...', done: '已保存抖音视频' },
     saveZhihuAnswer: { type: 'save-zhihu-answer', pending: '保存中...', done: '已保存知乎回答' },
@@ -1088,7 +1088,7 @@ function getCaptureActionMeta(action) {
 
 function summarizeActionResponse(response, fallback) {
   if (response?.noteId) {
-    return response.duplicate ? '知识库中已存在' : '已保存到 RedBox';
+    return response.duplicate ? '知识库中已存在' : '已保存到 Beav';
   }
   if (response?.mode === 'xhs-blogger-notes') {
     return `博主笔记 ${Number(response.count || 0)} 条，失败 ${Number(response.failed || 0)} 条`;
@@ -1258,7 +1258,7 @@ function normalizePlatform(value) {
   if (/^x$|(^|[^a-z])x\.com|twitter|platform-x|[^a-z]x[^a-z]/.test(text)) return 'x';
   if (/zhihu|知乎/.test(text)) return 'zhihu';
   if (/weixin|wechat|mp\.weixin|公众号/.test(text)) return 'wechat';
-  if (/redbox|redconvert/.test(text)) return 'redbox';
+  if (/beav|redbox|redconvert/.test(text)) return 'redbox';
   return 'web';
 }
 
@@ -1286,7 +1286,7 @@ function getPlatformMeta(platform) {
     instagram: { platform: 'instagram', name: 'Instagram', logo: 'I', icon: 'assets/platforms/instagram.svg' },
     wechat: { platform: 'wechat', name: '微信公众号', logo: '微' },
     zhihu: { platform: 'zhihu', name: '知乎', logo: '知', icon: 'assets/platforms/zhihu.svg' },
-    redbox: { platform: 'redbox', name: 'RedBox', logo: 'R' },
+    redbox: { platform: 'redbox', name: 'Beav', logo: 'B' },
     web: { platform: 'web', name: '网页', logo: 'W' },
   };
   return map[platform] || map.web;

@@ -15,7 +15,7 @@ use crate::session_manager::{
     session_resume_value, set_session_starred, set_session_unread, update_metadata,
 };
 use crate::skills::{merge_requested_skills_into_metadata, SkillActivationSource};
-use crate::store::settings as settings_store;
+use crate::store::{settings as settings_store, topic_center as topic_center_store};
 use crate::*;
 use base64::Engine;
 use serde_json::{json, Value};
@@ -950,7 +950,12 @@ fn enrich_wander_items_with_optional_index(
 }
 
 fn recent_wander_excluded_ids(store: &AppStore, recent_limit: usize) -> HashSet<String> {
-    let mut history = if store.wander_history.is_empty() {
+    let mut history = if !store.topic_center.is_empty() {
+        topic_center_store::topic_records_for_list(store, true)
+            .into_iter()
+            .map(|record| topic_center_store::wander_history_from_topic_record(&record))
+            .collect::<Vec<_>>()
+    } else if store.wander_history.is_empty() {
         rebuild_wander_history_from_sessions(store)
     } else {
         store.wander_history.clone()
@@ -1683,7 +1688,15 @@ fn collect_comment_insight_prior_topics(
         return Vec::new();
     }
     let mut topics = Vec::new();
-    for record in &store.wander_history {
+    let history = if !store.topic_center.is_empty() {
+        topic_center_store::topic_records_for_list(store, true)
+            .into_iter()
+            .map(|record| topic_center_store::wander_history_from_topic_record(&record))
+            .collect::<Vec<_>>()
+    } else {
+        store.wander_history.clone()
+    };
+    for record in &history {
         let Ok(record_items) = serde_json::from_str::<Vec<Value>>(&record.items) else {
             continue;
         };
@@ -3742,34 +3755,39 @@ pub fn handle_chat_sessions_wander_channel(
                         store.wander_history = rebuilt;
                     }
                 }
-                let mut history = store
-                    .wander_history
-                    .iter()
-                    .filter(|item| include_abandoned || item.status.as_deref() != Some("abandoned"))
-                    .cloned()
+                topic_center_store::migrate_wander_history(store);
+                let history = topic_center_store::topic_records_for_list(store, include_abandoned)
+                    .into_iter()
+                    .map(|record| topic_center_store::wander_history_from_topic_record(&record))
                     .collect::<Vec<_>>();
-                history.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 Ok(json!(history))
             }),
             "wander:abandon-history" => {
                 let history_id = payload_value_as_string(&payload).unwrap_or_default();
                 with_store_mut(state, |store| {
+                    topic_center_store::migrate_wander_history(store);
                     let Some(record) = store
-                        .wander_history
+                        .topic_center
                         .iter_mut()
                         .find(|item| item.id == history_id)
                     else {
                         return Err("选题不存在".to_string());
                     };
-                    record.status = Some("abandoned".to_string());
-                    record.abandoned_at = Some(now_i64());
+                    let now = now_i64();
+                    record.status = "abandoned".to_string();
+                    record.abandoned_at = Some(now);
+                    record.updated_at = now;
+                    let updated = record.clone();
+                    topic_center_store::upsert_wander_history_compat(store, &updated);
                     Ok(json!({ "success": true }))
                 })
             }
             "wander:delete-history" => {
                 let history_id = payload_value_as_string(&payload).unwrap_or_default();
                 with_store_mut(state, |store| {
-                    store.wander_history.retain(|item| item.id != history_id);
+                    topic_center_store::migrate_wander_history(store);
+                    store.topic_center.retain(|item| item.id != history_id);
+                    topic_center_store::remove_wander_history_compat(store, &history_id);
                     Ok(json!({ "success": true }))
                 })
             }
@@ -4228,14 +4246,26 @@ pub fn handle_chat_sessions_wander_channel(
                         "Wander brainstorm completed".to_string(),
                         Some(json!({ "responsePreview": text_snippet(&result_text, 160) })),
                     );
-                    store.wander_history.push(WanderHistoryRecord {
+                    let history_record = WanderHistoryRecord {
                         id: history_id.clone(),
                         items: serde_json::to_string(&items).map_err(|error| error.to_string())?,
                         result: result_text.clone(),
                         created_at: now_i64(),
                         status: None,
                         abandoned_at: None,
-                    });
+                    };
+                    store.wander_history.push(history_record.clone());
+                    let topic_record =
+                        topic_center_store::topic_record_from_wander_history(&history_record);
+                    if let Some(existing) = store
+                        .topic_center
+                        .iter_mut()
+                        .find(|item| item.id == topic_record.id)
+                    {
+                        *existing = topic_record;
+                    } else {
+                        store.topic_center.push(topic_record);
+                    }
                     Ok(())
                 })?;
                 log_timing_event(

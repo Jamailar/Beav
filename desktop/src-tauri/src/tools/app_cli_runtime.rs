@@ -99,6 +99,9 @@ pub(super) fn handle(
                     .unwrap_or(50)
             }),
         ),
+        "get-model-config" | "model-config" => {
+            executor.call_channel("runtime:get-model-config", json!({}))
+        }
         "tasks" => {
             let sub = tokens.get(1).map(String::as_str).unwrap_or("list");
             let nested_args = parse_cli_args(&tokens[2..])?;

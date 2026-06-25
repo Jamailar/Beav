@@ -635,11 +635,11 @@ select {
 .app-founder-sponsor-button[data-active='true'] {
   color: rgb(255 239 190 / 0.98);
   background:
-    radial-gradient(circle at 18% 16%, rgb(255 243 196 / 0.32), transparent 28%),
-    linear-gradient(135deg, rgb(70 43 18 / 0.96), rgb(154 101 31 / 0.92) 48%, rgb(45 27 13 / 0.98));
+    radial-gradient(circle at 18% 16%, rgb(255 246 214 / 0.34), transparent 28%),
+    linear-gradient(135deg, rgb(246 155 92 / 0.98), rgb(231 116 75 / 0.96) 52%, rgb(196 93 96 / 0.98));
   border-color: rgb(245 211 132 / 0.76);
   box-shadow:
-    0 14px 32px -20px rgb(146 64 14 / 0.78),
+    0 14px 32px -20px rgb(225 92 64 / 0.5),
     0 0 0 1px rgb(255 250 225 / 0.16) inset,
     0 1px 0 rgb(255 255 255 / 0.24) inset;
 }
@@ -672,7 +672,7 @@ select {
 
 .app-founder-sponsor-button[data-active='true'] > svg {
   color: rgb(255 226 137 / 1);
-  filter: drop-shadow(0 1px 1px rgb(58 31 8 / 0.55));
+  filter: drop-shadow(0 1px 1px rgb(151 60 52 / 0.28));
 }
 
 [data-brand='beav'] .app-founder-sponsor-button {
@@ -694,10 +694,10 @@ select {
   color: rgb(255 250 244 / 0.98);
   background:
     radial-gradient(circle at 18% 16%, rgb(255 244 231 / 0.26), transparent 30%),
-    linear-gradient(135deg, rgb(var(--color-accent-primary) / 0.96), rgb(196 105 55 / 0.94) 52%, rgb(107 76 53 / 0.98));
+    linear-gradient(135deg, rgb(var(--color-accent-primary) / 0.98), rgb(229 125 78 / 0.96) 52%, rgb(214 112 111 / 0.98));
   border-color: rgb(var(--color-accent-muted) / 0.68);
   box-shadow:
-    0 12px 24px -18px rgb(58 47 42 / 0.62),
+    0 12px 24px -18px rgb(211 93 65 / 0.46),
     0 0 0 1px rgb(255 250 244 / 0.16) inset,
     0 1px 0 rgb(255 255 255 / 0.18) inset;
 }
@@ -936,7 +936,8 @@ select {
 .app-founder-sponsor-benefit-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px 8px;
+  gap: 12px 24px;
+  padding: 2px 4px 0;
 }
 
 .app-founder-member-overview {
@@ -949,7 +950,7 @@ select {
   position: relative;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid rgb(237 211 170 / 0.88);
+  border: 0;
   border-radius: 16px;
   background:
     radial-gradient(circle at 18% 0%, rgb(255 242 202 / 0.58), transparent 38%),
@@ -1029,14 +1030,10 @@ select {
 .app-founder-sponsor-benefit-tile {
   display: flex;
   min-width: 0;
-  min-height: 46px;
+  min-height: 40px;
   align-items: center;
-  gap: 9px;
-  border: 1px solid rgb(232 222 207 / 0.86);
-  border-radius: 10px;
-  background: rgb(255 255 255 / 0.78);
-  padding: 8px 11px;
-  box-shadow: 0 1px 0 rgb(255 255 255 / 0.8) inset;
+  gap: 10px;
+  padding: 4px 0;
 }
 
 .app-founder-sponsor-tile-icon {
@@ -1185,12 +1182,6 @@ select {
   border-color: rgb(var(--color-accent-primary) / 0.38);
 }
 
-[data-brand='beav'] .app-founder-sponsor-benefit-tile {
-  border-color: rgb(var(--color-border) / 0.88);
-  background: rgb(var(--color-background) / 0.56);
-  box-shadow: 0 1px 0 rgb(255 250 244 / 0.56) inset;
-}
-
 [data-brand='beav'] .app-founder-sponsor-tile-icon--gold,
 [data-brand='beav'] .app-founder-sponsor-tile-icon--purple {
   color: rgb(var(--color-accent-primary));
@@ -1300,7 +1291,7 @@ select {
   }
 
   .app-founder-sponsor-benefit-tile {
-    padding: 12px 14px;
+    padding: 7px 0;
   }
 }
 

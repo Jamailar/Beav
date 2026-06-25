@@ -97,6 +97,9 @@ pub fn load_session_bundle_chat_messages(
     let messages = load_session_bundle_messages(state, &resolved_session_id)?;
     let mut restored = Vec::<ChatMessageRecord>::new();
     for (index, item) in messages.into_iter().enumerate() {
+        if is_internal_runtime_bundle_message(&item) {
+            continue;
+        }
         let role = item
             .get("role")
             .and_then(Value::as_str)
@@ -138,6 +141,9 @@ pub fn merge_chat_messages_with_bundle_history(
     mut messages: Vec<ChatMessageRecord>,
     bundle_messages: Vec<ChatMessageRecord>,
 ) -> Vec<ChatMessageRecord> {
+    messages.retain(|message| {
+        !(message.role == "user" && is_internal_runtime_history_user_message(&message.content))
+    });
     if bundle_messages.len() <= messages.len() {
         messages.sort_by(|a, b| compare_created_at(&a.created_at, &b.created_at));
         return messages;
@@ -219,6 +225,10 @@ pub fn duplicate_session_bundle(
     bundle.session_id = target_session_id.to_string();
     bundle.created_at = now_iso();
     bundle.updated_at = now_iso();
+    bundle
+        .messages
+        .retain(|message| !is_internal_runtime_bundle_message(message));
+    bundle.message_count = bundle.messages.len() as i64;
     persist_session_runtime_bundle(state, &bundle)?;
     let entries = load_transcript_entries(state, source_session_id)?;
     for entry in entries {
@@ -227,12 +237,17 @@ pub fn duplicate_session_bundle(
                 message,
                 created_at,
                 ..
-            } => SessionTranscriptFileEntry::Message {
-                entry_id: make_id("entry"),
-                session_id: target_session_id.to_string(),
-                message,
-                created_at,
-            },
+            } => {
+                if is_internal_runtime_bundle_message(&message) {
+                    continue;
+                }
+                SessionTranscriptFileEntry::Message {
+                    entry_id: make_id("entry"),
+                    session_id: target_session_id.to_string(),
+                    message,
+                    created_at,
+                }
+            }
             SessionTranscriptFileEntry::Metadata {
                 title,
                 tag,

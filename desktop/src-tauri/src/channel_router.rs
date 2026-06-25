@@ -106,6 +106,11 @@ pub(crate) fn handle_channel(
     {
         return result;
     }
+    if let Some(result) =
+        commands::topic_center::handle_topic_center_channel(app, state, channel, &payload)
+    {
+        return result;
+    }
     if let Some(result) = commands::chat_sessions_wander::handle_chat_sessions_wander_channel(
         app, state, channel, &payload,
     ) {

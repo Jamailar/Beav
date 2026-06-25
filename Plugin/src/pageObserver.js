@@ -899,8 +899,8 @@ function ensureDragDropUi() {
         }
       </style>
 	      <div class="zone" data-visible="false" data-state="idle">
-	        <div class="eyebrow">RedBox Capture</div>
-	        <div class="title">保存图片到 RedBox</div>
+	        <div class="eyebrow">Beav</div>
+	        <div class="title">保存图片到 Beav</div>
 	        <div class="meta">松手后会直接保存到素材库，并保留来源域名与原页面链接。</div>
 	      </div>
 	    `;
@@ -922,7 +922,7 @@ function setDragZoneState(state, payload, message) {
     ensureDragDropUi();
     if (!dragOverlayHost || !dragZoneElement || !dragZoneTitleElement || !dragZoneMetaElement) return;
 
-    const title = normalizeText(payload?.title) || '保存图片到 RedBox';
+    const title = normalizeText(payload?.title) || '保存图片到 Beav';
     dragOverlayHost.style.display = 'block';
     dragZoneElement.dataset.visible = 'true';
     dragZoneElement.dataset.state = state;
@@ -943,7 +943,7 @@ function setDragZoneState(state, payload, message) {
         return;
     }
 
-    dragZoneTitleElement.textContent = '保存图片到 RedBox';
+    dragZoneTitleElement.textContent = '保存图片到 Beav';
     dragZoneMetaElement.textContent = message || title;
 }
 
@@ -1177,7 +1177,7 @@ function summarizeActionResponse(response, fallback) {
         if (response.duplicate) {
             return response.updated ? '知识库中已存在，已更新' : '知识库中已存在';
         }
-        return '已保存到 RedBox';
+        return '已保存到 Beav';
     }
     if (response?.mode === 'xhs-link-batch') {
         return `成功 ${Number(response.count || 0)} 条，失败 ${Number(response.failed || 0)} 条`;
@@ -1206,7 +1206,7 @@ function summarizeActionResponse(response, fallback) {
 async function runXhsDomAction(action, options = {}) {
     if (!USER_PROFILE_FEATURE_ENABLED && (action === 'blogger' || action === 'bloggerNotes')) return;
     const actionMap = {
-        save: { type: 'save-xhs', pending: '保存中...', done: '已保存到 RedBox' },
+        save: { type: 'save-xhs', pending: '保存中...', done: '已保存到 Beav' },
         download: { type: 'xhs:download-current-note', pending: '下载中...', done: '已创建下载任务' },
         downloadZip: { type: 'xhs:download-current-note-zip', pending: '打包中...', done: '已创建压缩包下载' },
         comments: { type: 'xhs:collect-current-comments', pending: '采集中...', done: '评论已写入知识库' },
@@ -1214,8 +1214,8 @@ async function runXhsDomAction(action, options = {}) {
         bloggerNotes: { type: 'xhs:collect-blogger-notes', pending: '采集中...', done: '已采集主页笔记' },
         exportJson: { type: 'xhs:export-current-note-json', pending: '导出中...', done: '已导出 JSON' },
         collectLink: { type: 'xhs:collect-note-links', pending: '采集中...', done: '已采集' },
-        savePageAuto: { type: 'save-page-auto', pending: '保存中...', done: '已保存到 RedBox' },
-        savePageLink: { type: 'save-page-link', pending: '保存中...', done: '已保存到 RedBox' },
+        savePageAuto: { type: 'save-page-auto', pending: '保存中...', done: '已保存到 Beav' },
+        savePageLink: { type: 'save-page-link', pending: '保存中...', done: '已保存到 Beav' },
         saveYoutube: { type: 'save-youtube', pending: '保存中...', done: '已保存 YouTube 视频' },
         saveDouyin: { type: 'save-douyin', pending: '保存中...', done: '已保存抖音视频' },
         saveZhihuAnswer: { type: 'save-zhihu-answer', pending: '保存中...', done: '已保存知乎回答' },
@@ -1309,10 +1309,10 @@ function ensureXhsDomStyle() {
       }
       .redbox-xhs-btn,
       .redbox-xhs-card-btn {
-        border: 1px solid rgba(194, 65, 12, 0.26);
+        border: 1px solid rgba(15, 118, 110, 0.28);
         border-radius: 8px;
         background: #ffffff;
-        color: #9a3412;
+        color: #115e59;
         cursor: pointer;
         font: 650 12px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
       }
@@ -1321,14 +1321,14 @@ function ensureXhsDomStyle() {
         padding: 7px 10px;
       }
       .redbox-xhs-btn.primary {
-        background: #c2410c;
-        border-color: #c2410c;
-        color: #fff7ed;
+        background: #0f766e;
+        border-color: #0f766e;
+        color: #f7fffb;
       }
       .redbox-xhs-btn:hover,
       .redbox-xhs-card-btn:hover {
-        border-color: #9a3412;
-        box-shadow: 0 6px 18px rgba(154, 52, 18, 0.14);
+        border-color: #115e59;
+        box-shadow: 0 6px 18px rgba(15, 118, 110, 0.14);
       }
       .redbox-xhs-btn:disabled,
       .redbox-xhs-card-btn:disabled {
@@ -1343,7 +1343,7 @@ function ensureXhsDomStyle() {
         word-break: break-word;
       }
       .redbox-xhs-status[data-state="pending"] {
-        color: #9a3412;
+        color: #115e59;
       }
       .redbox-xhs-status[data-state="error"] {
         color: #b91c1c;
@@ -1375,7 +1375,7 @@ function ensureXhsDomStyle() {
         word-break: break-word;
       }
       .redbox-xhs-card-status[data-state="pending"] {
-        color: #9a3412;
+        color: #115e59;
       }
       .redbox-xhs-card-status[data-state="error"] {
         color: #b91c1c;
@@ -1546,19 +1546,19 @@ function createXhsDetailHost(injectionKey) {
       }
       button {
         min-height: 32px;
-        border: 1px solid #c2410c;
+        border: 1px solid #0f766e;
         border-radius: 8px;
-        background: #c2410c;
-        color: #fff7ed;
+        background: #0f766e;
+        color: #f7fffb;
         cursor: pointer;
         padding: 7px 14px;
         font: 700 13px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
         white-space: nowrap;
-        box-shadow: 0 6px 18px rgba(194, 65, 12, 0.14);
+        box-shadow: 0 6px 18px rgba(15, 118, 110, 0.14);
       }
       button:hover {
-        background: #9a3412;
-        border-color: #9a3412;
+        background: #115e59;
+        border-color: #115e59;
       }
       button:disabled {
         cursor: not-allowed;
@@ -1571,7 +1571,7 @@ function createXhsDetailHost(injectionKey) {
         word-break: break-word;
       }
       .redbox-xhs-status[data-state="pending"] {
-        color: #9a3412;
+        color: #115e59;
       }
       .redbox-xhs-status[data-state="error"] {
         color: #b91c1c;
@@ -1583,7 +1583,7 @@ function createXhsDetailHost(injectionKey) {
     saveButton.type = 'button';
     saveButton.dataset.redboxAction = 'save';
     saveButton.textContent = '保存笔记';
-    saveButton.title = '保存当前小红书笔记到 RedBox';
+    saveButton.title = '保存当前小红书笔记到 Beav';
     const zipButton = document.createElement('button');
     zipButton.type = 'button';
     zipButton.dataset.redboxAction = 'downloadZip';
@@ -1689,7 +1689,7 @@ function injectXhsProfileActions() {
     status.className = 'redbox-xhs-status';
     status.hidden = true;
     if (ACCOUNT_BINDING_FEATURE_ENABLED) {
-        container.append(makeXhsDomButton('保存博主', 'blogger', { primary: true, statusTarget: container, title: '保存当前小红书博主资料到 RedBox' }));
+        container.append(makeXhsDomButton('保存博主', 'blogger', { primary: true, statusTarget: container, title: '保存当前小红书博主资料到 Beav' }));
     }
     container.append(
         makeXhsDomButton('采集博主笔记', 'bloggerNotes', { primary: !ACCOUNT_BINDING_FEATURE_ENABLED, statusTarget: container, title: '采集当前博主主页全部可加载笔记' }),
@@ -1749,7 +1749,7 @@ function injectXhsCardButtons() {
         button.type = 'button';
         button.className = 'redbox-xhs-card-btn';
         button.textContent = '采集';
-        button.title = '采集这条小红书笔记到 RedBox';
+        button.title = '采集这条小红书笔记到 Beav';
         const status = document.createElement('span');
         status.className = 'redbox-xhs-card-status redbox-xhs-status';
         status.hidden = true;
@@ -1819,10 +1819,10 @@ function getRedboxOverlayConfig(pageInfo) {
     if (isXhsNoteDetailPath() || /^xhs-(note|image|video)$/i.test(String(pageInfo?.kind || ''))) {
         return {
             variant: 'note',
-            title: 'RedBox 笔记采集',
+            title: 'Beav 笔记采集',
             subtitle: '小红书笔记页',
             actions: [
-                { label: '保存笔记', action: 'save', primary: true, title: '保存当前笔记到 RedBox' },
+                { label: '保存笔记', action: 'save', primary: true, title: '保存当前笔记到 Beav' },
                 { label: '下载素材', action: 'download', title: '下载当前笔记图片或视频' },
                 { label: '采集评论', action: 'comments', title: '采集当前笔记评论' },
                 { label: '导出 JSON', action: 'exportJson', title: '导出当前笔记原始 JSON' },
@@ -1832,47 +1832,47 @@ function getRedboxOverlayConfig(pageInfo) {
     if (isXhsHost()) {
         return {
             variant: 'xhs',
-            title: 'RedBox 小红书采集',
+            title: 'Beav 小红书采集',
             subtitle: '当前页面',
             actions: [
-                { label: '保存网页', action: 'savePageLink', primary: true, title: '保存当前页面链接到 RedBox' },
+                { label: '保存网页', action: 'savePageLink', primary: true, title: '保存当前页面链接到 Beav' },
             ],
         };
     }
     if (pageInfo?.kind === 'youtube') {
         return {
             variant: 'youtube',
-            title: 'RedBox 视频采集',
+            title: 'Beav 视频采集',
             subtitle: 'YouTube',
             actions: [
-                { label: '保存视频', action: 'saveYoutube', primary: true, title: '保存当前 YouTube 视频到 RedBox' },
+                { label: '保存视频', action: 'saveYoutube', primary: true, title: '保存当前 YouTube 视频到 Beav' },
             ],
         };
     }
     if (pageInfo?.kind === 'douyin-video') {
         return {
             variant: 'douyin',
-            title: 'RedBox 视频采集',
+            title: 'Beav 视频采集',
             subtitle: '抖音',
             actions: [
-                { label: '保存视频', action: 'saveDouyin', primary: true, title: '保存当前抖音视频到 RedBox' },
+                { label: '保存视频', action: 'saveDouyin', primary: true, title: '保存当前抖音视频到 Beav' },
             ],
         };
     }
     const platformMap = {
-        'bilibili': { variant: 'bilibili', subtitle: 'Bilibili', label: '保存内容', action: 'saveBilibili', title: '保存当前 Bilibili 内容到 RedBox' },
-        'kuaishou': { variant: 'kuaishou', subtitle: '快手', label: '保存内容', action: 'saveKuaishou', title: '保存当前快手内容到 RedBox' },
-        'tiktok': { variant: 'tiktok', subtitle: 'TikTok', label: '保存内容', action: 'saveTiktok', title: '保存当前 TikTok 内容到 RedBox' },
-        'reddit': { variant: 'reddit', subtitle: 'Reddit', label: '保存内容', action: 'saveReddit', title: '保存当前 Reddit 内容到 RedBox' },
-        'x': { variant: 'x', subtitle: 'X', label: '保存内容', action: 'saveX', title: '保存当前 X 内容到 RedBox' },
-        'instagram': { variant: 'instagram', subtitle: 'Instagram', label: '保存内容', action: 'saveInstagram', title: '保存当前 Instagram 内容到 RedBox' },
+        'bilibili': { variant: 'bilibili', subtitle: 'Bilibili', label: '保存内容', action: 'saveBilibili', title: '保存当前 Bilibili 内容到 Beav' },
+        'kuaishou': { variant: 'kuaishou', subtitle: '快手', label: '保存内容', action: 'saveKuaishou', title: '保存当前快手内容到 Beav' },
+        'tiktok': { variant: 'tiktok', subtitle: 'TikTok', label: '保存内容', action: 'saveTiktok', title: '保存当前 TikTok 内容到 Beav' },
+        'reddit': { variant: 'reddit', subtitle: 'Reddit', label: '保存内容', action: 'saveReddit', title: '保存当前 Reddit 内容到 Beav' },
+        'x': { variant: 'x', subtitle: 'X', label: '保存内容', action: 'saveX', title: '保存当前 X 内容到 Beav' },
+        'instagram': { variant: 'instagram', subtitle: 'Instagram', label: '保存内容', action: 'saveInstagram', title: '保存当前 Instagram 内容到 Beav' },
     };
     const platformKey = String(pageInfo?.platform || pageInfo?.kind || '').split('-')[0];
     if (platformMap[platformKey]) {
         const platform = platformMap[platformKey];
         return {
             variant: platform.variant,
-            title: 'RedBox 页面采集',
+            title: 'Beav 页面采集',
             subtitle: platform.subtitle,
             actions: [
                 { label: platform.label, action: platform.action, primary: true, title: platform.title },
@@ -1882,39 +1882,39 @@ function getRedboxOverlayConfig(pageInfo) {
     if (pageInfo?.kind === 'wechat-article') {
         return {
             variant: 'wechat',
-            title: 'RedBox 文章采集',
+            title: 'Beav 文章采集',
             subtitle: '微信公众号',
             actions: [
-                { label: '保存文章', action: 'savePageLink', primary: true, title: '保存当前公众号文章到 RedBox' },
+                { label: '保存文章', action: 'savePageLink', primary: true, title: '保存当前公众号文章到 Beav' },
             ],
         };
     }
     if (pageInfo?.kind === 'zhihu-answer') {
         return {
             variant: 'zhihu',
-            title: 'RedBox 回答采集',
+            title: 'Beav 回答采集',
             subtitle: '知乎',
             actions: [
-                { label: '保存回答', action: 'saveZhihuAnswer', primary: true, title: '保存当前知乎回答到 RedBox' },
+                { label: '保存回答', action: 'saveZhihuAnswer', primary: true, title: '保存当前知乎回答到 Beav' },
             ],
         };
     }
     if (pageInfo?.kind === 'zhihu-article') {
         return {
             variant: 'zhihu',
-            title: 'RedBox 文章采集',
+            title: 'Beav 文章采集',
             subtitle: '知乎专栏',
             actions: [
-                { label: '保存文章', action: 'saveZhihuArticle', primary: true, title: '保存当前知乎专栏文章到 RedBox' },
+                { label: '保存文章', action: 'saveZhihuArticle', primary: true, title: '保存当前知乎专栏文章到 Beav' },
             ],
         };
     }
     return {
         variant: 'generic',
-        title: 'RedBox 页面采集',
+        title: 'Beav 页面采集',
         subtitle: pageInfo?.detected ? '当前页面' : '网页链接',
         actions: [
-            { label: '保存网页', action: pageInfo?.action === 'save-page-auto' ? 'savePageAuto' : 'savePageLink', primary: true, title: '保存当前网页到 RedBox' },
+            { label: '保存网页', action: pageInfo?.action === 'save-page-auto' ? 'savePageAuto' : 'savePageLink', primary: true, title: '保存当前网页到 Beav' },
         ],
     };
 }
@@ -2031,8 +2031,8 @@ function ensureXhsOverlay(pageInfo) {
           width: 28px;
           height: 28px;
           border-radius: 8px;
-          background: #c2410c;
-          color: #fff7ed;
+          background: #0f766e;
+          color: #f7fffb;
           font: 800 14px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
         }
         .panel-copy {
@@ -2070,13 +2070,13 @@ function ensureXhsOverlay(pageInfo) {
           line-height: 1.1;
         }
         button:hover:not(:disabled) {
-          border-color: #c2410c;
-          color: #9a3412;
+          border-color: #0f766e;
+          color: #115e59;
         }
         button.primary {
-          border-color: #c2410c;
-          background: #c2410c;
-          color: #fff7ed;
+          border-color: #0f766e;
+          background: #0f766e;
+          color: #f7fffb;
         }
         button:disabled {
           cursor: not-allowed;
@@ -2096,10 +2096,10 @@ function ensureXhsOverlay(pageInfo) {
           color: #b91c1c;
         }
         .status[data-state="pending"] {
-          color: #9a3412;
+          color: #115e59;
         }
       </style>
-      <div class="dock" role="toolbar" aria-label="RedBox 页面采集">
+      <div class="dock" role="toolbar" aria-label="Beav 页面采集">
       </div>
     `;
 

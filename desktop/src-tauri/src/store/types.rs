@@ -248,6 +248,39 @@ pub(crate) struct WanderHistoryRecord {
     pub(crate) abandoned_at: Option<i64>,
 }
 
+fn default_topic_center_status() -> String {
+    "active".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TopicCenterRecord {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) content_direction: String,
+    #[serde(default)]
+    pub(crate) direction_frame: Value,
+    pub(crate) method: String,
+    pub(crate) source_evidence: String,
+    #[serde(default)]
+    pub(crate) source_refs: Vec<Value>,
+    pub(crate) target_reader: String,
+    pub(crate) user_problem: String,
+    pub(crate) content_value: String,
+    pub(crate) fit_reason: String,
+    #[serde(default)]
+    pub(crate) score: Option<f64>,
+    #[serde(default = "default_topic_center_status")]
+    pub(crate) status: String,
+    pub(crate) created_by: String,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    #[serde(default)]
+    pub(crate) abandoned_at: Option<i64>,
+    #[serde(default)]
+    pub(crate) raw_result: Option<Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct YoutubeVideoRecord {
@@ -421,6 +454,7 @@ pub(crate) struct AppStore {
     pub(crate) embedding_cache: Vec<EmbeddingCacheRecord>,
     pub(crate) similarity_cache: Vec<SimilarityCacheRecord>,
     pub(crate) wander_history: Vec<WanderHistoryRecord>,
+    pub(crate) topic_center: Vec<TopicCenterRecord>,
     pub(crate) chat_sessions: Vec<ChatSessionRecord>,
     pub(crate) chat_messages: Vec<ChatMessageRecord>,
     pub(crate) session_context_records: Vec<ChatSessionContextRecord>,

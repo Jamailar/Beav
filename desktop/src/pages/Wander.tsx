@@ -112,6 +112,9 @@ interface WanderResult {
     topic: { title: string; connections: number[] };
   }>;
   selected_index?: number;
+  method?: string;
+  created_by?: string;
+  createdBy?: string;
 }
 
 interface WanderValidationIssue {
@@ -394,6 +397,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       selected_index: Number.isFinite(Number(result.selected_index))
         ? Math.max(0, Number(result.selected_index))
         : (Number.isFinite(Number(embedded.selected_index)) ? Math.max(0, Number(embedded.selected_index)) : 0),
+      method: result.method || embedded.method,
+      created_by: result.created_by || embedded.created_by,
+      createdBy: result.createdBy || embedded.createdBy,
     };
   }
 
@@ -507,7 +513,40 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       selected_index: Number.isFinite(Number(payload.selected_index ?? payload.selectedIndex))
         ? Math.max(0, Number(payload.selected_index ?? payload.selectedIndex))
         : 0,
+      method: String(payload.method || payload.sourceMethod || payload.source_mode || payload.sourceMode || '').trim() || undefined,
+      created_by: String(payload.created_by || payload.createdBy || '').trim() || undefined,
+      createdBy: String(payload.createdBy || payload.created_by || '').trim() || undefined,
     });
+  }
+
+  function normalizedTopicMethod(value: unknown): string {
+    return String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  }
+
+  function topicSourceLabel(parsed: WanderResult | null, recordItems: WanderItem[]): string {
+    const createdBy = String(parsed?.created_by || parsed?.createdBy || '').trim().toLowerCase();
+    const method = normalizedTopicMethod(parsed?.method);
+    if (['agent', 'ai', 'ai_agent', 'redclaw', 'content_topic_miner'].includes(createdBy)) {
+      return 'AI创作';
+    }
+    if ([
+      'ai_creation',
+      'content_topic_miner',
+      'knowledge_mining',
+      'knowledge_similar_mining',
+      'history_mining',
+      'trend_mining',
+    ].includes(method)) {
+      return 'AI创作';
+    }
+    if (method === 'comment_insight' || method === 'comment_demand_insight' || method.includes('comment')) {
+      return '评论洞察';
+    }
+    const isCommentInsight = recordItems.some((item) => {
+      const meta = item.meta || {};
+      return String(meta.sourceType || meta.source_type || '').trim() === 'xhs-comments';
+    });
+    return isCommentInsight ? '评论洞察' : '灵感漫步';
   }
 
   function normalizeWanderValidationIssues(raw: unknown): WanderValidationIssue[] {
@@ -1460,16 +1499,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       const selected = parsed?.options?.[optionIndex];
       const recordItems = normalizeWanderItemsPayload(record.items);
       const abandoned = isAbandonedHistoryRecord(record);
-      const isCommentInsight = recordItems.some((item) => {
-        const meta = item.meta || {};
-        return String(meta.sourceType || '').trim() === 'xhs-comments';
-      });
       return {
         id: record.id,
         title: selected?.topic.title || parsed?.topic.title || getHistoryTitle(record),
         direction: selected?.content_direction || parsed?.content_direction || '',
         createdAt: getHistoryCreatedAt(record),
-        source: isCommentInsight ? '评论洞察' : '灵感漫步',
+        source: topicSourceLabel(parsed, recordItems),
         score: Math.max(68, 91 - index * 3),
         status: abandoned ? '已放弃' : currentHistoryId === record.id ? '当前' : '待处理',
         evidenceCount: recordItems.length || 3,
@@ -1847,7 +1882,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-text-primary">选题池</h2>
-            <div className="mt-1 text-xs text-text-tertiary">统一管理灵感漫步和评论洞察生成的选题</div>
+            <div className="mt-1 text-xs text-text-tertiary">统一管理灵感漫步、评论洞察和 AI创作生成的选题</div>
           </div>
           <button
             type="button"
@@ -1907,7 +1942,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
               <Sparkles className="h-5 w-5" />
             </div>
             <div className="mt-4 text-sm font-semibold text-text-primary">暂无选题</div>
-            <div className="mt-1 max-w-sm text-xs leading-relaxed text-text-tertiary">点击上方“灵感漫步”生成第一组选题，后续评论洞察也会汇入这里。</div>
+            <div className="mt-1 max-w-sm text-xs leading-relaxed text-text-tertiary">点击上方“灵感漫步”生成第一组选题，后续评论洞察和 AI创作也会汇入这里。</div>
           </div>
         ) : (
           <div className="divide-y divide-border">

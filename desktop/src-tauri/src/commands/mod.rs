@@ -31,6 +31,7 @@ pub mod skills_ai;
 pub mod spaces;
 pub mod subjects;
 pub mod system;
+pub mod topic_center;
 pub mod voice;
 pub mod wechat_official;
 pub mod workspace_data;

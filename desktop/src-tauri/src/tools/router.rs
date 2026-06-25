@@ -939,6 +939,58 @@ mod tests {
     }
 
     #[test]
+    fn router_allows_read_current_manuscript_in_authoring_sessions() {
+        let metadata = json!({
+            "executionProfile": "artifact-authoring",
+            "artifactType": "manuscript",
+            "allowedTools": ["resource", "workflow"],
+            "allowedOperateActions": [
+                "skills.invoke",
+                "manuscripts.createProject"
+            ],
+            "allowedWriteTargets": ["manuscripts://current"],
+            "deferredDiscovery": false
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare("Read", &json!({ "path": "manuscripts://current" }))
+            .expect("Read current manuscript should route in authoring session");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("manuscripts.readCurrent"))
+        );
+    }
+
+    #[test]
+    fn router_allows_reading_listed_manuscript_paths_by_default() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare("Read", &json!({ "path": "manuscripts://wander/demo" }))
+            .expect("Read should route listed manuscript paths");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("manuscripts.read"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/path"),
+            Some(&json!("wander/demo"))
+        );
+    }
+
+    #[test]
     fn router_rejects_workspace_write_with_structured_action_hint() {
         let metadata = json!({
             "executionProfile": "artifact-authoring",

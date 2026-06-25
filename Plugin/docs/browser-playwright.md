@@ -1,6 +1,6 @@
 # Browser Playwright
 
-RedBox exposes a limited Playwright-shaped API through `tab.playwright`. It is not full upstream Playwright.
+Beav exposes a limited Playwright-shaped API through `tab.playwright`. It is not full upstream Playwright.
 
 - Use `domSnapshot()` for orientation and locator construction.
 - Use locators for scoped checks and actions.
@@ -31,4 +31,3 @@ Supported locator methods:
 - `innerText`, `textContent`, `isEnabled`, `isVisible`, `getAttribute`
 - `click`, `dblclick`, `fill`, `type`, `press`
 - `check`, `uncheck`, `setChecked`, `selectOption`, `waitFor`
-

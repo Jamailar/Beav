@@ -3,6 +3,8 @@ use tauri::{AppHandle, State};
 
 #[path = "runtime_collab.rs"]
 mod runtime_collab;
+#[path = "runtime_model_config.rs"]
+mod runtime_model_config;
 #[path = "runtime_query.rs"]
 mod runtime_query;
 #[path = "runtime_session_ops.rs"]
@@ -29,6 +31,9 @@ pub fn handle_runtime_session_channel(
             runtime_session_ops::runtime_tool_results_value(state, payload)
         }
         "runtime:get-events" => runtime_session_ops::runtime_events_value(state, payload),
+        "runtime:get-model-config" => {
+            runtime_model_config::runtime_model_config_value(state, payload)
+        }
         "runtime:list-approvals" => runtime_session_ops::runtime_approvals_value(state),
         "task-panel:list" => runtime_collab::task_panel_list_value(state, payload),
         "team-runtime:list-sessions" | "collab:sessions:list" => {

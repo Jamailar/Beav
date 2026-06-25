@@ -5,7 +5,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f6f6f2;
+  background: #f3f7f3;
   color: #171717;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
@@ -19,7 +19,7 @@ body {
 .page-header,
 .panel,
 .status-panel {
-  border: 1px solid #deded8;
+  border: 1px solid #d7e5df;
   border-radius: 8px;
   background: #fff;
 }
@@ -112,8 +112,8 @@ input[type="number"] {
 }
 
 input:focus {
-  border-color: #c2410c;
-  outline: 2px solid rgba(194, 65, 12, 0.12);
+  border-color: #0f766e;
+  outline: 2px solid rgba(15, 118, 110, 0.14);
 }
 
 .switch-row {
@@ -125,7 +125,7 @@ input:focus {
 .switch-row input {
   width: 16px;
   height: 16px;
-  accent-color: #c2410c;
+  accent-color: #0f766e;
 }
 
 .actions {
@@ -148,14 +148,14 @@ input:focus {
 }
 
 .btn:hover:not(:disabled) {
-  border-color: #c2410c;
-  color: #9a3412;
+  border-color: #0f766e;
+  color: #115e59;
 }
 
 .btn.primary {
-  border-color: #c2410c;
-  background: #c2410c;
-  color: #fff7ed;
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #f7fffb;
 }
 
 .btn.ghost {

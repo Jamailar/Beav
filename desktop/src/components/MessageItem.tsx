@@ -946,7 +946,7 @@ export const MessageItem = memo(({
   msg,
   copiedMessageId,
   onCopyMessage,
-  workflowPlacement = 'top',
+  workflowPlacement = 'bottom',
   workflowVariant = 'default',
   workflowEmphasis = 'default',
   workflowDisplayMode = 'all',

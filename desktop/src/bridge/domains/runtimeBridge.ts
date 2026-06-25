@@ -20,6 +20,7 @@ export function createRuntimeBridge(core: BridgeCore) {
         core.invokeChannel('runtime:get-tool-results', payload),
       getEvents: (payload: { sessionId: string; limit?: number; includeChildSessions?: boolean; category?: string; eventType?: string }) =>
         core.invokeChannel('runtime:get-events', payload),
+      getModelConfig: () => core.invokeChannel('runtime:get-model-config'),
       listApprovals: () => core.invokeChannel('runtime:list-approvals'),
       onEvent: (listener: Listener) => core.on('runtime:event', listener),
       offEvent: (listener: Listener) => core.off('runtime:event', listener),

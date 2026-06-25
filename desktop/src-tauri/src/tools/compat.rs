@@ -562,6 +562,22 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         .or_else(|| object.get("action"))
         .and_then(Value::as_str)
         .map(normalize_action_token);
+    let action_hint = nested_action
+        .as_deref()
+        .or_else(|| input.get("id").and_then(Value::as_str));
+    if resource == "runtime" {
+        if let Some(action) = action_hint {
+            if is_runtime_model_config_get_action(action) {
+                input.remove("action");
+                return app_cli_action_call(
+                    "runtime.modelConfig.get",
+                    Value::Object(input),
+                    Some("Operate"),
+                    Some("runtime.modelConfig.get"),
+                );
+            }
+        }
+    }
     if resource == "cli_runtime" {
         if let Some(action) = nested_action.as_deref() {
             if action.starts_with("cli_runtime.") {
@@ -727,6 +743,64 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ),
         ("memory", "create" | "add") => {
             app_cli_action_call("memory.note", payload, Some("Operate"), Some("memory.add"))
+        }
+        (
+            "topiccenter" | "topic-center" | "topic_center" | "topics",
+            "list" | "read" | "search",
+        ) => app_cli_action_call(
+            "topicCenter.read",
+            payload_with_operation(payload, "list"),
+            Some("Operate"),
+            Some("topicCenter.list"),
+        ),
+        ("topiccenter" | "topic-center" | "topic_center" | "topics", "get") => app_cli_action_call(
+            "topicCenter.read",
+            payload_with_operation(payload, "get"),
+            Some("Operate"),
+            Some("topicCenter.get"),
+        ),
+        ("topiccenter" | "topic-center" | "topic_center" | "topics", "create" | "add") => {
+            app_cli_action_call(
+                "topicCenter.manage",
+                payload_with_operation(payload, "create"),
+                Some("Operate"),
+                Some("topicCenter.create"),
+            )
+        }
+        (
+            "topiccenter" | "topic-center" | "topic_center" | "topics",
+            "update" | "edit" | "save",
+        ) => app_cli_action_call(
+            "topicCenter.manage",
+            payload_with_operation(payload, "update"),
+            Some("Operate"),
+            Some("topicCenter.update"),
+        ),
+        (
+            "topiccenter" | "topic-center" | "topic_center" | "topics",
+            "upsert" | "bulk-upsert" | "bulkupsert" | "bulkcreate" | "bulk-create",
+        ) => app_cli_action_call(
+            "topicCenter.manage",
+            payload_with_operation(payload, "bulkUpsert"),
+            Some("Operate"),
+            Some("topicCenter.bulkUpsert"),
+        ),
+        (
+            "topiccenter" | "topic-center" | "topic_center" | "topics",
+            "abandon" | "archive" | "discard",
+        ) => app_cli_action_call(
+            "topicCenter.manage",
+            payload_with_operation(payload, "abandon"),
+            Some("Operate"),
+            Some("topicCenter.abandon"),
+        ),
+        ("topiccenter" | "topic-center" | "topic_center" | "topics", "delete" | "remove") => {
+            app_cli_action_call(
+                "topicCenter.manage",
+                payload_with_operation(payload, "delete"),
+                Some("Operate"),
+                Some("topicCenter.delete"),
+            )
         }
         (
             "memory",
@@ -986,19 +1060,59 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("assets.generateCharacterCard"),
         ),
+        ("space" | "spaces", "manage") => app_cli_action_call(
+            "spaces.manage",
+            payload_with_default_operation(payload, "list"),
+            Some("Operate"),
+            Some("spaces.manage"),
+        ),
+        ("space" | "spaces", "list") => app_cli_action_call(
+            "spaces.manage",
+            payload_with_operation(payload, "list"),
+            Some("Operate"),
+            Some("spaces.list"),
+        ),
+        ("space" | "spaces", "get" | "read") => app_cli_action_call(
+            "spaces.manage",
+            payload_with_operation(payload, "get"),
+            Some("Operate"),
+            Some("spaces.get"),
+        ),
+        (
+            "space" | "spaces",
+            "create" | "add" | "switch" | "rename" | "delete" | "remove" | "ensure",
+        ) => {
+            let operation = match operation.as_str() {
+                "add" => "create",
+                "remove" => "delete",
+                other => other,
+            };
+            app_cli_action_call(
+                "spaces.manage",
+                payload_with_operation(payload, operation),
+                Some("Operate"),
+                Some("spaces.manage"),
+            )
+        }
         ("image", "generate" | "create" | "run") => app_cli_action_call(
             "image.generate",
             payload,
             Some("Operate"),
             Some("image.generate"),
         ),
-        ("generation" | "job" | "jobs", "list" | "search") => app_cli_action_call(
+        (
+            "generation" | "generation.job" | "generation_job" | "generation-job" | "job" | "jobs",
+            "list" | "search",
+        ) => app_cli_action_call(
             "generation.job.list",
             payload,
             Some("Operate"),
             Some("generation.job.list"),
         ),
-        ("generation" | "job" | "jobs", "get" | "status" | "progress") => {
+        (
+            "generation" | "generation.job" | "generation_job" | "generation-job" | "job" | "jobs",
+            "get" | "status" | "progress",
+        ) => {
             let payload = normalize_id_payload(payload, "jobId");
             app_cli_action_call(
                 "generation.job.get",
@@ -1018,6 +1132,30 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             normalize_voice_speech_payload(payload),
             Some("Operate"),
             Some("voice.speech"),
+        ),
+        ("voice", "list" | "search") => {
+            app_cli_action_call("voice.list", payload, Some("Operate"), Some("voice.list"))
+        }
+        ("voice", "get" | "read") => app_cli_action_call(
+            "voice.get",
+            normalize_id_payload(payload, "voiceId"),
+            Some("Operate"),
+            Some("voice.get"),
+        ),
+        ("voice", "clone") => {
+            app_cli_action_call("voice.clone", payload, Some("Operate"), Some("voice.clone"))
+        }
+        ("voice", "bindasset" | "bind-asset" | "bind") => app_cli_action_call(
+            "voice.bindAsset",
+            payload,
+            Some("Operate"),
+            Some("voice.bindAsset"),
+        ),
+        ("voice", "delete" | "remove") => app_cli_action_call(
+            "voice.delete",
+            normalize_id_payload(payload, "voiceId"),
+            Some("Operate"),
+            Some("voice.delete"),
         ),
         ("video", "analyze") => app_cli_action_call(
             "video.analyze",
@@ -1046,6 +1184,12 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("skill.read"),
             )
         }
+        ("skill" | "skills", "inspect") => app_cli_action_call(
+            "skills.inspect",
+            payload,
+            Some("Operate"),
+            Some("skill.inspect"),
+        ),
         ("skill" | "skills", "run" | "invoke" | "create" | "confirm") => {
             let mut map = payload.as_object().cloned().unwrap_or_default();
             if !map.contains_key("name") {
@@ -1086,6 +1230,42 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("mcp.get"),
         ),
+        ("mcp", "inspect") => app_cli_action_call(
+            "mcp.inspect",
+            payload_with_default_operation(payload, "list"),
+            Some("Operate"),
+            Some("mcp.inspect"),
+        ),
+        ("mcp", "sessions") => app_cli_action_call(
+            "mcp.inspect",
+            payload_with_operation(payload, "sessions"),
+            Some("Operate"),
+            Some("mcp.sessions"),
+        ),
+        ("mcp", "tools" | "listtools" | "list-tools") => app_cli_action_call(
+            "mcp.inspect",
+            payload_with_operation(payload, "tools"),
+            Some("Operate"),
+            Some("mcp.tools"),
+        ),
+        ("mcp", "resources" | "listresources" | "list-resources") => app_cli_action_call(
+            "mcp.inspect",
+            payload_with_operation(payload, "resources"),
+            Some("Operate"),
+            Some("mcp.resources"),
+        ),
+        (
+            "mcp",
+            "resourcetemplates"
+            | "resource-templates"
+            | "listresourcetemplates"
+            | "list-resource-templates",
+        ) => app_cli_action_call(
+            "mcp.inspect",
+            payload_with_operation(payload, "resourceTemplates"),
+            Some("Operate"),
+            Some("mcp.resourceTemplates"),
+        ),
         ("mcp", "verify") => app_cli_action_call(
             "mcp.manage",
             payload_with_operation(payload, "test"),
@@ -1119,6 +1299,14 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("media.videoRetalk"),
         ),
+        ("runtime", "modelconfig" | "model-config" | "getmodelconfig" | "get-model-config") => {
+            app_cli_action_call(
+                "runtime.modelConfig.get",
+                payload,
+                Some("Operate"),
+                Some("runtime.modelConfig.get"),
+            )
+        }
         ("runtime", "get" | "list") => app_cli_action_call(
             "runtime.query",
             payload,
@@ -2014,9 +2202,31 @@ fn app_cli_action_or_legacy_call(
     }
 }
 
+fn normalized_action_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn is_runtime_model_config_get_action(value: &str) -> bool {
+    matches!(
+        normalized_action_key(value).as_str(),
+        "runtimemodelconfigget" | "runtimegetmodelconfig"
+    )
+}
+
 fn payload_with_operation(payload: Value, operation: &str) -> Value {
     let mut map = payload.as_object().cloned().unwrap_or_default();
     map.insert("operation".to_string(), json!(operation));
+    Value::Object(map)
+}
+
+fn payload_with_default_operation(payload: Value, operation: &str) -> Value {
+    let mut map = payload.as_object().cloned().unwrap_or_default();
+    map.entry("operation".to_string())
+        .or_insert_with(|| json!(operation));
     Value::Object(map)
 }
 
@@ -3095,6 +3305,99 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_operate_control_plane_resources_to_structured_actions() {
+        let cases = [
+            ("skill", "inspect", "skills.inspect", None),
+            ("mcp", "inspect", "mcp.inspect", Some("list")),
+            ("mcp", "tools", "mcp.inspect", Some("tools")),
+            ("space", "manage", "spaces.manage", Some("list")),
+            ("generation.job", "list", "generation.job.list", None),
+            ("voice", "list", "voice.list", None),
+        ];
+
+        for (resource, operation, action, expected_payload_operation) in cases {
+            let normalized = normalize_tool_call(
+                "Operate",
+                &json!({
+                    "resource": resource,
+                    "operation": operation,
+                    "input": {}
+                }),
+            );
+            assert_eq!(normalized.name, "workflow", "{resource}.{operation}");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!(action)),
+                "{resource}.{operation}"
+            );
+            assert_eq!(normalized.arguments.get("command"), None);
+            if let Some(expected) = expected_payload_operation {
+                assert_eq!(
+                    normalized
+                        .arguments
+                        .get("payload")
+                        .and_then(|value| value.get("operation")),
+                    Some(&json!(expected)),
+                    "{resource}.{operation}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn normalizes_operate_runtime_model_config_get() {
+        for arguments in [
+            json!({
+                "resource": "runtime",
+                "operation": "get",
+                "id": "runtime.modelConfig.get",
+                "input": {}
+            }),
+            json!({
+                "resource": "runtime",
+                "operation": "get-model-config",
+                "input": {}
+            }),
+        ] {
+            let normalized = normalize_tool_call("Operate", &arguments);
+            assert_eq!(normalized.name, "workflow");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!("runtime.modelConfig.get"))
+            );
+            assert_eq!(normalized.arguments.get("command"), None);
+        }
+    }
+
+    #[test]
+    fn preserves_nested_operation_for_generic_operate_management_calls() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "space",
+                "operation": "manage",
+                "input": {
+                    "operation": "get",
+                    "name": "Default"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("spaces.manage"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("get"))
+        );
+    }
+
+    #[test]
     fn recovers_misrouted_task_brief_update_operate_calls() {
         for arguments in [
             json!({
@@ -3266,6 +3569,45 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("operation")),
             Some(&json!("uninstall"))
+        );
+    }
+
+    #[test]
+    fn normalizes_topic_center_bulk_upsert_to_app_cli_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "topicCenter",
+                "operation": "bulkUpsert",
+                "input": {
+                    "candidates": [{
+                        "topic_name": "每天十个选题怎么稳定产出",
+                        "method": "knowledge_mining"
+                    }]
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("topicCenter.manage"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("bulkUpsert"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("candidates"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
         );
     }
 

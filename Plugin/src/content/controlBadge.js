@@ -42,7 +42,7 @@ function normalizeBadgeState(options = {}) {
   const origin = String(options.origin || '').trim();
   const pageRole = String(options.pageRole || '').trim();
   const sessionName = String(options.sessionName || options.name || '').trim();
-  const baseLabel = String(options.label || '').trim() || 'RedBox 控制中';
+  const baseLabel = String(options.label || '').trim() || 'Beav 控制中';
   const label = sessionName ? `${baseLabel} · ${sessionName}` : baseLabel;
   return {
     visible: options.visible !== false && options.badge !== false && state === 'active',
@@ -50,7 +50,7 @@ function normalizeBadgeState(options = {}) {
     origin,
     pageRole,
     label: label.slice(0, 40),
-    title: sessionName ? `RedBox browser-control: ${sessionName}` : 'RedBox browser-control',
+    title: sessionName ? `Beav browser-control: ${sessionName}` : 'Beav browser-control',
   };
 }
 

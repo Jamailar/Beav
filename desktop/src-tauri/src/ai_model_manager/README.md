@@ -125,6 +125,9 @@ default seed 逻辑，都必须先检查这个 marker。
 
 - Settings / IPC: `db:get-settings`、`db:save-settings`。
 - Diagnostics: `ai-model-manager:snapshot`、`ai-model-manager:resolve`。
+- Runtime diagnostics: `runtime:get-model-config` / `runtime.modelConfig.get` 返回当前有效模型配置摘要、
+  app config 文件路径、脱敏后的 `model-config.json`、provider/source summary、configured routes 和
+  resolved per-scope routes；agent 查询模型配置时应使用这个结构化入口，不要在 workspace 里猜配置文件。
 - Readiness: `llm-readiness:get-state`、`llm-readiness:refresh`。
 - Chat runtime: `runtime::resolve_chat_config` 现在是 manager adapter。
 - Internal text tasks: 通过 `chat_helpers` 和 `resolve_chat_config` 间接接入。

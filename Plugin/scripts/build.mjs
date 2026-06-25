@@ -70,5 +70,5 @@ await Promise.all(scriptEntries.map((entry) => build({
 })));
 
 const outputFiles = await readdir(outputDir);
-console.log(`Built RedBox Capture extension into ${path.relative(pluginRoot, outputDir)}`);
+console.log(`Built Beav extension into ${path.relative(pluginRoot, outputDir)}`);
 console.log(`Output entries: ${outputFiles.sort().join(', ')}`);

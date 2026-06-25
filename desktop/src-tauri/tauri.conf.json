@@ -32,21 +32,30 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
+          "$HOME/.beav/**",
           "$HOME/.redbox/**",
           "$HOME/.redconvert/**",
           "$HOME/.redconvert.migrated-*/**",
+          "$APPDATA/Beav/**",
           "$APPDATA/RedBox/**",
+          "$LOCALDATA/Beav/**",
           "$LOCALDATA/RedBox/**",
+          "$DOCUMENT/Beav/**",
           "$DOCUMENT/RedBox/**",
           "$DOCUMENT/RedConvert/**",
+          "$DOCUMENT/**/Beav/**",
           "$DOCUMENT/**/RedBox/**",
           "$DOCUMENT/**/RedConvert/**",
+          "$DOWNLOAD/Beav/**",
           "$DOWNLOAD/RedBox/**",
           "$DOWNLOAD/RedConvert/**",
+          "$PICTURE/Beav/**",
           "$PICTURE/RedBox/**",
           "$PICTURE/RedConvert/**",
+          "$DESKTOP/Beav/**",
           "$DESKTOP/RedBox/**",
           "$DESKTOP/RedConvert/**",
+          "$HOME/Library/Application Support/Beav/**",
           "$HOME/Library/Application Support/RedBox/**"
         ]
       }

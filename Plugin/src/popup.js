@@ -40,7 +40,7 @@ async function init() {
     serverStatusEl.textContent = '本地知识库已链接 ✅';
     serverStatusEl.className = 'status ok';
   } else {
-    serverStatusEl.textContent = `本地知识库未链接：${health?.error || '请先打开桌面应用'}`;
+    serverStatusEl.textContent = '未链接，请打开Beav';
     serverStatusEl.className = 'status error';
   }
 

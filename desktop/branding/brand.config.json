@@ -216,7 +216,7 @@
       "founderXHandle": "@JambaHailar",
       "founderXUrl": "https://x.com/JambaHailar",
       "developerWechatQrSrc": "/branding/developer-wechat-qr.jpg",
-      "visibleSettingsTabs": ["ai", "general"],
+      "visibleSettingsTabs": ["ai", "general", "platforms", "skills", "mcp", "profile", "tools"],
       "appIcon": {
         "png": "branding/variants/beav/icons/icon.png",
         "icns": "branding/variants/beav/icons/icon.icns",

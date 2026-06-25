@@ -404,11 +404,11 @@ export async function groupFinalizedTabs(finalized) {
   const deliverable = finalized.filter((item) => item.status === 'deliverable').map((item) => item.tabId);
   if (handoff.length) {
     const groupId = await chrome.tabs.group({ tabIds: handoff });
-    await chrome.tabGroups.update(groupId, { title: 'RedBox Handoff', color: 'blue' }).catch(() => {});
+    await chrome.tabGroups.update(groupId, { title: 'Beav Handoff', color: 'blue' }).catch(() => {});
   }
   if (deliverable.length) {
     const groupId = await chrome.tabs.group({ tabIds: deliverable });
-    await chrome.tabGroups.update(groupId, { title: 'RedBox Deliverable', color: 'green' }).catch(() => {});
+    await chrome.tabGroups.update(groupId, { title: 'Beav Deliverable', color: 'green' }).catch(() => {});
   }
 }
 

@@ -382,50 +382,55 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
   const authBusy = wechatBusy || smsBusy || customBusy;
   const showMainlandWechatQr = isMainlandRealm && Boolean(wechatQrUrl);
   const title = mode === 'checking'
-    ? 'Checking session'
-    : 'Welcome back';
+    ? '正在恢复会话'
+    : `欢迎回到 ${APP_BRAND.displayName}`;
   const subtitle = mode === 'checking'
-    ? `Restoring ${APP_BRAND.displayName}.`
+    ? `正在恢复 ${APP_BRAND.displayName} 的登录状态。`
     : mode === 'expired'
-      ? 'Your session expired. Log in or use your own API to continue.'
-      : `Choose how ${APP_BRAND.displayName} should run AI.`;
+      ? '登录状态已过期，请重新登录或配置自定义 API。'
+      : `选择 ${APP_BRAND.displayName} 的 AI 运行方式。`;
+  const inputClassName = 'h-12 w-full rounded-2xl bg-[rgb(var(--color-surface-primary)/0.86)] px-4 text-sm text-[rgb(var(--color-text-primary))] shadow-[inset_0_0_0_1px_rgb(var(--color-border)/0.58)] outline-none transition placeholder:text-[rgb(var(--color-text-secondary)/0.62)] focus:bg-[rgb(var(--color-surface-primary)/0.98)] focus:shadow-[inset_0_0_0_1px_rgb(var(--color-accent-primary)/0.38),0_0_0_3px_rgb(var(--color-accent-primary)/0.10)] disabled:opacity-60';
+  const selectClassName = `${inputClassName} appearance-none pr-11`;
+  const primaryButtonClassName = 'h-12 w-full rounded-2xl bg-[rgb(var(--color-accent-primary))] text-sm font-semibold text-white transition hover:bg-[rgb(var(--color-accent-hover))] active:scale-[0.99] disabled:opacity-60';
+  const secondaryButtonClassName = 'flex h-[56px] w-full items-center justify-center gap-3 rounded-2xl bg-[rgb(var(--color-surface-secondary)/0.62)] text-base font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-primary)/0.78)] hover:text-[rgb(var(--color-text-primary))] active:scale-[0.99] disabled:opacity-60';
+  const sectionLabelClassName = 'text-sm font-semibold text-[rgb(var(--color-text-primary))]';
 
   return (
     <>
-      <div className="min-h-screen overflow-hidden bg-[rgb(var(--color-background))] text-slate-950">
+      <div className="min-h-screen overflow-hidden bg-[rgb(var(--color-background))] text-[rgb(var(--color-text-primary))]">
         <TransparentWindowTitleBar />
-        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_85%,rgb(var(--color-accent-primary)/0.18),transparent_34%),radial-gradient(circle_at_32%_45%,rgb(var(--color-accent-muted)/0.5),transparent_28%),linear-gradient(135deg,rgb(var(--color-background))_0%,rgb(var(--color-surface-primary))_52%,rgb(var(--color-surface-secondary))_100%)]" />
+        <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(135deg,rgb(var(--color-background))_0%,rgb(var(--color-surface-secondary)/0.82)_52%,rgb(var(--color-accent-muted)/0.46)_100%)]" />
         <div className="relative grid min-h-screen grid-cols-1 lg:grid-cols-[1fr_520px]">
-          <section className="hidden lg:flex min-h-screen flex-col justify-center px-[11vw]">
-            <div className="relative h-[440px] w-[360px]">
+          <section className="hidden lg:flex min-h-screen flex-col justify-center px-[12vw]">
+            <div className="relative h-[420px] w-[360px]">
               <img
                 src={APP_BRAND.logoSrc}
                 alt=""
-                className="absolute left-0 top-0 h-[300px] w-[300px] object-contain opacity-20 blur-[1px]"
+                className="absolute left-0 top-0 h-[260px] w-[260px] object-contain opacity-90"
               />
-              <div className="absolute left-10 bottom-8 flex items-center gap-3">
-                <img src={APP_BRAND.logoSrc} alt="" className="h-9 w-9 object-contain" />
-                <div className="text-4xl font-semibold tracking-[0]">{APP_BRAND.displayName}</div>
+              <div className="absolute left-0 bottom-20 flex items-center gap-3">
+                <img src={APP_BRAND.logoSrc} alt="" className="h-10 w-10 object-contain" />
+                <div className="text-4xl font-semibold tracking-[0] text-[rgb(var(--color-text-primary))]">{APP_BRAND.displayName}</div>
               </div>
-              <p className="absolute left-10 bottom-0 text-[13px] whitespace-nowrap text-[rgb(var(--color-text-secondary))]">
+              <p className="absolute bottom-10 left-0 max-w-[300px] text-[13px] leading-6 text-[rgb(var(--color-text-secondary))]">
                 {APP_BRAND.tagline || 'The AI content workspace that helps your ideas thrive.'}
               </p>
             </div>
-            <div className="absolute bottom-10 left-12 flex items-center gap-2 text-xs text-slate-500">
+            <div className="absolute bottom-10 left-12 flex items-center gap-2 text-xs text-[rgb(var(--color-text-tertiary))]">
               <ShieldCheck className="h-4 w-4 text-[rgb(var(--color-accent-primary))]" />
-              Your data is encrypted and secure.
+              本地优先，登录态加密保存。
             </div>
           </section>
 
           <main className="flex min-h-screen items-center justify-center px-6 py-8 lg:justify-start lg:px-0">
             <div className="w-full max-w-[432px]">
               <div className="mb-10 text-center lg:text-left">
-                <h1 className="text-4xl font-semibold tracking-[0] text-slate-950">{title}</h1>
-                <p className="mt-3 text-base text-slate-500">{subtitle}</p>
+                <h1 className="text-4xl font-semibold tracking-[0] text-[rgb(var(--color-text-primary))]">{title}</h1>
+                <p className="mt-3 text-base text-[rgb(var(--color-text-secondary))]">{subtitle}</p>
               </div>
 
               {mode === 'checking' ? (
-                <div className="flex h-52 items-center justify-center rounded-2xl border border-slate-200/80 bg-white/70 text-slate-500 shadow-sm">
+                <div className="flex h-52 items-center justify-center rounded-[24px] bg-[rgb(var(--color-surface-secondary)/0.52)] text-[rgb(var(--color-text-secondary))]">
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   正在恢复账号
                 </div>
@@ -439,19 +444,19 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         void handleCustomApiSetup();
                       }}
                     >
-                      <div className="text-sm font-medium text-slate-700">自定义 API</div>
+                      <div className={sectionLabelClassName}>自定义 API</div>
                       <div className="relative">
                         <select
                           value={customForm.presetId}
                           onChange={(event) => handleCustomPresetChange(event.target.value)}
                           disabled={authBusy}
-                          className="h-12 w-full appearance-none rounded-xl border border-slate-200/80 bg-white/80 px-4 pr-11 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
+                          className={selectClassName}
                         >
                           {AI_SOURCE_PRESETS.filter((preset) => preset.id !== 'redbox-official').map((preset) => (
                             <option key={preset.id} value={preset.id}>{preset.label}</option>
                           ))}
                         </select>
-                        <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                        <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[rgb(var(--color-text-tertiary))]" />
                       </div>
                       <input
                         type="url"
@@ -460,7 +465,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         placeholder="API Base URL"
                         autoComplete="url"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
+                        className={inputClassName}
                       />
                       <input
                         type="password"
@@ -469,12 +474,12 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         placeholder="API Key"
                         autoComplete="off"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
+                        className={inputClassName}
                       />
                       <button
                         type="submit"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgb(var(--color-accent-primary)/0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
+                        className={primaryButtonClassName}
                       >
                         {customBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '继续'}
                       </button>
@@ -485,25 +490,25 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           setLoginNotice('idle', '');
                         }}
                         disabled={authBusy}
-                        className="flex h-[56px] w-full items-center justify-center rounded-xl border border-slate-200/80 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                        className={secondaryButtonClassName}
                       >
-                        返回登陆
+                        返回登录
                       </button>
                     </form>
                   ) : showMainlandWechatQr ? (
                     <div className="space-y-5">
                       <div className="flex items-center justify-between gap-3">
-                        <div className="text-sm font-medium text-slate-700">微信扫码登录</div>
+                        <div className={sectionLabelClassName}>微信扫码登录</div>
                         <button
                           type="button"
                           onClick={returnToSmsLogin}
-                          className="text-sm font-medium text-slate-500 transition hover:text-slate-700"
+                          className="text-sm font-semibold text-[rgb(var(--color-text-secondary))] transition hover:text-[rgb(var(--color-accent-primary))]"
                         >
                           手机号登录
                         </button>
                       </div>
                       <div className="flex justify-center py-2">
-                        <img src={wechatQrUrl} alt="微信登录二维码" className="h-64 w-64 rounded-xl bg-white object-contain p-3 shadow-[0_16px_44px_rgba(15,23,42,0.08)]" />
+                        <img src={wechatQrUrl} alt="微信登录二维码" className="h-64 w-64 rounded-[20px] bg-white object-contain p-3" />
                       </div>
                     </div>
                   ) : isMainlandRealm && (
@@ -514,7 +519,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         void handleSmsAuth('login');
                       }}
                     >
-                      <div className="text-sm font-medium text-slate-700">手机号登录</div>
+                      <div className={sectionLabelClassName}>手机号登录</div>
                       <input
                         type="tel"
                         value={smsForm.phone}
@@ -522,7 +527,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         placeholder="手机号"
                         autoComplete="tel"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
+                        className={inputClassName}
                       />
                       <div className="grid grid-cols-[1fr_auto] gap-3">
                         <input
@@ -532,13 +537,13 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           placeholder="短信验证码"
                           autoComplete="one-time-code"
                           disabled={authBusy}
-                          className="h-12 min-w-0 rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white disabled:opacity-60"
+                          className={inputClassName}
                         />
                         <button
                           type="button"
                           onClick={() => void sendSmsCode()}
                           disabled={authBusy}
-                          className="h-12 rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm font-medium text-slate-600 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                          className="h-12 rounded-2xl bg-[rgb(var(--color-surface-secondary)/0.62)] px-4 text-sm font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-primary)/0.78)] hover:text-[rgb(var(--color-text-primary))] disabled:opacity-60"
                         >
                           发送验证码
                         </button>
@@ -546,7 +551,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                       <button
                         type="submit"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgb(var(--color-accent-primary)/0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
+                        className={primaryButtonClassName}
                       >
                         {smsBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录 / 注册'}
                       </button>
@@ -560,7 +565,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           type="button"
                           onClick={startGoogleLogin}
                           disabled={authBusy}
-                          className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                          className={secondaryButtonClassName}
                         >
                           <img src={googleIcon} alt="" className="h-5 w-5" />
                           Continue with Google
@@ -571,10 +576,10 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         type="button"
                         onClick={() => void startWechatLogin()}
                         disabled={authBusy}
-                        className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200/80 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                        className={secondaryButtonClassName}
                       >
                         {wechatBusy ? <Loader2 className="h-5 w-5 animate-spin text-[rgb(var(--color-accent-primary))]" /> : <img src={wechatIcon} alt="" className="h-5 w-5" />}
-                        Continue with WeChat
+                        微信登录
                       </button>
                       <button
                         type="button"
@@ -584,7 +589,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           setLoginNotice('idle', '');
                         }}
                         disabled={authBusy}
-                        className="flex h-[56px] w-full items-center justify-center rounded-xl border border-slate-200/80 bg-white/70 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                        className={secondaryButtonClassName}
                       >
                         自定义 API
                       </button>
@@ -593,20 +598,20 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
 
                   {activeSetupTab !== 'custom' && wechatQrUrl && !showMainlandWechatQr && (
                     <div className="flex items-center gap-4">
-                      <img src={wechatQrUrl} alt="微信登录二维码" className="h-24 w-24 rounded-lg bg-white object-contain" />
-                      <div className="min-w-0 text-sm text-slate-500">
-                        <div className="font-medium text-slate-700">微信扫码登录</div>
+                      <img src={wechatQrUrl} alt="微信登录二维码" className="h-24 w-24 rounded-2xl bg-white object-contain p-1" />
+                      <div className="min-w-0 text-sm text-[rgb(var(--color-text-secondary))]">
+                        <div className="font-semibold text-[rgb(var(--color-text-primary))]">微信扫码登录</div>
                       </div>
                     </div>
                   )}
 
                   {notice && (
-                    <div className={`text-center text-sm ${
+                    <div className={`rounded-2xl border px-3 py-2 text-center text-sm ${
                       noticeType === 'error'
-                        ? 'text-red-500'
+                        ? 'border-red-500/20 bg-red-500/10 text-red-500'
                         : noticeType === 'success'
-                          ? 'text-[rgb(var(--color-accent-primary))]'
-                          : 'text-slate-500'
+                          ? 'border-[rgb(var(--color-accent-primary)/0.22)] bg-[rgb(var(--color-accent-primary)/0.08)] text-[rgb(var(--color-accent-primary))]'
+                          : 'border-[rgb(var(--color-border)/0.72)] bg-[rgb(var(--color-surface-secondary)/0.54)] text-[rgb(var(--color-text-secondary))]'
                     }`}>
                       {notice}
                     </div>

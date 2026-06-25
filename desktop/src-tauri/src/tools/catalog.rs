@@ -598,6 +598,73 @@ fn memory_diagnostics_input_schema() -> Value {
     no_payload_schema()
 }
 
+fn topic_center_read_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "operation",
+                json!({
+                    "type": "string",
+                    "enum": ["list", "get"],
+                    "description": "Read operation. Use list to browse Topic Center; use get with id to read one topic."
+                }),
+            ),
+            ("id", string_schema("Topic id for operation=get.")),
+            ("query", string_schema("Optional text filter for operation=list.")),
+            ("status", string_schema("Optional status filter such as active, draft, used, or abandoned.")),
+            (
+                "includeAbandoned",
+                bool_schema("Whether abandoned topics should be included in list results."),
+            ),
+            (
+                "limit",
+                integer_schema("Maximum topics to return.", 1, 200),
+            ),
+        ],
+        &[],
+        Some("Read Topic Center records. Topic Center is the canonical store for generated content topics."),
+    )
+}
+
+fn topic_center_manage_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Create, update, bulk upsert, abandon, or delete Topic Center records. For generated topics, send candidates/items with topic_name/title, method, source_evidence, target_reader, user_problem, core_insight/content_direction, content_value, fit_reason, score, and sourceRefs when available.",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": ["create", "update", "bulkUpsert", "upsert", "abandon", "delete"],
+                "description": "Topic Center mutation operation."
+            },
+            "id": string_schema("Topic id for update, abandon, or delete."),
+            "topicId": string_schema("Alias for id."),
+            "title": string_schema("Topic title."),
+            "topic_name": string_schema("Alias for title, often used by topic generation outputs."),
+            "content_direction": string_schema("The concrete content direction or core insight."),
+            "contentDirection": string_schema("Alias for content_direction."),
+            "method": string_schema("Topic method, such as knowledge_mining, wander, comment_insight, history_mining, or trend_mining."),
+            "source_evidence": string_schema("Short evidence explaining where the topic came from."),
+            "sourceEvidence": string_schema("Alias for source_evidence."),
+            "target_reader": string_schema("Target reader."),
+            "targetReader": string_schema("Alias for target_reader."),
+            "user_problem": string_schema("Reader problem or demand this topic addresses."),
+            "userProblem": string_schema("Alias for user_problem."),
+            "content_value": string_schema("Value delivered by the content."),
+            "contentValue": string_schema("Alias for content_value."),
+            "fit_reason": string_schema("Why this topic fits the user goal/profile."),
+            "fitReason": string_schema("Alias for fit_reason."),
+            "score": number_schema("Optional confidence or fit score.", 0.0, 1.0),
+            "status": string_schema("Topic status, such as active, draft, used, or abandoned."),
+            "sourceRefs": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "source_refs": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "candidates": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "items": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "patch": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": true
+    })
+}
+
 fn memory_manage_input_schema() -> Value {
     object_schema(
         &[
@@ -1520,6 +1587,23 @@ fn manuscripts_list_input_schema() -> Value {
     no_payload_schema()
 }
 
+fn manuscripts_read_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema("Manuscript path returned by manuscripts.list or a manuscripts:// path without the scheme."),
+            ),
+            (
+                "filePath",
+                string_schema("Compatibility alias for path."),
+            ),
+        ],
+        &["path"],
+        None,
+    )
+}
+
 fn manuscripts_create_project_input_schema() -> Value {
     object_schema(
         &[
@@ -1556,6 +1640,8 @@ fn manuscripts_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
         "properties": {
+            "content": { "type": "string" },
+            "metadata": { "type": "object", "additionalProperties": true },
             "projectPath": { "type": "string" },
             "contentPath": { "type": "string" },
             "savedBytes": { "type": "integer", "minimum": 0 },
@@ -4838,6 +4924,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "topicCenter.read",
+        namespace: "topicCenter",
+        description: "Read Topic Center records. Use this before generating or editing topics so new suggestions avoid duplicates and can build on prior topic decisions.",
+        input_schema: topic_center_read_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "topicCenter.manage",
+        namespace: "topicCenter",
+        description: "Create, update, bulk upsert, abandon, or delete Topic Center records. Generated topic candidates should be persisted here before the final user-facing summary.",
+        input_schema: topic_center_manage_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "memory.rebuildIndex",
         namespace: "memory",
         description: "Rebuild the local durable memory BM25 index from the memory catalog.",
@@ -5106,6 +5214,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "manuscripts",
         description: "List manuscript tree items.",
         input_schema: manuscripts_list_input_schema,
+        output_schema: manuscripts_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: MANUSCRIPT_AUTHORING_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "manuscripts.read",
+        namespace: "manuscripts",
+        description: "Read one manuscript project or file by path returned from manuscripts.list.",
+        input_schema: manuscripts_read_input_schema,
+        output_schema: manuscripts_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: MANUSCRIPT_AUTHORING_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "manuscripts.readCurrent",
+        namespace: "manuscripts",
+        description: "Read the currently bound manuscript project for this authoring session.",
+        input_schema: no_payload_schema,
         output_schema: manuscripts_output_schema,
         mutating: false,
         concurrency_safe: true,
@@ -5385,6 +5515,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "runtime.modelConfig.get",
+        namespace: "runtime",
+        description: "Read the current effective AI model configuration, including the app config file path, redacted model-config.json contents, provider/source summary, configured routes, and resolved per-scope model routes. Use this instead of searching the workspace for model settings.",
+        input_schema: no_payload_schema,
+        output_schema: runtime_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -7168,6 +7309,7 @@ mod tests {
             .expect("action enum");
         let actions = actions.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         assert!(actions.contains(&"runtime.query"));
+        assert!(actions.contains(&"runtime.modelConfig.get"));
         assert!(actions.contains(&"taskBrief.goal"));
         assert!(!actions.contains(&"cli_runtime.detect"));
         assert!(!actions.contains(&"cli_runtime.discover"));
@@ -7307,6 +7449,21 @@ mod tests {
     }
 
     #[test]
+    fn team_schema_exposes_model_config_diagnostics_action() {
+        let schema =
+            schema_for_tool_for_runtime_mode("workflow", Some("team")).expect("team schema");
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert!(actions.contains(&"runtime.modelConfig.get"));
+        assert!(!actions.contains(&"runtime.query"));
+    }
+
+    #[test]
     fn image_generation_schema_exposes_media_generation_actions() {
         let schema = schema_for_tool_for_runtime_mode("workflow", Some("image-generation"))
             .expect("image-generation schema should exist");
@@ -7345,6 +7502,8 @@ mod tests {
         assert!(!actions.contains(&"redclaw.task.preview"));
         assert!(!actions.contains(&"redclaw.task.list"));
         assert!(!actions.contains(&"cli_runtime.inspect"));
+        assert!(actions.contains(&"runtime.modelConfig.get"));
+        assert!(!actions.contains(&"runtime.query"));
         assert!(!actions.contains(&"runtime.tasks.list"));
         assert!(!actions.contains(&"cli_runtime.detect"));
     }
@@ -7632,6 +7791,25 @@ mod tests {
         .expect("descriptor should exist");
         let output = (descriptor.output_schema)();
         assert!(output.get("properties").is_some());
+    }
+
+    #[test]
+    fn manuscript_model_actions_include_read_actions() {
+        let actions =
+            action_descriptors_for_tool("workflow", Some("redclaw"), ActionVisibility::Model)
+                .into_iter()
+                .map(|descriptor| descriptor.action)
+                .collect::<Vec<_>>();
+
+        for action in [
+            "manuscripts.list",
+            "manuscripts.read",
+            "manuscripts.readCurrent",
+            "manuscripts.createProject",
+            "manuscripts.writeCurrent",
+        ] {
+            assert!(actions.contains(&action), "{action}");
+        }
     }
 
     #[test]

@@ -502,19 +502,6 @@ fn resolve_scope(
         return Ok(source_scope);
     }
 
-    let has_workspace_target = payload_string(arguments, "path")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-        || payload_string(arguments, "pattern")
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-    if !has_workspace_target {
-        return Err(
-            "knowledge tool requires advisorId, memberId/sourceId, or a session bound to one advisor/member"
-                .to_string(),
-        );
-    }
-
     Ok(KnowledgeScope {
         kind: KnowledgeScopeKind::Workspace,
         member_id: None,
@@ -1178,6 +1165,9 @@ fn resolve_session_collab_member_id(
 
 fn collect_matching_files(root: &Path, pattern: &Pattern) -> Result<Vec<MatchedFile>, String> {
     let mut files = Vec::<MatchedFile>::new();
+    if !root.exists() {
+        return Ok(files);
+    }
     collect_matching_files_recursive(root, root, pattern, &mut files)?;
     Ok(files)
 }
@@ -1492,6 +1482,23 @@ mod tests {
         let pattern = list_pattern_for_scope(&scope, &arguments).unwrap();
         assert_eq!(pattern, "redbook/knowledge-123/**/*");
         let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn collect_matching_files_returns_empty_for_missing_workspace_knowledge_root() {
+        let unique = format!(
+            "redbox-missing-knowledge-root-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique).join("knowledge");
+        let pattern = compile_pattern("**/*").unwrap();
+
+        let files = collect_matching_files(&root, &pattern).unwrap();
+
+        assert!(files.is_empty());
     }
 
     #[test]
