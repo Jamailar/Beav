@@ -593,7 +593,6 @@ export interface CreateAiSourceDraft {
   baseURL: string;
   apiKey: string;
   protocol: AiProtocol;
-  setAsDefault: boolean;
 }
 
 export const AiPresetSelect = ({
@@ -1111,7 +1110,6 @@ export const createAiSourceDraftFromPreset = (presetId: string = DEFAULT_AI_PRES
     baseURL: preset?.baseURL || '',
     apiKey: '',
     protocol: preset?.protocol || 'openai',
-    setAsDefault: false,
   };
 };
 

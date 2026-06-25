@@ -740,7 +740,6 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
   if (!settings) return [];
 
   const options: ChatModelOption[] = [];
-  const defaultSourceId = canonicalizeOfficialAutoSourceId(String(settings.default_ai_source_id || '').trim());
   const chatRoute = (() => {
     try {
       const routes = JSON.parse(String(settings.ai_model_routes_json || '{}')) as Record<string, unknown>;
@@ -754,10 +753,8 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
   })();
   const routeSourceId = canonicalizeOfficialAutoSourceId(String(chatRoute.sourceId || chatRoute.source_id || '').trim());
   const routeModel = String(chatRoute.model || chatRoute.modelName || chatRoute.model_name || '').trim();
-  const selectedDefaultSourceId = routeSourceId || defaultSourceId;
-  const selectedDefaultModel = routeModel || String(settings.model_name || '').trim();
-  const prefersOfficialDefault = isOfficialAutoSourceId(defaultSourceId);
-  let hasExplicitDefaultSource = false;
+  const selectedChatSourceId = routeSourceId;
+  const selectedChatModel = routeModel;
 
   try {
     const parsed = JSON.parse(String(settings.ai_sources_json || '[]')) as Array<Record<string, unknown>>;
@@ -766,9 +763,6 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
         if (!item || typeof item !== 'object') continue;
         const sourceId = canonicalizeOfficialAutoSourceId(String(item.id || '').trim());
         const presetId = String(item.presetId || item.preset_id || '').trim();
-        if (sourceId && sourceId === selectedDefaultSourceId) {
-          hasExplicitDefaultSource = true;
-        }
         const sourceName = String(item.name || sourceId || '供应商').trim();
         const baseURL = String(item.baseURL || item.baseUrl || '').trim();
         const apiKey = String(item.apiKey || item.key || '').trim();
@@ -800,8 +794,8 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
             apiKey,
             isDefault: Boolean(
               sourceId
-              && sourceId === selectedDefaultSourceId
-              && modelName === selectedDefaultModel,
+              && sourceId === selectedChatSourceId
+              && modelName === selectedChatModel,
             ),
           });
         }
@@ -809,23 +803,6 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
     }
   } catch {
     // ignore malformed ai_sources_json
-  }
-
-  const fallbackModel = String(settings.model_name || '').trim();
-  if (
-    !prefersOfficialDefault
-    && !hasExplicitDefaultSource
-    && fallbackModel
-    && modelSupportsChat(fallbackModel)
-  ) {
-    options.push({
-      key: `fallback::${fallbackModel}`,
-      modelName: fallbackModel,
-      sourceName: '当前默认供应商',
-      baseURL: String(settings.api_endpoint || '').trim(),
-      apiKey: String(settings.api_key || '').trim(),
-      isDefault: true,
-    });
   }
 
   const deduped = new Map<string, ChatModelOption>();
