@@ -616,6 +616,7 @@ fn pinned_direct_app_cli_actions(
             "image.generate",
             "skills.invoke",
             "mcp.inspect",
+            "profile.manage",
             "task.manage",
         ]
     } else if wants_host_cli || (!media_intent && runtime_mode == "knowledge") {
@@ -1470,6 +1471,58 @@ mod tests {
             assert!(!plan.has_direct_app_cli_action(action), "{action}");
             assert!(!plan.has_deferred_app_cli_action(action), "{action}");
         }
+    }
+
+    #[test]
+    fn redclaw_profile_manage_is_direct_but_legacy_profile_actions_stay_hidden() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("profile.read"));
+        assert!(plan.has_direct_app_cli_action("profile.manage"));
+        assert!(!plan.has_deferred_app_cli_action("profile.manage"));
+        let direct_actions = plan
+            .direct_app_cli_actions
+            .iter()
+            .map(|descriptor| descriptor.action)
+            .collect::<Vec<_>>();
+        for action in [
+            "redclaw.profile.bundle",
+            "redclaw.profile.read",
+            "redclaw.profile.update",
+            "redclaw.profile.completeStyleDefinition",
+        ] {
+            assert!(!direct_actions.contains(&action), "{action}");
+            assert!(!plan.has_deferred_app_cli_action(action), "{action}");
+        }
+    }
+
+    #[test]
+    fn legacy_redclaw_profile_allowlist_canonicalizes_to_profile_actions() {
+        let metadata = json!({
+            "allowedOperateActions": [
+                "redclaw.profile.bundle",
+                "redclaw.profile.read",
+                "redclaw.profile.update",
+                "redclaw.profile.completeStyleDefinition"
+            ]
+        });
+
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let actions = plan
+            .direct_app_cli_actions
+            .iter()
+            .map(|descriptor| descriptor.action)
+            .collect::<Vec<_>>();
+
+        assert_eq!(actions, vec!["profile.read", "profile.manage"]);
+        assert!(plan.deferred_app_cli_actions.is_empty());
     }
 
     #[test]

@@ -393,6 +393,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str("文档职责与更新规则：\n");
                 rendered.push_str("- 工作区相对路径：redclaw/profile/Agent.md | redclaw/profile/Soul.md | redclaw/profile/user.md | redclaw/profile/CreatorProfile.md | memory/MEMORY.md\n");
                 rendered.push_str("- 查询长期档案优先使用 `Operate(resource=\"profile\", operation=\"get|list\")`，不要先用 bash/find/PowerShell 按文件名盲扫。\n");
+                rendered.push_str("- 更新长期档案使用 `Operate(resource=\"profile\", operation=\"update\", input={\"docType\":\"agent|soul|user|creator_profile\",\"markdown\":\"...\"})`，不要用通用 `Write` 直接改工作区文件。\n");
                 rendered.push_str("- 查询长期记忆优先使用 `Operate(resource=\"memory\", operation=\"list|search|get\")`；写入/修订长期记忆使用 `Operate(resource=\"memory\", operation=\"create|update\")`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。\n");
                 rendered.push_str(&format!("- Agent.md：{} 的工作契约、执行规则、标准流程。只有当用户明确要求修改工作方式、流程、约束、职责边界时才更新。\n", app_ai_display_name()));
                 rendered.push_str(&format!("- Soul.md：{} 的协作语气、反馈风格、人格倾向。用户明确调整沟通风格、表达方式时更新。\n", app_ai_display_name()));
