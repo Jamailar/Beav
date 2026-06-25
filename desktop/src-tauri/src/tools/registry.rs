@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::mcp::{McpToolInfo, McpToolInventorySnapshot};
+use crate::tools::action_aliases::canonical_app_cli_action_for_policy;
 use crate::tools::catalog::{
     descriptor_by_name, schema_for_tool_for_runtime_mode, schema_for_tool_from_action_descriptors,
     tool_action_family_summary, tool_action_family_summary_for_descriptors, ToolDescriptor,
@@ -58,11 +59,11 @@ fn is_artifact_authoring_manuscript(metadata: Option<&Value>) -> bool {
 }
 
 pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<String> {
-    let operate_actions = string_list(metadata, "allowedOperateActions");
+    let operate_actions = canonical_action_list(string_list(metadata, "allowedOperateActions"));
     if !operate_actions.is_empty() {
         return operate_actions;
     }
-    let mut actions = string_list(metadata, "allowedAppCliActions");
+    let mut actions = canonical_action_list(string_list(metadata, "allowedAppCliActions"));
     if is_artifact_authoring_manuscript(metadata) {
         actions.retain(|item| item != "manuscripts.writeCurrent");
     }
@@ -79,6 +80,17 @@ pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<Strin
         actions.push("image.generate".to_string());
     }
     actions
+}
+
+fn canonical_action_list(actions: Vec<String>) -> Vec<String> {
+    let mut canonical = Vec::<String>::new();
+    for action in actions {
+        let normalized = canonical_app_cli_action_for_policy(&action).to_string();
+        if !canonical.iter().any(|item| item == &normalized) {
+            canonical.push(normalized);
+        }
+    }
+    canonical
 }
 
 pub fn base_tool_names_for_session_metadata(
