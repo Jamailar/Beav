@@ -1,6 +1,6 @@
 [package]
 name = "beav"
-version = "2.4.0"
+version = "2.5.0"
 description = "Rust host for the RedConvert desktop migration"
 authors = ["Codex"]
 edition = "2021"
