@@ -5,7 +5,7 @@
 body {
   margin: 0;
   min-width: 320px;
-  background: #f7f7f4;
+  background: #f3f7f3;
   color: #171717;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
@@ -18,7 +18,7 @@ body {
 
 .topbar,
 .section {
-  border: 1px solid #deded8;
+  border: 1px solid #d7e5df;
   border-radius: 8px;
   background: #ffffff;
 }
@@ -92,12 +92,12 @@ h1 {
 }
 
 .account-binding-notice {
-  border-color: #fed7aa;
-  background: #fff7ed;
+  border-color: #99d3c8;
+  background: #f2faf7;
 }
 
 .notice-title {
-  color: #9a3412;
+  color: #115e59;
   font-size: 13px;
   font-weight: 800;
   line-height: 1.35;
@@ -105,17 +105,17 @@ h1 {
 
 .notice-copy {
   margin-top: 3px;
-  color: #7c2d12;
+  color: #134e4a;
   font-size: 12px;
   line-height: 1.45;
 }
 
 .account-binding-notice button {
   min-height: 34px;
-  border: 1px solid #c2410c;
+  border: 1px solid #0f766e;
   border-radius: 7px;
-  background: #c2410c;
-  color: #fff7ed;
+  background: #0f766e;
+  color: #f7fffb;
   cursor: pointer;
   font: inherit;
   font-size: 12px;
@@ -133,7 +133,7 @@ h1 {
   bottom: 8px;
   display: grid;
   gap: 4px;
-  border: 1px solid #deded8;
+  border: 1px solid #d7e5df;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.96);
   padding: 10px 12px;
@@ -170,12 +170,12 @@ h1 {
   width: 58px;
   height: 58px;
   border-radius: 16px;
-  background: #c2410c;
-  color: #fff7ed;
+  background: #0f766e;
+  color: #f7fffb;
   font-size: 22px;
   font-weight: 800;
   line-height: 1;
-  box-shadow: 0 14px 30px rgba(194, 65, 12, 0.16);
+  box-shadow: 0 14px 30px rgba(15, 118, 110, 0.18);
   overflow: hidden;
 }
 
@@ -226,8 +226,8 @@ h1 {
 }
 
 .platform-redbox {
-  background: #c2410c;
-  color: #fff7ed;
+  background: #0f766e;
+  color: #f7fffb;
 }
 
 .hidden {
@@ -279,9 +279,9 @@ h1 {
 }
 
 .update-badge.available {
-  border-color: #fed7aa;
-  background: #fff7ed;
-  color: #9a3412;
+  border-color: #99d3c8;
+  background: #f2faf7;
+  color: #115e59;
 }
 
 .update-badge.error {
@@ -325,8 +325,8 @@ h1 {
 }
 
 .update-actions button:hover:not(:disabled) {
-  border-color: #c2410c;
-  color: #9a3412;
+  border-color: #0f766e;
+  color: #115e59;
 }
 
 .update-actions button:disabled {
@@ -390,8 +390,8 @@ h1 {
   width: 34px;
   height: 34px;
   border-radius: 9px;
-  background: #c2410c;
-  color: #fff7ed;
+  background: #0f766e;
+  color: #f7fffb;
   font-size: 16px;
   font-weight: 850;
   line-height: 1;
@@ -438,20 +438,20 @@ h1 {
 }
 
 .capture-actions button:hover:not(:disabled) {
-  border-color: #c2410c;
-  color: #9a3412;
+  border-color: #0f766e;
+  color: #115e59;
 }
 
 .capture-actions button.primary {
-  border-color: #c2410c;
-  background: #c2410c;
-  color: #fff7ed;
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #f7fffb;
 }
 
 .capture-actions button.primary:hover:not(:disabled) {
-  border-color: #9a3412;
-  background: #9a3412;
-  color: #fff7ed;
+  border-color: #115e59;
+  background: #115e59;
+  color: #f7fffb;
 }
 
 .capture-actions button:disabled {
@@ -477,7 +477,7 @@ h1 {
 .capture-switch-row input {
   width: 16px;
   height: 16px;
-  accent-color: #c2410c;
+  accent-color: #0f766e;
 }
 
 .capture-status {
@@ -504,9 +504,9 @@ h1 {
 }
 
 .capture-status[data-state="pending"] {
-  border-color: #fed7aa;
-  background: #fff7ed;
-  color: #9a3412;
+  border-color: #99d3c8;
+  background: #f2faf7;
+  color: #115e59;
 }
 
 .progress-card {
@@ -515,7 +515,7 @@ h1 {
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 10px;
   background:
-    linear-gradient(135deg, rgba(255, 247, 237, 0.9), rgba(255, 255, 255, 0.98));
+    linear-gradient(135deg, rgba(242, 250, 247, 0.96), rgba(255, 255, 255, 0.98));
   padding: 10px;
 }
 
@@ -530,7 +530,7 @@ h1 {
 }
 
 .progress-card[data-state="pending"] {
-  border-color: #fed7aa;
+  border-color: #99d3c8;
 }
 
 .progress-card-head {
@@ -549,7 +549,7 @@ h1 {
 
 .progress-card-percent {
   flex: 0 0 auto;
-  color: #9a3412;
+  color: #115e59;
   font-size: 12px;
   font-weight: 800;
   line-height: 1.2;
@@ -568,8 +568,8 @@ h1 {
   inset: 0 auto 0 0;
   width: 0%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #f97316, #fb923c 55%, #fdba74);
-  box-shadow: 0 0 18px rgba(249, 115, 22, 0.28);
+  background: linear-gradient(90deg, #0f766e, #14b8a6 58%, #f3b95f);
+  box-shadow: 0 0 18px rgba(15, 118, 110, 0.24);
   transition: width 240ms ease;
 }
 
@@ -608,8 +608,8 @@ h1 {
 }
 
 .task-controls button:hover:not(:disabled) {
-  border-color: #c2410c;
-  color: #9a3412;
+  border-color: #0f766e;
+  color: #115e59;
 }
 
 .task-controls button:disabled {
@@ -633,9 +633,9 @@ h1 {
 }
 
 .task-badge.running {
-  border-color: #fed7aa;
-  background: #fff7ed;
-  color: #9a3412;
+  border-color: #99d3c8;
+  background: #f2faf7;
+  color: #115e59;
 }
 
 .task-current {
@@ -705,8 +705,8 @@ h1 {
 }
 
 .log-item.partial {
-  border-color: #fed7aa;
-  background: #fff7ed;
+  border-color: #99d3c8;
+  background: #f2faf7;
 }
 
 .log-item.running {
@@ -761,8 +761,8 @@ h1 {
 }
 
 .icon-btn:hover:not(:disabled) {
-  border-color: #c2410c;
-  color: #9a3412;
+  border-color: #0f766e;
+  color: #115e59;
 }
 
 .icon-btn:disabled {

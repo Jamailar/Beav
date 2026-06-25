@@ -1,25 +1,26 @@
 ---
-description: 漫步选题综合技能，用于从随机素材中选出高互动母版、拆解其内容公式，再从三条素材里挖掘细小选题，并完成基础质量自检。
-allowedRuntimeModes: [wander]
+description: 漫步选题方法，用于从随机或编排器选出的素材中选出高互动母版、拆解其内容公式，再从小批量素材里挖掘细小选题。
+allowedRuntimeModes: [wander, redclaw, chatroom]
 hookMode: inline
 autoActivate: false
 activationScope: session
-activationHint: 当 runtime_mode 为 wander，或任务是从漫步随机素材生成灵感选题时，加载本技能。
-contextNote: 漫步阶段只处理本轮随机素材和宿主预读素材包；不要引入长期记忆、用户档案或其他未提供素材。
+activationHint: 当 runtime_mode 为 wander，任务是从随机/锚点素材生成灵感选题，或 content-topic-miner 需要使用“素材碰撞/漫步”作为一种选题方法时，加载本技能。
+contextNote: 漫步是统一选题系统里的一个方法。方法内部只处理本轮素材和宿主预读素材包；外层 topic orchestrator 可以在进入本方法前用用户档案、账号目标、知识库和历史记录选择素材、排序和去重。
 promptPrefix: 你当前已加载 wander-synthesis。漫步不是素材摘要任务，也不是把三条素材串成一个大主题；它是先选出点赞最高的素材作为母版，拆解母版的内容公式，再从三条素材中挖一个足够小、足够细、可继续创作的选题。最终只能输出严格 JSON。
-promptSuffix: 完成前执行 wander-synthesis 输出自检：只能输出一个 JSON 对象，不要 Markdown、代码块或解释；thinking_process 必须是字符串数组；topic.title、content_direction、direction_frame 四字段必须完整；connections 只能引用实际参与最终小选题的素材序号。
+promptSuffix: 完成前执行 wander-synthesis 输出自检。如果本技能是本轮唯一的选题方法，最终只能输出一个 JSON 对象，不要 Markdown、代码块或解释；thinking_process 必须是字符串数组；topic.title、content_direction、direction_frame 四字段必须完整；connections 只能引用实际参与最终小选题的素材序号。如果本技能由 content-topic-miner 或 topic orchestrator 统筹使用，把该 JSON 当作方法候选记录，最终用户可见格式服从外层编排器。
 maxPromptChars: 3200
 ---
 # Wander Synthesis
 
-用于漫步页的随机灵感选题。宿主负责机械地随机选择素材；本技能负责后续 AI 判断流程。
+用于漫步页的随机灵感选题，也可作为 AI 对话选题编排器的一种方法。宿主或外层编排器负责选择素材；本技能负责对小批量素材做方法内部判断。
 
 核心原则：漫步不是三篇素材合并，不是找一个能概括三篇的大主题。漫步要先找出数据最强的母版，再借另外两篇提供小细节、小场景、小反差，产出一个越细越好的选题。
 
 ## 输入边界
 
 - 只使用本轮随机素材、宿主预读素材包，以及必要时补读到的同一批素材文件。
-- 不读取、不引用、不迁就用户档案、长期记忆、账号定位或其他知识库内容。
+- 方法内部不读取、不引用、不迁就用户档案、长期记忆、账号定位或其他知识库内容。
+- 如果本技能由外层 topic orchestrator 调用，用户档案、账号定位、知识库和历史记录只用于进入本方法前的素材选择，以及方法输出后的去重、排序和推荐解释；不要把这些外层信息混入 `thinking_process` 或 `content_direction` 的素材推理。
 - 预读素材包足够时，不要调用工具；只有内容缺口会影响判断时，才补读 1-2 个具体文件。
 - 不做目录侦察，不为了显得勤奋而 List/Search。
 

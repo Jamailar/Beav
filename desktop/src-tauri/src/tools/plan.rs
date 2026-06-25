@@ -512,10 +512,14 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "taskBrief.context",
     "session.resources.list",
     "session.resources.get",
+    "topicCenter.read",
+    "topicCenter.manage",
     "memory.search",
     "profile.read",
     "task.read",
     "manuscripts.list",
+    "manuscripts.read",
+    "manuscripts.readCurrent",
     "assets.search",
     "assets.get",
     "assets.categories.list",
@@ -1026,6 +1030,19 @@ mod tests {
     }
 
     #[test]
+    fn redclaw_default_exposes_topic_center_directly() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("topicCenter.read"));
+        assert!(plan.has_direct_app_cli_action("topicCenter.manage"));
+        assert!(!plan.has_deferred_app_cli_action("topicCenter.read"));
+        assert!(!plan.has_deferred_app_cli_action("topicCenter.manage"));
+    }
+
+    #[test]
     fn image_generation_runtime_exposes_image_action() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "image-generation",
@@ -1115,11 +1132,12 @@ mod tests {
             "team.guide.create",
             "skills.invoke",
             "manuscripts.createProject",
+            "manuscripts.readCurrent",
             "profile.read",
         ] {
             assert!(actions.contains(&action), "{action} should be direct");
         }
-        assert_eq!(actions.len(), 4);
+        assert_eq!(actions.len(), 5);
         assert!(!plan.has_direct_app_cli_action("manuscripts.writeCurrent"));
         assert!(!visible.contains(&"tool_search"));
         assert!(!visible.contains(&"shell"));
@@ -1155,6 +1173,22 @@ mod tests {
             .visible_tools
             .iter()
             .any(|tool| tool.name == "tool_search"));
+    }
+
+    #[test]
+    fn redclaw_default_allows_manuscript_list_and_read() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        for action in [
+            "manuscripts.list",
+            "manuscripts.read",
+            "manuscripts.readCurrent",
+        ] {
+            assert!(plan.has_direct_app_cli_action(action), "{action}");
+        }
     }
 
     #[test]

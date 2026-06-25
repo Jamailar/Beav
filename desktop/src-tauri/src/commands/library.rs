@@ -874,6 +874,10 @@ fn load_note_detail(state: &State<'_, AppState>, item_id: &str) -> Result<Value,
         if let Some(comments) = comments {
             object.insert("xhsComments".to_string(), comments);
         }
+        object.insert(
+            "visualBlocks".to_string(),
+            visual_blocks_for_source_or_empty(state, item_id),
+        );
     }
     Ok(value)
 }
@@ -902,16 +906,13 @@ fn load_document_source_detail(
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "visualBlocks".to_string(),
-            visual_blocks_for_document_source(state, item_id)?,
+            visual_blocks_for_source_or_empty(state, item_id),
         );
     }
     Ok(value)
 }
 
-fn visual_blocks_for_document_source(
-    state: &State<'_, AppState>,
-    source_id: &str,
-) -> Result<Value, String> {
+fn visual_blocks_for_source(state: &State<'_, AppState>, source_id: &str) -> Result<Value, String> {
     knowledge_index::schema::ensure_catalog_ready(state)?;
     let conn = rusqlite::Connection::open(knowledge_index::catalog_db_path(state)?)
         .map_err(|error| error.to_string())?;
@@ -1007,6 +1008,16 @@ fn visual_blocks_for_document_source(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     Ok(Value::Array(rows))
+}
+
+fn visual_blocks_for_source_or_empty(state: &State<'_, AppState>, source_id: &str) -> Value {
+    match visual_blocks_for_source(state, source_id) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("[RedBox library] load visual blocks failed for {source_id}: {error}");
+            Value::Array(Vec::new())
+        }
+    }
 }
 
 pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value, String> {

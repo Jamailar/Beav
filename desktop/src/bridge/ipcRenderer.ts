@@ -23,6 +23,7 @@ import { createSpacesBridge } from './domains/spacesBridge';
 import { createSubjectsBridge } from './domains/subjectsBridge';
 import { createSystemBridge } from './domains/systemBridge';
 import { createTeamRuntimeBridge } from './domains/teamRuntimeBridge';
+import { createTopicCenterBridge } from './domains/topicCenterBridge';
 import { createToolsBridge } from './domains/toolsBridge';
 import { createVideoEditorBridge } from './domains/videoEditorBridge';
 import { createWanderBridge } from './domains/wanderBridge';
@@ -64,6 +65,7 @@ function createIpcRenderer() {
     ...createManuscriptsBridge(core),
     ...createSkillsBridge(core),
     ...createWanderBridge(core),
+    ...createTopicCenterBridge(core),
 
     ...createSystemBridge(core),
     ...createRuntimeBridge(core),

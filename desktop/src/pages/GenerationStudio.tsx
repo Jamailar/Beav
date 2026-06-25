@@ -3641,7 +3641,7 @@ export function GenerationStudio({
                                             welcomeSubtitle=""
                                             contentLayout="wide"
                                             allowFileUpload={false}
-                                            messageWorkflowPlacement="top"
+                                            messageWorkflowPlacement="bottom"
                                             messageWorkflowVariant="compact"
                                             messageWorkflowEmphasis="thoughts-first"
                                             messageWorkflowDisplayMode="all"
@@ -3662,7 +3662,7 @@ export function GenerationStudio({
                     )}
                 </main>
 
-                <footer className="bg-background pb-5 pt-4">
+                <footer className="pb-5 pt-4">
                     <div className={composerWidthClass}>
                         <div className="rounded-[24px] border border-border bg-surface-secondary px-5 py-3 shadow-[var(--ui-shadow-1)]">
                             {studioToolbar}

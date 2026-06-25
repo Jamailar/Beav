@@ -31,7 +31,7 @@ export async function readTabControlBadgeState(tabId) {
   return {
     visible: true,
     state: 'active',
-    label: 'RedBox 控制中',
+    label: 'Beav 控制中',
     sessionName: String(session.name || '').trim(),
     sessionId: lease.sessionId || '',
     turnId: lease.turnId || '',

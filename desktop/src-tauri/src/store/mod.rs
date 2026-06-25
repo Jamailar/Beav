@@ -6,5 +6,6 @@ pub(crate) mod runtime_tasks;
 pub(crate) mod settings;
 pub(crate) mod spaces;
 pub(crate) mod subjects;
+pub(crate) mod topic_center;
 pub(crate) mod types;
 pub(crate) mod work_items;

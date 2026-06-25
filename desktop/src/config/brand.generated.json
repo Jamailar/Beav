@@ -14,7 +14,12 @@
   "developerWechatQrSrc": "/branding/developer-wechat-qr.jpg",
   "visibleSettingsTabs": [
     "ai",
-    "general"
+    "general",
+    "platforms",
+    "skills",
+    "mcp",
+    "profile",
+    "tools"
   ],
   "theme": {
     "light": {

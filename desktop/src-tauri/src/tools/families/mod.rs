@@ -36,14 +36,16 @@ pub fn default_direct_namespaces(
     let mut namespaces = match normalize_runtime_mode(runtime_mode) {
         "image-generation" => vec![
             image::NAMESPACE,
+            runtime::NAMESPACE,
             "generation.job",
             "video_analysis",
             subjects::NAMESPACE,
             voice::NAMESPACE,
         ],
-        "knowledge" => vec![subjects::NAMESPACE],
+        "knowledge" => vec![subjects::NAMESPACE, runtime::NAMESPACE],
         "redclaw" => vec![
             image::NAMESPACE,
+            runtime::NAMESPACE,
             "video_analysis",
             voice::NAMESPACE,
             "video",
@@ -65,6 +67,7 @@ pub fn default_direct_namespaces(
             team::ARTIFACT_NAMESPACE,
             team::BLOCKER_NAMESPACE,
             subjects::NAMESPACE,
+            runtime::NAMESPACE,
             image::NAMESPACE,
             manuscripts::NAMESPACE,
             "video_analysis",
@@ -72,6 +75,7 @@ pub fn default_direct_namespaces(
         ],
         _ => vec![
             subjects::NAMESPACE,
+            runtime::NAMESPACE,
             image::NAMESPACE,
             manuscripts::NAMESPACE,
             "video_analysis",

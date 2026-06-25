@@ -286,7 +286,7 @@ export async function clearCursorOverlayForTab(tabId, reason = 'clear_cursor_ove
   const state = buildCursorState(id, {
     sessionId: previous.sessionId || '',
     turnId: previous.turnId || '',
-    label: previous.label || 'RedBox',
+    label: previous.label || 'Beav',
   }, {}, false, null);
   cursorStateByTabId.delete(id);
   const response = await sendContentMessage(id, TARGET_CURSOR_STATE_TYPE, { state, reason }, 0).catch((error) => ({
@@ -386,7 +386,7 @@ function buildCursorState(tabId, action = {}, options = {}, visible = true, move
     turnId: session.turnId || action.turnId || '',
     isVisible: visible,
     cursor,
-    label: action.label || 'RedBox',
+    label: action.label || 'Beav',
     updatedAt: new Date().toISOString(),
   };
 }
@@ -401,7 +401,7 @@ function deriveCursorOverlayStateForTab(tabId, options = {}) {
       turnId: options.turnId || '',
       isVisible: false,
       cursor: null,
-      label: options.label || 'RedBox',
+      label: options.label || 'Beav',
       updatedAt: new Date().toISOString(),
     };
   }

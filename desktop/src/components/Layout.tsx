@@ -377,17 +377,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
           'app-sidebar-nav-item relative w-full rounded-xl transition-all font-normal inline-flex items-center',
           sidebarVisualCollapsed ? 'app-sidebar-nav-item--collapsed justify-center' : 'app-sidebar-nav-item--expanded',
           primary && 'app-sidebar-nav-item--primary',
-          view === 'subjects'
-            ? (
-              isActive
-                ? 'app-sidebar-nav-item--active-special shadow-none'
-                : 'app-sidebar-nav-item--plain'
-            )
-            : (
-              isActive
-                ? 'app-sidebar-nav-item--active shadow-sm'
-                : 'app-sidebar-nav-item--plain'
-            )
+          isActive
+            ? 'app-sidebar-nav-item--active-special shadow-none'
+            : 'app-sidebar-nav-item--plain'
         )}
       >
         {key === 'new-chat' ? (

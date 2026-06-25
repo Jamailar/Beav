@@ -59,13 +59,23 @@ fn is_artifact_authoring_manuscript(metadata: Option<&Value>) -> bool {
 }
 
 pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<String> {
-    let operate_actions = canonical_action_list(string_list(metadata, "allowedOperateActions"));
+    let mut operate_actions = canonical_action_list(string_list(metadata, "allowedOperateActions"));
+    if is_artifact_authoring_manuscript(metadata) && !operate_actions.is_empty() {
+        for action in ["manuscripts.readCurrent"] {
+            if !operate_actions.iter().any(|item| item == action) {
+                operate_actions.push(action.to_string());
+            }
+        }
+    }
     if !operate_actions.is_empty() {
         return operate_actions;
     }
     let mut actions = canonical_action_list(string_list(metadata, "allowedAppCliActions"));
     if is_artifact_authoring_manuscript(metadata) {
         actions.retain(|item| item != "manuscripts.writeCurrent");
+        if !actions.is_empty() && !actions.iter().any(|item| item == "manuscripts.readCurrent") {
+            actions.push("manuscripts.readCurrent".to_string());
+        }
     }
     let looks_like_legacy_authoring_whitelist = actions.iter().any(|item| {
         matches!(

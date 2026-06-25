@@ -1,19 +1,19 @@
 ---
 name: xhs-comment-insight
 description: 小红书评论区洞察选题技能，用于从单条笔记的评论区统计和分析追问、反驳、补充、情绪和未满足需求，生成 1 个可继续创作的小红书选题。
-allowedRuntimeModes: [wander, chatroom]
+allowedRuntimeModes: [wander, redclaw, chatroom]
 hookMode: inline
 autoActivate: false
 activationScope: session
-activationHint: 当选题中心随机挑取一条小红书笔记，并要求分析这条笔记评论区后产出潜在选题时，加载本技能；在 AI 聊天中，当用户明确要求“评论区洞察”、分析一条小红书笔记的评论、从评论里找选题、或输入 `/xhs-comment-insight` 时，也可调用 `Operate(resource="skills", operation="invoke", input={ "name": "xhs-comment-insight" })` 单独激活。
-contextNote: 评论区洞察阶段只处理本轮提供的 1 条笔记与评论摘录；AI 聊天中如果用户没有提供笔记和评论内容，应先要求用户提供评论素材或选择一条带评论的小红书笔记，不要读取长期记忆、账号定位或未提供素材。
+activationHint: 当选题中心随机挑取一条小红书笔记，并要求分析这条笔记评论区后产出潜在选题时，加载本技能；在 AI 聊天中，当用户明确要求“评论区洞察”、分析一条小红书笔记的评论、从评论里找选题、或 content-topic-miner 需要使用“评论需求洞察”作为一种选题方法时，也可调用 `Operate(resource="skills", operation="invoke", input={ "name": "xhs-comment-insight" })`。
+contextNote: 评论区洞察是统一选题系统里的一个方法。方法内部只处理本轮提供的 1 条笔记与评论摘录；AI 聊天中如果用户没有提供笔记和评论内容，应先要求用户提供评论素材或由外层 topic orchestrator 从知识库选择一条带评论素材，不要在方法内部读取长期记忆、账号定位或未提供素材。
 promptPrefix: 你当前已加载 xhs-comment-insight。评论区洞察流程固定为：1 条小红书笔记 -> 统计和分析该笔记评论区 -> 输出 1 个潜在选题。选题中心会随机提供 1 条带评论笔记；AI 聊天中则使用用户本轮提供或指定的 1 条笔记评论素材。它不是评论摘要，也不是复述原笔记；它要从评论里的真实用户问题、误解、反驳、补充信息、情绪和行动需求中提炼一个更值得写的新选题。最终只能输出严格 JSON。
-promptSuffix: 完成前执行 xhs-comment-insight 输出自检：只能输出一个 JSON 对象，不要 Markdown、代码块或解释；topic.title、content_direction、direction_frame 四字段必须完整；topic.connections 必须是 [1]。
+promptSuffix: 完成前执行 xhs-comment-insight 输出自检。如果本技能是本轮唯一的选题方法，最终只能输出一个 JSON 对象，不要 Markdown、代码块或解释；topic.title、content_direction、direction_frame 四字段必须完整；topic.connections 必须是 [1]。如果本技能由 content-topic-miner 或 topic orchestrator 统筹使用，把该 JSON 当作方法候选记录，最终用户可见格式服从外层编排器。
 maxPromptChars: 3600
 ---
 # XHS Comment Insight
 
-用于选题中心和 AI 聊天的评论区洞察。选题中心宿主负责随机提供本轮 1 条带评论的小红书素材和评论摘录；AI 聊天中，用户可以直接提供或指定 1 条小红书笔记及评论素材。本技能负责统计、分析这条笔记评论里真正值得二次创作的内容机会。
+用于选题中心和 AI 聊天的评论区洞察，也可作为 AI 对话选题编排器的一种方法。选题中心宿主负责随机提供本轮 1 条带评论的小红书素材和评论摘录；AI 聊天中，用户可以直接提供或指定 1 条小红书笔记及评论素材，外层编排器也可以先从知识库选择一条带评论素材。本技能负责统计、分析这条笔记评论里真正值得二次创作的内容机会。
 
 核心原则：评论区洞察不是跨素材综合，不是统计评论数量，也不是把热评改写成标题。它要在单条笔记评论区里找到“读者真正还想知道什么”，再收敛成一个足够小、能写成一篇小红书图文的潜在选题。
 
@@ -22,7 +22,8 @@ maxPromptChars: 3600
 - 只使用本轮 1 条笔记、本轮提供的评论摘录，以及必要时补读到的同一条笔记的 `comments.json` / `meta.json` / 正文文件。
 - AI 聊天中如果只有泛泛需求、没有笔记和评论内容，先请用户提供评论素材或选择一条带评论的小红书笔记。
 - 原笔记正文只作为背景，评论区才是主输入。
-- 不引入长期记忆、账号定位、用户档案或其他知识库内容。
+- 方法内部不引入长期记忆、账号定位、用户档案或其他知识库内容。
+- 如果本技能由外层 topic orchestrator 调用，用户档案、账号定位、知识库和历史记录只用于进入本方法前的素材选择，以及方法输出后的去重、排序和推荐解释；不要把这些外层信息混入评论信号判断。
 - 预读评论足够时不要调用工具；只有评论上下文缺口影响判断时，才补读具体文件。
 
 ## 评论价值类型

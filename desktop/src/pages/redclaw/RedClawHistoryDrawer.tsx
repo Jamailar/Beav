@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Archive, ChevronRight, Clock3, Edit3, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, History, Loader2, MoreHorizontal, Pin, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { REDCLAW_DISPLAY_NAME } from './config';
@@ -1414,7 +1415,7 @@ export function RedClawHistorySidebarSection({
                     ) : null}
                 </div>
             )}
-            {renameTarget && (
+            {renameTarget && createPortal((
                 <div
                     className="redclaw-rename-dialog-backdrop fixed inset-0 z-[130] flex items-center justify-center px-4"
                     onMouseDown={closeRenameDialog}
@@ -1481,8 +1482,8 @@ export function RedClawHistorySidebarSection({
                         </div>
                     </div>
                 </div>
-            )}
-            {manuscriptDialog && (
+            ), document.body)}
+            {manuscriptDialog && createPortal((
                 <div
                     className="redclaw-manuscript-dialog-backdrop fixed inset-0 z-[130] flex items-center justify-center bg-black/30 px-4"
                     onMouseDown={closeManuscriptDialog}
@@ -1591,7 +1592,7 @@ export function RedClawHistorySidebarSection({
                         )}
                     </div>
                 </div>
-            )}
+            ), document.body)}
         </div>
     );
 }

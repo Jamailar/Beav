@@ -221,6 +221,65 @@ function toOptionalNumber(value: unknown): number | undefined {
   return undefined;
 }
 
+function parseJsonObject(value: string): UnknownRecord | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as UnknownRecord
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function checkpointTypeFromSummary(value: string): string {
+  const match = value.match(/"checkpointType"\s*:\s*"([^"]+)"/);
+  return match?.[1] || '';
+}
+
+function normalizeCheckpointPayload(payload: UnknownRecord): {
+  checkpointType: string;
+  checkpointPayload: UnknownRecord;
+  summary: string;
+} {
+  let checkpointType = toText(payload.checkpointType || payload.checkpoint_type);
+  let checkpointPayload = toRecord(payload.payload);
+  let summary = toText(payload.summary);
+
+  if ((!checkpointType || Object.keys(checkpointPayload).length === 0) && summary) {
+    const parsed = parseJsonObject(summary);
+    if (parsed) {
+      checkpointType = checkpointType || toText(parsed.checkpointType || parsed.checkpoint_type);
+      checkpointPayload = Object.keys(checkpointPayload).length > 0
+        ? checkpointPayload
+        : toRecord(parsed.payload);
+      summary = toText(parsed.summary) || summary;
+    } else {
+      checkpointType = checkpointType || checkpointTypeFromSummary(summary);
+    }
+  }
+
+  if (!checkpointType && summary) {
+    checkpointType = checkpointTypeFromSummary(summary);
+  }
+
+  if (
+    checkpointType === 'chat.error'
+    && Object.keys(checkpointPayload).length === 0
+    && summary
+  ) {
+    checkpointPayload = {
+      detail: summary,
+      message: '执行异常',
+      raw: summary,
+    };
+  }
+
+  return { checkpointType, checkpointPayload, summary };
+}
+
 function normalizeToolConfirmRequest(value: unknown): ToolConfirmRequestPayload | null {
   const record = toRecord(value);
   const detailsRecord = toRecord(record.details);
@@ -647,9 +706,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
   }
 
   if (envelope.eventType === 'runtime:checkpoint') {
-    const checkpointType = toText(payload.checkpointType);
-    const checkpointPayload = toRecord(payload.payload);
-    const summary = toText(payload.summary);
+    const { checkpointType, checkpointPayload, summary } = normalizeCheckpointPayload(payload);
     handlers.onTaskCheckpointSaved?.({
       sessionId,
       ...runtimeMeta,

@@ -160,7 +160,7 @@ const zhCN = {
   'settings.general.viewCurrentReleaseNotes': '查看本版更新',
   'settings.general.loading': '加载中...',
   'settings.general.updateDescription': '启动时自动检查新版本，安装包从应用下载源获取。',
-  'settings.general.founderX': '作者 X：{handle}',
+  'settings.general.founderX': '作者：本项目由{handle} 一人开发',
   'settings.general.openDownloadPage': '打开下载页',
   'settings.general.browserPlugin': '浏览器插件',
   'settings.general.installPlugin': '安装插件',

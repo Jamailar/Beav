@@ -53,7 +53,7 @@ export async function requireSidePanelOpen(windowId = null, options = {}) {
   await restoreSidePanelStatus();
   const status = getSidePanelStatus(windowId);
   if (!status.sidePanelOpen) {
-    const error = new Error(options.closedError || 'RedBox side panel is not open.');
+    const error = new Error(options.closedError || 'Beav side panel is not open.');
     error.code = 'side_panel_not_open';
     error.status = status;
     throw error;

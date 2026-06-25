@@ -63,8 +63,9 @@ pub use export::{
 };
 pub use history::sanitize_runtime_history_messages;
 use history::{
-    build_session_context_summary, estimate_tokens_from_chars,
-    runtime_history_message_from_chat_record, session_bundle_summary_from_messages, snippet,
+    build_session_context_summary, estimate_tokens_from_chars, is_internal_runtime_bundle_message,
+    is_internal_runtime_history_user_message, runtime_history_message_from_chat_record,
+    session_bundle_summary_from_messages, snippet,
 };
 use query::session_ids_for_query;
 pub use query::{

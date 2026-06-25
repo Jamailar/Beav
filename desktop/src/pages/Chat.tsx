@@ -583,8 +583,10 @@ const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntim
 function shouldPreserveFixedSessionWarmMessages(
   warm: FixedSessionWarmSnapshot | null,
   history: unknown[],
+  options: { runtimeKnownComplete?: boolean } = {},
 ): warm is FixedSessionWarmSnapshot {
   if (!warm?.messages.length) return false;
+  if (options.runtimeKnownComplete && history.length >= warm.messages.length) return false;
   const hasActivePlaceholder = warm.messages.some((message) => message.role === 'ai' && message.isStreaming);
   return hasActivePlaceholder && history.length < warm.messages.length;
 }
@@ -1159,6 +1161,124 @@ function runtimeEventId(event: PersistedRuntimeEvent, fallback: string): string 
   return runtimeText(event.id) || fallback;
 }
 
+function checkpointTypeFromSummary(value: string): string {
+  const match = value.match(/"checkpointType"\s*:\s*"([^"]+)"/);
+  return match?.[1] || '';
+}
+
+function parseRuntimeJsonObject(value: string): Record<string, unknown> | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizePersistedCheckpointPayload(payload: Record<string, unknown>): {
+  checkpointType: string;
+  checkpointPayload: Record<string, unknown>;
+  summary: string;
+} {
+  let checkpointType = runtimeText(payload.checkpointType || payload.checkpoint_type);
+  let checkpointPayload = runtimeObject(payload.payload);
+  let summary = runtimeText(payload.summary);
+
+  if ((!checkpointType || Object.keys(checkpointPayload).length === 0) && summary) {
+    const parsed = parseRuntimeJsonObject(summary);
+    if (parsed) {
+      checkpointType = checkpointType || runtimeText(parsed.checkpointType || parsed.checkpoint_type);
+      checkpointPayload = Object.keys(checkpointPayload).length > 0
+        ? checkpointPayload
+        : runtimeObject(parsed.payload);
+      summary = runtimeText(parsed.summary) || summary;
+    } else {
+      checkpointType = checkpointType || checkpointTypeFromSummary(summary);
+    }
+  }
+
+  if (!checkpointType && summary) {
+    checkpointType = checkpointTypeFromSummary(summary);
+  }
+
+  if (checkpointType === 'chat.error' && Object.keys(checkpointPayload).length === 0 && summary) {
+    checkpointPayload = {
+      detail: summary,
+      message: '执行异常',
+      raw: summary,
+    };
+  }
+
+  return { checkpointType, checkpointPayload, summary };
+}
+
+function shouldFailRunningTimelineItem(item: ProcessItem): boolean {
+  return (
+    item.type === 'tool-call'
+    || item.type === 'cli-install'
+    || item.type === 'cli-exec'
+    || item.type === 'cli-escalation'
+    || item.type === 'cli-verify'
+  );
+}
+
+function finalizeRunningTimelineItems(
+  timeline: ProcessItem[],
+  timestamp: number,
+  failed: boolean,
+): ProcessItem[] {
+  return timeline.map((item) => {
+    if (item.status !== 'running') return item;
+    return {
+      ...item,
+      status: failed && shouldFailRunningTimelineItem(item) ? 'failed' : 'done',
+      duration: Math.max(0, timestamp - item.timestamp),
+    } as ProcessItem;
+  });
+}
+
+function latestWarmStreamingStartedAt(warm: FixedSessionWarmSnapshot | null): number | null {
+  if (!warm?.messages.length) return null;
+  let latest: number | null = null;
+  warm.messages.forEach((message) => {
+    if (message.role !== 'ai' || !message.isStreaming) return;
+    const startedAt = typeof message.processingStartedAt === 'number'
+      ? message.processingStartedAt
+      : parseMessageTimestampMs(message.id);
+    if (typeof startedAt !== 'number') return;
+    latest = latest === null ? startedAt : Math.max(latest, startedAt);
+  });
+  return latest;
+}
+
+function hasTerminalRuntimeEventAfterWarmSnapshot(
+  warm: FixedSessionWarmSnapshot | null,
+  eventsRaw: unknown,
+): boolean {
+  const startedAt = latestWarmStreamingStartedAt(warm);
+  const events = Array.isArray(eventsRaw) ? eventsRaw as PersistedRuntimeEvent[] : [];
+  if (startedAt === null || events.length === 0) return false;
+
+  return events.some((event) => {
+    const eventCreatedAt = runtimeEventCreatedAt(event);
+    if (eventCreatedAt < startedAt) return false;
+    const eventType = runtimeEventType(event);
+    if (eventType === 'runtime:done') return true;
+    if (eventType !== 'runtime:checkpoint' && eventType !== 'task_checkpoint_saved') return false;
+    const payload = runtimeObject(event.payload);
+    const { checkpointType } = normalizePersistedCheckpointPayload(payload);
+    return (
+      checkpointType === 'chat.error'
+      || checkpointType === 'chat.cancelled'
+      || checkpointType === 'chat.response_end'
+    );
+  });
+}
+
 function stringifyRuntimePreview(value: unknown, maxLength = 420): string {
   if (typeof value === 'string') return value.slice(0, maxLength);
   try {
@@ -1169,21 +1289,118 @@ function stringifyRuntimePreview(value: unknown, maxLength = 420): string {
   }
 }
 
+const RUNTIME_EVENT_MESSAGE_TIME_TOLERANCE_MS = 1_500;
+const INTERNAL_RUNTIME_STATUS_PREFIXES = [
+  '系统状态更新：以下技能已激活并写入当前会话：',
+  '系统状态更新：以下技能已激活并加入当前轮上下文：',
+  '系统状态更新：以下技能已激活：',
+];
+
+function isInternalRuntimeStatusText(value: unknown): boolean {
+  const content = String(value || '').trim();
+  return INTERNAL_RUNTIME_STATUS_PREFIXES.some((prefix) => content.startsWith(prefix));
+}
+
+function isInternalRuntimeStatusMessage(message: Pick<Message, 'role' | 'content' | 'displayContent'>): boolean {
+  if (message.role !== 'user') return false;
+  return isInternalRuntimeStatusText(message.displayContent || message.content);
+}
+
+function latestUserMessageIndexBeforeRuntimeEvent(
+  messages: Message[],
+  messageTimes: Array<number | undefined>,
+  eventCreatedAt: number,
+): number {
+  let latestUserIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].role !== 'user') continue;
+    const messageTime = messageTimes[index];
+    if (
+      typeof messageTime !== 'number'
+      || messageTime <= eventCreatedAt + RUNTIME_EVENT_MESSAGE_TIME_TOLERANCE_MS
+    ) {
+      latestUserIndex = index;
+    }
+  }
+  return latestUserIndex;
+}
+
 function persistedRuntimeTargetAssistantIndex(
   messages: Message[],
   messageTimes: Array<number | undefined>,
   eventCreatedAt: number,
 ): number {
+  const latestUserIndex = latestUserMessageIndexBeforeRuntimeEvent(messages, messageTimes, eventCreatedAt);
   let fallback = -1;
-  for (let index = 0; index < messages.length; index += 1) {
+  for (let index = Math.max(0, latestUserIndex + 1); index < messages.length; index += 1) {
+    if (messages[index].role === 'user') break;
     if (messages[index].role !== 'ai') continue;
     fallback = index;
     const messageTime = messageTimes[index];
-    if (typeof messageTime !== 'number' || eventCreatedAt <= messageTime + 1_500) {
+    if (
+      typeof messageTime !== 'number'
+      || eventCreatedAt <= messageTime + RUNTIME_EVENT_MESSAGE_TIME_TOLERANCE_MS
+    ) {
       return index;
     }
   }
   return fallback;
+}
+
+function ensureRuntimeReplayAssistantMessage(
+  messages: Message[],
+  messageTimes: Array<number | undefined>,
+  eventCreatedAt: number,
+): number {
+  const latestUserIndex = latestUserMessageIndexBeforeRuntimeEvent(messages, messageTimes, eventCreatedAt);
+  if (latestUserIndex === -1) return -1;
+
+  const insertAt = latestUserIndex + 1;
+  const userCreatedAt = messageTimes[latestUserIndex];
+  const timestamp = Number.isFinite(eventCreatedAt) ? eventCreatedAt : Date.now();
+  const id = `runtime_replay_${timestamp}_${Math.random().toString(36).slice(2, 8)}`;
+  messages.splice(insertAt, 0, {
+    id,
+    role: 'ai',
+    messageType: 'reply',
+    content: '',
+    tools: [],
+    timeline: [],
+    isStreaming: true,
+    processingStartedAt: typeof userCreatedAt === 'number' ? userCreatedAt : timestamp,
+  });
+  messageTimes.splice(insertAt, 0, timestamp);
+  return insertAt;
+}
+
+function shouldCreateRuntimeReplayAssistantMessage(
+  eventType: string,
+  payload: Record<string, unknown>,
+): boolean {
+  if (eventType === 'runtime:text-delta' || eventType === 'text_delta') {
+    const content = runtimeText(payload.content);
+    const stream = runtimeText(payload.stream || 'response');
+    const messagePhase = runtimeText(payload.messagePhase || (stream === 'thought' ? 'thought' : 'final_answer'));
+    return Boolean(content && (messagePhase === 'commentary' || messagePhase === 'thought' || stream === 'thought'));
+  }
+  if (
+    eventType === 'runtime:tool-start'
+    || eventType === 'runtime:tool-update'
+    || eventType === 'runtime:tool-end'
+    || eventType === 'tool_request'
+    || eventType === 'tool_result'
+  ) {
+    return true;
+  }
+  if (eventType === 'runtime:checkpoint' || eventType === 'task_checkpoint_saved') {
+    const { checkpointType, checkpointPayload } = normalizePersistedCheckpointPayload(payload);
+    return Boolean(
+      checkpointType === 'chat.error'
+      || checkpointType === 'chat.skill_activated'
+      || runtimeText(checkpointPayload.detail || checkpointPayload.message || checkpointPayload.raw)
+    );
+  }
+  return false;
 }
 
 function pushOrMergeNarrationItem(
@@ -1278,14 +1495,18 @@ function applyPersistedRuntimeEventsToMessages(
     ...message,
     timeline: [...(message.timeline || [])],
   }));
+  const nextMessageTimes = [...messageTimes];
 
   events.forEach((event, index) => {
     const eventType = runtimeEventType(event);
     const timestamp = runtimeEventCreatedAt(event);
-    const targetIndex = persistedRuntimeTargetAssistantIndex(next, messageTimes, timestamp);
+    const payload = runtimeObject(event.payload);
+    let targetIndex = persistedRuntimeTargetAssistantIndex(next, nextMessageTimes, timestamp);
+    if (targetIndex === -1 && shouldCreateRuntimeReplayAssistantMessage(eventType, payload)) {
+      targetIndex = ensureRuntimeReplayAssistantMessage(next, nextMessageTimes, timestamp);
+    }
     if (targetIndex === -1) return;
 
-    const payload = runtimeObject(event.payload);
     const timeline = next[targetIndex].timeline;
     const eventId = runtimeEventId(event, `runtime_event_${timestamp}_${index}`);
 
@@ -1313,13 +1534,13 @@ function applyPersistedRuntimeEventsToMessages(
     }
 
     if (eventType === 'runtime:checkpoint' || eventType === 'task_checkpoint_saved') {
-      const checkpointType = runtimeText(payload.checkpointType || payload.checkpoint_type);
-      const checkpointPayload = runtimeObject(payload.payload);
+      const { checkpointType, checkpointPayload } = normalizePersistedCheckpointPayload(payload);
       if (checkpointType === 'chat.error') {
         const detail = runtimeText(checkpointPayload.detail || checkpointPayload.message || checkpointPayload.raw)
           || stringifyRuntimePreview(checkpointPayload);
+        next[targetIndex].timeline = finalizeRunningTimelineItems(timeline, timestamp, true);
         if (detail) {
-          timeline.push({
+          next[targetIndex].timeline.push({
             id: `error_${eventId}`,
             type: 'error',
             title: '处理失败',
@@ -1328,6 +1549,19 @@ function applyPersistedRuntimeEventsToMessages(
             timestamp,
           });
         }
+        next[targetIndex].isStreaming = false;
+        next[targetIndex].suppressPendingIndicator = false;
+        next[targetIndex].processingFinishedAt = timestamp;
+      } else if (checkpointType === 'chat.cancelled') {
+        next[targetIndex].timeline = finalizeRunningTimelineItems(timeline, timestamp, false);
+        next[targetIndex].isStreaming = false;
+        next[targetIndex].suppressPendingIndicator = false;
+        next[targetIndex].processingFinishedAt = timestamp;
+      } else if (checkpointType === 'chat.response_end') {
+        next[targetIndex].timeline = finalizeRunningTimelineItems(timeline, timestamp, false);
+        next[targetIndex].isStreaming = false;
+        next[targetIndex].suppressPendingIndicator = false;
+        next[targetIndex].processingFinishedAt = timestamp;
       } else if (checkpointType === 'chat.skill_activated') {
         const name = runtimeText(checkpointPayload.name);
         if (name) {
@@ -1349,11 +1583,10 @@ function applyPersistedRuntimeEventsToMessages(
 
     if (eventType === 'runtime:done') {
       const failed = runtimeText(payload.status) === 'error' || runtimeText(payload.reason) === 'error';
-      next[targetIndex].timeline = timeline.map((item) => (
-        item.status === 'running'
-          ? { ...item, status: failed ? 'failed' : 'done', duration: Math.max(0, timestamp - item.timestamp) }
-          : item
-      ));
+      next[targetIndex].timeline = finalizeRunningTimelineItems(timeline, timestamp, failed);
+      next[targetIndex].isStreaming = false;
+      next[targetIndex].suppressPendingIndicator = false;
+      next[targetIndex].processingFinishedAt = timestamp;
     }
   });
 
@@ -1416,6 +1649,10 @@ export function Chat({
   const [messages, setMessages] = useState<Message[]>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.messages || []
   ));
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => !isInternalRuntimeStatusMessage(message)),
+    [messages],
+  );
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ToolConfirmRequest | null>(null);
@@ -1979,7 +2216,7 @@ export function Chat({
   }, [selectedChatModel]);
 
   // 判断是否是空会话（新建或无消息）
-  const isEmptySession = messages.length === 0;
+  const isEmptySession = visibleMessages.length === 0;
 
   // 标记是否已处理过 pendingMessage，避免重复处理
   const pendingMessageHandledRef = useRef(false);
@@ -2341,16 +2578,27 @@ export function Chat({
       if (localMessageMutationRef.current !== mutationVersionAtStart) {
         return;
       }
-      const runtimeState = runtimeStateRaw as ChatRuntimeState;
+      const runtimeState = runtimeStateRaw as ChatRuntimeState | null;
+      const runtimeProcessing = Boolean(runtimeState?.success && runtimeState?.isProcessing);
+      const runtimeKnownComplete = Boolean(
+        shouldRecoverRuntime
+        && runtimeState?.success
+        && !runtimeProcessing
+      );
       if (fixedSessionId && sessionId === fixedSessionId) {
         const warm = readFixedSessionWarmSnapshot(sessionId);
-        if (shouldPreserveFixedSessionWarmMessages(warm, history)) {
+        const runtimeTerminalAfterWarm = hasTerminalRuntimeEventAfterWarmSnapshot(warm, runtimeEventsRaw);
+        if (shouldPreserveFixedSessionWarmMessages(warm, history, {
+          runtimeKnownComplete: runtimeKnownComplete || runtimeTerminalAfterWarm,
+        })) {
           setMessages(warm.messages);
           setIsProcessing(true);
           debugUi('select_session:preserve_warm_messages', {
             sessionId,
             warmMessageCount: warm.messages.length,
             historyMessageCount: history.length,
+            runtimeKnownComplete,
+            runtimeTerminalAfterWarm,
           });
           return;
         }
@@ -2359,58 +2607,62 @@ export function Chat({
       // Convert DB messages to UI messages
       let lastUserCreatedAt: number | undefined;
       const messageTimes: Array<number | undefined> = [];
-      let uiMessages: Message[] = history.map((msg: any) => {
-        // 解析 attachment（数据库中存储为 JSON 字符串）
-        let attachment = undefined;
-        let attachments: UploadedFileAttachment[] = [];
-        if (msg.attachment) {
-          try {
-            const parsed = typeof msg.attachment === 'string' ? JSON.parse(msg.attachment) : msg.attachment;
-            if (Array.isArray(parsed)) {
-              attachments = parsed.filter((item) => item?.type === 'uploaded-file') as UploadedFileAttachment[];
-              attachment = attachments[0];
-            } else {
-              attachment = parsed;
-              attachments = uploadedFileAttachmentsFromMessageAttachment(parsed as Message['attachment'] | undefined);
+      let uiMessages: Message[] = history
+        .filter((msg: any) => !(
+          msg.role === 'user'
+          && isInternalRuntimeStatusText(msg.displayContent || msg.display_content || msg.content)
+        ))
+        .map((msg: any) => {
+          // 解析 attachment（数据库中存储为 JSON 字符串）
+          let attachment = undefined;
+          let attachments: UploadedFileAttachment[] = [];
+          if (msg.attachment) {
+            try {
+              const parsed = typeof msg.attachment === 'string' ? JSON.parse(msg.attachment) : msg.attachment;
+              if (Array.isArray(parsed)) {
+                attachments = parsed.filter((item) => item?.type === 'uploaded-file') as UploadedFileAttachment[];
+                attachment = attachments[0];
+              } else {
+                attachment = parsed;
+                attachments = uploadedFileAttachmentsFromMessageAttachment(parsed as Message['attachment'] | undefined);
+              }
+            } catch (e) {
+              console.error('Failed to parse attachment:', e);
             }
-          } catch (e) {
-            console.error('Failed to parse attachment:', e);
           }
-        }
 
-        const role = msg.role === 'user' ? 'user' : 'ai';
-        const createdAt = parseMessageTimestampMs(msg.createdAt ?? msg.created_at ?? msg.timestamp);
-        const processingStartedAt = role === 'ai' ? (lastUserCreatedAt ?? createdAt) : undefined;
-        const processingFinishedAt = role === 'ai' ? createdAt : undefined;
-        const memberActor = memberActorFromMessageMetadata(msg.metadata);
-        const knowledgeReferences = knowledgeReferencesFromMessageMetadata(msg.metadata);
+          const role = msg.role === 'user' ? 'user' : 'ai';
+          const createdAt = parseMessageTimestampMs(msg.createdAt ?? msg.created_at ?? msg.timestamp);
+          const processingStartedAt = role === 'ai' ? (lastUserCreatedAt ?? createdAt) : undefined;
+          const processingFinishedAt = role === 'ai' ? createdAt : undefined;
+          const memberActor = memberActorFromMessageMetadata(msg.metadata);
+          const knowledgeReferences = knowledgeReferencesFromMessageMetadata(msg.metadata);
 
-        if (role === 'user') {
-          lastUserCreatedAt = createdAt;
-        }
-        messageTimes.push(createdAt);
+          if (role === 'user') {
+            lastUserCreatedAt = createdAt;
+          }
+          messageTimes.push(createdAt);
 
-        return {
-          id: msg.id,
-          role, // Simplified mapping
-          messageType: role === 'ai' ? 'reply' : undefined,
-          content: msg.content,
-          displayContent: msg.displayContent || msg.display_content || undefined,
-          attachment: attachment,
-          attachments,
-          knowledgeReferences: role === 'user' ? knowledgeReferences : [],
-          memberMention: role === 'user' ? memberActor : undefined,
-          memberActor: role === 'ai' ? memberActor : undefined,
-          tools: [], // History tools not fully reconstructed in this simple view yet
-          timeline: [], // History timeline not fully reconstructed
-          isStreaming: false,
-          processingStartedAt,
-          processingFinishedAt,
-        };
-      });
+          return {
+            id: msg.id,
+            role, // Simplified mapping
+            messageType: role === 'ai' ? 'reply' : undefined,
+            content: msg.content,
+            displayContent: msg.displayContent || msg.display_content || undefined,
+            attachment: attachment,
+            attachments,
+            knowledgeReferences: role === 'user' ? knowledgeReferences : [],
+            memberMention: role === 'user' ? memberActor : undefined,
+            memberActor: role === 'ai' ? memberActor : undefined,
+            tools: [], // History tools not fully reconstructed in this simple view yet
+            timeline: [], // History timeline not fully reconstructed
+            isStreaming: false,
+            processingStartedAt,
+            processingFinishedAt,
+          };
+        });
       uiMessages = applyPersistedRuntimeEventsToMessages(uiMessages, messageTimes, runtimeEventsRaw);
 
-      const runtimeProcessing = Boolean(runtimeState?.success && runtimeState?.isProcessing);
       const runtimePartial = runtimeState?.partialResponse || '';
       let shouldSetProcessing = false;
 
@@ -3754,22 +4006,11 @@ export function Chat({
         setMessages(prev => {
           const lastReplyIndex = findLastAssistantReplyIndex(prev);
           const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
-          if (lastMsg && lastMsg.role === 'ai' && lastMsg.isStreaming) {
+          const hasRunningTimeline = Array.isArray(lastMsg?.timeline)
+            && lastMsg.timeline.some((item) => item.status === 'running');
+          if (lastMsg && lastMsg.role === 'ai' && (lastMsg.isStreaming || hasRunningTimeline)) {
             const now = Date.now();
-            const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
-              if (item.status !== 'running') return item;
-              return {
-                ...item,
-                status: (
-                  item.type === 'tool-call'
-                  || item.type === 'cli-install'
-                  || item.type === 'cli-exec'
-                  || item.type === 'cli-escalation'
-                  || item.type === 'cli-verify'
-                ) ? 'failed' : 'done',
-                duration: now - item.timestamp,
-              } as ProcessItem;
-            });
+            const timeline = finalizeRunningTimelineItems(lastMsg.timeline || [], now, true);
             timeline.push(errorTimelineItem);
             const next = [...prev];
             next[lastReplyIndex] = {
@@ -4156,6 +4397,7 @@ export function Chat({
           onCreated: (sessionId) => {
             currentSessionIdRef.current = sessionId;
             skipNextFixedSessionLoadRef.current = sessionId;
+            fixedSessionInflightLoads.delete(sessionId);
             writeFixedSessionWarmSnapshot(sessionId, { messages: optimisticMessages });
             localMessageMutationRef.current += 1;
             setMessages(optimisticMessages);
@@ -4178,6 +4420,7 @@ export function Chat({
     }
     notifySessionActivity(targetSessionId, new Date(processingStartedAt).toISOString());
 
+    fixedSessionInflightLoads.delete(targetSessionId);
     if (!seededOptimisticMessages) {
       localMessageMutationRef.current += 1;
       setMessages(prev => [...prev, userMsg, aiPlaceholder]);
@@ -4500,6 +4743,7 @@ export function Chat({
         selectedModelKey={selectedChatModelKey}
         onSelectedModelKeyChange={setSelectedChatModelKey}
         isBusy={isProcessing}
+        allowInputWhileBusy={keepComposerInputActive}
         audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}
         onAudioAction={handleAudioInput}
         onCancel={handleCancel}
@@ -4769,7 +5013,7 @@ export function Chat({
                           </div>
                         ) : (
                           <>
-                            {messages.map((msg) => (
+                            {visibleMessages.map((msg) => (
                               <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
                                 <MessageItem
                                   msg={msg}

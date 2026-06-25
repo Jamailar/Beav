@@ -1170,6 +1170,58 @@ impl<'a> AppCliExecutor<'a> {
             "taskbriefupdate" => self.handle_task_brief_update(payload),
             "taskbriefgoal" => self.handle_task_brief_goal(payload),
             "taskbriefcontext" => self.handle_task_brief_context(payload),
+            "topiccenterread" => {
+                let operation = payload_string_alias(payload, &["operation", "mode"])
+                    .map(|value| normalized_app_cli_action_key(&value))
+                    .unwrap_or_else(|| {
+                        if payload_string_alias(payload, &["id", "topicId", "topic_id"]).is_some() {
+                            "get".to_string()
+                        } else {
+                            "list".to_string()
+                        }
+                    });
+                match operation.as_str() {
+                    "get" | "read" => self.call_channel("topic-center:get", payload.clone()),
+                    "list" | "search" => self.call_channel("topic-center:list", payload.clone()),
+                    _ => Err(app_cli_error_json(
+                        Some("topicCenter.read"),
+                        "UNSUPPORTED_OPERATION",
+                        &format!("unsupported topicCenter.read operation: {operation}"),
+                        false,
+                        None,
+                    )),
+                }
+            }
+            "topiccentermanage" => {
+                let operation = payload_string_alias(payload, &["operation", "mode"])
+                    .map(|value| normalized_app_cli_action_key(&value))
+                    .unwrap_or_else(|| {
+                        if payload_string_alias(payload, &["id", "topicId", "topic_id"]).is_some() {
+                            "update".to_string()
+                        } else {
+                            "create".to_string()
+                        }
+                    });
+                let channel = match operation.as_str() {
+                    "create" | "add" => "topic-center:create",
+                    "update" | "edit" | "save" => "topic-center:update",
+                    "bulkupsert" | "upsert" | "bulkadd" | "bulkcreate" => {
+                        "topic-center:bulk-upsert"
+                    }
+                    "abandon" | "archive" | "discard" => "topic-center:abandon",
+                    "delete" | "remove" => "topic-center:delete",
+                    _ => {
+                        return Err(app_cli_error_json(
+                            Some("topicCenter.manage"),
+                            "UNSUPPORTED_OPERATION",
+                            &format!("unsupported topicCenter.manage operation: {operation}"),
+                            false,
+                            None,
+                        ));
+                    }
+                };
+                self.call_channel(channel, payload.clone())
+            }
             "taskbriefgetcontext" => {
                 let mut request = payload.as_object().cloned().unwrap_or_default();
                 request
@@ -1431,6 +1483,10 @@ impl<'a> AppCliExecutor<'a> {
             }
             "runtimegetevents" => {
                 let tokens = vec!["get-events".to_string()];
+                app_cli_runtime::handle(self, &tokens, payload)
+            }
+            "runtimemodelconfigget" | "runtimegetmodelconfig" => {
+                let tokens = vec!["get-model-config".to_string()];
                 app_cli_runtime::handle(self, &tokens, payload)
             }
             "runtimetaskscreate" => {
@@ -1796,6 +1852,11 @@ impl<'a> AppCliExecutor<'a> {
             return result;
         }
         if let Some(result) = commands::manuscripts::handle_manuscripts_channel(
+            self.app, self.state, channel, &payload,
+        ) {
+            return result;
+        }
+        if let Some(result) = commands::topic_center::handle_topic_center_channel(
             self.app, self.state, channel, &payload,
         ) {
             return result;
@@ -3395,7 +3456,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "memory list|search|recall|add|update|archive|delete|rebuild-index|diagnostics",
             "web fetch|search",
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
-            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|get-events|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
+            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|get-events|get-model-config|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
             "skills list|read|invoke|create|save|enable|disable|market-install",
             "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
@@ -3514,6 +3575,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "runtime get-checkpoints --session-id <sessionId> [--limit 50]",
             "runtime get-tool-results --session-id <sessionId> [--limit 50]",
             "runtime get-events --session-id <sessionId> [--category media_generation] [--event-type request.failed] [--limit 50]",
+            "runtime get-model-config",
             "runtime tasks create [payload or payload.payload]",
             "runtime tasks list",
             "runtime tasks get --task-id <taskId>",
@@ -4226,6 +4288,12 @@ mod tests {
             ("memory.archive", "memory.manage"),
             ("memory.rebuildIndex", "memory.manage"),
             ("memory.diagnostics", "memory.manage"),
+            ("topicCenter.list", "topicCenter.read"),
+            ("topicCenter.get", "topicCenter.read"),
+            ("topicCenter.create", "topicCenter.manage"),
+            ("topicCenter.update", "topicCenter.manage"),
+            ("topicCenter.bulkUpsert", "topicCenter.manage"),
+            ("topicCenter.delete", "topicCenter.manage"),
             ("mcp.list", "mcp.inspect"),
             ("mcp.get", "mcp.inspect"),
             ("mcp.sessions", "mcp.inspect"),

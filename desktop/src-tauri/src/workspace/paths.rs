@@ -7,6 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
+const CURRENT_WORKSPACE_DIR_NAME: &str = ".beav";
+const LEGACY_REDBOX_WORKSPACE_DIR_NAME: &str = ".redbox";
+const LEGACY_REDCONVERT_WORKSPACE_DIR_NAME: &str = ".redconvert";
+
 pub(crate) fn store_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = state
         .store_path
@@ -20,11 +24,15 @@ pub(crate) fn store_root(state: &State<'_, AppState>) -> Result<PathBuf, String>
 pub(crate) fn preferred_workspace_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(".redbox")
+        .join(CURRENT_WORKSPACE_DIR_NAME)
+}
+
+pub(crate) fn legacy_redbox_workspace_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(LEGACY_REDBOX_WORKSPACE_DIR_NAME))
 }
 
 pub(crate) fn legacy_workspace_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".redconvert"))
+    dirs::home_dir().map(|home| home.join(LEGACY_REDCONVERT_WORKSPACE_DIR_NAME))
 }
 
 pub(crate) fn legacy_default_workspace_dir() -> Option<PathBuf> {
@@ -62,6 +70,9 @@ pub(crate) fn configured_workspace_dir(settings: &Value) -> Option<PathBuf> {
 pub(crate) fn compatible_workspace_base_dir(settings: &Value) -> PathBuf {
     if let Some(configured) = configured_workspace_dir(settings) {
         return configured;
+    }
+    if let Some(legacy_redbox) = legacy_redbox_workspace_dir().filter(|path| path.exists()) {
+        return legacy_redbox;
     }
     if let Some(legacy) = legacy_workspace_dir().filter(|_| has_legacy_workspace_layout()) {
         return legacy;

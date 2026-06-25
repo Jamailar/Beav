@@ -28,6 +28,19 @@ pub fn canonical_app_cli_action_for_policy<'a>(action: &'a str) -> &'a str {
         "memoryupdate" | "memoryarchive" | "memoryrebuildindex" | "memorydiagnostics" => {
             "memory.manage"
         }
+        "topiccenterlist" | "topiccenterget" | "topiccenterread" | "topiccentersearch" => {
+            "topicCenter.read"
+        }
+        "topiccentercreate"
+        | "topiccenteradd"
+        | "topiccenterupdate"
+        | "topiccenteredit"
+        | "topiccenterupsert"
+        | "topiccenterbulkupsert"
+        | "topiccenterabandon"
+        | "topiccenterarchive"
+        | "topiccenterdelete"
+        | "topiccenterremove" => "topicCenter.manage",
         "redclawrunnerstatus"
         | "redclawrunnerstart"
         | "redclawrunnerstop"
@@ -136,6 +149,19 @@ fn app_cli_action_alias(action: &str) -> Option<(&'static str, Option<&'static s
         "taskconfirm" => Some(("task.manage", Some("confirm"))),
         "taskupdate" => Some(("task.manage", Some("update"))),
         "taskcancel" => Some(("task.manage", Some("cancel"))),
+        "topiccenterlist" | "topiccenterread" | "topiccentersearch" => {
+            Some(("topicCenter.read", Some("list")))
+        }
+        "topiccenterget" => Some(("topicCenter.read", Some("get"))),
+        "topiccentercreate" | "topiccenteradd" => Some(("topicCenter.manage", Some("create"))),
+        "topiccenterupdate" | "topiccenteredit" => Some(("topicCenter.manage", Some("update"))),
+        "topiccenterupsert" | "topiccenterbulkupsert" => {
+            Some(("topicCenter.manage", Some("bulkUpsert")))
+        }
+        "topiccenterabandon" | "topiccenterarchive" => {
+            Some(("topicCenter.manage", Some("abandon")))
+        }
+        "topiccenterdelete" | "topiccenterremove" => Some(("topicCenter.manage", Some("delete"))),
         _ => None,
     }
 }

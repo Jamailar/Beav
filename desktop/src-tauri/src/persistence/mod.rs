@@ -14,7 +14,7 @@ use crate::scheduler::sync_redclaw_job_definitions;
 use crate::skills::builtin_skill_records;
 use crate::store::{
     assistant as assistant_store, media as media_store, redclaw as redclaw_store,
-    spaces as spaces_store, subjects as subjects_store,
+    spaces as spaces_store, subjects as subjects_store, topic_center as topic_center_store,
 };
 use crate::workspace_loaders::{
     load_chat_rooms_from_fs, load_chatroom_messages_from_fs, load_memories_from_fs,
@@ -266,19 +266,37 @@ pub(crate) fn apply_workspace_hydration_snapshot(
     sync_redclaw_job_definitions(store);
 }
 
+const CURRENT_STORE_DIR_NAME: &str = "Beav";
+const CURRENT_STORE_FILE_NAME: &str = "beav-state.json";
+const LEGACY_REDBOX_STORE_DIR_NAME: &str = "RedBox";
+const LEGACY_REDBOX_STORE_FILE_NAME: &str = "redbox-state.json";
+
+fn select_store_path(base: &Path) -> PathBuf {
+    let legacy_redbox_path = base
+        .join(LEGACY_REDBOX_STORE_DIR_NAME)
+        .join(LEGACY_REDBOX_STORE_FILE_NAME);
+    if legacy_redbox_path.exists() {
+        return legacy_redbox_path;
+    }
+
+    let current_path = base
+        .join(CURRENT_STORE_DIR_NAME)
+        .join(CURRENT_STORE_FILE_NAME);
+    if current_path.exists() {
+        return current_path;
+    }
+
+    current_path
+}
+
 pub fn build_store_path() -> PathBuf {
     let base = config_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let redbox_dir = base.join("RedBox");
-    let redbox_path = redbox_dir.join("redbox-state.json");
-
-    if redbox_path.exists() {
-        let _ = fs::create_dir_all(&redbox_dir);
-        return redbox_path;
+    let path = select_store_path(&base);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
     }
-
-    let _ = fs::create_dir_all(&redbox_dir);
-    redbox_path
+    path
 }
 
 fn store_root_from_store_path(store_path: &Path) -> Result<PathBuf, String> {
@@ -849,6 +867,7 @@ pub fn default_store() -> AppStore {
         embedding_cache: Vec::new(),
         similarity_cache: Vec::new(),
         wander_history: Vec::new(),
+        topic_center: Vec::new(),
         chat_sessions: Vec::new(),
         chat_messages: Vec::new(),
         session_context_records: Vec::new(),
@@ -1021,11 +1040,13 @@ pub fn load_store(path: &PathBuf) -> AppStore {
         }
     }
     let skills_migrated = ensure_builtin_skills_present(&mut store);
+    let topic_center_migrated = topic_center_store::migrate_wander_history(&mut store) > 0;
     let assistant_daemon_migrated =
         assistant_store::enable_daemon_by_default_after_load(&mut store);
     crate::session_manager::enforce_default_retention(&mut store);
     if skills_migrated
         || assistant_daemon_migrated
+        || topic_center_migrated
         || acp_runs_repaired
         || migrated_session_artifacts
         || loaded_from_legacy
@@ -1546,6 +1567,37 @@ mod tests {
         let root = std::env::temp_dir().join(format!("redbox-persistence-{label}-{unique}"));
         fs::create_dir_all(&root).expect("temp dir should be creatable");
         root.join("redbox-state.json")
+    }
+
+    fn temp_config_base(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("redbox-store-path-{label}-{unique}"));
+        fs::create_dir_all(&root).expect("temp config base should be creatable");
+        root
+    }
+
+    #[test]
+    fn select_store_path_uses_beav_for_new_users() {
+        let base = temp_config_base("new-user");
+        let selected = select_store_path(&base);
+
+        assert_eq!(selected, base.join("Beav").join("beav-state.json"));
+    }
+
+    #[test]
+    fn select_store_path_keeps_existing_redbox_store() {
+        let base = temp_config_base("legacy-redbox");
+        let legacy = base.join("RedBox").join("redbox-state.json");
+        fs::create_dir_all(legacy.parent().expect("legacy parent"))
+            .expect("legacy parent should be creatable");
+        fs::write(&legacy, "{}").expect("legacy store should be writable");
+
+        let selected = select_store_path(&base);
+
+        assert_eq!(selected, legacy);
     }
 
     fn seeded_store() -> AppStore {

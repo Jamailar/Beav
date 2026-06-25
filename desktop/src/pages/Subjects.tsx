@@ -356,12 +356,6 @@ const DEFAULT_VOICE_TTS_MODEL = 'cosyvoice-v3.5-plus';
 const DEFAULT_VOICE_CLONE_MODEL = 'cosyvoice-v3.5-plus-voice-clone';
 const MINIMAX_VOICE_CLONE_MODEL = 'minimax-voice-clone';
 const COSYVOICE_CLONE_MODEL = 'cosyvoice-v3.5-plus-voice-clone';
-const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
-    generated: '已生成',
-    planned: '计划项',
-    imported: '导入',
-};
-
 type SubjectVoiceInfo = {
     label: string;
     detail?: string;
@@ -610,12 +604,6 @@ function isAudioAsset(asset: Pick<MediaAsset, 'mimeType' | 'relativePath' | 'abs
     return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i.test(mediaAssetSourceUrl(asset).trim());
 }
 
-function mediaAssetKindLabel(asset: MediaAsset): string {
-    if (isAudioAsset(asset)) return '音频';
-    if (isVideoAsset(asset)) return '视频';
-    return asset.aspectRatio || asset.size || '图片';
-}
-
 function parseJsonObject(value: unknown): Record<string, unknown> {
     if (!value) return {};
     if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -720,53 +708,39 @@ function buildVoiceCloneModelOptions(settings: Record<string, unknown>): { optio
     return { options, selectedModel: selectedModel || options[0]?.value || DEFAULT_VOICE_TTS_MODEL };
 }
 
-function AudioMediaThumb({ src, compact = false }: { src: string; compact?: boolean }) {
-    return (
-        <div className={clsx(
-            'flex h-full w-full flex-col items-center justify-center bg-surface-secondary/60 text-accent-primary',
-            compact ? 'gap-1.5 p-1.5' : 'gap-3 p-4',
-        )}>
-            <div className={clsx(
-                'flex items-center justify-center rounded-xl border border-accent-primary/20 bg-accent-primary/10',
-                compact ? 'h-9 w-9' : 'h-14 w-14',
-            )}>
-                <Music2 className={compact ? 'h-5 w-5' : 'h-7 w-7'} />
-            </div>
-            {!compact && src ? (
-                <audio
-                    src={resolveAssetUrl(src)}
-                    className="w-full"
-                    controls
-                    preload="metadata"
-                    onClick={(event) => event.stopPropagation()}
-                />
-            ) : null}
-        </div>
-    );
-}
-
-function VideoMediaThumb({
-    sourceUrl,
-    thumbnailUrl,
-    label,
-}: {
-    sourceUrl: string;
-    thumbnailUrl?: string;
-    label: string;
-}) {
-    const resolvedThumbnailUrl = thumbnailUrl ? resolveAssetUrl(thumbnailUrl) : '';
-    if (resolvedThumbnailUrl) {
-        return <img src={resolvedThumbnailUrl} alt={label} className="h-full w-full object-cover" />;
-    }
+function MediaMasonryThumb({ asset }: { asset: MediaAsset }) {
+    const sourceUrl = mediaAssetSourceUrl(asset);
     const resolvedSourceUrl = sourceUrl ? resolveAssetUrl(sourceUrl) : '';
-    if (resolvedSourceUrl) {
-        return <video src={resolvedSourceUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />;
-    }
-    return (
-        <div className="flex h-full w-full items-center justify-center text-text-tertiary">
-            <Clapperboard className="h-6 w-6" />
+    const resolvedThumbnailUrl = asset.thumbnailUrl ? resolveAssetUrl(asset.thumbnailUrl) : '';
+    const iconFallback = (
+        <div className="flex aspect-square w-full items-center justify-center bg-surface-secondary/70 text-text-tertiary">
+            {isAudioAsset(asset) ? <Music2 className="h-7 w-7" /> : <Clapperboard className="h-7 w-7" />}
         </div>
     );
+
+    if (asset.exists === false) return iconFallback;
+
+    if (isAudioAsset(asset)) {
+        return (
+            <div className="flex aspect-[4/3] w-full items-center justify-center bg-surface-secondary/70 text-accent-primary">
+                <Music2 className="h-7 w-7" />
+            </div>
+        );
+    }
+
+    if (isVideoAsset(asset)) {
+        if (resolvedThumbnailUrl) {
+            return <img src={resolvedThumbnailUrl} alt="" className="block h-auto w-full bg-surface-secondary" loading="lazy" />;
+        }
+        if (resolvedSourceUrl) {
+            return <video src={resolvedSourceUrl} className="block h-auto w-full bg-black" muted playsInline preload="metadata" />;
+        }
+        return iconFallback;
+    }
+
+    const resolvedImageUrl = resolvedThumbnailUrl || resolvedSourceUrl;
+    if (!resolvedImageUrl) return iconFallback;
+    return <img src={resolvedImageUrl} alt="" className="block h-auto w-full bg-surface-secondary" loading="lazy" />;
 }
 
 function MediaAssetPreviewDialog({ asset, onClose }: { asset: MediaAsset; onClose: () => void }) {
@@ -1024,13 +998,6 @@ function VoiceSlotBadges({ slots, compact = false }: { slots: SubjectVoiceSlotIn
             ))}
         </div>
     );
-}
-
-function formatAssetDate(value?: string): string {
-    if (!value) return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleDateString();
 }
 
 function getBrandWorkspaceBridge(): BrandWorkspaceBridge | null {
@@ -3837,7 +3804,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }
 
     return (
-        <div className="flex h-full min-h-0 flex-col bg-white">
+        <div className="flex h-full min-h-0 flex-col bg-background">
             <div className={clsx(isModalVariant ? 'px-5 pt-4 pb-3' : 'px-8 pt-6 pb-4')}>
                 <div className="flex items-center gap-3">
                     {!isModalVariant && onReturnHome && (
@@ -3860,7 +3827,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
                             刷新
                         </button>
-                        {!isBrandCategoryView && (
+                        {showAssetControls && !isBrandCategoryView && (
                         <div className="inline-flex rounded-xl bg-[rgb(var(--color-surface-secondary))] p-1">
                             <button
                                 type="button"
@@ -4023,13 +3990,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <Clapperboard className="mb-4 h-12 w-12 stroke-[1.8]" />
                             <div className="text-sm font-medium">暂无媒体</div>
                         </div>
-                    ) : viewMode === 'grid' ? (
+                    ) : (
                         <>
-                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                            <div className="columns-2 sm:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6" style={{ columnGap: '0.625rem' }}>
                                 {filteredMediaAssets.map((asset) => {
-                                    const sourceUrl = mediaAssetSourceUrl(asset);
-                                    const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
-                                    const source = normalizeMediaSource(asset.source);
                                     return (
                                         <div
                                             key={asset.id}
@@ -4042,88 +4006,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 event.preventDefault();
                                                 openMediaPreview(asset);
                                             }}
-                                            className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
+                                            aria-label={asset.title || asset.id}
+                                            className="group mb-2.5 block w-full break-inside-avoid overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md focus:outline-none focus:ring-2 focus:ring-accent-primary/30"
                                         >
-                                            <div className="aspect-video overflow-hidden bg-surface-secondary/50">
-                                                {previewUrl && asset.exists ? (
-                                                    isAudioAsset(asset) ? (
-                                                        <AudioMediaThumb src={sourceUrl} />
-                                                    ) : isVideoAsset(asset) ? (
-                                                        <VideoMediaThumb
-                                                            sourceUrl={sourceUrl}
-                                                            thumbnailUrl={asset.thumbnailUrl}
-                                                            label={asset.title || asset.id}
-                                                        />
-                                                    ) : (
-                                                        <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
-                                                    )
-                                                ) : (
-                                                    <div className="flex h-full w-full items-center justify-center text-text-tertiary">
-                                                        <Clapperboard className="h-6 w-6" />
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <div className="space-y-1.5 p-2.5">
-                                                <div className="truncate text-xs font-semibold text-text-primary">{asset.title || asset.id}</div>
-                                                <div className="truncate text-[11px] text-text-tertiary">
-                                                    {asset.projectId || '未设置项目ID'}
-                                                </div>
-                                                <div className="flex items-center justify-between gap-2 text-[10px] text-text-tertiary">
-                                                    <span>{MEDIA_SOURCE_LABEL[source]}</span>
-                                                    <span>{mediaAssetKindLabel(asset)}</span>
-                                                </div>
-                                            </div>
+                                            <MediaMasonryThumb asset={asset} />
                                         </div>
-                                    );
-                                })}
-                            </div>
-                            {mediaLoadMoreControl}
-                        </>
-                    ) : (
-                        <>
-                            <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
-                                {filteredMediaAssets.map((asset) => {
-                                    const sourceUrl = mediaAssetSourceUrl(asset);
-                                    const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
-                                    const source = normalizeMediaSource(asset.source);
-                                    return (
-                                        <button
-                                            key={asset.id}
-                                            type="button"
-                                            onClick={() => openMediaPreview(asset)}
-                                            onContextMenu={(event) => openMediaContextMenu(event, asset)}
-                                            className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
-                                        >
-                                            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
-                                                {previewUrl && asset.exists ? (
-                                                    isAudioAsset(asset) ? (
-                                                        <AudioMediaThumb src={sourceUrl} compact />
-                                                    ) : isVideoAsset(asset) ? (
-                                                        <VideoMediaThumb
-                                                            sourceUrl={sourceUrl}
-                                                            thumbnailUrl={asset.thumbnailUrl}
-                                                            label={asset.title || asset.id}
-                                                        />
-                                                    ) : (
-                                                        <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
-                                                    )
-                                                ) : (
-                                                    <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
-                                                        <Clapperboard className="h-5 w-5" />
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <div className="min-w-0 flex-1">
-                                                <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{asset.title || asset.id}</div>
-                                                <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
-                                                    {MEDIA_SOURCE_LABEL[source]} · {asset.projectId || '未设置项目ID'}
-                                                    {asset.boundManuscriptPath ? ` · ${asset.boundManuscriptPath}` : ''}
-                                                </div>
-                                            </div>
-                                            <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
-                                                {formatAssetDate(asset.updatedAt || asset.createdAt)}
-                                            </div>
-                                        </button>
                                     );
                                 })}
                             </div>

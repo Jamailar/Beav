@@ -185,6 +185,7 @@ export interface ChatComposerProps {
   selectedModelKey?: string;
   onSelectedModelKeyChange?: (key: string) => void;
   isBusy?: boolean;
+  allowInputWhileBusy?: boolean;
   audioState?: ChatComposerAudioState;
   onAudioAction?: (() => void | Promise<void>) | null;
   onCancel?: (() => void | Promise<void>) | null;
@@ -1198,6 +1199,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   selectedModelKey = '',
   onSelectedModelKeyChange,
   isBusy = false,
+  allowInputWhileBusy = false,
   audioState = 'idle',
   onAudioAction,
   onCancel,
@@ -1248,6 +1250,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const hasKnowledgeMentions = selectedKnowledgeMentions.length > 0;
   const hasSkillMentions = selectedSkillMentions.length > 0;
   const hasAssetMentions = selectedAssetMentions.length > 0;
+  const inputLocked = disabled || readOnly || (isBusy && !allowInputWhileBusy);
   const submitDisabled = disabled || isBusy || attachmentBusy || (!value.trim() && !attachment && !hasKnowledgeMentions && !hasSkillMentions && !hasAssetMentions);
   const showAttachmentButton = Boolean(onPickAttachment);
   const showModelSelector = Boolean(onSelectedModelKeyChange);
@@ -1491,7 +1494,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }, [onSubmit, submitDisabled]);
 
   const updateMentionTrigger = useCallback((nextValue: string, caretIndex: number) => {
-    if (readOnly || disabled || isBusy) {
+    if (inputLocked) {
       setMemberMentionTrigger(null);
       setKnowledgeMentionTrigger(null);
       return;
@@ -1519,7 +1522,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     }
     setMemberMentionTrigger(null);
     setKnowledgeMentionTrigger(null);
-  }, [assetMentionEnabled, disabled, isBusy, knowledgeMentionEnabled, memberMentionEnabled, readOnly, skillMentionEnabled]);
+  }, [assetMentionEnabled, inputLocked, knowledgeMentionEnabled, memberMentionEnabled, skillMentionEnabled]);
 
   const selectMemberMention = useCallback((member: ChatMemberMentionOption) => {
     const trigger = memberMentionTrigger;
@@ -1736,7 +1739,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       attachments={mediaSlotAttachments}
       darkEmbedded={darkEmbedded}
       variant={variant}
-      disabled={disabled || isBusy || attachmentBusy}
+      disabled={inputLocked || attachmentBusy}
       onRemove={(item) => {
         if (onRemoveAttachment) {
           onRemoveAttachment(item);
@@ -1749,7 +1752,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     <ComposerAttachmentPlaceholder
       darkEmbedded={darkEmbedded}
       variant={variant}
-      disabled={disabled || isBusy || attachmentBusy}
+      disabled={inputLocked || attachmentBusy}
       onClick={() => onPickAttachment?.()}
     />
   ) : null;
@@ -1804,7 +1807,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       ) : null}
       <div
         ref={textareaRef}
-        contentEditable={!readOnly && !isBusy}
+        contentEditable={!inputLocked}
         suppressContentEditableWarning
         onInput={() => {
           const editor = textareaRef.current;
@@ -1849,7 +1852,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         onKeyUp={(event) => updateMentionTrigger(readEditorText(event.currentTarget), editorCaretTextOffset(event.currentTarget))}
         onPaste={(event) => {
           const imageFiles = getClipboardImageFiles(event.clipboardData);
-          if (imageFiles.length > 0 && onPasteImageFiles && !disabled && !readOnly && !isBusy) {
+          if (imageFiles.length > 0 && onPasteImageFiles && !inputLocked) {
             event.preventDefault();
             void onPasteImageFiles?.(imageFiles);
             return;
@@ -1864,7 +1867,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           palette.text,
         )}
         spellCheck={false}
-        aria-disabled={disabled || isBusy}
+        aria-disabled={inputLocked}
         role="textbox"
         aria-multiline="true"
       />
@@ -2174,7 +2177,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               <button
                 type="button"
                 onClick={() => void onPickAttachment?.()}
-                disabled={disabled || isBusy || attachmentBusy}
+                disabled={inputLocked || attachmentBusy}
                 className={clsx('p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-45', subtleButtonClass)}
                 title="添加文件"
               >

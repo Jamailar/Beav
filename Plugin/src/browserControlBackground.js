@@ -749,7 +749,7 @@ async function resolveApiBase(force = false) {
     }
   }
   cachedBaseUrl = null;
-  throw new Error(lastError || 'RedBox browser-control HTTP bridge is not configured');
+  throw new Error(lastError || 'Beav browser-control HTTP bridge is not configured');
 }
 
 async function registerPlugin(force) {
@@ -783,7 +783,7 @@ async function ensureAppServerWithSidePanelGate(message = {}) {
   const isTargetCodexAlias = method === 'ensure_codex_app_server';
   try {
     const sidePanel = await requireSidePanelOpen(message.windowId || message.params?.windowId, {
-      closedError: isTargetCodexAlias ? 'Codex side panel is not open.' : 'RedBox side panel is not open.',
+      closedError: isTargetCodexAlias ? 'Codex side panel is not open.' : 'Beav side panel is not open.',
     });
     const result = await requestNativeHost('ensureCodexAppServer', message.params || {}, message.timeoutMs);
     const status = refreshNativeStatus();

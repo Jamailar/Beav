@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square, Info } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square, Info, Copy, Check } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import type { PendingChatMessage } from '../features/app-shell/types';
@@ -69,6 +69,65 @@ interface SettingsShape {
 
 const BROWSER_PLUGIN_DOWNLOAD_URL = APP_BRAND.downloadUrl || 'https://redbox.ziz.hk/download';
 
+const copyTextWithClipboard = async (text: string): Promise<boolean> => {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            return ok;
+        } catch {
+            return false;
+        }
+    }
+};
+
+function stripVisualProjectionKeywords(text: string): string {
+    return text.replace(/\n关键词:[\s\S]*$/u, '').trim();
+}
+
+function isVisibleTextEvidence(evidence: NonNullable<VisualSemanticBlock['visualEvidence']>[number]): boolean {
+    const kind = String(evidence.kind || '').trim().toLowerCase();
+    const id = String(evidence.id || '').trim().toLowerCase();
+    const title = String(evidence.title || '').trim().toLowerCase();
+    return kind === 'visible_text'
+        || id.includes('visible_text')
+        || title.includes('visible_text')
+        || title.includes('可见文字')
+        || title.includes('ocr');
+}
+
+function buildVisibleTextBlocksText(blocks?: VisualSemanticBlock[]): string {
+    if (!Array.isArray(blocks) || blocks.length === 0) return '';
+    const seen = new Set<string>();
+    const chunks: string[] = [];
+    for (const block of blocks) {
+        const evidenceText = (block.visualEvidence || [])
+            .filter(isVisibleTextEvidence)
+            .map((evidence) => String(evidence.text || '').trim())
+            .filter(Boolean)
+            .join('\n');
+        const fallbackText = block.blockType === 'image.visible_text'
+            ? stripVisualProjectionKeywords(String(block.text || '').trim())
+            : '';
+        const text = (evidenceText || fallbackText).trim();
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        const prefix = typeof block.page === 'number' ? `P${block.page} ` : '';
+        chunks.push(`${prefix}${text}`);
+    }
+    return chunks.join('\n\n');
+}
+
 function ObsidianIcon({ className }: { className?: string }) {
     return (
         <svg
@@ -110,6 +169,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const [isVisualIndexSettingSaving, setIsVisualIndexSettingSaving] = useState(false);
     const [showSubtitle, setShowSubtitle] = useState(false);
     const [showTranscript, setShowTranscript] = useState(false);
+    const [copiedExtractionId, setCopiedExtractionId] = useState<string | null>(null);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [isSubtitleLoading, setIsSubtitleLoading] = useState(false);
     const [isRefreshingYoutubeSummaries, setIsRefreshingYoutubeSummaries] = useState(false);
@@ -497,6 +557,20 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         setSelectedNote(null);
     }, [isExpandableXiaohongshuNote, onNavigateToRedClaw]);
 
+    const handleCopyExtractionText = useCallback(async (copyId: string, text: string) => {
+        const normalizedText = text.trim();
+        if (!normalizedText) return;
+        const ok = await copyTextWithClipboard(normalizedText);
+        if (!ok) {
+            void appAlert('复制失败，请手动选择文本复制。');
+            return;
+        }
+        setCopiedExtractionId(copyId);
+        window.setTimeout(() => {
+            setCopiedExtractionId((current) => current === copyId ? null : current);
+        }, 1400);
+    }, []);
+
     const refreshIndexStatus = useCallback(async () => {
         try {
             const status = await window.ipcRenderer.knowledge.getIndexStatus<KnowledgeIndexStatus>();
@@ -629,6 +703,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     }, []);
 
     const openNoteDetail = useCallback(async (note: Note) => {
+        setShowTranscript(false);
         setSelectedNote(note);
         const detail = await loadKnowledgeDetail(note.id, note.knowledgeKind || note.captureKind || 'redbook-note');
         if (detail && loadDetailRequestRef.current > 0) {
@@ -1624,32 +1699,67 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         );
     };
 
-    const renderXhsTranscriptionModule = (note: Note) => {
-        if (!note.video) return null;
-
+    const renderKnowledgeExtractionFoldout = (note: Note, compact = false) => {
+        const transcript = String(note.transcript || '').trim();
+        const ocrText = transcript ? '' : buildVisibleTextBlocksText(note.visualBlocks);
+        const contentText = transcript || ocrText;
+        if (!contentText && !note.video) return null;
         const isCurrentNoteTranscribing = isTranscribing && selectedNote?.id === note.id;
         const isProcessing = note.transcriptionStatus === 'processing' || isCurrentNoteTranscribing;
-        const hasTranscript = Boolean(note.transcript?.trim());
-        const isFailed = note.transcriptionStatus === 'failed' && !hasTranscript;
-        const statusLabel = hasTranscript ? '转录完成' : isProcessing ? '转录中' : isFailed ? '转录失败' : '等待转录';
-        const progressWidth = hasTranscript ? '100%' : isProcessing ? '62%' : isFailed ? '100%' : '0%';
-        const progressClass = hasTranscript
-            ? 'bg-emerald-500'
-            : isFailed
-                ? 'bg-rose-500'
-                : 'bg-accent-primary';
+        const isFailed = note.transcriptionStatus === 'failed' && !transcript;
+        const title = transcript ? '转录内容' : ocrText ? 'OCR内容' : '转录内容';
+        const statusLabel = contentText
+            ? `${title}已生成`
+            : isProcessing ? '转录中' : isFailed ? '转录失败' : '等待转录';
+        const Icon = transcript || note.video ? FileText : Image;
+        const canTranscribe = Boolean(note.video && !transcript);
+        const copyId = `${note.id}:${transcript ? 'transcript' : 'ocr'}`;
+        const isCopied = copiedExtractionId === copyId;
 
         return (
-            <div className="rounded-2xl border border-black/[0.06] bg-black/[0.02] p-4">
-                <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-2 text-[13px] font-bold text-text-primary">
-                            <FileText className="h-4 w-4 text-text-secondary" />
-                            视频转录
-                        </div>
-                        <div className="mt-1 text-[12px] font-medium text-text-tertiary">{statusLabel}</div>
-                    </div>
-                    {!hasTranscript && (
+            <div className={clsx(
+                'overflow-hidden rounded-2xl border bg-black/[0.02]',
+                compact ? 'border-black/[0.06]' : 'border-black/[0.03]',
+            )}>
+                <div className="flex items-center justify-between gap-2 px-4 py-3">
+                    <button
+                        type="button"
+                        onClick={() => contentText && setShowTranscript(!showTranscript)}
+                        disabled={!contentText}
+                        className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left disabled:cursor-default"
+                    >
+                        <span className="min-w-0">
+                            <span className={clsx(
+                                'flex items-center gap-2 font-extrabold text-text-primary',
+                                compact ? 'text-[13px]' : 'text-[14px]',
+                            )}>
+                                <Icon className="h-4 w-4 text-accent-primary" />
+                                {title}
+                            </span>
+                            <span className="mt-1 block text-[12px] font-medium text-text-tertiary">{statusLabel}</span>
+                        </span>
+                        {contentText && (
+                            <ChevronRight className={clsx(
+                                'h-4 w-4 shrink-0 text-text-tertiary transition-transform duration-300',
+                                showTranscript && 'rotate-90 text-accent-primary',
+                            )} />
+                        )}
+                    </button>
+                    {contentText && (
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                void handleCopyExtractionText(copyId, contentText);
+                            }}
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-black/[0.06] bg-white text-text-secondary transition hover:bg-black/[0.03] hover:text-text-primary"
+                            title={isCopied ? '已复制' : `复制${title}`}
+                            aria-label={isCopied ? '已复制' : `复制${title}`}
+                        >
+                            {isCopied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                        </button>
+                    )}
+                    {canTranscribe && (
                         <button
                             type="button"
                             onClick={() => handleTranscribeNote(note.id)}
@@ -1661,19 +1771,18 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                         </button>
                     )}
                 </div>
-                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
-                    <div
-                        className={clsx('h-full rounded-full transition-all duration-500', progressClass, isProcessing && 'animate-pulse')}
-                        style={{ width: progressWidth }}
-                    />
-                </div>
-                {hasTranscript && (
-                    <pre className="mt-4 max-h-[220px] overflow-auto whitespace-pre-wrap rounded-xl bg-white px-3 py-3 font-sans text-[13px] leading-relaxed text-text-secondary ring-1 ring-black/[0.04] custom-scrollbar">
-                        {note.transcript}
-                    </pre>
+                {contentText && showTranscript && (
+                    <div className={clsx('px-4 pb-4 animate-in slide-in-from-top-2 duration-300', compact ? 'pt-0' : 'pt-1')}>
+                        <pre className={clsx(
+                            'overflow-auto whitespace-pre-wrap rounded-xl bg-white font-sans leading-relaxed text-text-secondary ring-1 ring-black/[0.04] custom-scrollbar',
+                            compact ? 'max-h-[240px] px-3 py-3 text-[13px]' : 'max-h-[400px] p-5 text-[13px]',
+                        )}>
+                            {contentText}
+                        </pre>
+                    </div>
                 )}
-                {isFailed && (
-                    <div className="mt-3 text-[12px] font-medium text-rose-600">转录没有完成，可以重试。</div>
+                {!contentText && isFailed && (
+                    <div className="px-4 pb-4 text-[12px] font-medium text-rose-600">转录没有完成，可以重试。</div>
                 )}
             </div>
         );
@@ -1801,8 +1910,8 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                         {tags.map((tag) => <span key={tag} className="text-[14px] font-semibold text-[#24599a]">#{tag}</span>)}
                                     </div>
                                 )}
+                                {renderKnowledgeExtractionFoldout(note, true)}
                                 <div className="pt-1 text-[12px] font-medium text-text-tertiary">{formatTimestampDateTime(note.createdAt)}</div>
-                                {renderXhsTranscriptionModule(note)}
                             </div>
 
                             <div className="border-t border-black/[0.06] px-5 py-5">
@@ -2108,21 +2217,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                 扩写公众号
                             </button>
                         )}
-                        {selectedNote.video && !selectedNote.transcript && (
-                            <button
-                                onClick={() => handleTranscribeNote(selectedNote.id)}
-                                disabled={isTranscribing || selectedNote.transcriptionStatus === 'processing'}
-                                className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded hover:bg-surface-hover disabled:opacity-50 transition-colors"
-                                title="提取文字"
-                            >
-                                {isTranscribing || selectedNote.transcriptionStatus === 'processing' ? (
-                                    <RefreshCw className="w-3 h-3 animate-spin" />
-                                ) : (
-                                    <FileText className="w-3 h-3" />
-                                )}
-                                {selectedNote.transcriptionStatus === 'processing' || isTranscribing ? '转录中...' : '提取文字'}
-                            </button>
-                        )}
                     </div>
                 </div>
 
@@ -2227,27 +2321,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                     {selectedNote.content}
                 </div>
 
-                {selectedNote.video && selectedNote.transcript && (
-                    <div className="bg-surface-secondary/50 rounded-lg border border-border overflow-hidden">
-                        <button
-                            onClick={() => setShowTranscript(!showTranscript)}
-                            className="w-full px-3 py-2 flex items-center justify-between text-xs font-semibold text-text-primary hover:bg-surface-secondary/80 transition-colors"
-                        >
-                            <span className="flex items-center gap-2">
-                                <FileText className="w-3.5 h-3.5" />
-                                视频转录
-                            </span>
-                            <ChevronRight className={`w-3.5 h-3.5 transition-transform ${showTranscript ? 'rotate-90' : ''}`} />
-                        </button>
-                        {showTranscript && (
-                            <div className="px-3 pb-3">
-                                <pre className="text-xs text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-60 overflow-auto">
-                                    {selectedNote.transcript}
-                                </pre>
-                            </div>
-                        )}
-                    </div>
-                )}
+                {renderKnowledgeExtractionFoldout(selectedNote)}
 
             </div>
         );
@@ -2958,16 +3032,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                 >
                                     <FolderOpen className="w-3.5 h-3.5" /> 在目录中查看
                                 </button>
-                                {selectedNote.video && !selectedNote.transcript && (
-                                    <button
-                                        onClick={() => handleTranscribeNote(selectedNote.id)}
-                                        disabled={isTranscribing || selectedNote.transcriptionStatus === 'processing'}
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-[11px] font-bold hover:bg-blue-600 transition-all disabled:opacity-40"
-                                    >
-                                        {isTranscribing || selectedNote.transcriptionStatus === 'processing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                                        提取文字
-                                    </button>
-                                )}
                             </div>
 
                             {selectedNote.video && (
@@ -3076,29 +3140,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                 </div>
                             )}
 
-                            {selectedNote.video && selectedNote.transcript && (
-                                <div className="bg-black/[0.02] rounded-2xl border border-black/[0.03] overflow-hidden transition-all hover:bg-black/[0.03]">
-                                    <button
-                                        onClick={() => setShowTranscript(!showTranscript)}
-                                        className="w-full px-6 py-4 flex items-center justify-between text-[14px] font-extrabold text-text-primary transition-colors"
-                                    >
-                                        <span className="flex items-center gap-2.5">
-                                            <FileText className="w-4 h-4 text-accent-primary" />
-                                            视频转录文本
-                                        </span>
-                                        <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${showTranscript ? 'rotate-90 text-accent-primary' : 'text-text-tertiary'}`} />
-                                    </button>
-                                    {showTranscript && (
-                                        <div className="px-6 pb-6 animate-in slide-in-from-top-2 duration-300">
-                                            <div className="bg-white rounded-xl p-5 border border-black/[0.02] shadow-inner">
-                                                <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-[400px] overflow-auto custom-scrollbar">
-                                                    {selectedNote.transcript}
-                                                </pre>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
+                            {renderKnowledgeExtractionFoldout(selectedNote)}
                         </div>
 
                         <div className="px-8 py-5 border-t border-black/[0.04] flex items-center justify-between bg-black/[0.01]" onClick={(event) => event.stopPropagation()}>
