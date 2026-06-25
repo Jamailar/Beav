@@ -437,31 +437,50 @@ impl ToolRouter {
     }
 
     fn validate_write_call(&self, arguments: &Value) -> Result<(), String> {
-        if self.plan.allowed_write_targets.is_empty() {
-            return Ok(());
-        }
         let path = arguments
             .get("path")
             .and_then(Value::as_str)
             .map(str::trim)
             .unwrap_or_default();
-        if self
-            .plan
-            .allowed_write_targets
-            .iter()
-            .any(|target| target == path)
+        if !path.starts_with("workspace://") && self.plan.allowed_write_targets.is_empty() {
+            return Ok(());
+        }
+        if !path.starts_with("workspace://")
+            && self
+                .plan
+                .allowed_write_targets
+                .iter()
+                .any(|target| target == path)
         {
             return Ok(());
         }
+        let details = if let Some(workspace_path) = path.strip_prefix("workspace://") {
+            let workspace_path = workspace_path.trim_start_matches('/');
+            json!({
+                "allowedWriteTargets": self.plan.allowed_write_targets.clone(),
+                "visibleTools": self.visible_tool_names(),
+                "unsupportedScheme": "workspace",
+                "reason": "Write only saves currently bound manuscript/editor resources in this turn",
+                "suggestedAction": "workspace.write",
+                "suggestedArguments": {
+                    "action": "workspace.write",
+                    "path": if workspace_path.is_empty() { "<workspace-relative-file>" } else { workspace_path },
+                    "content": "<complete UTF-8 content>"
+                },
+                "suggestionAvailability": "Use the structured workspace.write file action when it is exposed by the current runtime"
+            })
+        } else {
+            json!({
+                "allowedWriteTargets": self.plan.allowed_write_targets.clone(),
+                "visibleTools": self.visible_tool_names(),
+            })
+        };
         Err(self
             .error(
                 "WRITE_TARGET_NOT_ALLOWED",
                 format!("Write target `{path}` is not available in this turn"),
                 false,
-                Some(json!({
-                    "allowedWriteTargets": self.plan.allowed_write_targets.clone(),
-                    "visibleTools": self.visible_tool_names(),
-                })),
+                Some(details),
             )
             .to_json_string(Some("Write"), None))
     }
@@ -848,6 +867,54 @@ mod tests {
             prepared.arguments.get("action"),
             Some(&json!("manuscripts.writeCurrent"))
         );
+    }
+
+    #[test]
+    fn router_rejects_workspace_write_with_structured_action_hint() {
+        let metadata = json!({
+            "executionProfile": "artifact-authoring",
+            "artifactType": "manuscript",
+            "allowedTools": ["resource", "workflow"],
+            "allowedOperateActions": [
+                "skills.invoke",
+                "manuscripts.createProject"
+            ],
+            "allowedWriteTargets": ["manuscripts://current"],
+            "deferredDiscovery": false
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let error = router
+            .prepare(
+                "Write",
+                &json!({ "path": "workspace://test_write.md", "content": "body" }),
+            )
+            .expect_err("workspace writes should not route through Write");
+
+        assert!(error.contains("WRITE_TARGET_NOT_ALLOWED"));
+        assert!(error.contains("unsupportedScheme"));
+        assert!(error.contains("workspace.write"));
+        assert!(error.contains("test_write.md"));
+
+        let router_without_write_targets =
+            ToolRouter::new(build_tool_registry_plan(ToolRegistryPlanParams {
+                runtime_mode: "redclaw",
+                ..ToolRegistryPlanParams::default()
+            }));
+        let fallback_error = router_without_write_targets
+            .prepare(
+                "Write",
+                &json!({ "path": "workspace://notes/demo.md", "content": "body" }),
+            )
+            .expect_err("workspace writes should always avoid Write");
+
+        assert!(fallback_error.contains("WRITE_TARGET_NOT_ALLOWED"));
+        assert!(fallback_error.contains("workspace.write"));
+        assert!(fallback_error.contains("notes/demo.md"));
     }
 
     #[test]

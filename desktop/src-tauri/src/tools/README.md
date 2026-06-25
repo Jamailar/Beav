@@ -52,7 +52,8 @@
 
 - 每个 action 必须单一职责，名字直接表达一个结构化能力。
 - schema-first：action 必须有明确输入 schema 和输出 schema。
-- `Read` / `List` / `Search` / `Write` 使用虚拟路径协议。
+- `Read` / `List` / `Search` 使用虚拟路径协议；`Write` 只写当前绑定的作者资源，当前支持 `manuscripts://current` 和 `editor://current/script`，不要用它写 `workspace://` 文件。
+- 普通 workspace 文件写入必须走结构化文件 action `workspace.write`（在当前 runtime 暴露时），而不是 `Write(path="workspace://...")`。
 - `Operate` 使用 `resource + operation + id? + input?` 协议。
 - `Operate(resource="image", operation="generate")` 的比例、尺寸、质量必须放在 `input.aspectRatio` / `input.size` / `input.quality`，不要只写进自然语言 prompt。支持的 `aspectRatio` 为 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`。
 - `Operate(resource="media", operation="videoRetalk")` 只接收已可远程访问的 `input.video_url` 与 `input.audio_url`，并必须携带计费字段 `durationSeconds` / `resolution`；本地上传、数字人角色资产创建和首页入口由上层产品流负责。
