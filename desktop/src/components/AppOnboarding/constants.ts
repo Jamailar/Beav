@@ -1,7 +1,7 @@
-export const APP_ONBOARDING_SEEN_KEY = 'redbox:app-onboarding:v1:seen';
+export const APP_ONBOARDING_SEEN_KEY = 'redbox:app-onboarding:v2:seen';
 export const APP_ACQUISITION_SOURCE_KEY = 'redbox:app-onboarding:v1:acquisition-source';
 
-export const STEPS = ['用户来源', '概览', '文件拖动', '评论洞察', '开始'];
+export const STEPS = ['品牌更名', '用户来源', '概览', '文件拖动', '评论洞察', '开始'];
 
 export function hasSeenAppOnboarding(): boolean {
   try {
