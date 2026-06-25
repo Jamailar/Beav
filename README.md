@@ -13,8 +13,8 @@
 ---
 
 <p align="center">
-  <strong>面向小红书创作者的本地化 AI 创作工作台</strong><br>
-  <em>评论区采集 | 选题洞察 | 笔记封面生成 | 知识库沉淀 | RedClaw 自动化执行</em>
+  <strong>面向通用 AI Agent 的自媒体素材库与创作工具</strong><br>
+  <em>Codex / Hermes / OpenClaw 接入 | 素材采集 | 多模态资产管理 | 稿件与封面 | 视频处理</em>
 </p>
 
 <p align="center">
@@ -51,6 +51,7 @@
 
 [项目概览](#项目概览) ·
 [核心功能](#核心功能) ·
+[Agent 接入](#agent-接入) ·
 [功能截图](#功能截图) ·
 [插件采集](#插件采集) ·
 [快速开始](#快速开始) ·
@@ -62,28 +63,47 @@
 
 ## 项目概览
 
-**RedBox (RedConvert)** 是一个面向小红书创作者与内容团队的本地化 AI 工作台，把 **内容采集、评论区洞察、选题发散、笔记封面生成、知识沉淀、稿件生产、自动化执行、主体资产管理** 串成一条完整工作流。
+> **品牌更名说明**：从 **2.5.0** 开始，RedBox 正式更名为 **Beav**。历史文档、旧版本下载包、仓库路径和部分协议名称中仍可能保留 RedBox / RedConvert 命名；它们指向的是同一款产品的不同阶段。
 
-你可以直接从浏览器插件采集小红书笔记和评论区内容，把用户讨论沉淀到本地知识库，再在桌面端分析评论需求、生成选题 brief、为笔记制作封面图，并继续进入稿件、媒体和 RedClaw 自动化执行链路。
+**RedBox (RedConvert)** 是一个面向 Codex、Hermes、OpenClaw 等通用 AI Agent 用户的本地自媒体素材库与创作工具。它不试图替代你正在使用的 Agent，而是为这些 Agent 提供可采集、可检索、可引用、可生成、可剪辑、可导出的创作资产底座。
+
+你可以把小红书、YouTube、网页、公众号、图片、视频、评论区和本地文档沉淀到 RedBox，再让通用 Agent 通过本地工具接口检索素材、组织选题、写稿、生成封面、处理视频、导出项目包。内置 Chat / RedClaw 仍然可用，但新的核心定位是：**让任何通用 Agent 拥有一个面向自媒体创作的本地资产工作区**。
 
 ## 核心功能
 
-### 从评论区洞察到内容创作的 AI 工作台
+### 给通用 Agent 使用的自媒体素材与创作底座
 
-围绕小红书内容生产，把评论区反馈、选题判断、笔记封面和后续创作任务放进同一条工作流。
+围绕内容生产，把素材采集、资产管理、语义检索、项目组织、稿件、封面、视频处理和自动化执行放进同一条可被 Agent 调用的工作流。
 
 ![评论区洞察](https://github.com/Jamailar/RedBox/releases/download/v2.3.0/redbox-2.3.0-comment-insights.png)
 
-1. **小红书评论区采集**：浏览器插件支持采集小红书笔记和评论区内容，评论可归档进本地知识库，保留后续分析和复用价值。
-2. **评论区选题洞察**：AI 可以分析评论里的真实需求、高频问题、购买顾虑、情绪反馈和潜在选题机会，帮助从用户讨论中找到内容方向。
-3. **选题中心与创作 brief**：把评论区洞察转成结构化选题 brief，继续进入笔记、脚本、封面和后续创作任务。
-4. **笔记封面生成**：支持围绕选题、正文、参考图片和社媒平台目标生成封面图，让小红书笔记更快完成视觉包装。
-5. **本地知识库**：统一管理小红书、YouTube、网页、图片、评论区归档和本地文档，支持搜索、筛选、空间隔离和后续 AI 检索。
-6. **自由创作工作台**：支持图片、视频、音频等媒体生成，支持拖拽媒体参考图、生成成本预估和 Agent 连续创作。
-7. **RedClaw 自动化执行**：把单轮对话、技能调用、定时任务、长周期任务和后台 Runner 放在一个入口里持续运行。
-8. **会话与团队协作**：支持会话导入导出、会话列表管理、成员画像、成员知识、单成员对话和多人群聊协作。
-9. **主体库与媒体库**：统一沉淀人物、商品、场景、AI 生成图和导入素材，后续在写稿、生图、封面时直接复用。
-10. **官方账号与会员体系**：支持官方 AI、积分成本预估、会员权益和支付状态同步，减少模型与账户配置的割裂。
+1. **Agent 接入层**：面向 Codex、Hermes、OpenClaw 等通用 Agent 提供本地 MCP / CLI / API 接入方向，让外部 Agent 可以检索素材、读取资产、写入项目、提交生成任务和导出结果。
+2. **浏览器素材采集**：浏览器插件支持保存小红书笔记、评论区、YouTube 视频、公众号文章、网页链接、选中文字和网页图片，外部内容可以直接进入本地素材库。
+3. **多模态素材库**：统一管理文本、图片、视频、音频、评论、截图、AI 生成结果、导入素材和稿件关联资产，并保留来源、标签、缩略图、文件引用和项目绑定关系。
+4. **知识库与语义检索**：把采集内容、本地文档、视频转写、网页正文和图片信息沉淀为可搜索上下文，供 Agent 在写稿、选题、复盘和生成时引用。
+5. **选题中心与创作 brief**：从评论、网页、历史素材和用户输入中整理内容机会，把洞察转成结构化 brief，继续进入脚本、图文、封面和视频项目。
+6. **稿件与项目包**：支持图文稿、视频稿、音频稿、Remotion 场景、字幕、素材绑定和导出，让 Agent 的创作结果变成可编辑、可复用的内容项目。
+7. **媒体生成与视频处理**：支持图片、视频、音频等媒体生成，提供参考图、任务队列、成本预估、生成历史和结果回流，适合作为 Agent 的媒体处理运行时。
+8. **封面与平台视觉资产**：围绕标题、正文、参考图和平台目标生成封面图，沉淀模板、底图、标题组和历史封面资产。
+9. **主体库**：统一管理人物、商品、场景、品牌 IP、角色声音和参考素材，帮助系列内容在写稿、生图、封面和视频里保持一致性。
+10. **内置自动化入口**：RedClaw、Chat、Team 和后台 Runner 继续作为内置 Agent 入口，可处理长周期任务、定时任务、技能调用和自动化执行。
+
+## Agent 接入
+
+RedBox 的长期方向是成为通用 Agent 的本地自媒体创作资源层。外部 Agent 负责规划和推理，RedBox 负责提供素材、上下文、媒体处理和创作产物管理。
+
+当前优先接入方式是本地 **ACP Agent Gateway**：外部 Agent 先通过本机 discovery 文件或 helper 发现当前端口，再读取 RedBox Creator Agent 的 manifest / guide，创建或复用 ACP 会话，把创作任务交给 RedBox AI，并通过事件轮询拿到状态和素材/稿件产物引用。详细方案见 [`desktop/docs/redbox-acp-agent-gateway-implementation-plan.md`](desktop/docs/redbox-acp-agent-gateway-implementation-plan.md)，使用说明见 [`desktop/docs/redbox-acp-agent-gateway-usage.md`](desktop/docs/redbox-acp-agent-gateway-usage.md)，命令行 helper 见 [`desktop/scripts/redbox-acp-client.mjs`](desktop/scripts/redbox-acp-client.mjs)。
+
+外部 Agent 的推荐发现顺序是：读取 `REDBOX_ACP_DISCOVERY_FILE` 或系统默认的 `RedBox/acp-gateway.json`，再访问其中的 `manifestUrl` / `guideUrl`；如果文件不存在，再回退到默认 `http://127.0.0.1:31937/acp/v1`。这样 Codex、Hermes、OpenClaw 不需要假设用户电脑上的端口固定不变。
+
+| 接入对象 | 使用 RedBox 做什么 | 推荐能力形态 |
+| --- | --- | --- |
+| Codex | 读取本地素材、整理选题、生成稿件、调用媒体处理任务、导出创作包 | ACP Gateway / CLI helper / 后续 MCP |
+| Hermes | 把 RedBox 作为长期素材库和创作上下文来源，结合记忆、技能和自动化流程执行内容任务 | ACP Gateway / workspace context |
+| OpenClaw | 通过本地素材、项目包和浏览器采集结果执行自媒体生产流程 | ACP Gateway / CLI helper |
+| 其他 AI Agent | 检索素材、读取文件、保存生成结果、复用封面模板和媒体任务 | ACP Gateway / 标准化工具协议 |
+
+推荐的工具边界是：Agent 调用结构化能力，RedBox 保存真实素材和产物。不要让 Agent 只拿自然语言描述猜测文件，也不要把媒体生成、视频渲染、素材索引这类重任务塞进一次性聊天上下文里。
 
 ## 功能截图
 
@@ -125,7 +145,7 @@
 
 ## 插件采集
 
-浏览器插件负责把外部内容送进 RedBox。小红书笔记、评论区、YouTube 视频、网页链接和网页图片都可以进入本地知识库，作为后续选题、分析和创作素材。
+浏览器插件负责把外部内容送进 RedBox。小红书笔记、评论区、YouTube 视频、公众号文章、网页链接、选中文字和网页图片都可以进入本地素材库，作为后续 Agent 检索、选题、分析、写稿、封面和视频创作的上下文。
 
 ### 采集小红书笔记与评论区
 ![Save Xiaohongshu](./images/plugin-save-xiaohongshu.gif)
@@ -139,19 +159,24 @@
 ## 快速开始
 
 1. 在 [RedBox 下载页](https://redbox.ziz.hk/download) 下载并安装。
-2. 打开 `设置 -> AI`，填写 Endpoint / Key / Model。
-3. 选择或创建工作空间，测试连接并保存。
-4. 安装并加载 `Plugin/` 里的 Chrome / Edge 扩展。
-5. 从 `浏览器插件 -> 知识库 -> 选题中心 / 自由创作 / RedClaw` 开始完整跑通一次工作流。
+2. 选择或创建工作空间，用它存放素材、项目、稿件、媒体和生成结果。
+3. 打开 `设置 -> AI`，按需填写 Endpoint / Key / Model，或使用官方 AI 能力。
+4. 安装并加载 `Plugin/` 里的 Chrome / Edge 扩展，把网页、图片、视频和评论区保存进素材库。
+5. 从 `素材采集 -> 知识库 / 媒体库 -> 选题 brief -> 稿件 / 封面 / 视频 -> 导出` 跑通一次内容生产流程。
+6. 在 Codex、Hermes、OpenClaw 等通用 Agent 中接入 RedBox 的本地工具能力，让外部 Agent 直接使用这些素材和创作工具。
 
 ## 社区
 
-[![加入微信交流群](https://img.shields.io/badge/微信社群-扫码加入-E11D48?style=for-the-badge&logo=wechat&logoColor=white)](./images/wechat.png)
+<a href="./images/wechat.png"><img src="./images/wechat.png" alt="加入微信交流群" width="280"></a>
 
 - [GitHub Issues](https://github.com/Jamailar/RedBox/issues)
 - [GitHub Discussions](https://github.com/Jamailar/RedBox/discussions)
 
 ## 更新日志
+
+### v2.5.0
+
+从 2.5.0 开始，RedBox 正式更名为 **Beav**。Beav 延续原 RedBox / RedConvert 的本地素材库、Agent 接入、媒体资产管理、稿件与封面、视频处理和自动化能力；旧名称仍会在历史版本、文档链接、仓库路径或兼容协议中保留一段时间。
 
 ### v2.4.0 (2026-06-20)
 
