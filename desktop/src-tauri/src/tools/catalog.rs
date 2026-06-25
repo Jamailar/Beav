@@ -55,7 +55,7 @@ const REDBOX_EDITOR_DESCRIPTION: &str = "Structured editor actions for the curre
 const READ_DESCRIPTION: &str = "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, or editor://current/script. Do not use bash/curl for web pages.";
 const LIST_DESCRIPTION: &str = "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, assets:// for asset library entries, or media:// for media.";
 const SEARCH_DESCRIPTION: &str = "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and assets:// for asset library lookup. For public web search, use Operate(resource=\"web\", operation=\"search\", input={\"query\":\"...\"}).";
-const WRITE_DESCRIPTION: &str = "Write content to a virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
+const WRITE_DESCRIPTION: &str = "Write content only to a currently bound authoring resource. Supported paths are manuscripts://current for the bound manuscript body and editor://current/script for the bound editor script. Do not use Write for workspace:// files; use the structured workspace.write file action when it is available.";
 const REDBOX_DESCRIPTION: &str = "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
 const TOOL_SEARCH_DESCRIPTION: &str = "Search deferred Operate actions and MCP tools that are available to this session but not exposed directly in the current turn. Use this when a tool or action is reported as deferred.";
 const ALL_APP_RUNTIME_MODES: &[&str] = &[
@@ -4258,6 +4258,17 @@ fn virtual_path_schema(description: &str) -> Value {
     })
 }
 
+fn bound_write_path_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": description,
+        "examples": [
+            "manuscripts://current",
+            "editor://current/script"
+        ]
+    })
+}
+
 fn redbox_resource_schema() -> Value {
     redbox_resource_schema_for_actions(&[])
 }
@@ -6791,7 +6802,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": virtual_path_schema("Target resource path. Supported write paths are manuscripts://current and editor://current/script."),
+                        "path": bound_write_path_schema("Target bound authoring path. Supported write paths are manuscripts://current and editor://current/script. workspace:// paths are not supported by Write; use workspace.write when available."),
                         "content": { "type": "string", "description": "Complete replacement content to write." },
                         "source": { "type": "string", "enum": ["user", "ai", "system"], "description": "Optional content source for editor script writes." }
                     },
@@ -7362,6 +7373,36 @@ mod tests {
         assert!(actions.contains(&"knowledge.list"));
         assert!(actions.contains(&"knowledge.read"));
         assert!(actions.contains(&"knowledge.search"));
+    }
+
+    #[test]
+    fn write_schema_points_workspace_writes_to_structured_action() {
+        let schema = schema_for_tool_for_runtime_mode("Write", Some("redclaw"))
+            .expect("Write schema should exist");
+        let description = schema
+            .pointer("/function/description")
+            .and_then(Value::as_str)
+            .expect("Write description");
+        let path_description = schema
+            .pointer("/function/parameters/properties/path/description")
+            .and_then(Value::as_str)
+            .expect("Write path description");
+        let path_examples = schema
+            .pointer("/function/parameters/properties/path/examples")
+            .and_then(Value::as_array)
+            .expect("Write path examples")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert!(description.contains("currently bound authoring resource"));
+        assert!(description.contains("workspace.write"));
+        assert!(path_description.contains("workspace:// paths are not supported"));
+        assert!(path_description.contains("workspace.write"));
+        assert_eq!(
+            path_examples,
+            vec!["manuscripts://current", "editor://current/script"]
+        );
     }
 
     #[test]
