@@ -8,6 +8,9 @@ use crate::store::settings as settings_store;
 fn update_official_session_user(settings: &mut Value, user: &Value) {
     let next_session = official_settings_session(settings).map(|mut session| {
         if let Some(object) = session.as_object_mut() {
+            if object.get("user") == Some(user) {
+                return session;
+            }
             object.insert("user".to_string(), user.clone());
             object.insert("updatedAt".to_string(), json!(now_ms() as i64));
         }

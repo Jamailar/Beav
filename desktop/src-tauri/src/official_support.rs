@@ -1115,12 +1115,19 @@ pub(crate) fn official_model_capabilities(item: &Value) -> Vec<String> {
 fn official_model_meta_value(item: &Value) -> Value {
     let mut meta = item.clone();
     let capabilities = official_model_capabilities(item);
-    if !capabilities.is_empty() {
-        if let Some(object) = meta.as_object_mut() {
+    if let Some(object) = meta.as_object_mut() {
+        object.remove("created");
+        object.remove("created_at");
+        object.remove("createdAt");
+        if !capabilities.is_empty() {
             object.insert("capabilities".to_string(), json!(capabilities));
         }
     }
     meta
+}
+
+pub(crate) fn normalize_official_model_catalog(models: &[Value]) -> Vec<Value> {
+    models.iter().map(official_model_meta_value).collect()
 }
 
 fn official_model_is_chat_list_candidate(item: &Value) -> bool {
@@ -1331,8 +1338,8 @@ pub(crate) fn sync_official_cached_models_into_settings(settings: &mut Value) ->
 
 pub(crate) fn fetch_official_models_for_settings(settings: &Value) -> Vec<Value> {
     run_official_ai_json_request(settings, "GET", "/models", None)
-        .map(|remote| official_response_items(&remote))
-        .unwrap_or_else(|_| official_settings_models(settings))
+        .map(|remote| normalize_official_model_catalog(&official_response_items(&remote)))
+        .unwrap_or_else(|_| normalize_official_model_catalog(&official_settings_models(settings)))
 }
 
 pub(crate) fn fetch_official_default_model_slots_for_settings(
@@ -1686,6 +1693,27 @@ mod tests {
             official_model_capabilities(&json!({ "id": "nova-3", "capability": "chat" })),
             vec!["transcription".to_string()]
         );
+    }
+
+    #[test]
+    fn official_model_catalog_normalization_drops_volatile_created_fields() {
+        let models = vec![json!({
+            "id": "qwen3.7-plus",
+            "object": "model",
+            "created": 1782370627,
+            "created_at": "2026-06-25T06:37:07Z",
+            "createdAt": 1782370627000_i64,
+            "capability": "chat",
+        })];
+
+        let normalized = normalize_official_model_catalog(&models);
+        let model = normalized.first().expect("normalized model should exist");
+
+        assert_eq!(model.get("id"), Some(&json!("qwen3.7-plus")));
+        assert_eq!(model.get("capabilities"), Some(&json!(["chat"])));
+        assert!(model.get("created").is_none());
+        assert!(model.get("created_at").is_none());
+        assert!(model.get("createdAt").is_none());
     }
 
     #[test]

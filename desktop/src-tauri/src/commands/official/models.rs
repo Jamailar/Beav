@@ -17,19 +17,19 @@ pub(super) fn fetch_official_models_with_recovery(
         expected_generation,
     ) {
         Ok(remote) => {
-            let items = official_response_items(&remote);
+            let items = normalize_official_model_catalog(&official_response_items(&remote));
             if items.is_empty() {
-                official_settings_models(settings)
+                normalize_official_model_catalog(&official_settings_models(settings))
             } else {
                 items
             }
         }
-        Err(_) => official_settings_models(settings),
+        Err(_) => normalize_official_model_catalog(&official_settings_models(settings)),
     }
 }
 
 pub(super) fn seed_official_models_from_cache(settings: &mut Value) {
-    let models = official_settings_models(settings);
+    let models = normalize_official_model_catalog(&official_settings_models(settings));
     write_settings_json_array(settings, "redbox_official_models_json", &models);
     if !models.is_empty() {
         official_sync_source_into_settings(settings, &models, false);
@@ -48,7 +48,7 @@ pub(super) fn handle_models_channel(
             let settings_snapshot =
                 with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
-            let mut models = official_settings_models(&settings);
+            let mut models = normalize_official_model_catalog(&official_settings_models(&settings));
             if models.is_empty() {
                 models = fetch_official_models_with_recovery(
                     app,

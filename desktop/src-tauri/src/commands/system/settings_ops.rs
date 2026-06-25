@@ -41,6 +41,97 @@ fn source_is_official(source: &Value) -> bool {
             .unwrap_or(false)
 }
 
+fn parse_ai_sources(settings: &Value) -> Vec<Value> {
+    payload_string(settings, "ai_sources_json")
+        .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn source_id_value(source: &Value) -> String {
+    canonical_source_id(source.get("id").and_then(Value::as_str).unwrap_or_default())
+}
+
+fn source_model_value(source: &Value) -> String {
+    source
+        .get("model")
+        .or_else(|| source.get("modelName"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn source_model_for_id(settings: &Value, source_id: &str) -> String {
+    let normalized_source_id = canonical_source_id(source_id);
+    parse_ai_sources(settings)
+        .iter()
+        .find(|source| source_id_value(source) == normalized_source_id)
+        .map(source_model_value)
+        .unwrap_or_default()
+}
+
+fn changed_default_source_model(
+    current: &Value,
+    payload: &Value,
+    next: &Value,
+) -> Option<(String, String)> {
+    let payload_object = payload.as_object()?;
+    if !payload_object.contains_key("ai_sources_json") {
+        return None;
+    }
+    let default_source_id =
+        canonical_source_id(&payload_string(next, "default_ai_source_id").unwrap_or_default());
+    if default_source_id.is_empty() {
+        return None;
+    }
+    let previous_model = source_model_for_id(current, &default_source_id);
+    let next_model = source_model_for_id(next, &default_source_id);
+    if next_model.is_empty() || previous_model == next_model {
+        return None;
+    }
+    Some((default_source_id, next_model))
+}
+
+fn sync_chat_family_routes_to_source_model(settings: &mut Value, source_id: &str, model: &str) {
+    let normalized_model = model.trim();
+    if normalized_model.is_empty() {
+        return;
+    }
+    let normalized_source_id = canonical_source_id(source_id);
+    let route_mode = if is_official_source_id(&normalized_source_id) {
+        "official"
+    } else {
+        "custom"
+    };
+    let mut routes = payload_string(settings, "ai_model_routes_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    for scope in ["chat", "wander", "team", "knowledge", "redclaw"] {
+        routes.insert(
+            scope.to_string(),
+            json!({
+                "mode": route_mode,
+                "sourceId": normalized_source_id,
+                "model": normalized_model,
+            }),
+        );
+    }
+    if let Some(object) = settings.as_object_mut() {
+        object.insert("model_name".to_string(), json!(normalized_model));
+        object.insert("model_name_wander".to_string(), json!(normalized_model));
+        object.insert("model_name_chatroom".to_string(), json!(normalized_model));
+        object.insert("model_name_knowledge".to_string(), json!(normalized_model));
+        object.insert("model_name_redclaw".to_string(), json!(normalized_model));
+        object.insert(
+            "ai_model_routes_json".to_string(),
+            json!(
+                serde_json::to_string(&Value::Object(routes)).unwrap_or_else(|_| "{}".to_string())
+            ),
+        );
+    }
+}
+
 fn route_chat_model(settings: &Value) -> String {
     payload_string(settings, "ai_model_routes_json")
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
@@ -220,6 +311,9 @@ fn merged_settings_payload(current: &Value, payload: &Value) -> Value {
             payload.clone()
         };
     normalize_default_ai_route_settings(&mut next);
+    if let Some((source_id, model)) = changed_default_source_model(current, payload, &next) {
+        sync_chat_family_routes_to_source_model(&mut next, &source_id, &model);
+    }
     if payload_updates_ai_model_selection(payload) {
         if let Some(object) = next.as_object_mut() {
             object
@@ -271,13 +365,18 @@ pub(super) fn save_settings(
         let active_space_id = spaces_store::active_space_id(&store);
         Ok(workspace_root_from_snapshot(&settings, &active_space_id, &state.store_path).ok())
     })?;
-    let (active_space_id, settings_snapshot) = with_store_mut(state, |store| {
+    let (active_space_id, settings_snapshot, store_snapshot) = with_store_mut(state, |store| {
         let settings_snapshot = settings_store::update_settings(store, |settings| {
             *settings = merged_settings_payload(settings, payload);
             crate::ai_model_manager::legacy_projection::normalize_settings_projection(settings);
         });
-        Ok((spaces_store::active_space_id(store), settings_snapshot))
+        Ok((
+            spaces_store::active_space_id(store),
+            settings_snapshot,
+            store.clone(),
+        ))
     })?;
+    crate::persist_store(&state.store_path, &store_snapshot)?;
     crate::ai_model_manager::store::sync_model_config_file(&state.store_path, &settings_snapshot)?;
     let _ = crate::ai_model_manager::defaults::repair_missing_official_defaults_for_store(
         Some(app),
@@ -318,6 +417,14 @@ pub(super) fn save_settings(
 mod tests {
     use super::{merged_settings_payload, normalize_default_ai_route_settings};
     use serde_json::{json, Value};
+
+    fn parsed_routes(settings: &Value) -> Value {
+        settings
+            .get("ai_model_routes_json")
+            .and_then(Value::as_str)
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .unwrap_or_else(|| json!({}))
+    }
 
     #[test]
     fn normalize_default_ai_route_settings_replaces_stale_root_fields_with_empty_values() {
@@ -389,6 +496,72 @@ mod tests {
         assert_eq!(settings["api_endpoint"], json!("https://next.example/v1"));
         assert_eq!(settings["api_key"], json!("next-key"));
         assert_eq!(settings["model_name"], json!("chat-route-model"));
+    }
+
+    #[test]
+    fn merged_settings_payload_syncs_chat_routes_when_default_source_model_changes() {
+        let current_routes = json!({
+            "chat": { "mode": "official", "sourceId": "redbox_official_auto", "model": "qwen3.5-plus" },
+            "redclaw": { "mode": "official", "sourceId": "redbox_official_auto", "model": "qwen3.5-plus" },
+            "image": { "mode": "official", "sourceId": "redbox_official_auto", "model": "gpt-image-2" },
+        });
+        let current = json!({
+            "default_ai_source_id": "redbox_official_auto",
+            "model_name": "qwen3.5-plus",
+            "model_name_redclaw": "qwen3.5-plus",
+            "ai_model_routes_json": serde_json::to_string(&current_routes).unwrap(),
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "redbox_official_auto",
+                "model": "qwen3.5-plus",
+                "models": ["qwen3.5-plus", "qwen3.7-plus"]
+            })]).unwrap(),
+        });
+        let payload = json!({
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "redbox_official_auto",
+                "model": "qwen3.7-plus",
+                "models": ["qwen3.5-plus", "qwen3.7-plus"]
+            })]).unwrap(),
+        });
+
+        let merged = merged_settings_payload(&current, &payload);
+        let routes = parsed_routes(&merged);
+
+        assert_eq!(merged["model_name"], json!("qwen3.7-plus"));
+        assert_eq!(merged["model_name_redclaw"], json!("qwen3.7-plus"));
+        assert_eq!(routes["chat"]["model"], json!("qwen3.7-plus"));
+        assert_eq!(routes["redclaw"]["model"], json!("qwen3.7-plus"));
+        assert_eq!(routes["image"]["model"], json!("gpt-image-2"));
+    }
+
+    #[test]
+    fn merged_settings_payload_keeps_chat_route_when_source_model_is_unchanged() {
+        let current_routes = json!({
+            "chat": { "mode": "official", "sourceId": "redbox_official_auto", "model": "qwen3.5-plus" },
+            "redclaw": { "mode": "official", "sourceId": "redbox_official_auto", "model": "qwen3.5-plus" },
+        });
+        let current_sources = vec![json!({
+            "id": "redbox_official_auto",
+            "model": "qwen3.7-plus",
+            "models": ["qwen3.5-plus", "qwen3.7-plus"]
+        })];
+        let current = json!({
+            "default_ai_source_id": "redbox_official_auto",
+            "model_name": "qwen3.5-plus",
+            "model_name_redclaw": "qwen3.5-plus",
+            "ai_model_routes_json": serde_json::to_string(&current_routes).unwrap(),
+            "ai_sources_json": serde_json::to_string(&current_sources).unwrap(),
+        });
+        let payload = json!({
+            "ai_sources_json": serde_json::to_string(&current_sources).unwrap(),
+        });
+
+        let merged = merged_settings_payload(&current, &payload);
+        let routes = parsed_routes(&merged);
+
+        assert_eq!(merged["model_name"], json!("qwen3.5-plus"));
+        assert_eq!(routes["chat"]["model"], json!("qwen3.5-plus"));
+        assert_eq!(routes["redclaw"]["model"], json!("qwen3.5-plus"));
     }
 
     #[test]
@@ -511,6 +684,22 @@ mod tests {
         assert_eq!(
             merged.get("visual_index_enabled").and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(merged.get("theme").and_then(Value::as_str), Some("dark"));
+    }
+
+    #[test]
+    fn merged_settings_payload_preserves_disabled_visual_index() {
+        let current = json!({
+            "visual_index_enabled": false,
+            "theme": "light"
+        });
+
+        let merged = merged_settings_payload(&current, &json!({ "theme": "dark" }));
+
+        assert_eq!(
+            merged.get("visual_index_enabled").and_then(Value::as_bool),
+            Some(false)
         );
         assert_eq!(merged.get("theme").and_then(Value::as_str), Some("dark"));
     }
