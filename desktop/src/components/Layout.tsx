@@ -563,7 +563,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
                 {isSpaceMenuOpen && (
                   <div
-                    className="app-space-menu absolute right-0 bottom-full z-[1] mb-1.5 w-[172px] overflow-hidden rounded-lg border border-border shadow-lg"
+                    className="app-space-menu absolute right-0 bottom-full z-[1] mb-1.5 w-[172px] overflow-hidden rounded-lg border border-border bg-surface-primary shadow-lg"
                   >
                     <div className="max-h-44 overflow-y-auto">
                       {spaces.length === 0 ? (
