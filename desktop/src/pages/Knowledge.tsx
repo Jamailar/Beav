@@ -1513,20 +1513,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         }
     };
 
-    const getKnowledgeTagClass = (tag: string) => {
-        switch (tag) {
-            case '公众号文章':
-                return 'text-emerald-700 bg-emerald-50 border-emerald-200';
-            case '网页文章':
-                return 'text-sky-700 bg-sky-50 border-sky-200';
-            case '知乎回答':
-            case '知乎文章':
-                return 'text-blue-700 bg-blue-50 border-blue-200';
-            default:
-                return 'text-accent-primary bg-accent-primary/5 border-accent-primary/10';
-        }
-    };
-
     const renderNoteBody = (note: Note) => {
         const isMarkdownArticle = (note.type === 'link-article' || note.captureKind === 'zhihu-answer' || note.captureKind === 'zhihu-article') && note.captureKind !== 'wechat-article';
         if (isMarkdownArticle) {
@@ -2658,9 +2644,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     if (item.kind === 'docs' && item.doc) {
                                         const source = item.doc;
                                         const hasVisualIndexSamples = source.sampleFiles.some(isVisualIndexFilePath);
-                                        const visualPreviewUrl = source.visualSearchThumbnailPath && hasRenderableAssetUrl(source.visualSearchThumbnailPath)
-                                            ? resolveAssetUrl(source.visualSearchThumbnailPath)
-                                            : '';
                                         return (
                                             <div
                                                 key={item.id}
@@ -2674,7 +2657,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                     }
                                                 }}
                                                 className={clsx(
-                                                    'relative mb-3 break-inside-avoid rounded-2xl border bg-white shadow-sm p-4 transition-all',
+                                                    'relative mb-3 break-inside-avoid rounded-lg border bg-white shadow-sm p-4 transition-all',
                                                     isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : 'border-black/[0.04]'
                                                 )}
                                             >
@@ -2698,7 +2681,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                                 </span>
                                                             )}
                                                         </div>
-                                                        <div className="mt-1.5 text-[10px] font-bold text-text-tertiary/60 break-all uppercase tracking-tighter">{source.rootPath}</div>
                                                     </div>
                                                     <button
                                                         type="button"
@@ -2712,73 +2694,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                         <Trash2 className="w-3.5 h-3.5" />
                                                     </button>
                                                 </div>
-                                                <div className="mt-3.5 flex flex-wrap gap-1.5 text-[10px] font-bold">
-                                                    <span className="inline-flex items-center gap-1 rounded-lg bg-black/[0.03] px-2.5 py-1.5 text-text-secondary border border-black/[0.02]">
-                                                        <FileText className="w-3 h-3 opacity-60" />
-                                                        {source.fileCount} DOCUMENTS
-                                                    </span>
-                                                </div>
-                                                {source.visualSearchSummary && (
-                                                    <div className="mt-3.5 overflow-hidden rounded-xl border border-sky-100 bg-sky-50/70">
-                                                        <div className="flex gap-3 p-2.5">
-                                                            {visualPreviewUrl ? (
-                                                                <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-white border border-sky-100">
-                                                                    <img
-                                                                        src={visualPreviewUrl}
-                                                                        alt={source.visualSearchPath || source.name}
-                                                                        className="h-full w-full object-cover"
-                                                                        loading="lazy"
-                                                                        decoding="async"
-                                                                    />
-                                                                </div>
-                                                            ) : (
-                                                                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg bg-white text-sky-500 border border-sky-100">
-                                                                    <Image className="h-5 w-5" />
-                                                                </div>
-                                                            )}
-                                                            <div className="min-w-0 flex-1">
-                                                                <div className="flex flex-wrap items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-sky-600">
-                                                                    <span>Visual Match</span>
-                                                                    {typeof source.visualSearchPage === 'number' && (
-                                                                        <span className="rounded-md bg-white/80 px-1.5 py-0.5 border border-sky-100">
-                                                                            PAGE {source.visualSearchPage}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                                <div className="mt-1 text-[11px] font-semibold leading-relaxed text-sky-950 line-clamp-3">
-                                                                    {source.visualSearchSummary}
-                                                                </div>
-                                                                {source.visualSearchPath && (
-                                                                    <div className="mt-1 text-[9px] font-bold text-sky-700/60 break-all line-clamp-1">
-                                                                        {source.visualSearchPath}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                                {source.sampleFiles.length > 0 && (
-                                                    <div className="mt-3.5 flex flex-wrap gap-1.5">
-                                                        {source.sampleFiles.slice(0, 6).map((file) => {
-                                                            const isVisualFile = isVisualIndexFilePath(file);
-                                                            const FileIcon = isVisualFile ? Image : FileText;
-                                                            return (
-                                                                <span
-                                                                    key={`${source.id}-${file}`}
-                                                                    className={clsx(
-                                                                        'inline-flex max-w-full items-start gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg border',
-                                                                        isVisualFile
-                                                                            ? 'bg-sky-50 text-sky-700 border-sky-100'
-                                                                            : 'bg-black/[0.02] text-text-tertiary border-black/[0.01]',
-                                                                    )}
-                                                                >
-                                                                    <FileIcon className="w-3 h-3 shrink-0 mt-0.5 opacity-60" />
-                                                                    <span className="min-w-0 break-all leading-relaxed line-clamp-1">{file}</span>
-                                                                </span>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                )}
                                             </div>
                                         );
                                     }
@@ -2792,7 +2707,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                 key={item.id}
                                                 onClick={() => void openVideoDetail(video)}
                                                 className={clsx(
-                                                    'group relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] overflow-hidden shadow-sm transition-all duration-300',
+                                                    'group relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-lg overflow-hidden shadow-sm transition-all duration-300',
                                                     isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-black/[0.04]'
                                                 )}
                                             >
@@ -2830,30 +2745,9 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                         </div>
                                                     )}
                                                     
-                                                    {video.summary && !isProcessing && (
-                                                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-                                                            <div className="text-[11px] leading-relaxed text-white/90 line-clamp-3 font-medium">
-                                                                {video.summary}
-                                                            </div>
-                                                        </div>
-                                                    )}
                                                 </div>
                                                 <div className="p-4">
                                                     <div className="text-[14px] font-extrabold text-text-primary line-clamp-2 leading-tight tracking-tight group-hover:text-accent-primary transition-colors">{video.title}</div>
-                                                    <div className="mt-2 text-[11px] font-bold text-text-tertiary/70 line-clamp-2 leading-relaxed">
-                                                        {isProcessing ? '正在智能解析内容细节...' : (video.summary || video.description || '暂无描述信息')}
-                                                    </div>
-                                                    <div className="mt-3.5 flex items-center justify-between gap-2 text-[10px] font-bold text-text-tertiary/50 uppercase tracking-tighter border-t border-black/[0.02] pt-3">
-                                                        <span>{new Date(video.createdAt).toLocaleDateString()}</span>
-                                                        <div className="flex items-center gap-2">
-                                                            {video.hasSubtitle && !isProcessing && (
-                                                                <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100">
-                                                                    SUBTITLES
-                                                                </span>
-                                                            )}
-                                                            {isFailed && <span className="text-red-500">FAILED</span>}
-                                                        </div>
-                                                    </div>
                                                 </div>
                                             </button>
                                         );
@@ -2867,16 +2761,14 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     const orderedImages = orderImages(note.images || []);
                                     const coverImage = note.cover || orderedImages[0];
                                     const isTextArticleCard = (item.kind === 'link-article' || item.kind === 'wechat-article' || item.kind === 'zhihu-answer' || item.kind === 'zhihu-article') && !coverImage && !note.video;
-                                    const notePreviewText = note.excerpt || note.content || note.sourceUrl || '暂无摘要';
                                     const isNoteTranscribing = Boolean(note.video && !note.transcript && note.transcriptionStatus === 'processing');
-                                    const canExpandToWechat = SHOW_WECHAT_KNOWLEDGE_ACTIONS && isExpandableXiaohongshuNote(note) && Boolean(onNavigateToRedClaw);
 
                                     return (
                                         <button
                                             key={item.id}
                                             onClick={() => void openNoteDetail(note)}
                                             className={clsx(
-                                                'relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] shadow-sm transition-all duration-300',
+                                                'relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-lg shadow-sm transition-all duration-300',
                                                 isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : 'border-black/[0.04]',
                                                 isTextArticleCard ? 'overflow-visible p-5' : 'overflow-hidden'
                                             )}
@@ -2884,12 +2776,9 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                             {selectionButton}
                                             {isTextArticleCard ? (
                                                 <div className="min-w-0">
-                                                    <div className="mb-2 flex items-center justify-between gap-2">
+                                                    <div className="mb-2 flex items-center gap-2">
                                                         <span className={clsx('shrink-0 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm border border-black/[0.02]', getKnowledgeKindBadgeClass(item.kind))}>
                                                             {getKnowledgeKindLabel(item.kind)}
-                                                        </span>
-                                                        <span className="min-w-0 truncate text-[10px] font-bold text-text-tertiary/50 uppercase tracking-tighter">
-                                                            {note.siteName || note.author || new Date(note.createdAt).toLocaleDateString()}
                                                         </span>
                                                     </div>
                                                     <div className={clsx(
@@ -2897,26 +2786,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                         embeddedUsesCompactCard ? 'text-[14px] line-clamp-4' : 'text-[15px] line-clamp-3',
                                                     )}>
                                                         {note.title}
-                                                    </div>
-                                                    <div className={clsx(
-                                                        'mt-2.5 text-text-tertiary leading-relaxed font-medium',
-                                                        embeddedUsesCompactCard ? 'text-[12px] line-clamp-6' : 'text-[12px] line-clamp-5',
-                                                    )}>
-                                                        {notePreviewText}
-                                                    </div>
-                                                    <div className="mt-4 flex items-center gap-2.5 text-[10px] font-bold text-text-tertiary/60 flex-wrap uppercase tracking-tighter">
-                                                        <span>{new Date(note.createdAt).toLocaleDateString()}</span>
-                                                        {note.sourceUrl && (
-                                                            <span className="flex min-w-0 items-center gap-1 max-w-full">
-                                                                <ExternalLink className="w-3 h-3 shrink-0 opacity-40" />
-                                                                {renderAuthorInline(note, 'truncate max-w-[180px]')}
-                                                            </span>
-                                                        )}
-                                                        {note.tags?.slice(0, 2).map((tag) => (
-                                                            <span key={tag} className={clsx('px-1.5 py-0.5 rounded-md border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
-                                                                #{tag}
-                                                            </span>
-                                                        ))}
                                                     </div>
                                                 </div>
                                             ) : coverImage ? (
@@ -2977,71 +2846,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                             {!isTextArticleCard && (
                                                 <div className="p-4">
                                                     <div className="text-[14px] font-extrabold text-text-primary line-clamp-2 leading-tight tracking-tight group-hover:text-accent-primary transition-colors">{note.title}</div>
-                                                    <div
-                                                        className={clsx(
-                                                            'text-[11px] font-medium text-text-tertiary/70 leading-relaxed',
-                                                            (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'mt-1.5 line-clamp-4' : 'mt-1.5 line-clamp-2'
-                                                        )}
-                                                    >
-                                                        {notePreviewText}
-                                                    </div>
-                                                    {!isEmbedded && note.tags && note.tags.length > 0 && (
-                                                        <div className="mt-2.5 flex flex-wrap gap-1">
-                                                            {note.tags.slice(0, 3).map((tag) => (
-                                                                <span key={tag} className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
-                                                                    #{tag}
-                                                                </span>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                    <div className="mt-3.5 flex items-center gap-3 text-[9px] font-bold text-text-tertiary/40 flex-wrap uppercase tracking-tighter border-t border-black/[0.02] pt-3">
-                                                        <span>{new Date(note.createdAt).toLocaleDateString()}</span>
-                                                        
-                                                        {item.kind !== 'link-article' && (
-                                                            <div className="flex items-center gap-2">
-                                                                <span className="flex items-center gap-1">
-                                                                    <Heart className="w-3 h-3 opacity-60" />
-                                                                    {note.stats?.likes || 0}
-                                                                </span>
-                                                                {typeof note.stats?.collects === 'number' && (
-                                                                    <span className="flex items-center gap-1">
-                                                                        <Star className="w-3 h-3 opacity-60" />
-                                                                        {note.stats.collects}
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                        
-                                                        {note.images?.length > 0 && (
-                                                            <span className="flex items-center gap-1">
-                                                                <Image className="w-3 h-3 opacity-60" />
-                                                                {note.images.length}
-                                                            </span>
-                                                        )}
-                                                        
-                                                        {(item.kind === 'link-article' || item.kind === 'wechat-article') && note.sourceUrl && (
-                                                            <span className="flex items-center gap-1 max-w-full">
-                                                                <ExternalLink className="w-3 h-3 opacity-40" />
-                                                                {renderAuthorInline(note, 'truncate max-w-[120px]')}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                    {canExpandToWechat && (
-                                                        <div className="mt-3">
-                                                            <span
-                                                                role="button"
-                                                                tabIndex={0}
-                                                                onClick={(event) => {
-                                                                    event.stopPropagation();
-                                                                    handleExpandToWechat(note);
-                                                                }}
-                                                                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-extrabold text-emerald-700 transition-all hover:bg-emerald-100 active:scale-95 shadow-sm"
-                                                            >
-                                                                <Sparkles className="w-3.5 h-3.5" />
-                                                                扩写为公众号
-                                                            </span>
-                                                        </div>
-                                                    )}
                                                 </div>
                                             )}
                                         </button>
