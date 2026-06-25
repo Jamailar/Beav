@@ -12,6 +12,7 @@ const DEV_URL = process.env.REDBOX_DEV_URL || process.env.LEXBOX_DEV_URL || `htt
 const cwd = process.cwd();
 const isProbe = process.argv.includes('--probe');
 const requestedBrand = String(process.env.REDBOX_BRAND || process.env.APP_BRAND || '').trim().toLowerCase();
+const BRAND_BINARIES = ['redbox', 'thrive', 'beav'];
 
 async function isHealthy(url) {
   try {
@@ -93,8 +94,8 @@ async function terminateProcess(pid) {
 
 async function terminateStaleDevAppForBrand() {
   if (!requestedBrand) return;
-  const staleBinary = requestedBrand === 'thrive' ? 'redbox' : 'thrive';
-  const targetMarker = `${cwd}/src-tauri/target/debug/${staleBinary}`;
+  const staleBinaries = BRAND_BINARIES.filter((binary) => binary !== requestedBrand);
+  const targetMarkers = staleBinaries.map((binary) => `${cwd}/src-tauri/target/debug/${binary}`);
 
   let stdout = '';
   try {
@@ -111,10 +112,10 @@ async function terminateStaleDevAppForBrand() {
       const match = line.match(/^(\d+)\s+(.+)$/);
       return match ? { pid: Number(match[1]), command: match[2] } : null;
     })
-    .filter((entry) => entry && Number.isFinite(entry.pid) && entry.command.includes(targetMarker));
+    .filter((entry) => entry && Number.isFinite(entry.pid) && targetMarkers.some((marker) => entry.command.includes(marker)));
 
   for (const entry of stalePids) {
-    console.log(`[tauri-before-dev] Stopping stale ${staleBinary} dev app ${entry.pid}`);
+    console.log(`[tauri-before-dev] Stopping stale brand dev app ${entry.pid}`);
     await terminateProcess(entry.pid);
   }
 }

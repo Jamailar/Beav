@@ -4870,6 +4870,7 @@ export function Chat({
                                   title: noticeTitle,
                                   content: reportContent,
                                   sourcePage: 'chat',
+                                  sessionId: currentSessionIdRef.current || currentSessionId || undefined,
                                   operation: 'chat_request',
                                 },
                               }))}

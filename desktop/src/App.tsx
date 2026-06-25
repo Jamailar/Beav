@@ -284,7 +284,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
           </div>
         )}
         {shouldRenderView(mountedViews, currentView, persistentViews, 'media-library') && (
-          <div className={currentView === 'media-library' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+          <div className={currentView === 'media-library' ? 'min-h-full bg-background flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'media-library' ? <ViewLoadingFallback /> : null}>
               <MediaLibraryPage
                 isActive={currentView === 'media-library'}

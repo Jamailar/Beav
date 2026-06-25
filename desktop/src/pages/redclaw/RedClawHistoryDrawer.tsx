@@ -1200,7 +1200,7 @@ export function RedClawHistorySidebarSection({
                                                     />
                                                 )}
                                                 {acpLabel && (
-                                                    <span className="shrink-0 rounded border border-emerald-300/70 bg-transparent px-1.5 py-0.5 text-[9px] font-semibold leading-none text-emerald-200">
+                                                    <span className="shrink-0 rounded border border-accent-primary/45 bg-accent-primary/10 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-accent-primary">
                                                         {acpLabel}
                                                     </span>
                                                 )}

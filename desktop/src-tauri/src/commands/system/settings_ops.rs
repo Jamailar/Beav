@@ -10,20 +10,122 @@ use crate::{
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
+const OFFICIAL_SOURCE_ID: &str = "redbox_official_auto";
+const OFFICIAL_PRESET_ID: &str = "redbox-official";
+
+fn is_official_source_id(source_id: &str) -> bool {
+    let normalized = source_id.trim().to_ascii_lowercase();
+    normalized == OFFICIAL_SOURCE_ID || normalized.ends_with("_official_auto")
+}
+
+fn canonical_source_id(source_id: &str) -> String {
+    let normalized = source_id.trim();
+    if is_official_source_id(normalized) {
+        OFFICIAL_SOURCE_ID.to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn source_is_official(source: &Value) -> bool {
+    source
+        .get("id")
+        .and_then(Value::as_str)
+        .map(is_official_source_id)
+        .unwrap_or(false)
+        || source
+            .get("presetId")
+            .or_else(|| source.get("preset_id"))
+            .and_then(Value::as_str)
+            .map(|value| value.trim().eq_ignore_ascii_case(OFFICIAL_PRESET_ID))
+            .unwrap_or(false)
+}
+
+fn route_chat_model(settings: &Value) -> String {
+    payload_string(settings, "ai_model_routes_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|routes| {
+            routes
+                .get("chat")
+                .and_then(|route| {
+                    route
+                        .get("model")
+                        .or_else(|| route.get("modelName"))
+                        .or_else(|| route.get("model_name"))
+                })
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+        .unwrap_or_default()
+}
+
+fn official_root_fields(settings: &Value) -> (String, String, String) {
+    (
+        crate::official_base_url_from_settings(settings),
+        crate::official_ai_api_key_from_settings(settings).unwrap_or_default(),
+        route_chat_model(settings),
+    )
+}
+
 fn normalize_default_ai_route_settings(settings: &mut Value) {
-    let default_source_id = payload_string(settings, "default_ai_source_id").unwrap_or_default();
+    let default_source_id =
+        canonical_source_id(&payload_string(settings, "default_ai_source_id").unwrap_or_default());
     let Some(raw_sources) = payload_string(settings, "ai_sources_json") else {
+        if is_official_source_id(&default_source_id) {
+            let (official_base_url, official_api_key, official_model) =
+                official_root_fields(settings);
+            if let Some(object) = settings.as_object_mut() {
+                object.insert(
+                    "default_ai_source_id".to_string(),
+                    json!(OFFICIAL_SOURCE_ID),
+                );
+                object.insert("api_endpoint".to_string(), json!(official_base_url));
+                object.insert("api_key".to_string(), json!(official_api_key));
+                object.insert("model_name".to_string(), json!(official_model));
+            }
+        }
         return;
     };
-    let sources = serde_json::from_str::<Vec<Value>>(&raw_sources).unwrap_or_default();
+    let mut sources = serde_json::from_str::<Vec<Value>>(&raw_sources).unwrap_or_default();
+    let mut sources_changed = false;
+    for source in &mut sources {
+        let source_id = source
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        if is_official_source_id(&source_id) && source_id != OFFICIAL_SOURCE_ID {
+            if let Some(object) = source.as_object_mut() {
+                object.insert("id".to_string(), json!(OFFICIAL_SOURCE_ID));
+                sources_changed = true;
+            }
+        }
+    }
     let default_source = sources.iter().find(|source| {
         source
             .get("id")
             .and_then(Value::as_str)
-            .map(|value| value.trim() == default_source_id)
+            .map(|value| canonical_source_id(value) == default_source_id)
             .unwrap_or(false)
+            || (is_official_source_id(&default_source_id) && source_is_official(source))
     });
     let Some(source) = default_source else {
+        if is_official_source_id(&default_source_id) {
+            let (official_base_url, official_api_key, official_model) =
+                official_root_fields(settings);
+            if let Some(object) = settings.as_object_mut() {
+                object.insert(
+                    "default_ai_source_id".to_string(),
+                    json!(OFFICIAL_SOURCE_ID),
+                );
+                object.insert("api_endpoint".to_string(), json!(official_base_url));
+                object.insert("api_key".to_string(), json!(official_api_key));
+                object.insert("model_name".to_string(), json!(official_model));
+            }
+        }
         return;
     };
 
@@ -50,6 +152,13 @@ fn normalize_default_ai_route_settings(settings: &mut Value) {
         .to_string();
 
     if let Some(object) = settings.as_object_mut() {
+        if sources_changed {
+            object.insert(
+                "ai_sources_json".to_string(),
+                json!(serde_json::to_string(&sources).unwrap_or_else(|_| "[]".to_string())),
+            );
+        }
+        object.insert("default_ai_source_id".to_string(), json!(default_source_id));
         object.insert("api_endpoint".to_string(), json!(base_url));
         object.insert("api_key".to_string(), json!(api_key.clone()));
         object.insert("model_name".to_string(), json!(model_name));
@@ -249,6 +358,84 @@ mod tests {
         assert_eq!(settings["api_endpoint"], json!("https://next.example/v1"));
         assert_eq!(settings["api_key"], json!("next-key"));
         assert_eq!(settings["model_name"], json!("next-model"));
+    }
+
+    #[test]
+    fn normalize_default_ai_route_settings_canonicalizes_legacy_official_source_id() {
+        let mut settings = json!({
+            "default_ai_source_id": "beav_official_auto",
+            "api_endpoint": "https://old.example/v1",
+            "api_key": "old-key",
+            "model_name": "old-model",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "beav_official_auto",
+                "name": "Beav Official",
+                "presetId": "redbox-official",
+                "baseURL": "https://api.ziz.hk/beav/v1",
+                "apiKey": "official-key",
+                "model": "official-model"
+            })]).unwrap()
+        });
+
+        normalize_default_ai_route_settings(&mut settings);
+
+        assert_eq!(
+            settings["default_ai_source_id"],
+            json!("redbox_official_auto")
+        );
+        assert_eq!(
+            settings["api_endpoint"],
+            json!("https://api.ziz.hk/beav/v1")
+        );
+        assert_eq!(settings["api_key"], json!("official-key"));
+        assert_eq!(settings["model_name"], json!("official-model"));
+
+        let sources = settings
+            .get("ai_sources_json")
+            .and_then(Value::as_str)
+            .and_then(|raw| serde_json::from_str::<Vec<Value>>(raw).ok())
+            .unwrap_or_default();
+        assert_eq!(
+            sources
+                .first()
+                .and_then(|source| source.get("id"))
+                .and_then(Value::as_str),
+            Some("redbox_official_auto")
+        );
+    }
+
+    #[test]
+    fn normalize_default_ai_route_settings_does_not_keep_stale_custom_root_for_missing_official_source(
+    ) {
+        let mut settings = json!({
+            "default_ai_source_id": "redbox_official_auto",
+            "redbox_official_base_url": "https://api.ziz.hk/redbox/v1",
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap(),
+            "api_endpoint": "https://custom.example/v1",
+            "api_key": "custom-key",
+            "model_name": "custom-model",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "custom-source",
+                "name": "Custom",
+                "baseURL": "https://custom.example/v1",
+                "apiKey": "custom-key",
+                "model": "custom-model"
+            })]).unwrap(),
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "chat": { "mode": "official", "sourceId": "redbox_official_auto", "model": "official-chat" }
+            })).unwrap()
+        });
+        let official_base_url = crate::official_base_url_from_settings(&settings);
+
+        normalize_default_ai_route_settings(&mut settings);
+
+        assert_eq!(
+            settings["default_ai_source_id"],
+            json!("redbox_official_auto")
+        );
+        assert_eq!(settings["api_endpoint"], json!(official_base_url));
+        assert_eq!(settings["api_key"], json!("official-key"));
+        assert_eq!(settings["model_name"], json!("official-chat"));
     }
 
     #[test]

@@ -387,6 +387,9 @@ function resolveBrand(config, requestedVariant) {
     founderXHandle: variantConfig.founderXHandle || '',
     founderXUrl: variantConfig.founderXUrl || '',
     developerWechatQrSrc: variantConfig.developerWechatQrSrc || '',
+    visibleSettingsTabs: Array.isArray(variantConfig.visibleSettingsTabs)
+      ? variantConfig.visibleSettingsTabs.map((tab) => String(tab || '').trim()).filter(Boolean)
+      : [],
     theme,
   };
 }
@@ -413,7 +416,7 @@ function replaceCargoPackageName(contents, packageName) {
 }
 
 function replaceCargoLockRootPackageName(contents, packageName) {
-  const pattern = /(\[\[package\]\]\nname = )"(redbox|thrive)"(\nversion = "\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?")/;
+  const pattern = /(\[\[package\]\]\nname = )"(redbox|thrive|beav)"(\nversion = "\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?")/;
   if (!pattern.test(contents)) {
     throw new Error('Failed to locate src-tauri/Cargo.lock root package');
   }
@@ -471,6 +474,7 @@ export async function syncBrand({ cwd = process.cwd(), variant: requestedVariant
     founderXHandle: brand.founderXHandle,
     founderXUrl: brand.founderXUrl,
     developerWechatQrSrc: brand.developerWechatQrSrc,
+    visibleSettingsTabs: brand.visibleSettingsTabs,
     theme: brand.theme,
   };
 

@@ -7,8 +7,11 @@ import {
   type AiSourceConfig,
   DEFAULT_AI_PRESET_ID,
   OFFICIAL_AUTO_SOURCE_ID,
+  OFFICIAL_AI_SOURCE_DISPLAY_NAME,
+  canonicalizeOfficialAutoSourceId,
   findAiPresetById,
   inferPresetIdByEndpoint,
+  isOfficialAutoSourceId,
 } from '../../config/aiSources';
 import {
   enforceModelCapabilityPolicy,
@@ -568,7 +571,10 @@ export const AiSourceLogo = ({
   const normalizedId = String(source.id || '').trim().toLowerCase();
   const normalizedName = String(source.name || '').trim().toLowerCase();
   const resolvedPresetId = (
-    normalizedId === OFFICIAL_AUTO_SOURCE_ID || normalizedName === 'redbox official'
+    isOfficialAutoSourceId(normalizedId)
+      || normalizedName === 'redbox official'
+      || normalizedName === `${APP_BRAND.displayName} official`.toLowerCase()
+      || normalizedName === OFFICIAL_AI_SOURCE_DISPLAY_NAME.toLowerCase()
       ? 'redbox-official'
       : source.presetId
   );
@@ -1120,6 +1126,15 @@ export const parseAiSources = (raw: string | undefined): AiSourceConfig[] => {
         const baseURL = String(item.baseURL || item.baseUrl || '');
         const presetId = String(item.presetId || inferPresetIdByEndpoint(baseURL) || 'custom');
         const model = String(item.model || item.modelName || '');
+        const rawId = String(item.id || '');
+        const name = String(item.name || findAiPresetById(presetId)?.label || '供应商');
+        const isOfficialSource = (
+          isOfficialAutoSourceId(rawId)
+          || presetId === 'redbox-official'
+          || name.trim().toLowerCase() === 'redbox official'
+          || name.trim().toLowerCase() === `${APP_BRAND.displayName} official`.toLowerCase()
+          || name.trim().toLowerCase() === OFFICIAL_AI_SOURCE_DISPLAY_NAME.toLowerCase()
+        );
         const modelsMeta = normalizeAiModelDescriptors(
           Array.isArray(item.modelsMeta)
             ? item.modelsMeta.map((value) => (value && typeof value === 'object' ? value as { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> } : null))
@@ -1129,9 +1144,9 @@ export const parseAiSources = (raw: string | undefined): AiSourceConfig[] => {
           ? normalizeSourceModels(item.models.map((value) => String(value || '')))
           : normalizeSourceModels([model]);
         return {
-          id: String(item.id || generateAiSourceId()),
-          name: String(item.name || findAiPresetById(presetId)?.label || '供应商'),
-          presetId,
+          id: isOfficialSource ? OFFICIAL_AUTO_SOURCE_ID : canonicalizeOfficialAutoSourceId(rawId || generateAiSourceId()),
+          name: isOfficialSource ? OFFICIAL_AI_SOURCE_DISPLAY_NAME : name,
+          presetId: isOfficialSource ? 'redbox-official' : presetId,
           baseURL,
           apiKey: String(item.apiKey || item.key || ''),
           models,

@@ -8,6 +8,8 @@ export type FeedbackReportContext = {
   title?: string;
   content?: string;
   sourcePage?: string;
+  sessionId?: string;
+  runtimeId?: string;
   operation?: string;
   errorCode?: string;
   detail?: string;
@@ -75,6 +77,8 @@ export function FeedbackReportDialog({
         uploadNow: true,
         context: {
           window: sourcePage,
+          sessionId: contextValue(context, 'sessionId'),
+          runtimeId: contextValue(context, 'runtimeId'),
           operation: contextValue(context, 'operation'),
           errorCode: contextValue(context, 'errorCode'),
         },

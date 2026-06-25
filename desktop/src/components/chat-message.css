@@ -135,11 +135,12 @@
   display: inline-block;
   max-width: min(100%, 740px);
   border-radius: 12px 4px 12px 12px;
-  background-color: var(--accent-primary, #2563eb);
+  color: rgb(var(--color-primary-text) / 1);
+  background-color: rgb(var(--color-primary) / 1);
   background-image: linear-gradient(
     165deg,
-    var(--accent-primary, #2563eb),
-    color-mix(in srgb, var(--accent-primary, #2563eb) 72%, #2563eb 28%)
+    rgb(var(--color-primary) / 1),
+    rgb(var(--color-primary-hover) / 1)
   );
 }
 

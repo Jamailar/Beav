@@ -76,6 +76,7 @@ pub(crate) fn compact_host_runtime_context(context: &HostRuntimeContext) -> Stri
 
 pub(crate) fn app_brand_display_name() -> &'static str {
     match env!("CARGO_PKG_NAME") {
+        "beav" => "Beav",
         "thrive" => "Thrive",
         "redbox" => "RedBox",
         _ => "App",
@@ -84,6 +85,7 @@ pub(crate) fn app_brand_display_name() -> &'static str {
 
 pub(crate) fn app_brand_slug() -> &'static str {
     match env!("CARGO_PKG_NAME") {
+        "beav" => "beav",
         "thrive" => "thrive",
         "redbox" => "redbox",
         _ => "redbox",
