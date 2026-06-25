@@ -706,6 +706,75 @@ mod tests {
     }
 
     #[test]
+    fn router_prepares_profile_get_operate_with_input_doc_type() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "profile",
+                    "operation": "get",
+                    "input": { "docType": "creator_profile" }
+                }),
+            )
+            .expect("profile get should prepare");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("redclaw.profile.read"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/docType"),
+            Some(&json!("creator_profile"))
+        );
+    }
+
+    #[test]
+    fn router_prepares_profile_update_operate_with_input_payload() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "profile",
+                    "operation": "update",
+                    "input": {
+                        "docType": "creator_profile",
+                        "markdown": "# CreatorProfile.md\n\n## 定位总览"
+                    }
+                }),
+            )
+            .expect("profile update should prepare");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("profile.manage"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/operation"),
+            Some(&json!("update"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/docType"),
+            Some(&json!("creator_profile"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/markdown"),
+            Some(&json!("# CreatorProfile.md\n\n## 定位总览"))
+        );
+    }
+
+    #[test]
     fn router_normalizes_voice_speech_operate_to_completed_audio_job() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",

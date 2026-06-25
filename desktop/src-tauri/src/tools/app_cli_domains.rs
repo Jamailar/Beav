@@ -45,6 +45,17 @@ fn find_category_by_name(list: &Value, name: &str) -> Option<Value> {
         .cloned()
 }
 
+fn redclaw_profile_doc_type(
+    args: &CliArgs,
+    payload: &Value,
+    default_doc_type: Option<&str>,
+) -> Option<String> {
+    args.string(&["doc-type", "docType", "type"])
+        .or_else(|| payload_string_alias(payload, &["docType", "doc-type", "type", "id"]))
+        .or_else(|| args.positionals.first().cloned())
+        .or_else(|| default_doc_type.map(ToString::to_string))
+}
+
 impl<'a> AppCliExecutor<'a> {
     pub(super) fn handle_session_resources(
         &self,
@@ -1905,10 +1916,10 @@ impl<'a> AppCliExecutor<'a> {
             "task-stats" => self.call_channel("redclaw:task-stats", json!({})),
             "profile-bundle" => self.call_channel("redclaw:profile:get-bundle", json!({})),
             "profile-read" => {
-                let doc_type = args
-                    .string(&["doc-type", "type"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .unwrap_or_else(|| "user".to_string());
+                let doc_type =
+                    redclaw_profile_doc_type(&args, payload, Some("user")).unwrap_or_else(|| {
+                        "user".to_string()
+                    });
                 let bundle = self.call_channel("redclaw:profile:get-bundle", json!({}))?;
                 let content = match doc_type.as_str() {
                     "agent" => bundle
@@ -1942,14 +1953,12 @@ impl<'a> AppCliExecutor<'a> {
             "profile-update" => self.call_channel(
                 "redclaw:profile:update-doc",
                 json!({
-                    "docType": args
-                        .string(&["doc-type", "type"])
-                        .or_else(|| args.positionals.first().cloned())
+                    "docType": redclaw_profile_doc_type(&args, payload, None)
                         .ok_or_else(|| "redclaw profile-update requires --doc-type".to_string())?,
                     "markdown": payload_string(payload, "markdown")
                         .or_else(|| args.string(&["markdown"]))
                         .unwrap_or_default(),
-                    "reason": args.string(&["reason"])
+                    "reason": args.string(&["reason"]).or_else(|| payload_string(payload, "reason"))
                 }),
             ),
             "profile-complete-style-definition" => {
@@ -3668,4 +3677,61 @@ fn truncate_task_brief_string(text: &str) -> String {
         out.push_str("...[truncated]");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cli_args(positionals: &[&str], options: Value) -> CliArgs {
+        CliArgs {
+            positionals: positionals.iter().map(|item| item.to_string()).collect(),
+            options: options.as_object().cloned().unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn redclaw_profile_doc_type_reads_json_payload_doc_type() {
+        let args = test_cli_args(&[], json!({}));
+        let payload = json!({ "docType": "creator_profile" });
+
+        assert_eq!(
+            redclaw_profile_doc_type(&args, &payload, None).as_deref(),
+            Some("creator_profile")
+        );
+    }
+
+    #[test]
+    fn redclaw_profile_doc_type_accepts_payload_id_alias() {
+        let args = test_cli_args(&[], json!({}));
+        let payload = json!({ "id": "soul" });
+
+        assert_eq!(
+            redclaw_profile_doc_type(&args, &payload, None).as_deref(),
+            Some("soul")
+        );
+    }
+
+    #[test]
+    fn redclaw_profile_doc_type_prefers_cli_option_over_payload() {
+        let args = test_cli_args(&[], json!({ "doc-type": "agent" }));
+        let payload = json!({ "docType": "creator_profile" });
+
+        assert_eq!(
+            redclaw_profile_doc_type(&args, &payload, None).as_deref(),
+            Some("agent")
+        );
+    }
+
+    #[test]
+    fn redclaw_profile_doc_type_uses_read_default_only_when_provided() {
+        let args = test_cli_args(&[], json!({}));
+        let payload = json!({});
+
+        assert_eq!(
+            redclaw_profile_doc_type(&args, &payload, Some("user")).as_deref(),
+            Some("user")
+        );
+        assert_eq!(redclaw_profile_doc_type(&args, &payload, None), None);
+    }
 }
