@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./images/brand-hero.png" alt="Beav（原RedBox）" width="100%">
+  <img src="./images/beav-product-hero.png" alt="Beav（原RedBox）" width="100%">
 </p>
 
 <p align="center">
@@ -190,6 +190,10 @@ Beav（原RedBox）的长期方向是成为通用 Agent 的本地自媒体创作
 ## 更新日志
 
 ### v2.5.0
+
+Beav（原RedBox）2.5.0 的重点是 **ACP Agent Gateway**：Codex、Claude Code、Hermes、WorkBuddy、OpenClaw 等外部 Agent 可以直接与 Beav 沟通，发现本机 Beav 服务、读取 Creator Agent manifest / guide、创建或复用会话、提交创作任务，并通过事件轮询拿到执行状态和素材/稿件产物引用。
+
+Beav 负责保存真实素材、知识库上下文、媒体资产、稿件、封面和生成任务；外部 Agent 负责规划、推理、拆任务和调用能力。这样 Agent 不需要靠复制粘贴素材，也不需要把图片、视频、素材索引等重任务塞进一次聊天上下文。
 
 从 2.5.0 开始，RedBox 正式更名为 **Beav（原RedBox）**。Beav（原RedBox）延续原 RedBox / RedConvert 的本地素材库、Agent 接入、媒体资产管理、稿件与封面、视频处理和自动化能力；旧名称仍会在历史版本、文档链接、仓库路径或兼容协议中保留一段时间。
 
@@ -402,3 +406,7 @@ Beav（原RedBox）2.0 是一次面向「AI 内容创作工作台」的重大升
 #### 这是一个大版本
 
 2.0.0 的重点不是增加几个按钮，而是把 Beav（原RedBox）从「AI 生成工具集合」升级为「自媒体创作 Agent 工作台」：它可以克隆角色、生成角色卡片、沉淀角色声音资产、理解素材、生成内容、处理媒体、维护角色一致性，并把多步创作任务尽可能交给 AI 连续完成。
+
+## 友情链接
+
+- [Linux.do](https://linux.do/)
