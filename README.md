@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <strong>改名通知：</strong>RedBox / RedConvert 现已更名为 <strong>Beav</strong>。
+  <strong>改名通知：</strong>RedBox 现已更名为 <strong>Beav</strong>。
 </p>
 
 <p align="center">
