@@ -18,6 +18,9 @@ const MAX_EVENT_BYTES: usize = 8 * 1024;
 const MAX_QUEUE_EVENTS: i64 = 5000;
 const BATCH_SIZE: i64 = 40;
 const FLUSH_RETRY_COOLDOWN_MS: u64 = 30_000;
+const PENDING_CHECKOUT_KEY: &str = "analytics_pending_checkout";
+const PENDING_CHECKOUT_SCHEMA_VERSION: &str = "redbox.analytics.pendingCheckout.v1";
+const PENDING_CHECKOUT_TTL_MS: i64 = 48 * 60 * 60 * 1000;
 
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 static FLUSH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -71,6 +74,10 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default()
+}
+
+fn now_millis_i64() -> i64 {
+    i64::try_from(now_millis()).unwrap_or(i64::MAX)
 }
 
 fn analytics_now_iso() -> String {
@@ -270,6 +277,21 @@ fn value_f64_any(value: &Value, keys: &[&str]) -> Option<f64> {
     })
 }
 
+fn value_i64_any(value: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        payload_field(value, key).and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .and_then(|text| text.trim().parse::<i64>().ok())
+                })
+        })
+    })
+}
+
 fn nested_value<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|key| payload_field(value, key))
 }
@@ -390,6 +412,144 @@ fn order_id_hash(order: &Value) -> Option<String> {
         &["id", "orderId", "order_id", "out_trade_no", "outTradeNo"],
     )
     .map(|order_id| analytics_hash(&format!("redbox-order:{order_id}")))
+}
+
+fn pending_checkout_snapshot(settings: &Value) -> Option<Map<String, Value>> {
+    let pending = payload_field(settings, PENDING_CHECKOUT_KEY)?;
+    let object = pending.as_object()?.clone();
+    let started_at_ms = value_i64_any(pending, &["startedAtMs"])?;
+    if now_millis_i64().saturating_sub(started_at_ms) > PENDING_CHECKOUT_TTL_MS {
+        return None;
+    }
+    Some(object)
+}
+
+fn clear_pending_checkout(state: &State<'_, AppState>) {
+    let _ = with_store_mut(state, |store| {
+        if let Some(object) = store.settings.as_object_mut() {
+            object.remove(PENDING_CHECKOUT_KEY);
+        }
+        Ok(())
+    });
+}
+
+fn clear_matching_pending_checkout(state: &State<'_, AppState>, order_hash: Option<&str>) {
+    let Some(order_hash) = order_hash else {
+        return;
+    };
+    let _ = with_store_mut(state, |store| {
+        let should_clear = payload_field(&store.settings, PENDING_CHECKOUT_KEY)
+            .and_then(|value| payload_string(value, "orderIdHash"))
+            .as_deref()
+            == Some(order_hash);
+        if should_clear {
+            if let Some(object) = store.settings.as_object_mut() {
+                object.remove(PENDING_CHECKOUT_KEY);
+            }
+        }
+        Ok(())
+    });
+}
+
+fn add_checkout_context(properties: &mut Map<String, Value>, pending: &Map<String, Value>) {
+    for key in [
+        "orderIdHash",
+        "productId",
+        "amount",
+        "paymentKind",
+        "orderStatus",
+        "checkoutSource",
+        "membershipTypeBefore",
+        "membershipStatusBefore",
+        "checkoutStartedAt",
+        "acquisitionSource",
+    ] {
+        if let Some(value) = pending.get(key) {
+            properties.insert(key.to_string(), value.clone());
+        }
+    }
+    if let Some(started_at_ms) = pending.get("startedAtMs").and_then(Value::as_i64) {
+        properties.insert(
+            "checkoutAgeMs".to_string(),
+            json!(now_millis_i64().saturating_sub(started_at_ms)),
+        );
+    }
+}
+
+fn pending_checkout_has_product(pending: &Map<String, Value>) -> bool {
+    pending
+        .get("productId")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn build_pending_checkout(
+    settings: &Value,
+    order: &Value,
+    source: &str,
+    payment_kind: &str,
+) -> Value {
+    let mut object = Map::new();
+    object.insert(
+        "schemaVersion".to_string(),
+        json!(PENDING_CHECKOUT_SCHEMA_VERSION),
+    );
+    object.insert(
+        "checkoutSource".to_string(),
+        json!(sanitize_string(source, 64)),
+    );
+    object.insert(
+        "paymentKind".to_string(),
+        json!(sanitize_string(payment_kind, 48)),
+    );
+    let checkout_started_at = analytics_now_iso();
+    object.insert("startedAt".to_string(), json!(checkout_started_at.clone()));
+    object.insert("checkoutStartedAt".to_string(), json!(checkout_started_at));
+    object.insert("startedAtMs".to_string(), json!(now_millis_i64()));
+    object.insert(
+        "membershipTypeBefore".to_string(),
+        json!(official_membership_type(settings)),
+    );
+    object.insert(
+        "membershipStatusBefore".to_string(),
+        json!(official_membership_status(settings)),
+    );
+    if let Some(user_hash) = official_user_hash(settings) {
+        object.insert("userIdHash".to_string(), json!(user_hash));
+    }
+    if let Some(order_hash) = order_id_hash(order) {
+        object.insert("orderIdHash".to_string(), json!(order_hash));
+    }
+    if let Some(product_id) = value_string_any(order, &["product_id", "productId", "sku"]) {
+        object.insert("productId".to_string(), json!(product_id));
+    }
+    if let Some(amount) = value_f64_any(order, &["amount", "amount_yuan", "amountYuan"]) {
+        object.insert("amount".to_string(), json!(amount));
+    }
+    if let Some(status) = value_string_any(order, &["status", "trade_status", "tradeStatus"]) {
+        object.insert(
+            "orderStatus".to_string(),
+            json!(normalized_status(Some(status))),
+        );
+    }
+    if let Some(acquisition_source) = value_string_any(
+        order,
+        &["acquisitionSource", "acquisition_source", "sourceSurvey"],
+    ) {
+        object.insert("acquisitionSource".to_string(), json!(acquisition_source));
+    }
+    Value::Object(object)
+}
+
+fn store_pending_checkout(state: &State<'_, AppState>, pending: &Value) {
+    let pending = pending.clone();
+    let _ = with_store_mut(state, |store| {
+        if let Some(object) = store.settings.as_object_mut() {
+            object.insert(PENDING_CHECKOUT_KEY.to_string(), pending);
+        }
+        Ok(())
+    });
 }
 
 fn app_metadata(surface: &str) -> Value {
@@ -834,8 +994,31 @@ pub fn observe_official_settings_update(
             "membership_activated",
             "account",
             "host",
-            Value::Object(properties),
+            Value::Object(properties.clone()),
         );
+        if let Some(pending) =
+            pending_checkout_snapshot(next_settings).filter(pending_checkout_has_product)
+        {
+            let mut inferred_properties = properties;
+            add_checkout_context(&mut inferred_properties, &pending);
+            inferred_properties.insert("source".to_string(), json!(sanitize_string(source, 64)));
+            inferred_properties
+                .insert("completionKind".to_string(), json!("membership_transition"));
+            inferred_properties.insert("inferred".to_string(), json!(true));
+            let event_id = pending
+                .get("orderIdHash")
+                .and_then(Value::as_str)
+                .map(|hash| format!("evt_checkout_completed_inferred_{hash}"));
+            let _ = track_internal_event_with_id(
+                state,
+                event_id.as_deref(),
+                "checkout_completed_inferred",
+                "billing",
+                "host",
+                Value::Object(inferred_properties),
+            );
+            clear_pending_checkout(state);
+        }
     }
 }
 
@@ -845,6 +1028,11 @@ pub fn observe_billing_order_created(
     source: &str,
     payment_kind: &str,
 ) {
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))
+        .unwrap_or_else(|_| Value::Object(Map::new()));
+    let pending = build_pending_checkout(&settings, order, source, payment_kind);
+    store_pending_checkout(state, &pending);
+
     let mut properties = Map::new();
     properties.insert("source".to_string(), json!(sanitize_string(source, 64)));
     properties.insert(
@@ -867,11 +1055,47 @@ pub fn observe_billing_order_created(
             json!(normalized_status(Some(status))),
         );
     }
+    if let Some(pending) = pending.as_object() {
+        add_checkout_context(&mut properties, pending);
+    }
     let event_id = order_hash.map(|hash| format!("evt_checkout_started_{hash}"));
     let _ = track_internal_event_with_id(
         state,
         event_id.as_deref(),
         "checkout_started",
+        "billing",
+        "host",
+        Value::Object(properties),
+    );
+}
+
+pub fn observe_billing_payment_opened(
+    state: &State<'_, AppState>,
+    source: &str,
+    open_result: &str,
+) {
+    let settings = match with_store(state, |store| Ok(settings_store::settings_snapshot(&store))) {
+        Ok(settings) => settings,
+        Err(_) => return,
+    };
+    let Some(pending) = pending_checkout_snapshot(&settings) else {
+        return;
+    };
+    let mut properties = Map::new();
+    properties.insert("source".to_string(), json!(sanitize_string(source, 64)));
+    properties.insert(
+        "openResult".to_string(),
+        json!(sanitize_string(open_result, 64)),
+    );
+    add_checkout_context(&mut properties, &pending);
+    let event_id = pending
+        .get("orderIdHash")
+        .and_then(Value::as_str)
+        .map(|hash| format!("evt_checkout_opened_{hash}"));
+    let _ = track_internal_event_with_id(
+        state,
+        event_id.as_deref(),
+        "checkout_opened",
         "billing",
         "host",
         Value::Object(properties),
@@ -896,6 +1120,11 @@ pub fn observe_billing_order_status(state: &State<'_, AppState>, order: &Value, 
     if let Some(amount) = value_f64_any(order, &["amount", "amount_yuan", "amountYuan"]) {
         properties.insert("amount".to_string(), json!(amount));
     }
+    if let Ok(settings) = with_store(state, |store| Ok(settings_store::settings_snapshot(&store))) {
+        if let Some(pending) = pending_checkout_snapshot(&settings) {
+            add_checkout_context(&mut properties, &pending);
+        }
+    }
     let event = if matches!(
         status.as_str(),
         "paid" | "success" | "succeeded" | "completed" | "finished" | "trade_success"
@@ -909,7 +1138,9 @@ pub fn observe_billing_order_status(state: &State<'_, AppState>, order: &Value, 
     } else {
         return;
     };
-    let event_id = order_hash.map(|hash| format!("evt_{event}_{hash}"));
+    let event_id = order_hash
+        .as_ref()
+        .map(|hash| format!("evt_{event}_{hash}"));
     let _ = track_internal_event_with_id(
         state,
         event_id.as_deref(),
@@ -918,6 +1149,7 @@ pub fn observe_billing_order_status(state: &State<'_, AppState>, order: &Value, 
         "host",
         Value::Object(properties),
     );
+    clear_matching_pending_checkout(state, order_hash.as_deref());
 }
 
 fn track_internal_event(

@@ -9,6 +9,19 @@ mod products;
 use orders::{query_remote_order_status, sync_remote_orders_into_settings};
 use products::{fetch_billing_product, fetch_billing_products_with_fallback};
 
+fn analytics_order_snapshot(order: &Value, payload: &Value) -> Value {
+    let mut next = order.clone();
+    if let Some(acquisition_source) = payload_string(payload, "acquisitionSource")
+        .or_else(|| payload_string(payload, "acquisition_source"))
+        .filter(|value| !value.trim().is_empty())
+    {
+        if let Some(object) = next.as_object_mut() {
+            object.insert("acquisitionSource".to_string(), json!(acquisition_source));
+        }
+    }
+    next
+}
+
 pub(super) fn handle_billing_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -171,9 +184,10 @@ pub(super) fn handle_billing_channel(
                 None,
                 request_generation,
             )?;
+            let analytics_order = analytics_order_snapshot(&order, payload);
             crate::analytics::observe_billing_order_created(
                 state,
-                &order,
+                &analytics_order,
                 "official-order-create",
                 "page_pay",
             );
@@ -238,9 +252,10 @@ pub(super) fn handle_billing_channel(
                 None,
                 request_generation,
             )?;
+            let analytics_order = analytics_order_snapshot(&order, payload);
             crate::analytics::observe_billing_order_created(
                 state,
-                &order,
+                &analytics_order,
                 "official-wechat-order-create",
                 "wechat_native",
             );
@@ -291,7 +306,14 @@ pub(super) fn handle_billing_channel(
         "redbox-auth:open-payment-form" => Some((|| -> Result<Value, String> {
             let payment_form = payload_string(payload, "paymentForm").unwrap_or_default();
             match open_payment_form(&payment_form) {
-                Ok(opened) => Ok(json!({ "success": true, "opened": opened })),
+                Ok(opened) => {
+                    crate::analytics::observe_billing_payment_opened(
+                        state,
+                        "official-payment-open",
+                        &opened,
+                    );
+                    Ok(json!({ "success": true, "opened": opened }))
+                }
                 Err(error) => Ok(json!({ "success": false, "error": error })),
             }
         })()),
@@ -406,9 +428,10 @@ pub(super) fn handle_billing_channel(
                 None,
                 request_generation,
             )?;
+            let analytics_order = analytics_order_snapshot(&order, payload);
             crate::analytics::observe_billing_order_created(
                 state,
-                &order,
+                &analytics_order,
                 "official-billing-create-order",
                 "official_billing",
             );

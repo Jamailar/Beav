@@ -8,6 +8,7 @@ import { useMembership } from '../membership/useMembership';
 import { extractAlipayPayQrContent } from '../../pages/settings/shared';
 import { LegalDocumentDialog } from '../legal/LegalDocumentDialog';
 import { LEGAL_DOCUMENTS, type LegalDocumentId } from '../legal/legalDocuments';
+import { getAppAcquisitionSource } from '../../components/AppOnboarding';
 
 type LoginTab = 'wechat' | 'sms';
 type NoticeType = 'idle' | 'success' | 'error';
@@ -748,6 +749,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
           amount: amount || undefined,
           subject: `积分充值 ¥${amount}`,
           pointsToDeduct: 0,
+          acquisitionSource: getAppAcquisitionSource(),
         }),
       );
       if (!orderResult?.success || !orderResult.order) {
@@ -831,6 +833,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
           subject: '创始赞助会员',
           pointsToDeduct: 0,
           points_to_deduct: 0,
+          acquisitionSource: getAppAcquisitionSource(),
         }),
       );
       if (!orderResult?.success || !orderResult.order) {
