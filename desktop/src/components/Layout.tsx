@@ -19,6 +19,7 @@ import { useLayoutTheme } from '../features/app-shell/useLayoutTheme';
 import { ENTITLEMENTS } from '../features/membership/entitlementKeys';
 import { useMembership } from '../features/membership/useMembership';
 import { asRecord, resolveFounderSponsorState, valueContainsFounder } from '../utils/membership';
+import { getAppAcquisitionSource } from './AppOnboarding';
 
 interface LayoutProps {
   children: ReactNode;
@@ -919,6 +920,7 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
         subject: t('layout.founderSponsor.title'),
         pointsToDeduct: 0,
         points_to_deduct: 0,
+        acquisitionSource: getAppAcquisitionSource(),
       }) as {
         success?: boolean;
         order?: Record<string, unknown>;
