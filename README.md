@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./images/beav-agent-workflow-hero.png" alt="Beav（原RedBox）" width="100%">
+  <img src="./images/beav-product-hero.png" alt="Beav（原RedBox）" width="100%">
 </p>
 
 <p align="center">
@@ -406,3 +406,7 @@ Beav（原RedBox）2.0 是一次面向「AI 内容创作工作台」的重大升
 #### 这是一个大版本
 
 2.0.0 的重点不是增加几个按钮，而是把 Beav（原RedBox）从「AI 生成工具集合」升级为「自媒体创作 Agent 工作台」：它可以克隆角色、生成角色卡片、沉淀角色声音资产、理解素材、生成内容、处理媒体、维护角色一致性，并把多步创作任务尽可能交给 AI 连续完成。
+
+## 友情链接
+
+- [Linux.do](https://linux.do/)
