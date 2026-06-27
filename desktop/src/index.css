@@ -1503,7 +1503,7 @@ select {
   left: 0;
   z-index: 70;
   display: grid;
-  grid-template-columns: 172px minmax(0, 1fr) auto;
+  grid-template-columns: 234px minmax(0, 1fr) auto;
   align-items: center;
   height: var(--app-titlebar-height);
   background: transparent;
@@ -1522,7 +1522,7 @@ select {
 }
 
 .app-titlebar--windows {
-  grid-template-columns: 104px minmax(0, 1fr) auto;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
   background: transparent;
 }
 
@@ -1568,6 +1568,40 @@ select {
 
 .app-titlebar-sidebar-toggle[data-sidebar-state='collapsed'] > svg {
   transform: scaleX(-1);
+}
+
+.app-titlebar-update-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 52px;
+  padding: 0 15px;
+  border: none;
+  border-radius: 999px;
+  background: #95bd5d;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgb(102 139 54 / 0.16);
+}
+
+.app-titlebar-update-button:hover {
+  background: #87af51;
+  color: #fff;
+}
+
+.app-titlebar-update-button:focus,
+.app-titlebar-update-button:focus-visible,
+.app-titlebar-update-button:active {
+  background: #7fa84a;
+  color: #fff;
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgb(149 189 93 / 0.22),
+    0 8px 18px rgb(102 139 54 / 0.18);
 }
 
 .app-global-search-backdrop {

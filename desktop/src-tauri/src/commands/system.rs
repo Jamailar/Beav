@@ -21,6 +21,7 @@ pub fn handle_system_channel(
 ) -> Option<Result<Value, String>> {
     let result = match channel {
         "app:get-version"
+        | "app:get-release-notes"
         | "app:check-update"
         | "app:open-release-page"
         | "app:open-external-url"
@@ -52,6 +53,7 @@ pub fn handle_system_channel(
         | "clipboard:write-html" => (|| -> Result<Value, String> {
             match channel {
                 "app:get-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
+                "app:get-release-notes" => app_update::get_release_notes(payload),
                 "app:check-update" => {
                     let force = payload_field(payload, "force")
                         .and_then(Value::as_bool)
