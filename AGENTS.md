@@ -13,6 +13,7 @@
 
 - Node 统一按 `>=22 <23` 处理；包管理按 `pnpm@10`。
 - 打包、签名、远程 Windows 构建依赖本地/远程环境；未确认前提前不要随意调整发布脚本。
+- 发布新版桌面端必须同时产出并上传 Tauri updater 资产到 GitHub Release；不得只上传 `.dmg` / `.exe` 普通安装包。
 - 主要目录：
   - `desktop/`：主桌面端。
   - `Plugin/`：Chrome / Edge 扩展，负责把外部内容送入桌面端。
@@ -56,6 +57,17 @@
   - 改 AI runtime / tool / prompt：至少跑一轮真实任务，检查事件流、工具调用、权限确认、最终摘要。
   - 改 `Plugin/`：验证 popup、background、注入页或右键入口。
   - 改 `RedBoxweb/`：运行 `pnpm test` 和一次 `pnpm build`。
+
+## Desktop Release And Updater Rules
+
+- 每次执行桌面端新版发布时，GitHub Release 必须同时包含普通安装包和自动更新包。
+- macOS 必须包含 `.dmg`、对应架构的 `.app.tar.gz`、以及同名 `.app.tar.gz.sig`。
+- Windows 必须包含 `*-setup.exe`，并包含 Tauri updater 使用的同名 `.sig`；如果构建产出 `*-setup.exe.zip` / `.nsis.zip` / `.msi.zip`，也必须和同名 `.sig` 一起上传。
+- `desktop/scripts/build-mac-release.mjs`、`desktop/scripts/build-windows-release.mjs`、`desktop/scripts/build-all-release.mjs` 和 `desktop/scripts/publish-open-source-release.mjs` 已经会把 `updaterArtifactPath` / `updaterSignatureArtifactPath` 纳入发布资产；修改发布脚本时必须保留这个收集逻辑。
+- 发布前必须确认 `desktop/src-tauri/tauri.conf.json` 的 `bundle.createUpdaterArtifacts` 没有被关闭，且 `plugins.updater.pubkey` 与当前签名私钥匹配。
+- updater 私钥不得进入仓库；本机和远程 Windows 构建机默认使用 `~/.tauri/redbox-updater.key`，或显式设置 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PATH`。
+- 如果某个平台本次没有 updater 包或 `.sig`，不要把该版本标成正式可更新版本；先修构建/签名/上传链路。
+- RedboxWeb 会从 GitHub latest release 同步 updater 包和 `.sig` 到 OSS，并由 `/api/updates/tauri` 提供给 `tauri-plugin-updater`；因此 GitHub Release 是 updater 资产的源头真值。
 
 ## Core Engineering Rules
 

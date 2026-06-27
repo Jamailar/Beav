@@ -320,10 +320,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const {
     updateNotice,
+    hasInstallableUpdate,
     updatePublishedDateLabel,
     isOpeningReleasePage,
     installState,
     isInstallingUpdate,
+    openInstallableUpdateNotice,
     openReleasePage,
     installUpdate,
     closeUpdateNotice,
@@ -378,6 +380,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       },
     });
   }, [founderSponsorState.active, sidebarVisualCollapsed]);
+  const openCurrentReleaseNotesFromTitleBar = useCallback(async () => {
+    await openInstallableUpdateNotice();
+  }, [openInstallableUpdateNotice]);
 
   const renderSidebarNavItem = (item: SidebarNavItem) => {
     const { key, view, labelKey, icon: Icon, primary } = item;
@@ -438,6 +443,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         isSidebarCollapsed={isSidebarCollapsed}
         toggleSidebarCollapsed={toggleSidebarCollapsed}
         openGlobalSearch={openGlobalSearch}
+        openCurrentReleaseNotes={openCurrentReleaseNotesFromTitleBar}
+        showUpdateButton={hasInstallableUpdate}
         notificationDrawerOpen={notificationDrawerOpen}
         unreadNotificationCount={unreadNotificationCount}
         toggleNotificationDrawer={toggleNotificationDrawer}

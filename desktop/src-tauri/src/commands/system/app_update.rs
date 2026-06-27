@@ -10,6 +10,8 @@ use crate::app_brand_display_name;
 
 pub(super) const APP_UPDATE_DOWNLOAD_PAGE_URL: &str = "https://redbox.ziz.hk/download";
 const APP_UPDATE_API_URL: &str = "https://redbox.ziz.hk/api/updates/app";
+const APP_RELEASE_MANIFEST_URL: &str =
+    "https://xitunimagedb.oss-rg-china-mainland.aliyuncs.com/manifests/latest.json";
 const APP_UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 const APP_UPDATE_CHECK_MIN_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
@@ -43,6 +45,32 @@ struct RedboxAppUpdateResponse {
 #[derive(Deserialize)]
 struct RedboxAppUpdateAsset {
     url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RedboxReleaseManifest {
+    tag: String,
+    #[serde(rename = "releaseName")]
+    release_name: String,
+    #[serde(rename = "releaseUrl")]
+    release_url: String,
+    #[serde(rename = "publishedAt")]
+    published_at: String,
+    notes: String,
+    #[serde(rename = "releaseNotes", default)]
+    release_notes: Vec<RedboxReleaseNotesEntry>,
+}
+
+#[derive(Deserialize)]
+struct RedboxReleaseNotesEntry {
+    tag: String,
+    #[serde(rename = "releaseName")]
+    release_name: String,
+    #[serde(rename = "releaseUrl")]
+    release_url: String,
+    #[serde(rename = "publishedAt")]
+    published_at: String,
+    notes: String,
 }
 
 struct LatestAppUpdate {
@@ -181,6 +209,82 @@ fn fetch_latest_app_update(current_version: &str) -> Result<LatestAppUpdate, Str
         published_at: data.published_at.unwrap_or_default(),
         body: data.notes.unwrap_or_default(),
     })
+}
+
+fn fetch_release_manifest() -> Result<RedboxReleaseManifest, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(APP_UPDATE_CHECK_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(APP_RELEASE_MANIFEST_URL)
+        .header("Accept", "application/json")
+        .header(
+            "User-Agent",
+            format!("{}/{}", app_brand_display_name(), env!("CARGO_PKG_VERSION")),
+        )
+        .send()
+        .map_err(|error| error.to_string())?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("更新日志请求失败：HTTP {}", status));
+    }
+
+    response
+        .json::<RedboxReleaseManifest>()
+        .map_err(|error| error.to_string())
+}
+
+pub(super) fn get_release_notes(payload: &Value) -> Result<Value, String> {
+    let requested_version = payload
+        .get("version")
+        .and_then(Value::as_str)
+        .map(normalize_version_tag)
+        .unwrap_or_else(|| normalize_version_tag(env!("CARGO_PKG_VERSION")));
+
+    if requested_version.is_empty() {
+        return Ok(json!({
+            "success": false,
+            "error": "缺少版本号",
+        }));
+    }
+
+    let manifest = fetch_release_manifest()?;
+    let matched = manifest
+        .release_notes
+        .iter()
+        .find(|entry| normalize_version_tag(&entry.tag) == requested_version);
+
+    if let Some(entry) = matched {
+        return Ok(json!({
+            "success": true,
+            "version": requested_version,
+            "tag": entry.tag,
+            "name": entry.release_name,
+            "htmlUrl": entry.release_url,
+            "publishedAt": entry.published_at,
+            "body": entry.notes,
+        }));
+    }
+
+    if normalize_version_tag(&manifest.tag) == requested_version {
+        return Ok(json!({
+            "success": true,
+            "version": requested_version,
+            "tag": manifest.tag,
+            "name": manifest.release_name,
+            "htmlUrl": manifest.release_url,
+            "publishedAt": manifest.published_at,
+            "body": manifest.notes,
+        }));
+    }
+
+    Ok(json!({
+        "success": false,
+        "version": requested_version,
+        "error": format!("未找到 v{} 的更新日志", requested_version),
+    }))
 }
 
 fn maybe_emit_app_update_available(

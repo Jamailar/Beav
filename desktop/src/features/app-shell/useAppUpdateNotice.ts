@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { subscribeAppUpdateAvailable, subscribeAppUpdateInstallProgress } from '../../bridge/appEvents';
-import { SHOW_CURRENT_RELEASE_NOTES_EVENT, currentReleaseNotesMarkdown } from '../../utils/currentReleaseNotes';
+import { SHOW_CURRENT_RELEASE_NOTES_EVENT } from '../../utils/currentReleaseNotes';
 import { appAlert } from '../../utils/appDialogs';
 
 export interface AppUpdateNoticePayload {
@@ -72,12 +72,18 @@ function markAppUpdateNoticeShown(payload: AppUpdateNoticePayload): void {
 
 export function useAppUpdateNotice(openDownloadFailedLabel: string) {
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
+  const [lastInstallableNotice, setLastInstallableNotice] = useState<AppUpdateNoticePayload | null>(null);
+  const [hasInstallableUpdate, setHasInstallableUpdate] = useState(false);
   const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
   const [installState, setInstallState] = useState<AppUpdateInstallState>(initialInstallState);
 
   useEffect(() => {
     const handleUpdateNotice = (_event: unknown, payload: AppUpdateNoticePayload) => {
       if (!payload || !payload.latestVersion) return;
+      if (payload.mode !== 'current') {
+        setHasInstallableUpdate(true);
+        setLastInstallableNotice(payload);
+      }
       if (!shouldShowAppUpdateNotice(payload)) return;
       markAppUpdateNoticeShown(payload);
       setInstallState(initialInstallState);
@@ -98,20 +104,31 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
         ? event.detail as { version?: unknown } | null
         : null;
       const version = String(detail?.version || '').trim() || '2.0.0';
-      setUpdateNotice({
-        currentVersion: version,
-        latestVersion: version,
-        htmlUrl: '',
-        name: `RedBox v${version}`,
-        publishedAt: '2026-05-14',
-        body: currentReleaseNotesMarkdown(),
-        mode: 'current',
+      void window.ipcRenderer.getAppReleaseNotes(version).then((result) => {
+        if (!result?.success) {
+          void appAlert(result?.error || '读取更新日志失败');
+          return;
+        }
+        setUpdateNotice({
+          currentVersion: version,
+          latestVersion: String(result.version || version),
+          htmlUrl: String(result.htmlUrl || ''),
+          name: String(result.name || `Beav v${result.version || version}`),
+          publishedAt: String(result.publishedAt || ''),
+          body: String(result.body || ''),
+          mode: 'current',
+        });
+        setInstallState(initialInstallState);
+      }).catch((error) => {
+        console.error('Failed to load current release notes:', error);
+        void appAlert('读取更新日志失败');
       });
-      setInstallState(initialInstallState);
     };
     const updateCheckTimer = window.setTimeout(() => {
       void window.ipcRenderer.checkAppUpdate(false).then((result) => {
         if (result?.hasUpdate && result.notice) {
+          setHasInstallableUpdate(true);
+          setLastInstallableNotice(result.notice);
           if (!shouldShowAppUpdateNotice(result.notice)) return;
           markAppUpdateNoticeShown(result.notice);
           setUpdateNotice(result.notice);
@@ -172,6 +189,38 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
 
   const isInstallingUpdate = ['checking', 'downloading', 'installing'].includes(installState.status);
 
+  const checkForUpdateNow = useCallback(async () => {
+    if (isInstallingUpdate) return false;
+    try {
+      const result = await window.ipcRenderer.checkAppUpdate(true);
+      if (result?.hasUpdate && result.notice) {
+        setHasInstallableUpdate(true);
+        setLastInstallableNotice(result.notice);
+        setInstallState(initialInstallState);
+        setUpdateNotice(result.notice);
+        markAppUpdateNoticeShown(result.notice);
+        return true;
+      }
+      setHasInstallableUpdate(false);
+      setLastInstallableNotice(null);
+      if (result && !result.success) {
+        console.warn('[AppUpdate] manual check failed:', result.message);
+      }
+    } catch (error) {
+      console.warn('[AppUpdate] manual check failed:', error);
+    }
+    return false;
+  }, [isInstallingUpdate]);
+
+  const openInstallableUpdateNotice = useCallback(async () => {
+    if (lastInstallableNotice) {
+      setInstallState(initialInstallState);
+      setUpdateNotice(lastInstallableNotice);
+      return true;
+    }
+    return checkForUpdateNow();
+  }, [checkForUpdateNow, lastInstallableNotice]);
+
   const installUpdate = useCallback(async () => {
     if (!updateNotice || updateNotice.mode === 'current' || isInstallingUpdate) return;
     setInstallState({
@@ -204,10 +253,12 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
 
   return {
     updateNotice,
+    hasInstallableUpdate,
     updatePublishedDateLabel,
     isOpeningReleasePage,
     installState,
     isInstallingUpdate,
+    openInstallableUpdateNotice,
     openReleasePage,
     installUpdate,
     closeUpdateNotice,

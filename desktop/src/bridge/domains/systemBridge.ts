@@ -15,6 +15,9 @@ interface AppUpdateCheckResult {
   success: boolean;
   hasUpdate: boolean;
   notice?: AppUpdateNotice | null;
+  throttled?: boolean;
+  inFlight?: boolean;
+  message?: string;
   error?: string;
 }
 
@@ -22,6 +25,17 @@ interface AppUpdateInstallResult {
   success: boolean;
   status?: string;
   version?: string;
+  error?: string;
+}
+
+interface AppReleaseNotesResult {
+  success: boolean;
+  version?: string;
+  tag?: string;
+  name?: string;
+  htmlUrl?: string;
+  publishedAt?: string;
+  body?: string;
   error?: string;
 }
 
@@ -155,6 +169,14 @@ export function createSystemBridge(core: BridgeCore) {
       offStatus: (listener: Listener) => core.off('app:startup-migration-status', listener),
     },
     getAppVersion: () => core.invokeChannel('app:get-version'),
+    getAppReleaseNotes: (version?: string) => core.invokeChannelGuarded<AppReleaseNotesResult>(
+      'app:get-release-notes',
+      { version },
+      {
+        timeoutMs: 12000,
+        fallback: { success: false, error: 'Release notes unavailable' },
+      },
+    ),
     checkAppUpdate: (force = false) => core.invokeCommandGuarded<AppUpdateCheckResult>(
       'app_check_update',
       { force },
