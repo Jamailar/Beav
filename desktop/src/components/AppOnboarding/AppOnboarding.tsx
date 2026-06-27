@@ -14,6 +14,7 @@ import {
   PenTool,
   Rocket,
   Sparkles,
+  UserRound,
   Zap,
 } from 'lucide-react';
 import { APP_BRAND } from '../../config/brand';
@@ -108,6 +109,40 @@ const STEP_CONTENT: OnboardingStepContent[] = [
     title: `你是从哪里知道 ${APP_BRAND.displayName} 的？`,
     desc: '选择一个最接近的来源，帮助我们判断应该把产品打磨和发布重点放在哪里。',
     acquisitionSurvey: true,
+  },
+  {
+    eyebrow: '空间管理',
+    title: '一个空间，对应一个账号。',
+    desc: '把不同账号放进不同空间，资料、工作流和 AI 上下文会按空间隔离，切换空间就是切换账号边界。',
+    cards: [
+      {
+        icon: UserRound,
+        title: '账号独立',
+        desc: '每个空间只服务一个账号，适合把不同客户、品牌或个人账号分开管理。',
+        meta: '一个空间一个账号',
+        tone: 'bg-sky-100 text-sky-600',
+      },
+      {
+        icon: Database,
+        title: '资料隔离',
+        desc: '知识库、素材、任务和生成记录跟随空间保存，不会混进其他账号。',
+        chips: [
+          { icon: FolderOpen, color: 'bg-amber-100 text-amber-600' },
+          { icon: Database, color: 'bg-emerald-100 text-emerald-600' },
+        ],
+        tone: 'bg-emerald-100 text-emerald-600',
+      },
+      {
+        icon: Check,
+        title: '切换清晰',
+        desc: '需要运营另一个账号时，先切到对应空间，再继续采集、创作和发布。',
+        chips: [
+          { icon: UserRound, color: 'bg-violet-100 text-violet-600' },
+          { icon: Check, color: 'bg-emerald-100 text-emerald-600' },
+        ],
+        tone: 'bg-violet-100 text-violet-600',
+      },
+    ],
   },
   {
     eyebrow: '本地创作工作台',

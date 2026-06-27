@@ -1,5 +1,20 @@
 import type { BridgeCore, Listener } from '../types';
 
+type LlmReadinessSnapshot = {
+  ready?: boolean;
+  mode?: 'official' | 'custom' | 'local' | 'none' | string;
+  reason?: string;
+  sourceId?: string;
+  sourceName?: string;
+  baseURL?: string;
+  model?: string;
+  protocol?: 'openai' | 'anthropic' | 'gemini' | string;
+  officialLoggedIn?: boolean;
+  canUseOfficial?: boolean;
+  canUseCustom?: boolean;
+  updatedAt?: string;
+};
+
 export function createAuthBridge(core: BridgeCore) {
   return {
     officialAuth: {
@@ -39,7 +54,7 @@ export function createAuthBridge(core: BridgeCore) {
       refreshPricing: () => core.invokeChannel('redbox-auth:pricing-refresh'),
     },
     llmReadiness: {
-      getState: () => core.invokeChannelGuarded(
+      getState: () => core.invokeChannelGuarded<LlmReadinessSnapshot>(
         'llm-readiness:get-state',
         undefined,
         {

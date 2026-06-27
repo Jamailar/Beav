@@ -2396,6 +2396,10 @@ export function RedClaw({
                                         placeholder="描述创作目标，使用 # 调用知识库"
                                         fixedMemberMention={activeMemberMention}
                                         onSessionActivity={markHistorySessionActivity}
+                                        analyticsContext={{
+                                            surface: 'redclaw',
+                                            runtimeMode: activeAiSurface,
+                                        }}
                                         messageListHeader={<RedClawImageGenerationProgressPanel jobs={activeAiSurface === 'redclaw' ? visibleImageJobs : []} />}
                                     />
                                 )}
