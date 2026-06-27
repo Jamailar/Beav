@@ -918,6 +918,48 @@ pub fn observe_media_generation_event(
     );
 }
 
+pub fn observe_knowledge_item_added(
+    state: &State<'_, AppState>,
+    item_kind: &str,
+    item_count: usize,
+    source_app_id: Option<&str>,
+    source_plugin_id: Option<&str>,
+    ingestion_source: &str,
+) {
+    if item_count == 0 {
+        return;
+    }
+    let mut properties = Map::new();
+    properties.insert(
+        "itemKind".to_string(),
+        json!(sanitize_string(item_kind, 64)),
+    );
+    properties.insert("itemCount".to_string(), json!(item_count.min(500)));
+    properties.insert(
+        "ingestionSource".to_string(),
+        json!(sanitize_string(ingestion_source, 64)),
+    );
+    if let Some(source_app_id) = source_app_id.filter(|value| !value.trim().is_empty()) {
+        properties.insert(
+            "sourceAppId".to_string(),
+            json!(sanitize_string(source_app_id, 64)),
+        );
+    }
+    if let Some(source_plugin_id) = source_plugin_id.filter(|value| !value.trim().is_empty()) {
+        properties.insert(
+            "sourcePluginId".to_string(),
+            json!(sanitize_string(source_plugin_id, 64)),
+        );
+    }
+    let _ = track_internal_event(
+        state,
+        "knowledge_item_added",
+        "knowledge",
+        "host",
+        Value::Object(properties),
+    );
+}
+
 pub fn observe_official_settings_update(
     state: &State<'_, AppState>,
     previous_settings: &Value,

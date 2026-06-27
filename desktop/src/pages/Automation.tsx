@@ -626,7 +626,6 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
                   <div className="automation-history-row">
                     <span className="automation-history-dot"><Check className="h-3 w-3" strokeWidth={1.8} /></span>
                     <span className="automation-history-title">{editingItem?.title || draft.name || '自动化任务'}</span>
-                    <span className="automation-history-project">RedConvert</span>
                     <span className="automation-history-time">{formatSidebarTime(latestExecution.updatedAt)}</span>
                     <span className="automation-history-status">{latestStatus}</span>
                   </div>
@@ -679,7 +678,7 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
                 <div className="automation-row-main">
                   <span className={item.enabled ? 'automation-dot' : 'automation-dot automation-dot--off'} />
                   <span className="automation-row-title">{item.title || '未命名自动化'}</span>
-                  <span className="automation-row-source">{item.requiresConfirmation ? '待确认' : 'RedConvert'}</span>
+                  {item.requiresConfirmation && <span className="automation-row-source">待确认</span>}
                 </div>
                 <div className="automation-row-schedule">{formatSchedule(item)}</div>
                 <div className="automation-row-actions">

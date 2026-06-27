@@ -137,6 +137,11 @@ function formatFounderProductPrice(product: FounderSponsorProduct | null): strin
   return `${prefix}${amount.toLocaleString(undefined, { minimumFractionDigits: fractionDigits, maximumFractionDigits: 2 })}`;
 }
 
+function founderProductAmountValue(product: FounderSponsorProduct | null): number | null {
+  const amount = Number(product?.amount);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
 function decodeHtmlEntities(value: string): string {
   if (typeof document === 'undefined') return value;
   const textarea = document.createElement('textarea');
@@ -361,6 +366,18 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       aiModelSubTab: 'login',
     });
   }, []);
+  const openFounderSponsorModalFromSidebar = useCallback(() => {
+    setFounderSponsorOpen(true);
+    void window.ipcRenderer.analytics.track('founder_sponsor_modal_opened', {
+      surface: 'app-shell',
+      origin: 'sidebar_footer',
+      properties: {
+        entry: 'sidebar_footer',
+        active: founderSponsorState.active,
+        sidebarCollapsed: sidebarVisualCollapsed,
+      },
+    });
+  }, [founderSponsorState.active, sidebarVisualCollapsed]);
 
   const renderSidebarNavItem = (item: SidebarNavItem) => {
     const { key, view, labelKey, icon: Icon, primary } = item;
@@ -469,7 +486,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
           <div className={clsx('border-t border-border', sidebarVisualCollapsed ? 'px-2 py-2 flex flex-col items-center gap-2' : 'px-4 py-2 space-y-2')}>
             <button
               type="button"
-              onClick={() => setFounderSponsorOpen(true)}
+              onClick={openFounderSponsorModalFromSidebar}
               className={clsx(
                 'app-founder-sponsor-button group inline-flex shrink-0 items-center justify-center transition-all',
                 sidebarVisualCollapsed
@@ -912,8 +929,21 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
     setPaymentMessage('');
     setOrderNo('');
     setPollOrderNo('');
+    const productId = String(product?.id || FOUNDER_SPONSOR_PRODUCT_ID).trim() || FOUNDER_SPONSOR_PRODUCT_ID;
+    const amount = founderProductAmountValue(product) ?? founderProductAmountValue(fallbackFounderSponsorProduct());
+    let failedStage: 'create_order' | 'missing_payment_info' | 'open_payment' = 'create_order';
+    let failedReason: 'create_order_failed' | 'missing_payment_info' | 'open_payment_failed' = 'create_order_failed';
+    void window.ipcRenderer.analytics.track('founder_sponsor_purchase_clicked', {
+      surface: 'billing',
+      origin: 'founder_sponsor_modal',
+      properties: {
+        source: 'founder_sponsor_modal',
+        productId,
+        paymentKind: 'page_pay',
+        amount,
+      },
+    });
     try {
-      const productId = String(product?.id || FOUNDER_SPONSOR_PRODUCT_ID).trim() || FOUNDER_SPONSOR_PRODUCT_ID;
       const orderResult = await window.ipcRenderer.officialAuth.createPagePayOrder({
         productId,
         product_id: productId,
@@ -933,8 +963,12 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
       const nextOrderNo = String(order.out_trade_no || order.outTradeNo || '').trim();
       const paymentTarget = extractPaymentTarget(order);
       if (!nextOrderNo || !paymentTarget) {
+        failedStage = 'missing_payment_info';
+        failedReason = 'missing_payment_info';
         throw new Error(t('layout.founderSponsor.missingPaymentInfo'));
       }
+      failedStage = 'open_payment';
+      failedReason = 'open_payment_failed';
       const openResult = await window.ipcRenderer.officialAuth.openPaymentForm({ paymentForm: paymentTarget }) as {
         success?: boolean;
         error?: string;
@@ -949,8 +983,20 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
     } catch (error) {
       setPaymentState('error');
       setPaymentMessage(error instanceof Error ? error.message : t('layout.founderSponsor.createOrderFailed'));
+      void window.ipcRenderer.analytics.track('checkout_failed', {
+        surface: 'billing',
+        origin: 'founder_sponsor_modal',
+        properties: {
+          source: 'founder_sponsor_modal',
+          stage: failedStage,
+          reason: failedReason,
+          productId,
+          paymentKind: 'page_pay',
+          amount,
+        },
+      });
     }
-  }, [active, onOpenBilling, product?.id, t]);
+  }, [active, onOpenBilling, product, t]);
 
   const openFounderXProfile = useCallback(async () => {
     if (!founderXUrl) return;

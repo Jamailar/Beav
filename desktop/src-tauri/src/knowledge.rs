@@ -1888,6 +1888,16 @@ fn ingest_youtube_entry(
             );
         }
     }
+    if existing.is_none() {
+        crate::analytics::observe_knowledge_item_added(
+            state,
+            "youtube-video",
+            1,
+            request.source.app_id.as_deref(),
+            request.source.plugin_id.as_deref(),
+            "entry-ingest",
+        );
+    }
     Ok(json!({
         "success": true,
         "kind": "youtube-video",
@@ -2091,6 +2101,16 @@ fn ingest_note_entry(
                 );
             }
         }
+    }
+    if existing_match.is_none() {
+        crate::analytics::observe_knowledge_item_added(
+            state,
+            &normalized_kind,
+            1,
+            request.source.app_id.as_deref(),
+            request.source.plugin_id.as_deref(),
+            "entry-ingest",
+        );
     }
     Ok(json!({
         "success": true,
@@ -2344,6 +2364,14 @@ pub(crate) fn ingest_media_assets(
         crate::commands::library::persist_media_workspace_catalog(state)?;
         emit_media_assets_changed(app);
     }
+    crate::analytics::observe_knowledge_item_added(
+        state,
+        "media-assets",
+        new_assets.len(),
+        request.source.app_id.as_deref(),
+        request.source.plugin_id.as_deref(),
+        "media-assets-ingest",
+    );
 
     Ok(json!({
         "success": true,
@@ -2826,6 +2854,7 @@ pub(crate) fn add_document_source(
     let sample_files = collect_sample_files(root_path, 6)?;
     let root_display = root_path.display().to_string();
     let mut sources = read_document_sources_index(state)?;
+    let mut created_source = false;
     let source = if let Some(existing) = sources.iter_mut().find(|item| {
         item.get("rootPath")
             .or_else(|| item.get("root_path"))
@@ -2839,6 +2868,7 @@ pub(crate) fn add_document_source(
         }
         existing.clone()
     } else {
+        created_source = true;
         let source = json!({
             "id": make_id("doc-source"),
             "kind": kind,
@@ -2865,6 +2895,16 @@ pub(crate) fn add_document_source(
         )),
     )?;
     crate::knowledge_index::jobs::schedule_rebuild(app, "document-source-mutation");
+    if created_source {
+        crate::analytics::observe_knowledge_item_added(
+            state,
+            kind,
+            1,
+            None,
+            None,
+            "document-source",
+        );
+    }
     Ok(json!({ "success": true, "source": source }))
 }
 

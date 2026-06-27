@@ -340,6 +340,10 @@ interface ChatProps {
   placeholder?: string;
   fixedMemberMention?: ChatMemberMentionOption | null;
   onSessionActivity?: (sessionId: string, updatedAt: string) => void;
+  analyticsContext?: {
+    surface?: string;
+    runtimeMode?: string;
+  };
   clearSignal?: number;
 }
 
@@ -1642,6 +1646,7 @@ export function Chat({
   placeholder,
   fixedMemberMention = null,
   onSessionActivity,
+  analyticsContext,
   clearSignal = 0,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
@@ -4446,6 +4451,21 @@ export function Chat({
     );
     const committedAttachments = commitAttachmentsForSend(resolvedAttachments);
     const resolvedAttachment = createAttachmentPayload(committedAttachments);
+    if (analyticsContext?.surface === 'redclaw') {
+      void window.ipcRenderer.analytics.track('redclaw_task_submitted', {
+        surface: 'redclaw',
+        origin: 'chat',
+        properties: {
+          runtimeMode: analyticsContext.runtimeMode || 'redclaw',
+          inputKind: committedAttachments.length > 0 ? (runtimeMessage.trim() ? 'mixed' : 'attachment') : 'text',
+          hasAttachment: committedAttachments.length > 0,
+          attachmentCount: committedAttachments.length,
+          knowledgeReferenceCount: safeKnowledgeMentions.length,
+          assetReferenceCount: assetReferencesForSend.length,
+          hasMemberMention: Boolean(memberMention),
+        },
+      });
+    }
 
     dispatchChatSend({
       sessionId: targetSessionId || undefined,

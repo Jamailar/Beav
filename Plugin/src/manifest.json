@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Beav",
   "description": "将网页、链接、选中文字、图片、小红书、抖音、Bilibili、快手、TikTok、Reddit、X、Instagram 和 YouTube 内容保存到 Beav。",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -35,8 +35,6 @@
   ],
   "host_permissions": [
     "<all_urls>",
-    "http://127.0.0.1:*/*",
-    "http://localhost:*/*",
     "http://127.0.0.1:31937/*",
     "http://localhost:31937/*",
     "http://127.0.0.1:23456/*",

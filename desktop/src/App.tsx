@@ -391,6 +391,10 @@ function App() {
   const officialAuthNeedsLogin = officialAuthBootstrapped
     && !officialAuthPending
     && !officialAuthLoggedIn;
+  const llmReady = Boolean(llmReadinessState?.ready);
+  const llmReadinessMode = String(llmReadinessState?.mode || '').trim();
+  const canEnterWithCustomAi = llmReady && (llmReadinessMode === 'custom' || llmReadinessMode === 'local');
+  const canEnterWorkspace = officialAuthLoggedIn ? llmReady : canEnterWithCustomAi;
   const llmReadinessPending = officialAuthLoggedIn && !llmReadinessBootstrapped;
 
   const openAppOnboarding = useCallback(() => {
@@ -417,7 +421,7 @@ function App() {
     );
   }
 
-  if (officialAuthNeedsLogin) {
+  if (officialAuthNeedsLogin && !canEnterWithCustomAi) {
     return (
       <>
         <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />
@@ -435,7 +439,7 @@ function App() {
     );
   }
 
-  if (!llmReadinessState?.ready) {
+  if (!canEnterWorkspace) {
     return (
       <>
         <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />
