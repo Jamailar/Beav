@@ -13,7 +13,9 @@
 ---
 
 <p align="center">
-  <strong>面向通用 AI Agent 的自媒体素材库与创作工具</strong><br>
+  <strong>Beav</strong><br>
+  <em>Formerly RedBox</em><br>
+  <strong>AI自媒体创作资产底座</strong><br>
   <em>Codex / Hermes / OpenClaw 接入 | 素材采集 | 多模态资产管理 | 稿件与封面 | 视频处理</em>
 </p>
 
