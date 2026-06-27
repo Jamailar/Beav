@@ -1,5 +1,6 @@
 import { Link2, Loader2 } from 'lucide-react';
 import { useI18n } from '../../i18n';
+import { clipboardCapturePlatformLabel } from './clipboardDetector';
 import { useClipboardCapturePrompt } from './useClipboardCapturePrompt';
 
 export function ClipboardCapturePrompt() {
@@ -10,6 +11,8 @@ export function ClipboardCapturePrompt() {
     return null;
   }
 
+  const candidateLabel = clipboardCapturePlatformLabel(clipboardCapture.candidate);
+
   return (
     <div className="fixed inset-0 z-[10000] bg-black/35 flex items-center justify-center px-4">
       <div className="w-full max-w-[560px] rounded-xl border border-border bg-surface-primary shadow-2xl p-5">
@@ -18,14 +21,23 @@ export function ClipboardCapturePrompt() {
             <Link2 className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-base font-semibold text-text-primary">{t('app.youtubeDetected')}</h3>
-            <p className="text-sm text-text-secondary mt-1">{t('app.youtubeCaptureDescription')}</p>
+            <h3 className="text-base font-semibold text-text-primary">{t('app.clipboardCaptureDetected', { label: candidateLabel })}</h3>
+            <p className="text-sm text-text-secondary mt-1">{t('app.clipboardCaptureDescription')}</p>
             <div className="mt-3 rounded-md border border-border bg-surface-secondary px-3 py-2 text-xs text-text-tertiary break-all">
               {clipboardCapture.candidate.rawUrl}
             </div>
-            <div className="mt-2 text-xs text-text-secondary">
-              videoId: <span className="font-mono">{clipboardCapture.candidate.videoId}</span>
-            </div>
+            {clipboardCapture.candidate.kind === 'xhs-note' && (
+              <label className="mt-3 inline-flex items-center gap-2 text-sm text-text-secondary">
+                <input
+                  type="checkbox"
+                  checked={clipboardCapture.includeComments}
+                  onChange={(event) => clipboardCapture.setIncludeComments(event.target.checked)}
+                  disabled={clipboardCapture.status === 'saving'}
+                  className="h-4 w-4 rounded border-border"
+                />
+                {t('app.clipboardCaptureIncludeComments')}
+              </label>
+            )}
           </div>
         </div>
 

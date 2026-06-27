@@ -10,6 +10,7 @@ import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { formatTimestampDateTime } from '../utils/time';
 import { SelectMenu } from '../components/ui/SelectMenu';
+import { CaptureJobsBar } from '../features/capture/CaptureJobsBar';
 import { APP_BRAND } from '../config/brand';
 import {
     Note,
@@ -2412,6 +2413,8 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                         </div>
                         {!isEmbedded && topControls}
                     </div>
+
+                    {!isEmbedded && <CaptureJobsBar />}
 
                     {!isEmbedded && (allTags.length > 0 || filteredKnowledgeItems.length > 0) && (
                         <div ref={allTagsDrawerRef} className="relative py-0.5">
