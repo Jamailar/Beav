@@ -5,6 +5,7 @@ mod auth_refresh;
 mod billing;
 mod cache;
 mod call_records;
+mod capture;
 mod models;
 mod points;
 mod pricing;
@@ -114,6 +115,9 @@ pub fn handle_official_channel(
         })
         .or_else(|| {
             billing::handle_billing_channel(app, state, channel, payload, request_generation)
+        })
+        .or_else(|| {
+            capture::handle_capture_channel(app, state, channel, payload, request_generation)
         })
         .or_else(|| models::handle_models_channel(app, state, channel, payload, request_generation))
 }

@@ -210,6 +210,9 @@ export function createSystemBridge(core: BridgeCore) {
         description?: string;
         thumbnailUrl?: string;
       }) => core.invokeChannel('youtube:save-note', payload),
+      createServerJob: (payload: Record<string, unknown>) => core.invokeChannel('capture:create-server-job', payload),
+      getServerJob: (payload: { jobId: string }) => core.invokeChannel('capture:get-server-job', payload),
+      listServerJobs: (payload?: { limit?: number }) => core.invokeChannel('capture:list-server-jobs', payload || {}),
     },
     openKnowledgeApiGuide: () => core.invokeChannel('app:open-knowledge-api-guide'),
     windowControls: {

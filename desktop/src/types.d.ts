@@ -1829,6 +1829,39 @@ declare global {
           error?: string;
           noteId?: string;
         } | null>;
+        createServerJob?: (payload: {
+          source: 'clipboard';
+          kind: 'youtube-video' | 'xhs-note' | 'xhs-profile' | 'douyin-video';
+          platform: 'youtube' | 'xiaohongshu' | 'douyin';
+          url: string;
+          canonicalUrl: string;
+          externalId?: string;
+          clientRequestId: string;
+          includeComments?: boolean;
+          options?: {
+            downloadMedia?: boolean;
+            includeComments?: boolean;
+            noteType?: string;
+            limit?: number;
+          };
+        }) => Promise<{
+          success: boolean;
+          duplicate?: boolean;
+          job?: Record<string, unknown>;
+          jobId?: string;
+          status?: 'queued' | 'running' | 'completed' | 'failed' | 'unavailable';
+          error?: string;
+        }>;
+        getServerJob?: (payload: { jobId: string }) => Promise<{
+          success: boolean;
+          job?: Record<string, unknown>;
+          error?: string;
+        }>;
+        listServerJobs?: (payload?: { limit?: number }) => Promise<{
+          success: boolean;
+          jobs?: Array<Record<string, unknown>>;
+          error?: string;
+        }>;
       };
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       plugins: {
@@ -1950,6 +1983,7 @@ declare global {
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;
         deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source' }> }) => Promise<unknown>;
+        batchIngest: (payload: { entries?: unknown[]; documentSources?: unknown[]; mediaAssets?: unknown[] }) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;
         deleteYoutube: (videoId: string) => Promise<unknown>;
         retryYoutubeSubtitle: (videoId: string) => Promise<unknown>;
