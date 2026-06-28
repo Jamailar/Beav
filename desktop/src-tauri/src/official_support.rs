@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::fs;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use url::Url;
 
 use crate::{
     app_brand_display_name, app_brand_slug, append_debug_trace_global, escape_html,
@@ -16,6 +17,7 @@ pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
 pub(crate) const AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY: &str = "ai_model_defaults_initialized_at";
 const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
+const PAYMENT_WINDOW_LABEL: &str = "redbox-payment";
 
 fn log_non_200_http(scope: &str, method: &str, url: &str, status: u16, body: &Value) {
     let details = http_error_details_from_value(status, body);
@@ -2362,19 +2364,43 @@ pub(crate) fn create_official_payment_form(order_no: &str, amount: f64, subject:
     )
 }
 
-pub(crate) fn open_payment_form(payment_form: &str) -> Result<String, String> {
+pub(crate) fn open_payment_form(app: &AppHandle, payment_form: &str) -> Result<String, String> {
     let normalized = payment_form.trim();
     if normalized.is_empty() {
         return Err("payment_form 不能为空".to_string());
     }
     if normalized.starts_with("http://") || normalized.starts_with("https://") {
-        open::that(normalized).map_err(|error| error.to_string())?;
-        return Ok("external-url".to_string());
+        let url = Url::parse(normalized).map_err(|error| error.to_string())?;
+        open_payment_url_window(app.clone(), url);
+        return Ok("app-window-url".to_string());
     }
     let target_path = std::env::temp_dir().join(format!("redbox-payment-{}.html", now_ms()));
     fs::write(&target_path, normalized).map_err(|error| error.to_string())?;
     open::that(&target_path).map_err(|error| error.to_string())?;
     Ok("external-html".to_string())
+}
+
+fn open_payment_url_window(app: AppHandle, url: Url) {
+    std::thread::spawn(move || {
+        let fallback_url = url.as_str().to_string();
+        let result = if let Some(window) = app.get_webview_window(PAYMENT_WINDOW_LABEL) {
+            window.navigate(url).and_then(|_| window.set_focus())
+        } else {
+            WebviewWindowBuilder::new(&app, PAYMENT_WINDOW_LABEL, WebviewUrl::External(url))
+                .title(format!("{} 支付", app_brand_display_name()))
+                .inner_size(520.0, 760.0)
+                .min_inner_size(420.0, 560.0)
+                .resizable(true)
+                .maximizable(false)
+                .center()
+                .focused(true)
+                .build()
+                .and_then(|window| window.set_focus())
+        };
+        if result.is_err() {
+            let _ = open::that(fallback_url);
+        }
+    });
 }
 
 pub(crate) fn invoke_chat_by_protocol(
