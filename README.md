@@ -15,6 +15,7 @@
 <p align="center">
   <strong>Beav</strong><br>
   <em>Formerly RedBox</em><br>
+  <strong>面向小红书创作者的</strong><br>
   <strong>AI自媒体创作资产底座</strong><br>
   <em>Codex / Hermes / OpenClaw 接入 | 素材采集 | 多模态资产管理 | 稿件与封面 | 视频处理</em>
 </p>
