@@ -305,7 +305,7 @@ pub(super) fn handle_billing_channel(
         })()),
         "redbox-auth:open-payment-form" => Some((|| -> Result<Value, String> {
             let payment_form = payload_string(payload, "paymentForm").unwrap_or_default();
-            match open_payment_form(&payment_form) {
+            match open_payment_form(app, &payment_form) {
                 Ok(opened) => {
                     crate::analytics::observe_billing_payment_opened(
                         state,
