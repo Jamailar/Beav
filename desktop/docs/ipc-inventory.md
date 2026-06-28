@@ -43,6 +43,8 @@
 | `app` | 3 |
 | `app:check-update` | 1 |
 | `app:get-version` | 1 |
+| `app:onboarding-mark-seen` | 1 |
+| `app:onboarding-status` | 1 |
 | `app:open-knowledge-api-guide` | 1 |
 | `app:open-path` | 1 |
 | `app:open-release-page` | 1 |
@@ -965,6 +967,8 @@
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/system.rs:ai-model-manager:snapshot` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/system.rs:app:check-update` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/system.rs:app:get-version` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/system.rs:app:onboarding-mark-seen` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/system.rs:app:onboarding-status` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/system.rs:app:open-knowledge-api-guide` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/system.rs:app:open-path` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/system.rs:app:open-release-page` | 1 |

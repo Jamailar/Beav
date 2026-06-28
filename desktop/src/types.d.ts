@@ -1804,6 +1804,8 @@ declare global {
         render: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary; outputPath?: string; compositionPath?: string; subtitlePath?: string | null }>;
       };
       getAppVersion: () => Promise<string>;
+      getAppOnboardingStatus: (payload?: { legacySeen?: boolean }) => Promise<{ success?: boolean; seen?: boolean; seenAt?: string; migrated?: boolean; path?: string; error?: string }>;
+      markAppOnboardingSeen: () => Promise<{ success?: boolean; seen?: boolean; seenAt?: string; path?: string; error?: string }>;
       getAppReleaseNotes: (version?: string) => Promise<{ success: boolean; version?: string; tag?: string; name?: string; htmlUrl?: string; publishedAt?: string; body?: string; error?: string }>;
       checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string; installable?: boolean } }>;
       installAppUpdate: () => Promise<{ success: boolean; installed?: boolean; hasUpdate?: boolean; inFlight?: boolean; error?: string }>;
