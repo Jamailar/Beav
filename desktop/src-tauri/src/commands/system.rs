@@ -1,5 +1,6 @@
 mod ai_model_ops;
 mod app_actions;
+mod app_onboarding;
 pub(crate) mod app_update;
 mod clipboard_ops;
 mod feedback;
@@ -22,6 +23,8 @@ pub fn handle_system_channel(
     let result = match channel {
         "app:get-version"
         | "app:get-release-notes"
+        | "app:onboarding-status"
+        | "app:onboarding-mark-seen"
         | "app:check-update"
         | "app:open-release-page"
         | "app:open-external-url"
@@ -54,6 +57,8 @@ pub fn handle_system_channel(
             match channel {
                 "app:get-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
                 "app:get-release-notes" => app_update::get_release_notes(payload),
+                "app:onboarding-status" => app_onboarding::get_status(state, payload),
+                "app:onboarding-mark-seen" => app_onboarding::mark_seen(state),
                 "app:check-update" => {
                     let force = payload_field(payload, "force")
                         .and_then(Value::as_bool)

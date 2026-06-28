@@ -169,6 +169,35 @@ export function createSystemBridge(core: BridgeCore) {
       offStatus: (listener: Listener) => core.off('app:startup-migration-status', listener),
     },
     getAppVersion: () => core.invokeChannel('app:get-version'),
+    getAppOnboardingStatus: (payload?: { legacySeen?: boolean }) => core.invokeChannelGuarded<{
+      success?: boolean;
+      seen?: boolean;
+      seenAt?: string;
+      migrated?: boolean;
+      path?: string;
+      error?: string;
+    }>(
+      'app:onboarding-status',
+      payload || {},
+      {
+        timeoutMs: 1200,
+        fallback: { success: false, seen: false, error: 'App onboarding status unavailable' },
+      },
+    ),
+    markAppOnboardingSeen: () => core.invokeChannelGuarded<{
+      success?: boolean;
+      seen?: boolean;
+      seenAt?: string;
+      path?: string;
+      error?: string;
+    }>(
+      'app:onboarding-mark-seen',
+      {},
+      {
+        timeoutMs: 1200,
+        fallback: { success: false, seen: true, error: 'App onboarding receipt unavailable' },
+      },
+    ),
     getAppReleaseNotes: (version?: string) => core.invokeChannelGuarded<AppReleaseNotesResult>(
       'app:get-release-notes',
       { version },

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, lazy, Suspense, type ReactNode } from
 import { FileText, Loader2, MessageSquareWarning } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
-import { AppOnboarding, getAppAcquisitionSource, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
+import { AppOnboarding, getAppAcquisitionSource, getAppOnboardingStatus, markAppOnboardingSeenOnDevice } from './components/AppOnboarding';
 import { FeedbackReportDialog } from './components/FeedbackReportDialog';
 import { useLlmReadinessLifecycle } from './hooks/useLlmReadinessLifecycle';
 import { useLlmReadinessState } from './hooks/useLlmReadinessState';
@@ -402,14 +402,20 @@ function App() {
   }, []);
 
   const closeAppOnboarding = useCallback(() => {
-    markAppOnboardingSeen();
+    void markAppOnboardingSeenOnDevice();
     setAppOnboardingOpen(false);
   }, []);
 
   useEffect(() => {
-    if (!hasSeenAppOnboarding()) {
-      setAppOnboardingOpen(true);
-    }
+    let cancelled = false;
+    void getAppOnboardingStatus().then((status) => {
+      if (!cancelled && !status.seen) {
+        setAppOnboardingOpen(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (officialAuthPending) {
