@@ -580,6 +580,7 @@ export function RedClaw({
     const [isCreatingRoom, setIsCreatingRoom] = useState(false);
     const [roomCreateError, setRoomCreateError] = useState('');
     const [isRedClawChatExecuting, setIsRedClawChatExecuting] = useState(false);
+    const [chatModelKey, setChatModelKey] = useState('');
 
     const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
     const [sidebarTab, setSidebarTab] = useState<SidebarTab>('skills');
@@ -2354,6 +2355,8 @@ export function RedClaw({
                                         fixedSessionId={activeChatSessionId}
                                         fixedSessionDraft={!activeChatSessionId}
                                         onEnsureSessionForSend={ensureActiveChatSessionForSend}
+                                        initialChatModelKey={chatModelKey}
+                                        onChatModelKeyChange={setChatModelKey}
                                         pendingMessage={activeAiSurface === 'redclaw' ? activeRedClawPendingMessage : null}
                                         onMessageConsumed={handleRedClawPendingMessageConsumed}
                                         showClearButton={false}

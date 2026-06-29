@@ -193,6 +193,17 @@ function mergeSkillMentionsIntoTaskHints(
   return base;
 }
 
+function chatModelConfigFromOption(option: ChatModelOption | null | undefined) {
+  if (!option) return undefined;
+  return {
+    apiKey: option.apiKey,
+    baseURL: option.baseURL,
+    modelName: option.modelName,
+    sourceId: option.sourceId,
+    presetId: option.presetId,
+  };
+}
+
 function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledgeMentionOption[] {
   if (!metadata || typeof metadata !== 'object') return [];
   const object = metadata as Record<string, unknown>;
@@ -299,6 +310,8 @@ interface ChatProps {
   fixedSessionId?: string | null;
   fixedSessionDraft?: boolean;
   onEnsureSessionForSend?: (defaultTitle?: string, options?: EnsureSessionForSendOptions) => Promise<string | null>;
+  initialChatModelKey?: string;
+  onChatModelKeyChange?: (key: string) => void;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
   shortcuts?: ChatShortcutProvider;
@@ -1605,6 +1618,8 @@ export function Chat({
   fixedSessionId,
   fixedSessionDraft = false,
   onEnsureSessionForSend,
+  initialChatModelKey = '',
+  onChatModelKeyChange,
   showClearButton = true,
   fixedSessionBannerText = '当前对话已关联到文档',
   shortcuts: shortcutsProp,
@@ -1725,11 +1740,13 @@ export function Chat({
       onExecutionStateChange?.(false);
     };
   }, [onExecutionStateChange]);
-  const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
+  const [selectedChatModelKey, setSelectedChatModelKeyState] = useState(() => String(initialChatModelKey || '').trim());
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const currentSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
+  const chatModelOptionsRef = useRef<ChatModelOption[]>([]);
+  const selectedChatModelKeyRef = useRef(String(initialChatModelKey || '').trim());
   const chatInstanceIdRef = useRef(
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
@@ -2005,6 +2022,31 @@ export function Chat({
     }
   }, [fixedSessionId]);
 
+  useEffect(() => {
+    const next = String(initialChatModelKey || '').trim();
+    if (!next || next === selectedChatModelKeyRef.current) return;
+    selectedChatModelKeyRef.current = next;
+    setSelectedChatModelKeyState(next);
+  }, [initialChatModelKey]);
+
+  const applyChatModelOptions = useCallback((options: ChatModelOption[]) => {
+    chatModelOptionsRef.current = options;
+    setChatModelOptions(options);
+  }, []);
+
+  const handleSelectedChatModelKeyChange = useCallback((key: string) => {
+    const next = String(key || '').trim();
+    selectedChatModelKeyRef.current = next;
+    setSelectedChatModelKeyState(next);
+    onChatModelKeyChange?.(next);
+  }, [onChatModelKeyChange]);
+
+  const resolveSelectedChatModelFromRefs = useCallback(() => {
+    const options = chatModelOptionsRef.current.length > 0 ? chatModelOptionsRef.current : chatModelOptions;
+    const key = selectedChatModelKeyRef.current || selectedChatModelKey;
+    return options.find((item) => item.key === key) || null;
+  }, [chatModelOptions, selectedChatModelKey]);
+
   const selectedChatModel = chatModelOptions.find((item) => item.key === selectedChatModelKey) || null;
 
   const buildPendingAssistantTimeline = useCallback((label: string): ProcessItem[] => ([
@@ -2032,15 +2074,21 @@ export function Chat({
         window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
       ));
       const options = buildChatModelOptions(settings);
-      setChatModelOptions(options);
-      setSelectedChatModelKey((current) => {
-        if (current && options.some((item) => item.key === current)) return current;
-        return options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+      applyChatModelOptions(options);
+      setSelectedChatModelKeyState((current) => {
+        const preferred = selectedChatModelKeyRef.current || current;
+        if (preferred && options.some((item) => item.key === preferred)) {
+          selectedChatModelKeyRef.current = preferred;
+          return preferred;
+        }
+        const next = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+        selectedChatModelKeyRef.current = next;
+        return next;
       });
     } catch (error) {
       console.error('Failed to load chat model options:', error);
     }
-  }, []);
+  }, [applyChatModelOptions]);
 
   const normalizeMemberMentionOptions = useCallback((records: AdvisorMentionRecord[] | null | undefined): ChatMemberMentionOption[] => (
     (records || [])
@@ -2183,14 +2231,9 @@ export function Chat({
   }, [isActive, loadKnowledgeMentionOptions]);
 
   const ensureChatModelConfig = useCallback(async () => {
-    if (selectedChatModel) {
-      return {
-        apiKey: selectedChatModel.apiKey,
-        baseURL: selectedChatModel.baseURL,
-        modelName: selectedChatModel.modelName,
-        sourceId: selectedChatModel.sourceId,
-        presetId: selectedChatModel.presetId,
-      };
+    const selected = resolveSelectedChatModelFromRefs();
+    if (selected) {
+      return chatModelConfigFromOption(selected);
     }
     const settings = await uiMeasure('chat', 'ensure_chat_model_config', async () => (
       window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
@@ -2199,26 +2242,18 @@ export function Chat({
     if (options.length === 0) {
       return undefined;
     }
-    setChatModelOptions(options);
-    const resolvedKey = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+    applyChatModelOptions(options);
+    const preferredKey = selectedChatModelKeyRef.current;
+    const resolvedKey = preferredKey && options.some((item) => item.key === preferredKey)
+      ? preferredKey
+      : options.find((item) => item.isDefault)?.key || options[0]?.key || '';
     if (resolvedKey) {
-      setSelectedChatModelKey((current) => {
-        if (current && options.some((item) => item.key === current)) return current;
-        return resolvedKey;
-      });
+      selectedChatModelKeyRef.current = resolvedKey;
+      setSelectedChatModelKeyState((current) => current === resolvedKey ? current : resolvedKey);
     }
     const resolved = options.find((item) => item.key === resolvedKey) || options[0];
-    if (!resolved) {
-      return undefined;
-    }
-    return {
-      apiKey: resolved.apiKey,
-      baseURL: resolved.baseURL,
-      modelName: resolved.modelName,
-      sourceId: resolved.sourceId,
-      presetId: resolved.presetId,
-    };
-  }, [selectedChatModel]);
+    return chatModelConfigFromOption(resolved);
+  }, [applyChatModelOptions, resolveSelectedChatModelFromRefs]);
 
   // 判断是否是空会话（新建或无消息）
   const isEmptySession = visibleMessages.length === 0;
@@ -4236,15 +4271,8 @@ export function Chat({
   ]);
 
   const getChatModelConfig = useCallback(() => {
-    if (!selectedChatModel) return undefined;
-    return {
-      apiKey: selectedChatModel.apiKey,
-      baseURL: selectedChatModel.baseURL,
-      modelName: selectedChatModel.modelName,
-      sourceId: selectedChatModel.sourceId,
-      presetId: selectedChatModel.presetId,
-    };
-  }, [selectedChatModel]);
+    return chatModelConfigFromOption(resolveSelectedChatModelFromRefs());
+  }, [resolveSelectedChatModelFromRefs]);
 
   const transcribeAudioClip = useCallback(async (clip: AudioRecordingClip) => {
     setIsTranscribingAudio(true);
@@ -4761,7 +4789,7 @@ export function Chat({
         onRemoveAttachment={removePendingAttachment}
         modelOptions={chatModelOptions}
         selectedModelKey={selectedChatModelKey}
-        onSelectedModelKeyChange={setSelectedChatModelKey}
+        onSelectedModelKeyChange={handleSelectedChatModelKeyChange}
         isBusy={isProcessing}
         allowInputWhileBusy={keepComposerInputActive}
         audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}
