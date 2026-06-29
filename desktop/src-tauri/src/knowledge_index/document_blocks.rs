@@ -1360,8 +1360,23 @@ fn build_blocks_for_file(
     if metadata.len() > max_indexed_file_bytes_for_path(file_path) {
         return Ok(());
     }
+    let is_visual_candidate = is_visual_candidate_path(file_path);
+    if matches!(
+        cache_policy,
+        CanonicalCachePolicy::RefreshIncompleteVisualIndex
+    ) && is_visual_candidate
+    {
+        let current_visual_config = resolve_visual_index_config(state)?;
+        if !current_visual_config.is_enabled() {
+            crate::append_debug_trace_global(format!(
+                "[visual-index] stopped_disabled path={}",
+                file_path.display()
+            ));
+            return Ok(());
+        }
+    }
     if let Some(seen_paths) = visual_seen_paths.as_deref_mut() {
-        if is_visual_candidate_path(file_path) {
+        if is_visual_candidate {
             let dedupe_key = visual_candidate_dedupe_key(file_path);
             if !seen_paths.insert(dedupe_key.clone()) {
                 crate::append_debug_trace_global(format!(
@@ -1384,7 +1399,7 @@ fn build_blocks_for_file(
         if matches!(
             cache_policy,
             CanonicalCachePolicy::RefreshIncompleteVisualIndex
-        ) && visual_config.enabled
+        ) && visual_config.is_enabled()
             && canonical_needs_visual_backfill_for_config(&cached, &visual_config)
         {
             let parser_config = resolve_parser_provider_config(state)?;
@@ -1635,6 +1650,7 @@ pub(crate) fn resolve_visual_index_config(
     state: &State<'_, AppState>,
 ) -> Result<VisualIndexConfig, String> {
     let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
+    let enabled = visual_index_enabled_from_settings(&settings);
     let resolved = crate::ai_model_manager::AiModelManager::resolve(
         &settings,
         crate::ai_model_manager::AiModelScope::VisualIndex,
@@ -1694,7 +1710,8 @@ pub(crate) fn resolve_visual_index_config(
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
     Ok(VisualIndexConfig {
-        enabled: true,
+        enabled,
+        enabled_runtime: Some(state.visual_index_enabled_runtime.clone()),
         endpoint: resolved
             .as_ref()
             .map(|route| route.base_url.clone())
@@ -1720,6 +1737,12 @@ pub(crate) fn resolve_visual_index_config(
         pdf_render_dpi,
         concurrency,
     })
+}
+
+fn visual_index_enabled_from_settings(settings: &Value) -> bool {
+    payload_field(settings, "visual_index_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn normalized_visual_prompt_version(value: Option<String>) -> String {
@@ -2414,6 +2437,17 @@ mod tests {
         assert!(value.iter().any(|item| item == "动合"));
         assert!(value.iter().any(|item| item == "合同"));
         assert!(value.iter().any(|item| item == "同法"));
+    }
+
+    #[test]
+    fn visual_index_enabled_from_settings_defaults_to_disabled() {
+        assert!(!super::visual_index_enabled_from_settings(&json!({})));
+        assert!(!super::visual_index_enabled_from_settings(&json!({
+            "visual_index_enabled": false
+        })));
+        assert!(super::visual_index_enabled_from_settings(&json!({
+            "visual_index_enabled": true
+        })));
     }
 
     #[test]

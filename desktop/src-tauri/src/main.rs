@@ -125,6 +125,18 @@ fn main() {
         initial_workspace_root,
     } = startup::prepare_startup_state();
     let shared_store = Arc::new(Mutex::new(store));
+    let visual_index_enabled_runtime = Arc::new(AtomicBool::new(
+        shared_store
+            .lock()
+            .ok()
+            .and_then(|store| {
+                store
+                    .settings
+                    .get("visual_index_enabled")
+                    .and_then(serde_json::Value::as_bool)
+            })
+            .unwrap_or(false),
+    ));
     register_global_debug_store(Arc::clone(&shared_store));
 
     tauri::Builder::default()
@@ -141,6 +153,7 @@ fn main() {
             official_auth_refresh_lock: Mutex::new(()),
             official_wechat_status_lock: Mutex::new(()),
             official_cache_refresh_inflight: AtomicBool::new(false),
+            visual_index_enabled_runtime,
             mcp_manager: mcp::McpManager::default(),
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
             editor_runtime_states: Mutex::new(std::collections::HashMap::new()),

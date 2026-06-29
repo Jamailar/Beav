@@ -437,6 +437,9 @@ pub(crate) fn backfill_incomplete_visual_index(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
+    if !resolve_visual_index_config(state)?.is_enabled() {
+        return Ok(());
+    }
     let repaired_from_canonical = repair_visual_blocks_from_canonical(app, state)?;
     if repaired_from_canonical && !visual_maintenance_needed(state)? {
         return Ok(());
@@ -445,6 +448,10 @@ pub(crate) fn backfill_incomplete_visual_index(
         return Ok(());
     }
     backfill_visual_index_incrementally(app, state)
+}
+
+fn visual_index_currently_enabled(state: &State<'_, AppState>) -> Result<bool, String> {
+    Ok(resolve_visual_index_config(state)?.is_enabled())
 }
 
 fn backfill_visual_index_incrementally(
@@ -459,9 +466,15 @@ fn backfill_visual_index_incrementally(
     let total_units = visual_backfill_progress_units(state, &knowledge_root)?;
 
     for note in crate::load_knowledge_notes_from_fs(&knowledge_root) {
+        if !visual_index_currently_enabled(state)? {
+            return Ok(());
+        }
         let note_paths = note_visual_paths(&note);
         let summary = summarize_note(note);
         for path in note_paths {
+            if !visual_index_currently_enabled(state)? {
+                return Ok(());
+            }
             let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
                 state,
                 &summary.item_id,
@@ -478,9 +491,15 @@ fn backfill_visual_index_incrementally(
         }
     }
     for video in crate::load_youtube_videos_from_fs(&knowledge_root) {
+        if !visual_index_currently_enabled(state)? {
+            return Ok(());
+        }
         let video_paths = video_visual_paths(&video);
         let summary = summarize_video(video);
         for path in video_paths {
+            if !visual_index_currently_enabled(state)? {
+                return Ok(());
+            }
             let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
                 state,
                 &summary.item_id,
@@ -497,6 +516,9 @@ fn backfill_visual_index_incrementally(
         }
     }
     for source in crate::load_document_sources_from_fs(&knowledge_root) {
+        if !visual_index_currently_enabled(state)? {
+            return Ok(());
+        }
         let root_path = PathBuf::from(&source.root_path);
         if !root_path.exists() {
             continue;
@@ -517,6 +539,9 @@ fn backfill_visual_index_incrementally(
     }
     let advisors = crate::with_store(state, |store| Ok(store.advisors.clone()))?;
     for advisor in advisors {
+        if !visual_index_currently_enabled(state)? {
+            return Ok(());
+        }
         let root_path = crate::advisor_knowledge_dir(state, &advisor.id)?;
         if !root_path.exists() {
             continue;

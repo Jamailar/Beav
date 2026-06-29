@@ -526,6 +526,9 @@ fn parse_scanned_pdf_visual_manifest(
     path: &Path,
     visual_config: &VisualIndexConfig,
 ) -> Result<(Option<Vec<ParsedSection>>, Option<Value>), String> {
+    if !visual_config.is_enabled() {
+        return Ok((None, None));
+    }
     let rendered_pages = pdf_pages::render_pdf_pages(
         path,
         visual_config.pdf_max_pages,
@@ -542,6 +545,9 @@ fn parse_scanned_pdf_visual_manifest(
         .collect::<Vec<_>>()
         .chunks(concurrency)
     {
+        if !visual_config.is_enabled() {
+            break;
+        }
         let mut handles = Vec::new();
         for (index, rendered_path) in chunk {
             let config = visual_config.clone();

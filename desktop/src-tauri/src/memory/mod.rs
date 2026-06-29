@@ -489,6 +489,7 @@ mod tests {
                 official_auth_refresh_lock: Mutex::new(()),
                 official_wechat_status_lock: Mutex::new(()),
                 official_cache_refresh_inflight: AtomicBool::new(false),
+                visual_index_enabled_runtime: Arc::new(AtomicBool::new(false)),
                 mcp_manager: crate::mcp::McpManager::default(),
                 chat_runtime_states: Mutex::new(HashMap::new()),
                 editor_runtime_states: Mutex::new(HashMap::new()),
