@@ -4,6 +4,10 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use super::visual_manifest::{
     metadata_only_manifest, normalize_manifest, VisualSourceUnit, DEFAULT_PROMPT_VERSION,
@@ -12,6 +16,7 @@ use super::visual_manifest::{
 #[derive(Debug, Clone)]
 pub(crate) struct VisualIndexConfig {
     pub enabled: bool,
+    pub enabled_runtime: Option<Arc<AtomicBool>>,
     pub endpoint: Option<String>,
     pub api_key: Option<String>,
     pub model: Option<String>,
@@ -28,6 +33,7 @@ impl Default for VisualIndexConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            enabled_runtime: None,
             endpoint: None,
             api_key: None,
             model: None,
@@ -43,8 +49,17 @@ impl Default for VisualIndexConfig {
 }
 
 impl VisualIndexConfig {
-    pub(crate) fn has_callable_model(&self) -> bool {
+    pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
+            && self
+                .enabled_runtime
+                .as_ref()
+                .map(|flag| flag.load(Ordering::Acquire))
+                .unwrap_or(true)
+    }
+
+    pub(crate) fn has_callable_model(&self) -> bool {
+        self.is_enabled()
             && self
                 .endpoint
                 .as_deref()
@@ -95,7 +110,7 @@ pub(super) fn analyze_visual_source(
     unit: &VisualSourceUnit,
     config: &VisualIndexConfig,
 ) -> Result<Value, String> {
-    if !config.enabled {
+    if !config.is_enabled() {
         return Ok(stamp_manifest_config(
             metadata_only_manifest(
                 unit,
@@ -582,6 +597,23 @@ mod tests {
                 .and_then(Value::as_str),
             Some(expected_signature.as_str())
         );
+    }
+
+    #[test]
+    fn runtime_enabled_flag_can_stop_existing_visual_config() {
+        let enabled_runtime = Arc::new(AtomicBool::new(true));
+        let config = VisualIndexConfig {
+            enabled: true,
+            enabled_runtime: Some(Arc::clone(&enabled_runtime)),
+            endpoint: Some("https://api.example.com/v1".to_string()),
+            model: Some("vision-small".to_string()),
+            ..VisualIndexConfig::default()
+        };
+
+        assert!(config.has_callable_model());
+        enabled_runtime.store(false, Ordering::Release);
+        assert!(!config.is_enabled());
+        assert!(!config.has_callable_model());
     }
 
     #[test]
