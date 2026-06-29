@@ -37,6 +37,8 @@ const XHS_TASK_HISTORY_LIMIT = 80;
 const XHS_TASK_LOG_LIMIT = 80;
 const XHS_BLOGGER_PROGRESS_LIMIT = 200;
 const XHS_BLOGGER_PROGRESS_NOTE_LIMIT = 5000;
+const XHS_COLLECTED_NOTES_KEY = 'xhsCollectedNoteIds';
+const XHS_COLLECTED_NOTES_LIMIT = 20000;
 const CAPTURE_CHECKPOINT_LIMIT = 120;
 const XHS_COLLECT_INTERVAL_DEFAULT_MIN_MS = 1500;
 const XHS_COLLECT_INTERVAL_DEFAULT_MAX_MS = 3500;
@@ -1758,6 +1760,58 @@ async function markCollectedXhsNotesForBlogger({ userId, source, nickname, noteI
   return nextEntry;
 }
 
+/**
+ * 归一化小红书 noteId：剥离历史遗留前缀（knowledge-、xhs-、note- 等），
+ * 保证跨时期、跨入口的去重键一致。
+ * 例如 "knowledge-69c9dd8e0000000023012132" → "69c9dd8e0000000023012132"
+ */
+function normalizeXhsNoteId(rawId) {
+  const id = normalizeText(rawId);
+  if (!id) return '';
+  return id.replace(/^(?:knowledge|xhs|note)[-_]?/i, '');
+}
+
+/**
+ * 读取全局已采集 noteId 集合（跨博主、跨入口共享）。
+ * 用于在抓取前判断笔记是否已采集过，命中则跳过抓取。
+ */
+async function readGlobalCollectedXhsNoteIds() {
+  const stored = await getStorageLocal([XHS_COLLECTED_NOTES_KEY]).catch(() => ({}));
+  const ids = Array.isArray(stored?.[XHS_COLLECTED_NOTES_KEY])
+    ? stored[XHS_COLLECTED_NOTES_KEY]
+    : [];
+  return new Set(ids.map(normalizeXhsNoteId).filter(Boolean));
+}
+
+async function isXhsNoteCollected(rawNoteId) {
+  const id = normalizeXhsNoteId(rawNoteId);
+  if (!id) return false;
+  const collected = await readGlobalCollectedXhsNoteIds();
+  return collected.has(id);
+}
+
+/**
+ * 批量登记已采集 noteId 到全局集合（采集成功后调用）。
+ * 自动去重 + 超限淘汰最旧条目（FIFO）。
+ */
+async function markXhsNotesCollected(rawNoteIds) {
+  const incoming = Array.from(new Set(
+    (Array.isArray(rawNoteIds) ? rawNoteIds : [])
+      .map((item) => normalizeXhsNoteId(item))
+      .filter(Boolean),
+  ));
+  if (incoming.length === 0) return null;
+  const existing = await readGlobalCollectedXhsNoteIds();
+  for (const id of incoming) existing.add(id);
+  const next = Array.from(existing);
+  // 超限时丢弃最旧（数组头部）条目
+  const trimmed = next.length > XHS_COLLECTED_NOTES_LIMIT
+    ? next.slice(next.length - XHS_COLLECTED_NOTES_LIMIT)
+    : next;
+  await setStorageLocal({ [XHS_COLLECTED_NOTES_KEY]: trimmed });
+  return trimmed;
+}
+
 function appendXhsTaskLog(entry) {
   const normalized = sanitizeXhsTaskLogForState({
     ...entry,
@@ -2317,6 +2371,41 @@ async function fetchKnowledgeJson(endpoint, path, init = {}) {
 function isRecoverableKnowledgeNetworkError(error) {
   const message = error instanceof Error ? error.message : String(error || '');
   return /Failed to fetch|NetworkError|Load failed|ERR_|请求失败/i.test(message);
+}
+
+/**
+ * 批量检查笔记是否已存在于知识库。
+ * 调用 Beav 服务端 POST /api/knowledge/entries/check 接口。
+ *
+ * @param {string[]} externalIds - 笔记 ID 列表（小红书 noteId）
+ * @returns {Promise<{exists: string[], missing: string[]}>}
+ *
+ * 接口约定（服务端待实现）：
+ *   POST /api/knowledge/entries/check
+ *   Content-Type: application/json
+ *   Body:   { "externalIds": ["68173abf...", "6810dd98..."] }
+ *   Success: { "success": true, "data": { "exists": ["68173abf..."], "missing": ["6810dd98..."] } }
+ */
+async function checkKnowledgeEntriesExist(externalIds) {
+  const ids = Array.from(new Set(
+    (Array.isArray(externalIds) ? externalIds : [])
+      .map((item) => normalizeText(item))
+      .filter(Boolean),
+  ));
+  if (ids.length === 0) return { exists: [], missing: [] };
+
+  const response = await postKnowledgeJson(
+    '/entries/check',
+    { externalIds: ids },
+    'entries-check',
+  );
+  const data = response?.data || response || {};
+  const exists = Array.isArray(data.exists) ? data.exists.map(normalizeText).filter(Boolean) : [];
+  const missing = Array.isArray(data.missing)
+    ? data.missing.map(normalizeText).filter(Boolean)
+    : ids.filter((id) => !exists.includes(id)); // 容错：服务端未返回 missing 时自行推算
+
+  return { exists, missing };
 }
 
 async function postKnowledgeJson(path, payload, logScope) {
@@ -2895,7 +2984,7 @@ function buildXhsEntry(payload) {
 
   const sourceUrl = normalizeText(payload?.source);
   const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
-  const stableNoteId = normalizeText(payload?.noteId)
+  const stableNoteId = normalizeXhsNoteId(payload?.noteId)
     || `xhs-${hashString(sourceUrl)}`;
   const noteType = normalizeText(payload?.noteType);
   const videoAssetUrl = keepInlineAssetWithinLimit(payload?.videoDataUrl)
@@ -2951,7 +3040,7 @@ function buildXhsEntry(payload) {
 function buildXhsCommentsEntry(payload) {
   const sourceUrl = normalizeText(payload?.source);
   const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
-  const stableNoteId = normalizeText(payload?.noteId) || `xhs-${hashString(sourceUrl)}`;
+  const stableNoteId = normalizeXhsNoteId(payload?.noteId) || `xhs-${hashString(sourceUrl)}`;
   const title = normalizeText(payload?.title) || '小红书评论';
   const comments = Array.isArray(payload?.comments)
     ? payload.comments
@@ -3007,7 +3096,7 @@ function buildXhsCommentsEntry(payload) {
 function buildXhsEntryV2Request(notePayload = {}, commentsPayload = {}) {
   const sourceUrl = normalizeText(notePayload?.source || commentsPayload?.source);
   const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
-  const stableNoteId = normalizeText(notePayload?.noteId || commentsPayload?.noteId)
+  const stableNoteId = normalizeXhsNoteId(notePayload?.noteId || commentsPayload?.noteId)
     || `xhs-${hashString(sourceUrl)}`;
   const noteType = normalizeText(notePayload?.noteType) || (notePayload?.videoUrl ? 'video' : 'image');
   const imageUrls = Array.isArray(notePayload?.images)
@@ -4158,6 +4247,22 @@ async function saveXhsNoteFromTab(tabId) {
   if (!payload?.title && !payload?.content && !payload?.images?.length && !payload?.videoUrl) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
+  // 全局去重：命中已采集缓存则跳过抓取与提交
+  const noteIdForDedupe = normalizeXhsNoteId(payload?.noteId);
+  if (noteIdForDedupe && await isXhsNoteCollected(noteIdForDedupe)) {
+    pluginLog('xhs-note-skipped-duplicate', {
+      noteId: noteIdForDedupe,
+      source: normalizeText(payload?.source),
+    });
+    return {
+      success: true,
+      mode: 'xhs',
+      noteId: noteIdForDedupe,
+      duplicate: true,
+      skipped: true,
+      comments: 0,
+    };
+  }
   let commentsPayload = {};
   if (settings.xhsSaveCommentsWithNote !== false) {
     await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
@@ -4202,6 +4307,9 @@ async function saveXhsNoteFromTab(tabId) {
   let response;
   try {
     response = await postKnowledgeXhsEntryV2(buildXhsEntryV2Request(payload, commentsPayload));
+    if (payload?.authorId && payload?.noteId) {
+      await markCollectedXhsBloggerNoteFromPayload(payload);
+    }
     if (Array.isArray(commentsPayload?.comments) && commentsPayload.comments.length > 0) {
       await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
         source: commentsPayload?.source || payload?.source,
@@ -4224,6 +4332,12 @@ async function saveXhsNoteFromTab(tabId) {
     }
     throw error;
   }
+  // 登记到全局已采集缓存，供后续去重跳过
+  if (noteIdForDedupe) {
+    await markXhsNotesCollected([noteIdForDedupe]).catch((error) => {
+      pluginWarn('xhs-note-global-collected-mark-failed', { error: describeError(error) });
+    });
+  }
   return {
     success: true,
     mode: 'xhs',
@@ -4231,6 +4345,26 @@ async function saveXhsNoteFromTab(tabId) {
     duplicate: Boolean(response.duplicate),
     comments: Number(response?.comments?.captured || 0),
   };
+}
+
+async function markCollectedXhsBloggerNoteFromPayload(payload) {
+  const authorId = normalizeText(payload?.authorId);
+  const noteId = normalizeText(payload?.noteId);
+  if (!authorId || !noteId) return;
+  try {
+    await markCollectedXhsNotesForBlogger({
+      userId: authorId,
+      source: normalizeText(payload?.source),
+      nickname: normalizeText(payload?.author),
+      noteIds: [noteId],
+    });
+  } catch (error) {
+    pluginWarn('xhs-blogger-mark-failed', {
+      error: describeError(error),
+      authorId,
+      noteId,
+    });
+  }
 }
 
 function sleep(ms) {
@@ -4702,12 +4836,15 @@ async function collectXhsBloggerFromTab(tabId) {
     throw new Error('当前页面未识别到小红书博主信息');
   }
   const response = await postKnowledgeEntry(buildXhsBloggerEntry(payload));
-  const accountResponse = await createAccountImportSessionFromXhs(payload).catch((error) => {
-    pluginWarn('xhs-account-import-session-failed', {
-      error: describeError(error),
+  let accountResponse = null;
+  if (typeof createAccountImportSessionFromXhs === 'function') {
+    accountResponse = await createAccountImportSessionFromXhs(payload).catch((error) => {
+      pluginWarn('xhs-account-import-session-failed', {
+        error: describeError(error),
+      });
+      return null;
     });
-    return null;
-  });
+  }
   const historyItem = await appendXhsTaskHistory({
     id: `xhs-blogger-${hashString(`${payload?.source || ''}-${Date.now()}`)}`,
     type: 'blogger',
@@ -4887,12 +5024,20 @@ async function collectXhsBloggerNotesByMode(tabId, payload, options = {}) {
     payloadApiError: normalizeText(payload?.apiError),
     options: describeBloggerCollectOptions(normalizedOptions),
   });
-  const accountSession = await ensureXhsAccountImportSession(payload, normalizedOptions).catch((error) => {
+  let accountSession = null;
+  try {
+    if (typeof ensureXhsAccountImportSession === 'function') {
+      accountSession = await ensureXhsAccountImportSession(payload, normalizedOptions);
+    } else {
+      pluginWarn('xhs-account-import-session-ensure-unavailable', {
+        reason: 'ensureXhsAccountImportSession is not defined',
+      });
+    }
+  } catch (error) {
     pluginWarn('xhs-account-import-session-ensure-failed', {
       error: describeError(error),
     });
-    return null;
-  });
+  }
   appendXhsTaskLog({
     type: 'xhs:collect-blogger-notes',
     status: 'running',
@@ -4994,6 +5139,38 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
     throw new Error('当前博主页未识别到可用于 API 采集的笔记链接');
   }
   const collectedNoteIds = await getCollectedXhsNoteIdsForBlogger(payloadState?.userId);
+  // 合并全局已采集缓存（跨博主共享），保证全局去重
+  const globalCollectedNoteIds = await readGlobalCollectedXhsNoteIds();
+  for (const noteId of globalCollectedNoteIds) {
+    collectedNoteIds.add(noteId);
+  }
+  // 查询 Beav 服务端数据库，补充已入库但不在本地缓存中的笔记
+  try {
+    const allNoteIds = notes
+      .map((item) => parseXhsNoteUrl(item?.url)?.id)
+      .filter(Boolean);
+    const remoteCheck = await checkKnowledgeEntriesExist(allNoteIds);
+    for (const noteId of remoteCheck.exists) {
+      collectedNoteIds.add(noteId);
+    }
+    // 远程查到的已存在笔记同步登记到全局缓存，避免后续重复抓取
+    if (remoteCheck.exists.length > 0) {
+      await markXhsNotesCollected(remoteCheck.exists).catch((error) => {
+        pluginWarn('xhs-blogger-notes-remote-mark-failed', { error: describeError(error) });
+      });
+    }
+    pluginLog('xhs-blogger-notes-remote-check', {
+      blogger: titleName,
+      localCount: collectedNoteIds.size - remoteCheck.exists.length,
+      remoteExists: remoteCheck.exists.length,
+      remoteMissing: remoteCheck.missing.length,
+    });
+  } catch (error) {
+    pluginWarn('xhs-blogger-notes-remote-check-failed', {
+      error: describeError(error),
+    });
+    // 服务端不可用时降级为仅用本地缓存，不影响采集流程
+  }
   let candidateLimit = Math.max(
     normalizePositiveInteger(options.limit, 1),
     normalizePositiveInteger(options.limit, 1) + collectedNoteIds.size,
@@ -5049,6 +5226,8 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
   const results = [];
   const failures = [];
   const accountPosts = [];
+  let accountBatch = null;
+  let accountMediaBatch = null;
   await syncXhsTaskStep({
     current: 0,
     total: pendingNotes.length,
@@ -5059,16 +5238,18 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
   });
 
   if (pendingNotes.length === 0) {
-    await completeAccountImportSession(options.accountSession, {
-      status: 'completed',
-      importedPostCount: 0,
-      failedPostCount: 0,
-      lastError: null,
-    }).catch((error) => {
-      pluginWarn('xhs-account-import-complete-empty-failed', {
-        error: describeError(error),
+    if (typeof completeAccountImportSession === 'function' && options.accountSession?.sessionId) {
+      await completeAccountImportSession(options.accountSession, {
+        status: 'completed',
+        importedPostCount: 0,
+        failedPostCount: 0,
+        lastError: null,
+      }).catch((error) => {
+        pluginWarn('xhs-account-import-complete-empty-failed', {
+          error: describeError(error),
+        });
       });
-    });
+    }
     const historyItem = await appendXhsTaskHistory({
       id: `xhs-blogger-api-${hashString(`${titleName}-${Date.now()}`)}`,
       type: 'blogger-notes',
@@ -5112,6 +5293,23 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
 
   for (let index = 0; index < pendingNotes.length; index += 1) {
     const note = pendingNotes[index];
+    // 全局去重：命中已采集缓存则跳过该条，不抓取
+    const globalNoteId = normalizeXhsNoteId(note?.urlInfo?.id);
+    if (globalNoteId && await isXhsNoteCollected(globalNoteId)) {
+      skippedNotes.push({
+        url: note?.urlInfo?.href || '',
+        noteId: globalNoteId,
+        reason: 'already-collected',
+      });
+      pluginLog('xhs-blogger-notes-api-item-skipped-duplicate', {
+        blogger: titleName,
+        index: index + 1,
+        total: pendingNotes.length,
+        noteId: globalNoteId,
+        url: normalizeText(note?.urlInfo?.href),
+      });
+      continue;
+    }
     pluginLog('xhs-blogger-notes-api-item-start', {
       blogger: titleName,
       index: index + 1,
@@ -5122,7 +5320,7 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
     await syncXhsTaskStep({
       current: results.length + failures.length,
       total: pendingNotes.length,
-      message: `API 模式采集中 ${index + 1}/${pendingNotes.length}${skippedNotes.length > 0 ? ` · 已跳过 ${skippedNotes.length}` : ''}`,
+      message: '采集中',
       mode: 'api',
     });
     let intervalMs = 0;
@@ -5133,7 +5331,7 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       await syncXhsTaskStep({
         current: results.length + failures.length,
         total: pendingNotes.length,
-        message: `正在读取第 ${index + 1}/${pendingNotes.length} 条笔记`,
+        message: '读取笔记内容',
         mode: 'api',
       });
       const feedResult = await runExtraction(tabId, extractXhsNoteFeedByUrlFromCurrentPage, {
@@ -5144,7 +5342,7 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       await syncXhsTaskStep({
         current: results.length + failures.length,
         total: pendingNotes.length,
-        message: `正在写入第 ${index + 1}/${pendingNotes.length} 条笔记`,
+        message: '写入知识库',
         mode: 'api',
       });
       const response = options.saveToRedBox !== false ? await postKnowledgeEntry(buildXhsEntry(entryPayload)) : null;
@@ -5162,6 +5360,12 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
           source: payloadState?.source,
           nickname: titleName,
           noteIds: [entryPayload.noteId],
+        });
+        // 同步登记到全局已采集缓存
+        await markXhsNotesCollected([entryPayload.noteId]).catch((error) => {
+          pluginWarn('xhs-blogger-notes-global-collected-mark-failed', {
+            error: describeError(error),
+          });
         });
       }
       results.push({
@@ -5186,7 +5390,7 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       setActiveXhsTaskProgress({
         current: results.length + failures.length,
         total: pendingNotes.length,
-        message: `已采集 ${results.length + failures.length}/${pendingNotes.length}${skippedNotes.length > 0 ? ` · 已跳过 ${skippedNotes.length}` : ''}`,
+        message: '笔记已采集',
         mode: 'api',
       });
     } catch (error) {
@@ -5214,7 +5418,7 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       setActiveXhsTaskProgress({
         current: results.length + failures.length,
         total: pendingNotes.length,
-        message: `已采集 ${results.length + failures.length}/${pendingNotes.length}${skippedNotes.length > 0 ? ` · 已跳过 ${skippedNotes.length}` : ''}`,
+        message: '笔记已采集',
         mode: 'api',
       });
     }
@@ -5246,29 +5450,35 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
     failures: failures.slice(0, 5),
     interval: describeBloggerCollectOptions(options),
   });
-  const accountBatch = await postAccountPostsBatch(options.accountSession, accountPosts).catch((error) => {
-    pluginWarn('xhs-account-posts-batch-failed', {
-      error: describeError(error),
+  if (typeof postAccountPostsBatch === 'function' && options.accountSession?.accountId) {
+    accountBatch = await postAccountPostsBatch(options.accountSession, accountPosts).catch((error) => {
+      pluginWarn('xhs-account-posts-batch-failed', {
+        error: describeError(error),
+      });
+      return null;
     });
-    return null;
-  });
-  const accountMedia = accountPosts.flatMap((post) => buildAccountMediaFromPost(post));
-  const accountMediaBatch = await postAccountMediaBatch(options.accountSession, accountMedia).catch((error) => {
-    pluginWarn('xhs-account-media-batch-failed', {
-      error: describeError(error),
+    const accountMedia = accountPosts.flatMap((post) => buildAccountMediaFromPost(post));
+    accountMediaBatch = await postAccountMediaBatch(options.accountSession, accountMedia).catch((error) => {
+      pluginWarn('xhs-account-media-batch-failed', {
+        error: describeError(error),
+      });
+      return null;
     });
-    return null;
-  });
-  await completeAccountImportSession(options.accountSession, {
-    status: failures.length > 0 ? (results.length > 0 ? 'partial' : 'failed') : 'completed',
-    importedPostCount: accountBatch?.postCount || results.length,
-    failedPostCount: failures.length,
-    lastError: failures.length > 0 ? `有 ${failures.length} 条采集失败` : null,
-  }).catch((error) => {
-    pluginWarn('xhs-account-import-complete-failed', {
-      error: describeError(error),
+    await completeAccountImportSession(options.accountSession, {
+      status: failures.length > 0 ? (results.length > 0 ? 'partial' : 'failed') : 'completed',
+      importedPostCount: accountBatch?.postCount || results.length,
+      failedPostCount: failures.length,
+      lastError: failures.length > 0 ? `有 ${failures.length} 条采集失败` : null,
+    }).catch((error) => {
+      pluginWarn('xhs-account-import-complete-failed', {
+        error: describeError(error),
+      });
     });
-  });
+  } else {
+    pluginWarn('xhs-account-sync-skipped', {
+      reason: 'account import functions are not defined',
+    });
+  }
 
   return {
     success: true,
@@ -5364,6 +5574,32 @@ async function collectXhsNoteLinks(urlsInput, options = {}) {
     mode: normalizeText(options?.mode) || 'tab',
   });
   for (let index = 0; index < targetUrls.length; index += 1) {
+    // 全局去重：从 URL 解析 noteId，命中已采集缓存则跳过，不打开 tab、不抓取
+    const preNoteId = normalizeXhsNoteId(parseXhsNoteUrl(targetUrls[index])?.id);
+    if (preNoteId && await isXhsNoteCollected(preNoteId)) {
+      results.push({
+        url: targetUrls[index],
+        title: targetUrls[index],
+        noteId: preNoteId,
+        entryId: '',
+        duplicate: true,
+        skipped: true,
+        intervalMs: 0,
+      });
+      pluginLog('xhs-note-links-item-skipped-duplicate', {
+        index: index + 1,
+        total: targetUrls.length,
+        url: targetUrls[index],
+        noteId: preNoteId,
+      });
+      setActiveXhsTaskProgress({
+        current: results.length + failures.length,
+        total: targetUrls.length,
+        message: `已跳过 ${results.length + failures.length}/${targetUrls.length}`,
+        mode: normalizeText(options?.mode) || 'tab',
+      });
+      continue;
+    }
     pluginLog('xhs-note-links-item-start', {
       index: index + 1,
       total: targetUrls.length,
@@ -5413,6 +5649,13 @@ async function collectXhsNoteLinks(urlsInput, options = {}) {
         mode: normalizeText(options?.mode) || 'tab',
       });
       const response = shouldSave ? await postKnowledgeEntry(buildXhsEntry(payload)) : null;
+      // 登记到全局已采集缓存，供后续去重跳过
+      const collectedNoteId = normalizeXhsNoteId(payload?.noteId);
+      if (collectedNoteId) {
+        await markXhsNotesCollected([collectedNoteId]).catch((error) => {
+          pluginWarn('xhs-note-links-global-collected-mark-failed', { error: describeError(error) });
+        });
+      }
       results.push({
         url,
         title: normalizeText(payload?.title) || url,
@@ -8130,6 +8373,232 @@ async function extractXhsNoteFeedByUrlFromCurrentPage(targetUrlInput, noteIdInpu
       if (currentId && currentId === noteId) {
   return data;
 }
+    }
+    return null;
+  }
+
+  function xB3TraceId() {
+    let value = '';
+    for (let index = 0; index < 16; index += 1) {
+      value += 'abcdef0123456789'.charAt(Math.floor(Math.random() * 16));
+    }
+    return value;
+  }
+
+  function traceId() {
+    const random = (bits) => Math.floor(Math.random() * (1 << bits));
+    const time = Date.now();
+    const part1 = (BigInt(time) << 23n) | BigInt(random(23));
+    const part2 = (BigInt(random(32)) << 32n) | BigInt(random(32));
+    return part1.toString(16).padStart(16, '0') + part2.toString(16).padStart(16, '0');
+  }
+
+  function crc32(value) {
+    const bytes = typeof value === 'string' ? Array.from(new TextEncoder().encode(value)) : Array.from(value || []);
+    let crc = -1;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let index = 0; index < 8; index += 1) {
+        crc = (crc & 1) ? ((crc >>> 1) ^ 0xedb88320) : (crc >>> 1);
+      }
+    }
+    return ((crc ^ -1) >>> 0);
+  }
+
+  function customBase64(inputBytes) {
+    const alphabet = 'ZmserbBoHQtNP+wOcza/LpngG8yJq42KWYj0DSfdikx3VT16IlUAFM97hECvuRX5';
+    const bytes = Array.isArray(inputBytes) ? inputBytes : Array.from(inputBytes || []);
+    let output = '';
+    for (let index = 0; index < bytes.length; index += 3) {
+      const byte1 = bytes[index];
+      const byte2 = index + 1 < bytes.length ? bytes[index + 1] : NaN;
+      const byte3 = index + 2 < bytes.length ? bytes[index + 2] : NaN;
+      const triplet = (byte1 << 16) | ((Number.isNaN(byte2) ? 0 : byte2) << 8) | (Number.isNaN(byte3) ? 0 : byte3);
+      output += alphabet[(triplet >>> 18) & 63];
+      output += alphabet[(triplet >>> 12) & 63];
+      output += Number.isNaN(byte2) ? '=' : alphabet[(triplet >>> 6) & 63];
+      output += Number.isNaN(byte3) ? '=' : alphabet[triplet & 63];
+    }
+    return output;
+  }
+
+  function getCookie(name) {
+    const cookies = document.cookie.split(';');
+    for (const item of cookies) {
+      const cookie = item.trim();
+      if (cookie.startsWith(`${name}=`)) {
+        return cookie.slice(name.length + 1);
+      }
+    }
+    return '';
+  }
+
+  function getOS() {
+    const userAgent = window.navigator?.userAgent?.toLowerCase() || '';
+    if (userAgent.includes('android')) return 'Android';
+    if (userAgent.includes('iphone') || userAgent.includes('ipad') || userAgent.includes('ipod')) return 'iOS';
+    if (userAgent.includes('macintosh')) return 'Mac OS';
+    if (userAgent.includes('windows')) return 'Windows';
+    if (userAgent.includes('linux')) return 'Linux';
+    return 'PC';
+  }
+
+  function getPlatform(os) {
+    switch (os) {
+      case 'Windows':
+        return 0;
+      case 'Android':
+        return 2;
+      case 'iOS':
+        return 1;
+      case 'Mac OS':
+        return 3;
+      case 'Linux':
+        return 4;
+      default:
+        return 5;
+    }
+  }
+
+  function getXSCommon() {
+    const b1 = localStorage.getItem('b1') || '';
+    const b1b1 = localStorage.getItem('b1b1') || '1';
+    const os = getOS();
+    const payload = {
+      s0: getPlatform(os),
+      s1: '',
+      x0: b1b1,
+      x1: '4.2.6',
+      x2: os,
+      x3: 'xhs-pc-web',
+      x4: '4.83.1',
+      x5: getCookie('a1'),
+      x6: '',
+      x7: '',
+      x8: b1,
+      x9: crc32(`${b1}`),
+      x10: 0,
+      x11: 'normal',
+    };
+    return customBase64(new TextEncoder().encode(JSON.stringify(payload)));
+  }
+
+  async function seccoreSign(path, body) {
+    if (typeof window.mnsv2 !== 'function') {
+      throw new Error('当前页面缺少 window.mnsv2，无法生成小红书签名');
+    }
+    if (typeof window.md5 !== 'function') {
+      throw new Error('当前页面缺少 window.md5，无法生成小红书签名');
+    }
+    let content = path;
+    const tag = Object.prototype.toString.call(body);
+    if (tag === '[object Object]' || tag === '[object Array]') {
+      content += JSON.stringify(body);
+    } else if (typeof body === 'string') {
+      content += body;
+    }
+    const contentMd5 = window.md5(content);
+    const pathMd5 = window.md5(path);
+    const signature = await window.mnsv2(content, contentMd5, pathMd5);
+    const payload = {
+      x0: '4.2.6',
+      x1: 'xhs-pc-web',
+      x2: window.xsecplatform || 'PC',
+      x3: signature,
+      x4: body ? typeof body : '',
+    };
+    return `XYS_${customBase64(new TextEncoder().encode(JSON.stringify(payload)))}`;
+  }
+
+  async function requestFeed(target) {
+    const body = {
+      source_note_id: target.noteId,
+      image_formats: ['jpg', 'webp', 'avif'],
+      extra: { need_body_topic: '1' },
+      xsec_source: target.source || 'pc_user',
+      xsec_token: target.token,
+    };
+    const path = '/api/sns/web/v1/feed';
+    const headers = {
+      accept: 'application/json, text/plain, */*',
+      'content-type': 'application/json;charset=UTF-8',
+      'x-s': await seccoreSign(path, body),
+      'x-t': `${Date.now()}`,
+      'x-s-common': getXSCommon(),
+      'x-xray-traceid': traceId(),
+      'x-b3-traceid': xB3TraceId(),
+    };
+    console.debug('[redbox-plugin][debug][xhs-feed-request]', {
+      noteId: target.noteId,
+      source: target.source,
+      hasToken: Boolean(target.token),
+    });
+    const response = await window.fetch(`https://edith.xiaohongshu.com${path}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error(`feed HTTP ${response.status}`);
+    }
+    const json = await response.json();
+    console.warn('[redbox-plugin][debug][xhs-feed-response-shape]', {
+      noteId: target.noteId,
+      status: response.status,
+      topLevelKeys: json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [],
+      success: json?.success,
+      code: json?.code,
+      msg: json?.msg,
+      hasData: Boolean(json?.data),
+      dataKeys: json?.data && typeof json.data === 'object' ? Object.keys(json.data).slice(0, 20) : [],
+      itemCount: Array.isArray(json?.data?.items) ? json.data.items.length : (Array.isArray(json?.items) ? json.items.length : 0),
+      firstItemKeys: Array.isArray(json?.data?.items) && json.data.items[0] && typeof json.data.items[0] === 'object'
+        ? Object.keys(json.data.items[0]).slice(0, 20)
+        : Array.isArray(json?.items) && json.items[0] && typeof json.items[0] === 'object'
+          ? Object.keys(json.items[0]).slice(0, 20)
+          : [],
+    });
+    if (!json) {
+      throw new Error('小红书 feed 接口返回为空');
+    }
+    if (json.success === false) {
+      throw new Error(normalizeText(json.msg) || '小红书 feed 接口请求失败');
+    }
+    return json.data || json.result?.data || json;
+  }
+
+  const target = parseTarget(targetUrlInput, noteIdInput);
+  if (!target.noteId) {
+    throw new Error('未识别到目标笔记 ID');
+  }
+  console.debug('[redbox-plugin][debug][xhs-feed-extract]', {
+    target,
+    location: location.href,
+  });
+
+  const cached = readFeedFromStore(target.noteId);
+  if (cached) {
+    console.debug('[redbox-plugin][debug][xhs-feed-extract-cache-hit]', {
+      noteId: target.noteId,
+    });
+    return cached;
+  }
+  if (!target.token) {
+    console.warn('[redbox-plugin][debug][xhs-feed-extract-token-missing]', {
+      target,
+      location: location.href,
+    });
+    throw new Error('目标笔记链接缺少 xsec_token，无法直接请求详情接口');
+  }
+  const feed = await requestFeed(target);
+  console.debug('[redbox-plugin][debug][xhs-feed-extract-success]', {
+    noteId: target.noteId,
+    mode: 'direct-fetch',
+  });
+  return feed;
+}
+
 
 async function fetchAccountsJson(path, init = {}) {
   const knowledgeEndpoint = await resolveKnowledgeApiEndpoint(false);
@@ -8412,231 +8881,6 @@ async function completeAccountImportSession(accountSession, summary = {}) {
       lastError: summary.lastError || null,
     }),
   });
-}
-    }
-    return null;
-  }
-
-  function xB3TraceId() {
-    let value = '';
-    for (let index = 0; index < 16; index += 1) {
-      value += 'abcdef0123456789'.charAt(Math.floor(Math.random() * 16));
-    }
-    return value;
-  }
-
-  function traceId() {
-    const random = (bits) => Math.floor(Math.random() * (1 << bits));
-    const time = Date.now();
-    const part1 = (BigInt(time) << 23n) | BigInt(random(23));
-    const part2 = (BigInt(random(32)) << 32n) | BigInt(random(32));
-    return part1.toString(16).padStart(16, '0') + part2.toString(16).padStart(16, '0');
-  }
-
-  function crc32(value) {
-    const bytes = typeof value === 'string' ? Array.from(new TextEncoder().encode(value)) : Array.from(value || []);
-    let crc = -1;
-    for (const byte of bytes) {
-      crc ^= byte;
-      for (let index = 0; index < 8; index += 1) {
-        crc = (crc & 1) ? ((crc >>> 1) ^ 0xedb88320) : (crc >>> 1);
-      }
-    }
-    return ((crc ^ -1) >>> 0);
-  }
-
-  function customBase64(inputBytes) {
-    const alphabet = 'ZmserbBoHQtNP+wOcza/LpngG8yJq42KWYj0DSfdikx3VT16IlUAFM97hECvuRX5';
-    const bytes = Array.isArray(inputBytes) ? inputBytes : Array.from(inputBytes || []);
-    let output = '';
-    for (let index = 0; index < bytes.length; index += 3) {
-      const byte1 = bytes[index];
-      const byte2 = index + 1 < bytes.length ? bytes[index + 1] : NaN;
-      const byte3 = index + 2 < bytes.length ? bytes[index + 2] : NaN;
-      const triplet = (byte1 << 16) | ((Number.isNaN(byte2) ? 0 : byte2) << 8) | (Number.isNaN(byte3) ? 0 : byte3);
-      output += alphabet[(triplet >>> 18) & 63];
-      output += alphabet[(triplet >>> 12) & 63];
-      output += Number.isNaN(byte2) ? '=' : alphabet[(triplet >>> 6) & 63];
-      output += Number.isNaN(byte3) ? '=' : alphabet[triplet & 63];
-    }
-    return output;
-  }
-
-  function getCookie(name) {
-    const cookies = document.cookie.split(';');
-    for (const item of cookies) {
-      const cookie = item.trim();
-      if (cookie.startsWith(`${name}=`)) {
-        return cookie.slice(name.length + 1);
-      }
-    }
-    return '';
-  }
-
-  function getOS() {
-    const userAgent = window.navigator?.userAgent?.toLowerCase() || '';
-    if (userAgent.includes('android')) return 'Android';
-    if (userAgent.includes('iphone') || userAgent.includes('ipad') || userAgent.includes('ipod')) return 'iOS';
-    if (userAgent.includes('macintosh')) return 'Mac OS';
-    if (userAgent.includes('windows')) return 'Windows';
-    if (userAgent.includes('linux')) return 'Linux';
-    return 'PC';
-  }
-
-  function getPlatform(os) {
-    switch (os) {
-      case 'Windows':
-        return 0;
-      case 'Android':
-        return 2;
-      case 'iOS':
-        return 1;
-      case 'Mac OS':
-        return 3;
-      case 'Linux':
-        return 4;
-      default:
-        return 5;
-    }
-  }
-
-  function getXSCommon() {
-    const b1 = localStorage.getItem('b1') || '';
-    const b1b1 = localStorage.getItem('b1b1') || '1';
-    const os = getOS();
-    const payload = {
-      s0: getPlatform(os),
-      s1: '',
-      x0: b1b1,
-      x1: '4.2.6',
-      x2: os,
-      x3: 'xhs-pc-web',
-      x4: '4.83.1',
-      x5: getCookie('a1'),
-      x6: '',
-      x7: '',
-      x8: b1,
-      x9: crc32(`${b1}`),
-      x10: 0,
-      x11: 'normal',
-    };
-    return customBase64(new TextEncoder().encode(JSON.stringify(payload)));
-  }
-
-  async function seccoreSign(path, body) {
-    if (typeof window.mnsv2 !== 'function') {
-      throw new Error('当前页面缺少 window.mnsv2，无法生成小红书签名');
-    }
-    if (typeof window.md5 !== 'function') {
-      throw new Error('当前页面缺少 window.md5，无法生成小红书签名');
-    }
-    let content = path;
-    const tag = Object.prototype.toString.call(body);
-    if (tag === '[object Object]' || tag === '[object Array]') {
-      content += JSON.stringify(body);
-    } else if (typeof body === 'string') {
-      content += body;
-    }
-    const contentMd5 = window.md5(content);
-    const pathMd5 = window.md5(path);
-    const signature = await window.mnsv2(content, contentMd5, pathMd5);
-    const payload = {
-      x0: '4.2.6',
-      x1: 'xhs-pc-web',
-      x2: window.xsecplatform || 'PC',
-      x3: signature,
-      x4: body ? typeof body : '',
-    };
-    return `XYS_${customBase64(new TextEncoder().encode(JSON.stringify(payload)))}`;
-  }
-
-  async function requestFeed(target) {
-    const body = {
-      source_note_id: target.noteId,
-      image_formats: ['jpg', 'webp', 'avif'],
-      extra: { need_body_topic: '1' },
-      xsec_source: target.source || 'pc_user',
-      xsec_token: target.token,
-    };
-    const path = '/api/sns/web/v1/feed';
-    const headers = {
-      accept: 'application/json, text/plain, */*',
-      'content-type': 'application/json;charset=UTF-8',
-      'x-s': await seccoreSign(path, body),
-      'x-t': `${Date.now()}`,
-      'x-s-common': getXSCommon(),
-      'x-xray-traceid': traceId(),
-      'x-b3-traceid': xB3TraceId(),
-    };
-    console.debug('[redbox-plugin][debug][xhs-feed-request]', {
-      noteId: target.noteId,
-      source: target.source,
-      hasToken: Boolean(target.token),
-    });
-    const response = await window.fetch(`https://edith.xiaohongshu.com${path}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers,
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      throw new Error(`feed HTTP ${response.status}`);
-    }
-    const json = await response.json();
-    console.warn('[redbox-plugin][debug][xhs-feed-response-shape]', {
-      noteId: target.noteId,
-      status: response.status,
-      topLevelKeys: json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [],
-      success: json?.success,
-      code: json?.code,
-      msg: json?.msg,
-      hasData: Boolean(json?.data),
-      dataKeys: json?.data && typeof json.data === 'object' ? Object.keys(json.data).slice(0, 20) : [],
-      itemCount: Array.isArray(json?.data?.items) ? json.data.items.length : (Array.isArray(json?.items) ? json.items.length : 0),
-      firstItemKeys: Array.isArray(json?.data?.items) && json.data.items[0] && typeof json.data.items[0] === 'object'
-        ? Object.keys(json.data.items[0]).slice(0, 20)
-        : Array.isArray(json?.items) && json.items[0] && typeof json.items[0] === 'object'
-          ? Object.keys(json.items[0]).slice(0, 20)
-          : [],
-    });
-    if (!json) {
-      throw new Error('小红书 feed 接口返回为空');
-    }
-    if (json.success === false) {
-      throw new Error(normalizeText(json.msg) || '小红书 feed 接口请求失败');
-    }
-    return json.data || json.result?.data || json;
-  }
-
-  const target = parseTarget(targetUrlInput, noteIdInput);
-  if (!target.noteId) {
-    throw new Error('未识别到目标笔记 ID');
-  }
-  console.debug('[redbox-plugin][debug][xhs-feed-extract]', {
-    target,
-    location: location.href,
-  });
-
-  const cached = readFeedFromStore(target.noteId);
-  if (cached) {
-    console.debug('[redbox-plugin][debug][xhs-feed-extract-cache-hit]', {
-      noteId: target.noteId,
-    });
-    return cached;
-  }
-  if (!target.token) {
-    console.warn('[redbox-plugin][debug][xhs-feed-extract-token-missing]', {
-      target,
-      location: location.href,
-    });
-    throw new Error('目标笔记链接缺少 xsec_token，无法直接请求详情接口');
-  }
-  const feed = await requestFeed(target);
-  console.debug('[redbox-plugin][debug][xhs-feed-extract-success]', {
-    noteId: target.noteId,
-    mode: 'direct-fetch',
-  });
-  return feed;
 }
 
 function extractXhsVisibleNoteLinksPayload() {
