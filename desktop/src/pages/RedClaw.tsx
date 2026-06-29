@@ -1496,6 +1496,7 @@ export function RedClaw({
         manualDraftActiveRef.current = true;
         activeSessionIdRef.current = null;
         setActiveSessionId(null);
+        setChatModelKey('');
         setIsSessionLoading(false);
         setHistoryLoading(false);
         setPreviewTarget(null);
@@ -1510,6 +1511,7 @@ export function RedClaw({
         manualDraftActiveRef.current = false;
         activeSessionIdRef.current = nextSessionId;
         setActiveSessionId(nextSessionId);
+        setChatModelKey('');
         debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
     }, [activeSpaceId, debugUi]);
 

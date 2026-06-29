@@ -1747,6 +1747,7 @@ export function Chat({
   const currentSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
   const chatModelOptionsRef = useRef<ChatModelOption[]>([]);
   const selectedChatModelKeyRef = useRef(String(initialChatModelKey || '').trim());
+  const hasManualChatModelSelectionRef = useRef(Boolean(String(initialChatModelKey || '').trim()));
   const chatInstanceIdRef = useRef(
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
@@ -2024,7 +2025,14 @@ export function Chat({
 
   useEffect(() => {
     const next = String(initialChatModelKey || '').trim();
-    if (!next || next === selectedChatModelKeyRef.current) return;
+    hasManualChatModelSelectionRef.current = Boolean(next);
+    if (!next) {
+      if (!selectedChatModelKeyRef.current) return;
+      selectedChatModelKeyRef.current = '';
+      setSelectedChatModelKeyState('');
+      return;
+    }
+    if (next === selectedChatModelKeyRef.current) return;
     selectedChatModelKeyRef.current = next;
     setSelectedChatModelKeyState(next);
   }, [initialChatModelKey]);
@@ -2036,6 +2044,7 @@ export function Chat({
 
   const handleSelectedChatModelKeyChange = useCallback((key: string) => {
     const next = String(key || '').trim();
+    hasManualChatModelSelectionRef.current = Boolean(next);
     selectedChatModelKeyRef.current = next;
     setSelectedChatModelKeyState(next);
     onChatModelKeyChange?.(next);
@@ -2076,7 +2085,9 @@ export function Chat({
       const options = buildChatModelOptions(settings);
       applyChatModelOptions(options);
       setSelectedChatModelKeyState((current) => {
-        const preferred = selectedChatModelKeyRef.current || current;
+        const preferred = hasManualChatModelSelectionRef.current
+          ? selectedChatModelKeyRef.current || current
+          : '';
         if (preferred && options.some((item) => item.key === preferred)) {
           selectedChatModelKeyRef.current = preferred;
           return preferred;
