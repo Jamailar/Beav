@@ -2,6 +2,7 @@ let installed = false;
 const AUTO_REPORT_COOLDOWN_MS = 60_000;
 const EVENT_LOOP_STALL_THRESHOLD_MS = 15_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
+const STALL_LOG_COOLDOWN_MS = 60_000;
 const autoReportLastSeen = new Map<string, number>();
 
 type RendererLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
@@ -112,6 +113,7 @@ export function installRendererDiagnostics() {
   });
 
   let lastHeartbeat = Date.now();
+  let lastStallLogAt = 0;
   window.setInterval(() => {
     const now = Date.now();
     const drift = now - lastHeartbeat - HEARTBEAT_INTERVAL_MS;
@@ -119,9 +121,15 @@ export function installRendererDiagnostics() {
     if (drift < EVENT_LOOP_STALL_THRESHOLD_MS) {
       return;
     }
+    if (now - lastStallLogAt < STALL_LOG_COOLDOWN_MS) {
+      return;
+    }
+    lastStallLogAt = now;
     void reportRendererError(new Error(`Renderer event loop stalled for ${Math.round(drift)}ms`), {
+      level: 'warn',
       category: 'renderer.health',
       event: 'renderer.event_loop_stall',
+      autoReport: false,
       trigger: 'renderer_event_loop_stall',
       fields: {
         driftMs: Math.round(drift),

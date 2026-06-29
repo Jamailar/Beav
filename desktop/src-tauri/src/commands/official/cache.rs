@@ -121,6 +121,30 @@ fn ensure_bootstrap_not_reauth_required(state: &State<'_, AppState>) -> Result<(
     Ok(())
 }
 
+fn cached_official_data_payload(settings: &Value, stale: bool, error: Option<String>) -> Value {
+    let mut payload = json!({
+        "user": cached_official_user(settings),
+        "points": cached_official_points(settings),
+        "models": official_settings_models(settings),
+        "records": official_settings_call_records_list(settings),
+        "refreshedAt": now_iso(),
+        "stale": stale,
+    });
+    if let Some(error) = error {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("error".to_string(), json!(error));
+        }
+    }
+    payload
+}
+
+fn bootstrap_cache_first(reason: &str) -> bool {
+    matches!(
+        reason,
+        "app-setup" | "app-startup" | "window-focus" | "app-visible" | "login-gate-authenticated"
+    )
+}
+
 pub(crate) fn refresh_official_cached_data(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -188,6 +212,20 @@ pub(crate) fn bootstrap_official_auth_session(
         Ok(official_settings_session(&settings))
     })?;
     let snapshot = auth::auth_state_snapshot(state).unwrap_or_default();
+    if bootstrap_cache_first(reason) {
+        let refresh_started = trigger_official_cached_data_refresh(app.clone());
+        return Ok(json!({
+            "success": true,
+            "loggedIn": session.is_some() || snapshot.logged_in,
+            "session": session,
+            "data": cached_official_data_payload(&settings_snapshot, true, None),
+            "authState": snapshot,
+            "reason": reason,
+            "refreshQueued": true,
+            "refreshStarted": refresh_started,
+            "alreadyInFlight": !refresh_started,
+        }));
+    }
     let refreshed = match refresh_official_cached_data(app, state) {
         Ok(payload) => payload,
         Err(error) if session.is_some() || snapshot.logged_in => {
@@ -212,15 +250,7 @@ pub(crate) fn bootstrap_official_auth_session(
                 }));
             }
             let _ = auth::mark_auth_degraded(app, state, error.clone(), kind);
-            json!({
-                "user": cached_official_user(&settings_snapshot),
-                "points": cached_official_points(&settings_snapshot),
-                "models": official_settings_models(&settings_snapshot),
-                "records": official_settings_call_records_list(&settings_snapshot),
-                "refreshedAt": now_iso(),
-                "stale": true,
-                "error": error,
-            })
+            cached_official_data_payload(&settings_snapshot, true, Some(error))
         }
         Err(error) => return Err(error),
     };
@@ -246,9 +276,30 @@ fn spawn_official_cached_data_refresh(app: AppHandle) -> bool {
 
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        if let Err(error) = refresh_official_cached_data(&app, &state) {
-            if error != "官方账号未登录" {
-                eprintln!("[{} official refresh] {error}", app_brand_display_name());
+        match refresh_official_cached_data(&app, &state) {
+            Ok(payload) => {
+                if payload
+                    .get("stale")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    auth::record_background_refresh_failure(
+                        &state,
+                        "official cached data refresh returned stale data",
+                        auth::AuthErrorKind::NetworkTransient,
+                    );
+                } else {
+                    auth::record_background_refresh_success(&state);
+                }
+            }
+            Err(error) => {
+                if error != "官方账号未登录" {
+                    let kind = auth::classify_auth_error(&error);
+                    if kind != auth::AuthErrorKind::ReauthRequired {
+                        auth::record_background_refresh_failure(&state, error.clone(), kind);
+                    }
+                    eprintln!("[{} official refresh] {error}", app_brand_display_name());
+                }
             }
         }
         state
