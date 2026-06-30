@@ -1,15 +1,50 @@
 use super::*;
+use crate::skills::InstalledRepoSkill;
+use crate::store::settings as settings_store;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    fs, io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
+const SETTINGS_SKILL_MARKET_SOURCES_KEY: &str = "skill_market_sources";
+const REDBOX_MARKET_KIND_SKILL_PACK: &str = "skill-pack";
+const MARKET_PROVENANCE_FILENAME: &str = ".redbox-market.json";
+const REDBOX_SERVER_SKILL_MARKET_URL: &str = "https://api.ziz.hk/api/v1/skill-market";
 const THRIVE_SKILL_DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/ThrivingOS/Thrive-release/main/community-skills.json";
+const REDSKILL_INSTALL_SCRIPT_URL: &str =
+    "https://fe-video-qc.xhscdn.com/fe-platform-file/104101b8320fbjem2620653u0hejenq0004pf88g6ask5i.sh";
 const THRIVE_SKILL_HTTP_USER_AGENT: &str =
-    "Thrive/SkillMarketplace (+https://github.com/ThrivingOS/Thrive-release)";
+    "RedBox/SkillMarketplace (+https://github.com/ThrivingOS/Thrive-release)";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-struct ThriveSkillMarketplaceRequest {
+struct SkillMarketplaceListRequest {
     url: Option<String>,
+    market_id: Option<String>,
+    query: Option<String>,
+    include_disabled_sources: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SkillMarketplaceSourceRequest {
+    id: Option<String>,
+    name: Option<String>,
+    kind: Option<String>,
+    source: Option<String>,
+    registry_url: Option<String>,
+    repo: Option<String>,
+    ref_name: Option<String>,
+    #[serde(rename = "ref")]
+    ref_alias: Option<String>,
+    enabled: Option<bool>,
+    priority: Option<i64>,
+    trust_level: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -23,6 +58,21 @@ pub(super) struct ThriveSkillMarketInstallRequest {
     pub(super) ref_alias: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SkillMarketplaceInstallRequest {
+    slug: Option<String>,
+    id: Option<String>,
+    package_id: Option<String>,
+    market_id: Option<String>,
+    repo: Option<String>,
+    ref_name: Option<String>,
+    #[serde(rename = "ref")]
+    ref_alias: Option<String>,
+    paths: Vec<String>,
+    scope: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ThriveSkillMarketplaceEntry {
@@ -33,95 +83,371 @@ pub(super) struct ThriveSkillMarketplaceEntry {
     pub(super) repo: String,
 }
 
-fn skill_marketplace_http_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .user_agent(THRIVE_SKILL_HTTP_USER_AGENT)
-        .redirect(reqwest::redirect::Policy::limited(8))
-        .build()
-        .map_err(|error| error.to_string())
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SkillMarketSource {
+    id: String,
+    name: String,
+    kind: String,
+    enabled: bool,
+    priority: i64,
+    trust_level: String,
+    source: Option<String>,
+    registry_url: Option<String>,
+    repo: Option<String>,
+    ref_name: Option<String>,
+    description: Option<String>,
 }
 
-fn is_safe_skill_marketplace_url(url: &str) -> bool {
-    url.starts_with("https://raw.githubusercontent.com/")
-        || url.starts_with("https://github.com/")
-        || url.starts_with("https://api.github.com/")
-}
-
-fn skill_marketplace_registry_url(
-    request: &ThriveSkillMarketplaceRequest,
-) -> Result<String, String> {
-    let url = request
-        .url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(THRIVE_SKILL_DEFAULT_REGISTRY_URL);
-    if !is_safe_skill_marketplace_url(url) {
-        return Err("skill marketplace registry must be a GitHub HTTPS URL".to_string());
+impl Default for SkillMarketSource {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            kind: "legacy-thrive".to_string(),
+            enabled: true,
+            priority: 100,
+            trust_level: "community".to_string(),
+            source: None,
+            registry_url: None,
+            repo: None,
+            ref_name: None,
+            description: None,
+        }
     }
-    Ok(url.to_string())
 }
 
-fn http_get_skill_marketplace_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
-    if !is_safe_skill_marketplace_url(url) {
-        return Err("skill marketplace request must use a GitHub HTTPS URL".to_string());
-    }
-    let response = skill_marketplace_http_client()?
-        .get(url)
-        .send()
-        .map_err(|error| format!("failed to request `{url}`: {error}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("request `{url}` failed with HTTP {status}"));
-    }
-    response
-        .json::<T>()
-        .map_err(|error| format!("failed to parse `{url}`: {error}"))
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillMarketWarning {
+    market_id: String,
+    market_name: String,
+    error: String,
 }
 
-fn load_skill_marketplace_entries(
-    request: &ThriveSkillMarketplaceRequest,
-) -> Result<(String, Vec<ThriveSkillMarketplaceEntry>), String> {
-    let registry_url = skill_marketplace_registry_url(request)?;
-    let entries =
-        http_get_skill_marketplace_json::<Vec<ThriveSkillMarketplaceEntry>>(&registry_url)?;
-    Ok((registry_url, entries))
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillMarketItem {
+    id: String,
+    package_id: String,
+    market_id: String,
+    market_name: String,
+    source_kind: String,
+    name: String,
+    author: String,
+    description: String,
+    repo: Option<String>,
+    ref_name: Option<String>,
+    paths: Vec<String>,
+    version: Option<String>,
+    kind: String,
+    channel: Option<String>,
+    tags: Vec<String>,
+    risk_level: Option<String>,
+    trust_level: String,
+    manifest_path: Option<String>,
+    package_path: Option<String>,
+    installed: bool,
+    installed_version: Option<String>,
+    update_available: bool,
+    installable: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct RedboxSkillRegistryEntry {
+    id: Option<String>,
+    package_id: Option<String>,
+    name: Option<String>,
+    display_name: Option<String>,
+    title: Option<String>,
+    author: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    kind: Option<String>,
+    channel: Option<String>,
+    tags: Vec<String>,
+    keywords: Vec<String>,
+    risk_level: Option<String>,
+    manifest_path: Option<String>,
+    package_path: Option<String>,
+    path: Option<String>,
+    repo: Option<String>,
+    source: Option<String>,
+    ref_name: Option<String>,
+    #[serde(rename = "ref")]
+    ref_alias: Option<String>,
+    skills: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct RedboxSkillManifest {
+    id: Option<String>,
+    package_id: Option<String>,
+    name: Option<String>,
+    display_name: Option<String>,
+    title: Option<String>,
+    author: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    kind: Option<String>,
+    channel: Option<String>,
+    tags: Vec<String>,
+    keywords: Vec<String>,
+    risk_level: Option<String>,
+    repo: Option<String>,
+    source: Option<String>,
+    ref_name: Option<String>,
+    #[serde(rename = "ref")]
+    ref_alias: Option<String>,
+    skills: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct InstalledMarketProvenance {
+    market_id: Option<String>,
+    package_id: Option<String>,
+    version: Option<String>,
+}
+
+pub(super) fn marketplace_channel_names() -> &'static [&'static str] {
+    &[
+        "skills:market-sources:list",
+        "skills:market-sources:add",
+        "skills:market-sources:update",
+        "skills:market-sources:remove",
+        "skills:market-sources:refresh",
+        "skills:marketplace:list",
+        "skills:marketplace:read-package",
+        "skills:marketplace:install",
+        "skills:marketplace:update-installed",
+        "skills:marketplace:uninstall",
+    ]
+}
+
+pub(super) fn handle_marketplace_channel(
+    state: &State<'_, AppState>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
+    let result = match channel {
+        "skills:market-sources:list" | "skills:market-sources:refresh" => {
+            list_skill_market_sources(state, payload)
+        }
+        "skills:market-sources:add" => add_skill_market_source(state, payload),
+        "skills:market-sources:update" => update_skill_market_source(state, payload),
+        "skills:market-sources:remove" => remove_skill_market_source(state, payload),
+        "skills:marketplace:list" => list_skill_marketplace(state, payload),
+        "skills:marketplace:read-package" => read_skill_marketplace_package(state, payload),
+        "skills:marketplace:install" | "skills:marketplace:update-installed" => {
+            install_skill_marketplace_package(state, payload)
+        }
+        "skills:marketplace:uninstall" => uninstall_skill_marketplace_package(state, payload),
+        _ => return None,
+    };
+    Some(result)
 }
 
 pub(super) fn list_skill_marketplace(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let request: ThriveSkillMarketplaceRequest = serde_json::from_value(payload.clone())
+    let request: SkillMarketplaceListRequest = serde_json::from_value(payload.clone())
         .map_err(|error| format!("skills:marketplace payload invalid: {error}"))?;
-    let (registry_url, entries) = load_skill_marketplace_entries(&request)?;
-    let installed_names = with_store(state, |store| {
-        Ok(store
-            .skills
-            .iter()
-            .map(|skill| skill.name.to_ascii_lowercase())
-            .collect::<std::collections::HashSet<_>>())
-    })?;
-    let skills = entries
-        .into_iter()
-        .map(|entry| {
-            let installed = installed_names.contains(&entry.id.to_ascii_lowercase())
-                || installed_names.contains(&entry.name.to_ascii_lowercase());
-            json!({
-                "id": entry.id,
-                "name": entry.name,
-                "author": entry.author,
-                "description": entry.description,
-                "repo": entry.repo,
-                "installed": installed,
-            })
-        })
-        .collect::<Vec<_>>();
+    let sources = if request
+        .url
+        .as_deref()
+        .is_some_and(|url| !url.trim().is_empty())
+    {
+        vec![legacy_thrive_source_for_url(request.url.clone())]
+    } else {
+        skill_market_sources(state)?
+    };
+    let installed = installed_skill_index(state)?;
+    let mut items = Vec::<SkillMarketItem>::new();
+    let mut warnings = Vec::<SkillMarketWarning>::new();
+    for source in sources {
+        if !request.include_disabled_sources && !source.enabled {
+            continue;
+        }
+        if request
+            .market_id
+            .as_deref()
+            .is_some_and(|market_id| market_id != source.id)
+        {
+            continue;
+        }
+        match load_skill_market_source_items(&source, &installed) {
+            Ok(mut loaded) => items.append(&mut loaded),
+            Err(error) => warnings.push(SkillMarketWarning {
+                market_id: source.id,
+                market_name: source.name,
+                error,
+            }),
+        }
+    }
+    let query = request
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+    if let Some(query) = query {
+        items.retain(|item| {
+            item.name.to_ascii_lowercase().contains(&query)
+                || item.id.to_ascii_lowercase().contains(&query)
+                || item.description.to_ascii_lowercase().contains(&query)
+                || item
+                    .tags
+                    .iter()
+                    .any(|tag| tag.to_ascii_lowercase().contains(&query))
+        });
+    }
+    items.sort_by(|left, right| {
+        left.market_name
+            .cmp(&right.market_name)
+            .then(left.name.cmp(&right.name))
+    });
+    let skills = serde_json::to_value(&items).map_err(|error| error.to_string())?;
     Ok(json!({
         "success": true,
-        "registryUrl": registry_url,
+        "registryUrl": THRIVE_SKILL_DEFAULT_REGISTRY_URL,
+        "sources": skill_market_sources(state)?,
+        "items": skills,
         "skills": skills,
+        "warnings": warnings,
     }))
+}
+
+pub(super) fn install_skill_marketplace_package(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let request: SkillMarketplaceInstallRequest = serde_json::from_value(payload.clone())
+        .map_err(|error| format!("skills:marketplace:install payload invalid: {error}"))?;
+    if let Some(repo) = request
+        .repo
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+    {
+        return install_market_item_from_repo(
+            state,
+            &repo,
+            request.ref_name.or(request.ref_alias),
+            request.paths,
+            request.scope,
+            None,
+        );
+    }
+
+    let package_id = request
+        .package_id
+        .clone()
+        .or(request.id.clone())
+        .or(request.slug.clone())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "缺少技能市场 packageId".to_string())?;
+    let package_id_ref = package_id.as_str();
+    let sources = skill_market_sources(state)?;
+    for source in sources {
+        if request
+            .market_id
+            .as_deref()
+            .is_some_and(|market_id| market_id != source.id)
+        {
+            continue;
+        }
+        if source.kind == "redbox-server" {
+            return install_redbox_server_market_package(
+                state,
+                &source,
+                &package_id,
+                request.scope.clone(),
+            );
+        }
+        if source.kind == "redskill-cli" {
+            return install_redskill_market_identifier(state, &source, &package_id);
+        }
+        let installed = installed_skill_index(state)?;
+        let items = load_skill_market_source_items(&source, &installed).unwrap_or_default();
+        if let Some(item) = items
+            .into_iter()
+            .find(|item| item.package_id == package_id_ref || item.id == package_id_ref)
+        {
+            let repo = item
+                .repo
+                .clone()
+                .or_else(|| source.repo.clone())
+                .or_else(|| local_source_path_for_install(&source));
+            let Some(repo) = repo else {
+                return Err(format!("市场包 `{package_id}` 没有可安装 source"));
+            };
+            let paths = if request.paths.is_empty() {
+                item.paths.clone()
+            } else {
+                request.paths.clone()
+            };
+            let ref_name = request
+                .ref_name
+                .clone()
+                .or(request.ref_alias.clone())
+                .or(item.ref_name.clone())
+                .or(source.ref_name.clone());
+            let provenance = json!({
+                "marketId": item.market_id,
+                "marketName": item.market_name,
+                "packageId": item.package_id,
+                "version": item.version,
+                "kind": item.kind,
+                "sourceKind": item.source_kind,
+                "repo": repo.clone(),
+                "refName": ref_name.clone(),
+                "paths": paths.clone(),
+                "installedAt": now_iso(),
+            });
+            return install_market_item_from_repo(
+                state,
+                &repo,
+                ref_name,
+                paths,
+                request.scope,
+                Some(provenance),
+            );
+        }
+    }
+
+    if let Ok(Some(entry)) = resolve_market_install_entry(&ThriveSkillMarketInstallRequest {
+        slug: request.slug.clone(),
+        id: request.id.clone(),
+        repo: None,
+        ref_name: request.ref_name.clone(),
+        ref_alias: request.ref_alias.clone(),
+    }) {
+        return install_market_item_from_repo(
+            state,
+            &entry.repo,
+            None,
+            Vec::new(),
+            request.scope,
+            Some(json!({
+                "marketId": "thrive-community",
+                "marketName": "Thrive Community",
+                "packageId": entry.id.clone(),
+                "kind": REDBOX_MARKET_KIND_SKILL_PACK,
+                "sourceKind": "legacy-thrive",
+                "repo": entry.repo.clone(),
+                "installedAt": now_iso(),
+            })),
+        );
+    }
+
+    Err(format!("未找到技能市场包: {package_id}"))
 }
 
 pub(super) fn resolve_market_install_entry(
@@ -136,7 +462,1515 @@ pub(super) fn resolve_market_install_entry(
     let Some(id) = id else {
         return Ok(None);
     };
-    let (_registry_url, entries) =
-        load_skill_marketplace_entries(&ThriveSkillMarketplaceRequest::default())?;
+    let entries = load_legacy_thrive_entries(THRIVE_SKILL_DEFAULT_REGISTRY_URL)?;
     Ok(entries.into_iter().find(|entry| entry.id == id))
+}
+
+fn list_skill_market_sources(
+    state: &State<'_, AppState>,
+    _payload: &Value,
+) -> Result<Value, String> {
+    Ok(json!({
+        "success": true,
+        "sources": skill_market_sources(state)?,
+    }))
+}
+
+fn add_skill_market_source(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    let request: SkillMarketplaceSourceRequest = serde_json::from_value(payload.clone())
+        .map_err(|error| format!("skills:market-sources:add payload invalid: {error}"))?;
+    let mut sources = persisted_or_default_market_sources(state)?;
+    let mut source = source_from_request(request, None)?;
+    if sources.iter().any(|item| item.id == source.id) {
+        source.id = unique_source_id(&sources, &source.id);
+    }
+    sources.push(source.clone());
+    sources.sort_by_key(|item| item.priority);
+    persist_skill_market_sources(state, &sources)?;
+    Ok(json!({ "success": true, "source": source, "sources": sources }))
+}
+
+fn update_skill_market_source(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let request: SkillMarketplaceSourceRequest = serde_json::from_value(payload.clone())
+        .map_err(|error| format!("skills:market-sources:update payload invalid: {error}"))?;
+    let id = request
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "缺少 market source id".to_string())?
+        .to_string();
+    let mut sources = persisted_or_default_market_sources(state)?;
+    let index = sources
+        .iter()
+        .position(|item| item.id == id)
+        .ok_or_else(|| format!("市场源不存在: {id}"))?;
+    let updated = source_from_request(request, Some(sources[index].clone()))?;
+    sources[index] = updated.clone();
+    sources.sort_by_key(|item| item.priority);
+    persist_skill_market_sources(state, &sources)?;
+    Ok(json!({ "success": true, "source": updated, "sources": sources }))
+}
+
+fn remove_skill_market_source(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let id = payload_string(payload, "id").unwrap_or_default();
+    if id.trim().is_empty() {
+        return Err("缺少 market source id".to_string());
+    }
+    let mut sources = persisted_or_default_market_sources(state)?;
+    let before = sources.len();
+    sources.retain(|source| source.id != id);
+    if sources.len() == before {
+        return Err(format!("市场源不存在: {id}"));
+    }
+    persist_skill_market_sources(state, &sources)?;
+    Ok(json!({ "success": true, "removedId": id, "sources": sources }))
+}
+
+fn read_skill_marketplace_package(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let request: SkillMarketplaceInstallRequest = serde_json::from_value(payload.clone())
+        .map_err(|error| format!("skills:marketplace:read-package payload invalid: {error}"))?;
+    let package_id = request
+        .package_id
+        .as_deref()
+        .or(request.id.as_deref())
+        .or(request.slug.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "缺少技能市场 packageId".to_string())?;
+    let installed = installed_skill_index(state)?;
+    for source in skill_market_sources(state)? {
+        if request
+            .market_id
+            .as_deref()
+            .is_some_and(|market_id| market_id != source.id)
+        {
+            continue;
+        }
+        let items = load_skill_market_source_items(&source, &installed).unwrap_or_default();
+        if let Some(item) = items
+            .into_iter()
+            .find(|item| item.package_id == package_id || item.id == package_id)
+        {
+            let manifest = read_market_item_manifest_value(&source, &item).unwrap_or(Value::Null);
+            return Ok(json!({
+                "success": true,
+                "item": item,
+                "manifest": manifest,
+            }));
+        }
+    }
+    Err(format!("未找到技能市场包: {package_id}"))
+}
+
+fn uninstall_skill_marketplace_package(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let name = requested_skill_name(payload);
+    if name.is_empty() {
+        return Ok(json!({ "success": false, "error": "技能名称不能为空" }));
+    }
+    let workspace = workspace_root(state).ok();
+    let outcome = crate::skills::uninstall_skill(
+        UninstallSkillRequest {
+            name,
+            scope: payload_string(payload, "scope").or_else(|| Some("user".to_string())),
+            workspace_root: workspace,
+        },
+        &preferred_user_skill_root(),
+    )?;
+    let _ = refresh_skill_store_catalog(state);
+    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
+    Ok(json!({
+        "success": true,
+        "name": outcome.name,
+        "scope": outcome.scope,
+        "installRoot": outcome.install_root,
+        "removedPath": outcome.removed_path,
+    }))
+}
+
+fn install_market_item_from_repo(
+    state: &State<'_, AppState>,
+    repo: &str,
+    ref_name: Option<String>,
+    paths: Vec<String>,
+    scope: Option<String>,
+    provenance: Option<Value>,
+) -> Result<Value, String> {
+    let workspace = workspace_root(state).ok();
+    let outcome = install_skills_from_repo(
+        InstallSkillsFromRepoRequest {
+            source: repo.to_string(),
+            ref_name,
+            paths,
+            scope: scope.or_else(|| Some("user".to_string())),
+            workspace_root: workspace,
+        },
+        &preferred_user_skill_root(),
+    )?;
+    if let Some(provenance) = provenance {
+        write_market_provenance_for_installed(&outcome.installed, &provenance)?;
+    }
+    let _ = refresh_skill_store_catalog(state);
+    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
+    Ok(json!({
+        "success": true,
+        "source": outcome.source,
+        "refName": outcome.ref_name,
+        "scope": outcome.scope,
+        "installRoot": outcome.install_root,
+        "installed": outcome.installed,
+    }))
+}
+
+fn skill_market_sources(state: &State<'_, AppState>) -> Result<Vec<SkillMarketSource>, String> {
+    let settings = with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
+    let Some(value) = settings.get(SETTINGS_SKILL_MARKET_SOURCES_KEY) else {
+        return Ok(default_skill_market_sources());
+    };
+    let mut sources = serde_json::from_value::<Vec<SkillMarketSource>>(value.clone())
+        .map_err(|error| format!("技能市场源配置无效: {error}"))?;
+    sanitize_market_sources(&mut sources);
+    Ok(sources)
+}
+
+fn persisted_or_default_market_sources(
+    state: &State<'_, AppState>,
+) -> Result<Vec<SkillMarketSource>, String> {
+    skill_market_sources(state)
+}
+
+fn persist_skill_market_sources(
+    state: &State<'_, AppState>,
+    sources: &[SkillMarketSource],
+) -> Result<(), String> {
+    with_store_mut(state, |store| {
+        settings_store::update_settings(store, |settings| {
+            if !settings.is_object() {
+                *settings = json!({});
+            }
+            if let Some(object) = settings.as_object_mut() {
+                object.insert(
+                    SETTINGS_SKILL_MARKET_SOURCES_KEY.to_string(),
+                    serde_json::to_value(sources).unwrap_or_else(|_| json!([])),
+                );
+            }
+        });
+        Ok(())
+    })
+}
+
+fn default_skill_market_sources() -> Vec<SkillMarketSource> {
+    vec![
+        SkillMarketSource {
+            id: "redbox-official".to_string(),
+            name: "RedBox 精选市场".to_string(),
+            kind: "redbox-server".to_string(),
+            enabled: true,
+            priority: 0,
+            trust_level: "official".to_string(),
+            source: Some(REDBOX_SERVER_SKILL_MARKET_URL.to_string()),
+            registry_url: None,
+            repo: None,
+            ref_name: None,
+            description: Some("RedBox 官方精选技能市场".to_string()),
+        },
+        SkillMarketSource {
+            id: "thrive-community".to_string(),
+            name: "Thrive Community".to_string(),
+            kind: "legacy-thrive".to_string(),
+            enabled: true,
+            priority: 30,
+            trust_level: "community".to_string(),
+            source: None,
+            registry_url: Some(THRIVE_SKILL_DEFAULT_REGISTRY_URL.to_string()),
+            repo: None,
+            ref_name: None,
+            description: Some("Legacy Thrive community skill registry".to_string()),
+        },
+        SkillMarketSource {
+            id: "redskill-official".to_string(),
+            name: "小红书 RedSkill 官方".to_string(),
+            kind: "redskill-cli".to_string(),
+            enabled: true,
+            priority: 20,
+            trust_level: "official".to_string(),
+            source: Some(REDSKILL_INSTALL_SCRIPT_URL.to_string()),
+            registry_url: None,
+            repo: None,
+            ref_name: None,
+            description: Some(
+                "Install official RedSkill packages by identifier through the redskill CLI"
+                    .to_string(),
+            ),
+        },
+    ]
+}
+
+fn legacy_thrive_source_for_url(url: Option<String>) -> SkillMarketSource {
+    SkillMarketSource {
+        registry_url: url.or_else(|| Some(THRIVE_SKILL_DEFAULT_REGISTRY_URL.to_string())),
+        ..default_skill_market_sources()
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+}
+
+fn sanitize_market_sources(sources: &mut Vec<SkillMarketSource>) {
+    for source in sources.iter_mut() {
+        source.id = slugish(&source.id);
+        if source.id.is_empty() {
+            source.id = slugish(&source.name);
+        }
+        if source.name.trim().is_empty() {
+            source.name = source.id.clone();
+        }
+        if source.kind.trim().is_empty() {
+            source.kind = "url".to_string();
+        }
+        if source.trust_level.trim().is_empty() {
+            source.trust_level = "community".to_string();
+        }
+    }
+    sources.sort_by_key(|item| item.priority);
+    sources.dedup_by(|left, right| left.id == right.id);
+}
+
+fn source_from_request(
+    request: SkillMarketplaceSourceRequest,
+    existing: Option<SkillMarketSource>,
+) -> Result<SkillMarketSource, String> {
+    let mut source = existing.unwrap_or_default();
+    if let Some(name) = request.name {
+        source.name = name.trim().to_string();
+    }
+    if let Some(kind) = request.kind {
+        source.kind = kind.trim().to_ascii_lowercase();
+    }
+    if let Some(value) = request.enabled {
+        source.enabled = value;
+    }
+    if let Some(value) = request.priority {
+        source.priority = value;
+    }
+    if let Some(value) = request.trust_level {
+        source.trust_level = value.trim().to_ascii_lowercase();
+    }
+    if let Some(value) = request.description {
+        source.description = non_empty_string(&value);
+    }
+    if let Some(value) = request.source {
+        source.source = non_empty_string(&value);
+    }
+    if let Some(value) = request.registry_url {
+        source.registry_url = non_empty_string(&value);
+    }
+    if let Some(value) = request.repo {
+        source.repo = non_empty_string(&value);
+    }
+    if let Some(value) = request.ref_name.or(request.ref_alias) {
+        source.ref_name = non_empty_string(&value);
+    }
+    source.id = request
+        .id
+        .as_deref()
+        .map(slugish)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| slugish(&source.name));
+    if source.id.is_empty() {
+        source.id = slugish(
+            source
+                .repo
+                .as_deref()
+                .or(source.source.as_deref())
+                .or(source.registry_url.as_deref())
+                .unwrap_or("skill-market"),
+        );
+    }
+    validate_market_source(&source)?;
+    Ok(source)
+}
+
+fn validate_market_source(source: &SkillMarketSource) -> Result<(), String> {
+    if source.id.trim().is_empty() {
+        return Err("市场源 id 不能为空".to_string());
+    }
+    match source.kind.as_str() {
+        "legacy-thrive" | "url" => {
+            if let Some(url) = source.registry_url.as_deref().or(source.source.as_deref()) {
+                validate_safe_market_url(url)?;
+            }
+        }
+        "github" | "git" => {
+            if source
+                .repo
+                .as_deref()
+                .or(source.source.as_deref())
+                .is_none()
+            {
+                return Err("GitHub 市场源必须提供 repo 或 source".to_string());
+            }
+        }
+        "redbox-server" => {
+            validate_redbox_server_market_url(&redbox_server_skill_market_base_url(source)?)?;
+        }
+        "redskill-cli" => {}
+        "local" => {
+            let path = source
+                .source
+                .as_deref()
+                .ok_or_else(|| "本地市场源必须提供 source 路径".to_string())?;
+            if !resolve_local_market_root(path)?.is_dir() {
+                return Err("本地市场源路径不存在".to_string());
+            }
+        }
+        other => return Err(format!("不支持的技能市场源类型: {other}")),
+    }
+    Ok(())
+}
+
+fn unique_source_id(existing: &[SkillMarketSource], desired: &str) -> String {
+    let base = if desired.trim().is_empty() {
+        "skill-market".to_string()
+    } else {
+        desired.to_string()
+    };
+    let existing_ids = existing
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<HashSet<_>>();
+    if !existing_ids.contains(base.as_str()) {
+        return base;
+    }
+    for index in 2..200 {
+        let candidate = format!("{base}-{index}");
+        if !existing_ids.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    format!("{base}-{}", now_ms())
+}
+
+fn load_skill_market_source_items(
+    source: &SkillMarketSource,
+    installed: &HashMap<String, InstalledMarketProvenance>,
+) -> Result<Vec<SkillMarketItem>, String> {
+    match source.kind.as_str() {
+        "legacy-thrive" => {
+            let url = source
+                .registry_url
+                .as_deref()
+                .or(source.source.as_deref())
+                .unwrap_or(THRIVE_SKILL_DEFAULT_REGISTRY_URL);
+            legacy_entries_to_items(source, load_legacy_thrive_entries(url)?, installed)
+        }
+        "local" => load_local_redbox_market_items(source, installed),
+        "github" | "git" => load_github_redbox_market_items(source, installed),
+        "redbox-server" => load_redbox_server_market_items(source, installed),
+        "redskill-cli" => Ok(Vec::new()),
+        "url" => load_url_market_items(source, installed),
+        other => Err(format!("不支持的技能市场源类型: {other}")),
+    }
+}
+
+fn load_url_market_items(
+    source: &SkillMarketSource,
+    installed: &HashMap<String, InstalledMarketProvenance>,
+) -> Result<Vec<SkillMarketItem>, String> {
+    let url = source
+        .registry_url
+        .as_deref()
+        .or(source.source.as_deref())
+        .ok_or_else(|| "URL 市场源缺少 registryUrl".to_string())?;
+    let value = http_get_skill_marketplace_json::<Value>(url)?;
+    if let Ok(entries) = serde_json::from_value::<Vec<ThriveSkillMarketplaceEntry>>(value.clone()) {
+        return legacy_entries_to_items(source, entries, installed);
+    }
+    let entries = redbox_registry_entries_from_value(value)?;
+    redbox_entries_to_items(source, entries, None, installed)
+}
+
+fn load_legacy_thrive_entries(url: &str) -> Result<Vec<ThriveSkillMarketplaceEntry>, String> {
+    http_get_skill_marketplace_json::<Vec<ThriveSkillMarketplaceEntry>>(url)
+}
+
+fn legacy_entries_to_items(
+    source: &SkillMarketSource,
+    entries: Vec<ThriveSkillMarketplaceEntry>,
+    installed: &HashMap<String, InstalledMarketProvenance>,
+) -> Result<Vec<SkillMarketItem>, String> {
+    Ok(entries
+        .into_iter()
+        .map(|entry| {
+            let package_id = entry.id.clone();
+            let installed_version = installed
+                .get(&entry.name.to_ascii_lowercase())
+                .or_else(|| installed.get(&entry.id.to_ascii_lowercase()))
+                .and_then(|value| value.version.clone());
+            let installed = installed_version.is_some()
+                || installed.contains_key(&entry.name.to_ascii_lowercase())
+                || installed.contains_key(&entry.id.to_ascii_lowercase());
+            SkillMarketItem {
+                id: scoped_market_item_id(&source.id, &package_id),
+                package_id,
+                market_id: source.id.clone(),
+                market_name: source.name.clone(),
+                source_kind: source.kind.clone(),
+                name: entry.name,
+                author: entry.author,
+                description: entry.description,
+                repo: Some(entry.repo),
+                ref_name: source.ref_name.clone(),
+                paths: Vec::new(),
+                version: None,
+                kind: REDBOX_MARKET_KIND_SKILL_PACK.to_string(),
+                channel: None,
+                tags: Vec::new(),
+                risk_level: Some("high".to_string()),
+                trust_level: source.trust_level.clone(),
+                manifest_path: None,
+                package_path: None,
+                installed,
+                installed_version,
+                update_available: false,
+                installable: true,
+                error: None,
+            }
+        })
+        .collect())
+}
+
+fn load_local_redbox_market_items(
+    source: &SkillMarketSource,
+    installed: &HashMap<String, InstalledMarketProvenance>,
+) -> Result<Vec<SkillMarketItem>, String> {
+    let root = resolve_local_market_root(
+        source
+            .source
+            .as_deref()
+            .ok_or_else(|| "本地市场源缺少 source".to_string())?,
+    )?;
+    let path = root
+        .join("registry")
+        .join("kinds")
+        .join(format!("{REDBOX_MARKET_KIND_SKILL_PACK}.json"));
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "failed to read RedBox skill registry `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let entries = redbox_registry_entries_from_value(
+        serde_json::from_str::<Value>(&raw)
+            .map_err(|error| format!("failed to parse `{}`: {error}", path.display()))?,
+    )?;
+    redbox_entries_to_items(source, entries, Some(root), installed)
+}
+
+fn load_github_redbox_market_items(
+    source: &SkillMarketSource,
+    installed: &HashMap<String, InstalledMarketProvenance>,
+) -> Result<Vec<SkillMarketItem>, String> {
+    let base = github_raw_base(source)?;
+    let registry_url = format!("{base}/registry/kinds/{REDBOX_MARKET_KIND_SKILL_PACK}.json");
+    let entries = redbox_registry_entries_from_value(http_get_skill_marketplace_json::<Value>(
+        &registry_url,
+    )?)?;
+    redbox_entries_to_items(source, entries, None, installed)
+}
+
+fn load_redbox_server_market_items(
+    source: &SkillMarketSource,
+    installed: &HashMap<String, InstalledMarketProvenance>,
+) -> Result<Vec<SkillMarketItem>, String> {
+    let base = redbox_server_skill_market_base_url(source)?;
+    let value = http_get_redbox_server_json::<Value>(&format!("{base}/skills?page_size=200"))?;
+    let entries = value
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "RedBox skill market response is missing items".to_string())?;
+    let mut items = Vec::new();
+    for entry in entries {
+        let package_id = value_first_string(entry, &["package_key", "packageKey", "id"])
+            .ok_or_else(|| "RedBox skill entry missing package_key".to_string())?;
+        let name =
+            value_first_string(entry, &["title", "name"]).unwrap_or_else(|| package_id.clone());
+        let description = value_first_string(entry, &["short_description", "shortDescription"])
+            .or_else(|| value_first_string(entry, &["description"]))
+            .unwrap_or_default();
+        let version = value_first_string(entry, &["latest_version", "latestVersion"]);
+        let author = entry
+            .get("publisher")
+            .and_then(|publisher| {
+                value_first_string(
+                    publisher,
+                    &[
+                        "display_name",
+                        "displayName",
+                        "publisher_key",
+                        "publisherKey",
+                    ],
+                )
+            })
+            .unwrap_or_else(|| "RedBox".to_string());
+        let market_name = entry
+            .get("source")
+            .and_then(|source_value| {
+                value_first_string(source_value, &["display_name", "displayName"])
+            })
+            .unwrap_or_else(|| source.name.clone());
+        let mut tags = value_string_list(entry.get("tags"));
+        tags.sort();
+        tags.dedup();
+        let installed_state = installed
+            .get(&name.to_ascii_lowercase())
+            .or_else(|| installed.get(&package_id.to_ascii_lowercase()));
+        let installed_version = installed_state.and_then(|value| value.version.clone());
+        let update_available = installed_version
+            .as_deref()
+            .zip(version.as_deref())
+            .is_some_and(|(left, right)| left != right);
+        items.push(SkillMarketItem {
+            id: scoped_market_item_id(&source.id, &package_id),
+            package_id,
+            market_id: source.id.clone(),
+            market_name,
+            source_kind: source.kind.clone(),
+            name,
+            author,
+            description,
+            repo: None,
+            ref_name: None,
+            paths: Vec::new(),
+            version,
+            kind: REDBOX_MARKET_KIND_SKILL_PACK.to_string(),
+            channel: Some("official".to_string()),
+            tags,
+            risk_level: value_first_string(entry, &["risk_level", "riskLevel"])
+                .or_else(|| Some("low".to_string())),
+            trust_level: source.trust_level.clone(),
+            manifest_path: None,
+            package_path: None,
+            installed: installed_state.is_some(),
+            installed_version,
+            update_available,
+            installable: true,
+            error: None,
+        });
+    }
+    Ok(items)
+}
+
+fn redbox_registry_entries_from_value(
+    value: Value,
+) -> Result<Vec<RedboxSkillRegistryEntry>, String> {
+    if value.is_array() {
+        return serde_json::from_value(value).map_err(|error| error.to_string());
+    }
+    if let Some(packages) = value.get("packages").cloned().filter(Value::is_array) {
+        return serde_json::from_value(packages).map_err(|error| error.to_string());
+    }
+    if let Some(items) = value.get("items").cloned().filter(Value::is_array) {
+        return serde_json::from_value(items).map_err(|error| error.to_string());
+    }
+    Err("RedBox skill registry must be an array or contain packages/items".to_string())
+}
+
+fn redbox_entries_to_items(
+    source: &SkillMarketSource,
+    entries: Vec<RedboxSkillRegistryEntry>,
+    local_root: Option<PathBuf>,
+    installed: &HashMap<String, InstalledMarketProvenance>,
+) -> Result<Vec<SkillMarketItem>, String> {
+    let mut items = Vec::new();
+    for entry in entries {
+        let manifest = read_redbox_manifest_for_entry(source, &entry, local_root.as_deref())
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let package_id = first_non_empty([
+            manifest.package_id.as_deref(),
+            manifest.id.as_deref(),
+            entry.package_id.as_deref(),
+            entry.id.as_deref(),
+            entry.package_path.as_deref(),
+            entry.manifest_path.as_deref(),
+            entry.path.as_deref(),
+        ])
+        .ok_or_else(|| "skill-pack registry entry is missing id".to_string())?;
+        let name = first_non_empty([
+            manifest.display_name.as_deref(),
+            manifest.title.as_deref(),
+            manifest.name.as_deref(),
+            entry.display_name.as_deref(),
+            entry.title.as_deref(),
+            entry.name.as_deref(),
+            Some(package_id.as_str()),
+        ])
+        .unwrap_or(package_id.clone());
+        let version = manifest.version.clone().or(entry.version.clone());
+        let manifest_path = entry.manifest_path.clone().or_else(|| {
+            entry
+                .package_path
+                .as_deref()
+                .map(|path| format!("{}/manifest.json", path.trim_end_matches('/')))
+        });
+        let package_path = entry.package_path.clone().or_else(|| {
+            manifest_path
+                .as_deref()
+                .and_then(|path| path.rsplit_once('/').map(|(dir, _)| dir.to_string()))
+        });
+        let paths = skill_paths_for_redbox_package(&entry, &manifest, package_path.as_deref());
+        let repo = manifest
+            .repo
+            .clone()
+            .or(manifest.source.clone())
+            .or(entry.repo.clone())
+            .or(entry.source.clone());
+        let installed_state = installed
+            .get(&name.to_ascii_lowercase())
+            .or_else(|| installed.get(&package_id.to_ascii_lowercase()));
+        let installed_version = installed_state.and_then(|value| value.version.clone());
+        let installed_match = installed_state.is_some();
+        let update_available = installed_version
+            .as_deref()
+            .zip(version.as_deref())
+            .is_some_and(|(left, right)| left != right);
+        let mut tags = entry.tags.clone();
+        tags.extend(entry.keywords.clone());
+        tags.extend(manifest.tags.clone());
+        tags.extend(manifest.keywords.clone());
+        tags.sort();
+        tags.dedup();
+        items.push(SkillMarketItem {
+            id: scoped_market_item_id(&source.id, &package_id),
+            package_id,
+            market_id: source.id.clone(),
+            market_name: source.name.clone(),
+            source_kind: source.kind.clone(),
+            name,
+            author: manifest
+                .author
+                .clone()
+                .or(entry.author)
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string()),
+            description: manifest
+                .description
+                .clone()
+                .or(entry.description.clone())
+                .unwrap_or_default(),
+            repo,
+            ref_name: manifest
+                .ref_name
+                .clone()
+                .or(manifest.ref_alias.clone())
+                .or(entry.ref_name.clone())
+                .or(entry.ref_alias.clone()),
+            paths,
+            version,
+            kind: manifest
+                .kind
+                .clone()
+                .or(entry.kind)
+                .clone()
+                .unwrap_or_else(|| REDBOX_MARKET_KIND_SKILL_PACK.to_string()),
+            channel: manifest.channel.clone().or(entry.channel.clone()),
+            tags,
+            risk_level: manifest
+                .risk_level
+                .clone()
+                .or(entry.risk_level.clone())
+                .or_else(|| Some("high".to_string())),
+            trust_level: source.trust_level.clone(),
+            manifest_path,
+            package_path,
+            installed: installed_match,
+            installed_version,
+            update_available,
+            installable: true,
+            error: None,
+        });
+    }
+    Ok(items)
+}
+
+fn read_redbox_manifest_for_entry(
+    source: &SkillMarketSource,
+    entry: &RedboxSkillRegistryEntry,
+    local_root: Option<&Path>,
+) -> Result<Option<RedboxSkillManifest>, String> {
+    let manifest_path = entry.manifest_path.clone().or_else(|| {
+        entry
+            .package_path
+            .as_deref()
+            .map(|path| format!("{}/manifest.json", path.trim_end_matches('/')))
+    });
+    let Some(manifest_path) = manifest_path else {
+        return Ok(None);
+    };
+    let value = match local_root {
+        Some(root) => {
+            let path = safe_join(root, &manifest_path)?;
+            if !path.is_file() {
+                return Ok(None);
+            }
+            let raw = fs::read_to_string(&path).map_err(|error| {
+                format!("failed to read manifest `{}`: {error}", path.display())
+            })?;
+            serde_json::from_str::<Value>(&raw).map_err(|error| {
+                format!("failed to parse manifest `{}`: {error}", path.display())
+            })?
+        }
+        None => {
+            let base = github_raw_base(source)?;
+            http_get_skill_marketplace_json::<Value>(&format!(
+                "{}/{}",
+                base,
+                manifest_path.trim_start_matches('/')
+            ))?
+        }
+    };
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|error| format!("failed to parse skill-pack manifest: {error}"))
+}
+
+fn read_market_item_manifest_value(
+    source: &SkillMarketSource,
+    item: &SkillMarketItem,
+) -> Result<Value, String> {
+    let Some(manifest_path) = item.manifest_path.as_deref() else {
+        return Ok(Value::Null);
+    };
+    match source.kind.as_str() {
+        "local" => {
+            let root = resolve_local_market_root(
+                source
+                    .source
+                    .as_deref()
+                    .ok_or_else(|| "本地市场源缺少 source".to_string())?,
+            )?;
+            let path = safe_join(&root, manifest_path)?;
+            let raw = fs::read_to_string(&path).map_err(|error| {
+                format!("failed to read manifest `{}`: {error}", path.display())
+            })?;
+            serde_json::from_str::<Value>(&raw).map_err(|error| error.to_string())
+        }
+        "github" | "git" => {
+            let base = github_raw_base(source)?;
+            http_get_skill_marketplace_json::<Value>(&format!(
+                "{}/{}",
+                base,
+                manifest_path.trim_start_matches('/')
+            ))
+        }
+        _ => Ok(Value::Null),
+    }
+}
+
+fn skill_paths_for_redbox_package(
+    entry: &RedboxSkillRegistryEntry,
+    manifest: &RedboxSkillManifest,
+    package_path: Option<&str>,
+) -> Vec<String> {
+    let mut paths = Vec::new();
+    for value in entry.skills.iter().chain(manifest.skills.iter()) {
+        if let Some(path) = value.as_str() {
+            paths.push(path.to_string());
+        } else if let Some(path) = value
+            .get("path")
+            .or_else(|| value.get("skillPath"))
+            .or_else(|| value.get("root"))
+            .and_then(Value::as_str)
+        {
+            paths.push(path.to_string());
+        }
+    }
+    if paths.is_empty() {
+        if let Some(package_path) = package_path {
+            paths.push(package_path.to_string());
+        }
+    }
+    paths
+        .into_iter()
+        .filter_map(|path| normalize_registry_path(&path))
+        .collect()
+}
+
+fn installed_skill_index(
+    state: &State<'_, AppState>,
+) -> Result<HashMap<String, InstalledMarketProvenance>, String> {
+    with_store(state, |store| {
+        let mut index = HashMap::new();
+        for skill in &store.skills {
+            let key = skill.name.to_ascii_lowercase();
+            let provenance = skill
+                .location
+                .strip_prefix("file:")
+                .and_then(|path| {
+                    PathBuf::from(path)
+                        .parent()
+                        .map(|dir| dir.join(MARKET_PROVENANCE_FILENAME))
+                })
+                .and_then(|path| fs::read_to_string(path).ok())
+                .and_then(|raw| serde_json::from_str::<InstalledMarketProvenance>(&raw).ok())
+                .unwrap_or_default();
+            index.insert(key, provenance);
+        }
+        Ok(index)
+    })
+}
+
+fn write_market_provenance_for_installed(
+    installed: &[InstalledRepoSkill],
+    provenance: &Value,
+) -> Result<(), String> {
+    let raw = serde_json::to_string_pretty(provenance).map_err(|error| error.to_string())?;
+    for skill in installed {
+        let path = PathBuf::from(&skill.path);
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        fs::write(parent.join(MARKET_PROVENANCE_FILENAME), &raw).map_err(|error| {
+            format!(
+                "failed to write skill market provenance for {}: {error}",
+                skill.name
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn install_redbox_server_market_package(
+    state: &State<'_, AppState>,
+    source: &SkillMarketSource,
+    package_id: &str,
+    scope: Option<String>,
+) -> Result<Value, String> {
+    let base = redbox_server_skill_market_base_url(source)?;
+    let package_segment = url_path_segment(package_id);
+    let plan_url = format!("{base}/skills/{package_segment}/install-plan");
+    let plan = http_post_redbox_server_json::<Value>(&plan_url, &json!({}))?;
+    let version = plan.get("version").cloned().unwrap_or_else(|| json!({}));
+    let artifact = plan.get("artifact").cloned().unwrap_or_else(|| json!({}));
+    let download_url = value_first_string(&artifact, &["download_url", "downloadUrl"])
+        .ok_or_else(|| "install plan missing artifact download_url".to_string())?;
+    validate_redbox_artifact_url(&download_url)?;
+    let expected_sha256 =
+        value_first_string(&artifact, &["sha256", "artifact_sha256", "artifactSha256"]);
+    let version_id = value_first_string(&version, &["id"]);
+    let version_label = value_first_string(&version, &["version"]);
+    record_redbox_server_install_event(source, package_id, version_id.as_deref(), "started", None);
+
+    let install_result = (|| -> Result<Value, String> {
+        let bytes = download_redbox_server_artifact(&download_url)?;
+        if let Some(expected) = expected_sha256.as_deref().filter(|value| !value.is_empty()) {
+            let actual = sha256_hex(&bytes);
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err("技能包 SHA256 校验失败".to_string());
+            }
+        }
+        let staging_root = unique_market_download_root(package_id)?;
+        let extracted_root = staging_root.join("extracted");
+        fs::create_dir_all(&extracted_root)
+            .map_err(|error| format!("failed to create skill market staging dir: {error}"))?;
+        extract_redbox_server_artifact(
+            &extracted_root,
+            package_id,
+            &download_url,
+            &artifact,
+            &bytes,
+        )?;
+        let provenance = json!({
+            "marketId": source.id,
+            "marketName": source.name,
+            "packageId": package_id,
+            "version": version_label,
+            "kind": REDBOX_MARKET_KIND_SKILL_PACK,
+            "sourceKind": source.kind.clone(),
+            "serverBaseUrl": base,
+            "artifactSha256": expected_sha256,
+            "installedAt": now_iso(),
+        });
+        let outcome = install_market_item_from_repo(
+            state,
+            &extracted_root.display().to_string(),
+            None,
+            Vec::new(),
+            scope,
+            Some(provenance),
+        );
+        let _ = fs::remove_dir_all(&staging_root);
+        let mut value = outcome?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert("marketId".to_string(), json!(source.id));
+            object.insert("marketName".to_string(), json!(source.name));
+            object.insert("packageId".to_string(), json!(package_id));
+            object.insert("installPlan".to_string(), plan.clone());
+        }
+        Ok(value)
+    })();
+
+    match install_result {
+        Ok(value) => {
+            record_redbox_server_install_event(
+                source,
+                package_id,
+                version_id.as_deref(),
+                "success",
+                None,
+            );
+            Ok(value)
+        }
+        Err(error) => {
+            record_redbox_server_install_event(
+                source,
+                package_id,
+                version_id.as_deref(),
+                "failed",
+                Some(error.as_str()),
+            );
+            Err(error)
+        }
+    }
+}
+
+fn install_redskill_market_identifier(
+    state: &State<'_, AppState>,
+    source: &SkillMarketSource,
+    identifier: &str,
+) -> Result<Value, String> {
+    validate_redskill_identifier(identifier)?;
+    let workspace = workspace_root(state)?;
+    let program = redskill_program();
+    let mut command = background_command(&program);
+    command
+        .arg("install")
+        .arg(identifier)
+        .current_dir(&workspace);
+    command.env("PATH", path_with_local_bin());
+    let output = command.output().map_err(|error| {
+        format!(
+            "failed to run redskill. Install CLI first: curl -fsSL {} | bash. Error: {error}",
+            source
+                .source
+                .as_deref()
+                .unwrap_or(REDSKILL_INSTALL_SCRIPT_URL)
+        )
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return Err(format!(
+            "redskill install {identifier} failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status, stdout, stderr
+        ));
+    }
+    let _ = refresh_skill_store_catalog(state);
+    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
+    Ok(json!({
+        "success": true,
+        "source": source.id,
+        "marketId": source.id,
+        "marketName": source.name,
+        "packageId": identifier,
+        "identifier": identifier,
+        "scope": "workspace",
+        "installRoot": workspace.join("skills").display().to_string(),
+        "stdout": stdout,
+        "stderr": stderr,
+        "requiresAgentRestart": true,
+        "installed": [{
+            "name": identifier,
+            "sourcePath": format!("redskill:{identifier}"),
+            "path": workspace.join("skills").display().to_string(),
+            "replaced": false
+        }]
+    }))
+}
+
+fn validate_redskill_identifier(identifier: &str) -> Result<(), String> {
+    let identifier = identifier.trim();
+    if identifier.is_empty() {
+        return Err("RedSkill identifier 不能为空".to_string());
+    }
+    if identifier.len() > 128 {
+        return Err("RedSkill identifier 过长".to_string());
+    }
+    if !identifier
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':'))
+    {
+        return Err("RedSkill identifier 只能包含字母、数字、-、_、.、/、:".to_string());
+    }
+    Ok(())
+}
+
+fn redskill_program() -> PathBuf {
+    dirs::home_dir()
+        .map(|home| home.join(".local").join("bin").join("redskill"))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("redskill"))
+}
+
+fn path_with_local_bin() -> String {
+    let mut parts = Vec::<String>::new();
+    if let Some(home) = dirs::home_dir() {
+        parts.push(home.join(".local").join("bin").display().to_string());
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        parts.push(path);
+    }
+    parts.join(":")
+}
+
+fn local_source_path_for_install(source: &SkillMarketSource) -> Option<String> {
+    if source.kind == "local" {
+        source
+            .source
+            .as_deref()
+            .and_then(|path| resolve_local_market_root(path).ok())
+            .map(|path| path.display().to_string())
+    } else {
+        None
+    }
+}
+
+fn resolve_local_market_root(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("本地市场源路径不能为空".to_string());
+    }
+    let expanded = if let Some(rest) = trimmed.strip_prefix("~/") {
+        dirs::home_dir()
+            .ok_or_else(|| "无法解析 home 目录".to_string())?
+            .join(rest)
+    } else {
+        PathBuf::from(trimmed)
+    };
+    fs::canonicalize(&expanded).map_err(|error| {
+        format!(
+            "failed to resolve local marketplace path `{}`: {error}",
+            expanded.display()
+        )
+    })
+}
+
+fn safe_join(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let normalized = normalize_registry_path(relative)
+        .ok_or_else(|| format!("registry path escapes root: {relative}"))?;
+    Ok(root.join(normalized))
+}
+
+fn normalize_registry_path(path: &str) -> Option<String> {
+    let trimmed = path.trim().trim_start_matches("./").trim_start_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = Path::new(trimmed);
+    if path
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn github_raw_base(source: &SkillMarketSource) -> Result<String, String> {
+    let repo = source
+        .repo
+        .as_deref()
+        .or(source.source.as_deref())
+        .ok_or_else(|| "GitHub 市场源缺少 repo".to_string())?;
+    let (owner, repo_name) = parse_github_owner_repo(repo)?;
+    let ref_name = source.ref_name.as_deref().unwrap_or("main");
+    Ok(format!(
+        "https://raw.githubusercontent.com/{owner}/{repo_name}/{ref_name}"
+    ))
+}
+
+fn parse_github_owner_repo(source: &str) -> Result<(String, String), String> {
+    let mut value = source.trim().trim_end_matches('/').trim_end_matches(".git");
+    if let Some(rest) = value.strip_prefix("https://github.com/") {
+        value = rest;
+    }
+    if let Some(rest) = value.strip_prefix("git@github.com:") {
+        value = rest;
+    }
+    let mut parts = value.split('/');
+    let owner = parts.next().unwrap_or_default();
+    let repo = parts.next().unwrap_or_default();
+    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
+        return Err("GitHub 市场源 repo 必须是 owner/repo 或 github.com URL".to_string());
+    }
+    Ok((owner.to_string(), repo.to_string()))
+}
+
+fn skill_marketplace_http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent(THRIVE_SKILL_HTTP_USER_AGENT)
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn redbox_server_skill_market_base_url(source: &SkillMarketSource) -> Result<String, String> {
+    let url = source
+        .registry_url
+        .as_deref()
+        .or(source.source.as_deref())
+        .unwrap_or(REDBOX_SERVER_SKILL_MARKET_URL)
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    if url.is_empty() {
+        return Err("RedBox 技能市场地址不能为空".to_string());
+    }
+    if url.ends_with("/skill-market") {
+        return Ok(url);
+    }
+    if url.ends_with("/api/v1") {
+        return Ok(format!("{url}/skill-market"));
+    }
+    Ok(format!("{url}/api/v1/skill-market"))
+}
+
+fn validate_safe_market_url(url: &str) -> Result<(), String> {
+    if is_safe_skill_marketplace_url(url) {
+        Ok(())
+    } else {
+        Err("skill marketplace registry must be a GitHub HTTPS URL".to_string())
+    }
+}
+
+fn is_safe_skill_marketplace_url(url: &str) -> bool {
+    url.starts_with("https://raw.githubusercontent.com/")
+        || url.starts_with("https://github.com/")
+        || url.starts_with("https://api.github.com/")
+}
+
+fn validate_redbox_server_market_url(url: &str) -> Result<(), String> {
+    validate_https_non_private_url(url, "RedBox skill marketplace")
+}
+
+fn validate_redbox_artifact_url(url: &str) -> Result<(), String> {
+    validate_https_non_private_url(url, "skill artifact")
+}
+
+fn validate_https_non_private_url(url: &str, label: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| format!("{label} URL 无效"))?;
+    if parsed.scheme() != "https" {
+        return Err(format!("{label} URL 必须使用 HTTPS"));
+    }
+    let Some(host) = parsed.host_str().map(|value| value.to_ascii_lowercase()) else {
+        return Err(format!("{label} URL 缺少 host"));
+    };
+    if host == "localhost"
+        || host.ends_with(".local")
+        || host == "metadata.google.internal"
+        || host == "::1"
+        || host.starts_with("127.")
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || host.starts_with("169.254.")
+        || is_private_172_host(&host)
+    {
+        return Err(format!("{label} URL 不能指向内网地址"));
+    }
+    Ok(())
+}
+
+fn is_private_172_host(host: &str) -> bool {
+    let Some(rest) = host.strip_prefix("172.") else {
+        return false;
+    };
+    let Some(first) = rest.split('.').next() else {
+        return false;
+    };
+    first
+        .parse::<u8>()
+        .is_ok_and(|value| (16..=31).contains(&value))
+}
+
+fn http_get_skill_marketplace_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
+    validate_safe_market_url(url)?;
+    let response = skill_marketplace_http_client()?
+        .get(url)
+        .send()
+        .map_err(|error| format!("failed to request `{url}`: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("request `{url}` failed with HTTP {status}"));
+    }
+    response
+        .json::<T>()
+        .map_err(|error| format!("failed to parse `{url}`: {error}"))
+}
+
+fn http_get_redbox_server_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
+    validate_redbox_server_market_url(url)?;
+    let response = skill_marketplace_http_client()?
+        .get(url)
+        .send()
+        .map_err(|error| format!("failed to request `{url}`: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("request `{url}` failed with HTTP {status}"));
+    }
+    response
+        .json::<T>()
+        .map_err(|error| format!("failed to parse `{url}`: {error}"))
+}
+
+fn http_post_redbox_server_json<T: for<'de> Deserialize<'de>>(
+    url: &str,
+    payload: &Value,
+) -> Result<T, String> {
+    validate_redbox_server_market_url(url)?;
+    let response = skill_marketplace_http_client()?
+        .post(url)
+        .json(payload)
+        .send()
+        .map_err(|error| format!("failed to request `{url}`: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("request `{url}` failed with HTTP {status}"));
+    }
+    response
+        .json::<T>()
+        .map_err(|error| format!("failed to parse `{url}`: {error}"))
+}
+
+fn record_redbox_server_install_event(
+    source: &SkillMarketSource,
+    package_id: &str,
+    version_id: Option<&str>,
+    status: &str,
+    error_code: Option<&str>,
+) {
+    let Ok(base) = redbox_server_skill_market_base_url(source) else {
+        return;
+    };
+    let payload = json!({
+        "package_key": package_id,
+        "version_id": version_id,
+        "status": status,
+        "event_type": match status {
+            "started" => "install_started",
+            "failed" => "install_failed",
+            _ => "install_success",
+        },
+        "client_kind": "desktop",
+        "install_target": "local-skill-root",
+        "request_id": format!("desktop-skill-market-{}-{}", package_id, now_ms()),
+        "idempotency_key": format!("desktop:{}:{}:{}", package_id, status, now_ms()),
+        "error_code": error_code,
+    });
+    let _ = http_post_redbox_server_json::<Value>(&format!("{base}/install-events"), &payload);
+}
+
+fn download_redbox_server_artifact(url: &str) -> Result<Vec<u8>, String> {
+    validate_redbox_artifact_url(url)?;
+    let response = skill_marketplace_http_client()?
+        .get(url)
+        .send()
+        .map_err(|error| format!("failed to download skill artifact: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("skill artifact download failed with HTTP {status}"));
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|error| format!("failed to read skill artifact: {error}"))?;
+    if bytes.len() > 25 * 1024 * 1024 {
+        return Err("技能包超过 25MB".to_string());
+    }
+    Ok(bytes.to_vec())
+}
+
+fn extract_redbox_server_artifact(
+    target_root: &Path,
+    package_id: &str,
+    download_url: &str,
+    artifact: &Value,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let content_type =
+        value_first_string(artifact, &["content_type", "contentType"]).unwrap_or_default();
+    let filename = value_first_string(artifact, &["filename", "file_name", "fileName"])
+        .or_else(|| download_url.rsplit('/').next().map(ToString::to_string))
+        .unwrap_or_else(|| "skill.zip".to_string());
+    let lower = filename.to_ascii_lowercase();
+    if lower.ends_with(".md") || content_type.contains("markdown") {
+        let dir = target_root.join(slugish(package_id));
+        fs::create_dir_all(&dir).map_err(|error| format!("failed to create skill dir: {error}"))?;
+        fs::write(dir.join("SKILL.md"), bytes)
+            .map_err(|error| format!("failed to write SKILL.md: {error}"))?;
+        return Ok(());
+    }
+    if lower.ends_with(".zip") || content_type.contains("zip") || bytes.starts_with(b"PK") {
+        extract_zip_bytes(target_root, bytes)?;
+        return Ok(());
+    }
+    if lower.ends_with(".tar.gz")
+        || lower.ends_with(".tgz")
+        || content_type.contains("gzip")
+        || bytes.starts_with(&[0x1f, 0x8b])
+    {
+        extract_tar_gz_bytes(target_root, bytes)?;
+        return Ok(());
+    }
+    Err("不支持的技能包格式".to_string())
+}
+
+fn extract_zip_bytes(target_root: &Path, bytes: &[u8]) -> Result<(), String> {
+    let reader = io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).map_err(|error| error.to_string())?;
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).map_err(|error| error.to_string())?;
+        let Some(enclosed) = file.enclosed_name().map(PathBuf::from) else {
+            continue;
+        };
+        let target = safe_archive_target(target_root, &enclosed)?;
+        if file.is_dir() {
+            fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let mut out = fs::File::create(&target).map_err(|error| error.to_string())?;
+        io::copy(&mut file, &mut out).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn extract_tar_gz_bytes(target_root: &Path, bytes: &[u8]) -> Result<(), String> {
+    let decoder = flate2::read::GzDecoder::new(io::Cursor::new(bytes));
+    let mut archive = tar::Archive::new(decoder);
+    for entry in archive.entries().map_err(|error| error.to_string())? {
+        let mut entry = entry.map_err(|error| error.to_string())?;
+        let entry_type = entry.header().entry_type();
+        if !(entry_type.is_file() || entry_type.is_dir()) {
+            continue;
+        }
+        let path = entry
+            .path()
+            .map_err(|error| error.to_string())?
+            .into_owned();
+        let target = safe_archive_target(target_root, &path)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        entry.unpack(&target).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn safe_archive_target(root: &Path, relative: &Path) -> Result<PathBuf, String> {
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("技能包包含非法路径".to_string());
+    }
+    Ok(root.join(relative))
+}
+
+fn unique_market_download_root(package_id: &str) -> Result<PathBuf, String> {
+    let root = preferred_user_skill_root()
+        .join(".market-downloads")
+        .join(format!("{}-{}", slugish(package_id), now_ms()));
+    fs::create_dir_all(&root)
+        .map_err(|error| format!("failed to create market download root: {error}"))?;
+    Ok(root)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(bytes);
+    format!("{digest:x}")
+}
+
+fn url_path_segment(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => vec![byte as char],
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
+}
+
+fn scoped_market_item_id(market_id: &str, package_id: &str) -> String {
+    format!("{market_id}:{package_id}")
+}
+
+fn value_first_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn value_string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn first_non_empty(values: [Option<&str>; 7]) -> Option<String> {
+    values
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn slugish(value: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in value.trim().chars() {
+        let ch = ch.to_ascii_lowercase();
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
 }

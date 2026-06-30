@@ -5,11 +5,11 @@ mod marketplace;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
-    build_market_file_skill_record, build_workspace_skill_record,
-    compute_skill_discovery_fingerprint, find_catalog_skill_by_name, install_skills_from_repo,
-    invoke_skill, preferred_user_skill_root, refresh_skill_store_catalog, resolve_skill_file_path,
-    skill_catalog_changed, skills_catalog_list_value, write_skill_record_to_path,
-    InstallSkillsFromRepoRequest, SkillInvokeRequest, UninstallSkillRequest,
+    build_workspace_skill_record, compute_skill_discovery_fingerprint, find_catalog_skill_by_name,
+    install_skills_from_repo, invoke_skill, preferred_user_skill_root, refresh_skill_store_catalog,
+    resolve_skill_file_path, skill_catalog_changed, skills_catalog_list_value,
+    write_skill_record_to_path, InstallSkillsFromRepoRequest, SkillInvokeRequest,
+    UninstallSkillRequest,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -17,7 +17,8 @@ use tauri::{AppHandle, State};
 
 use ai_control::{ai_detect_protocol_value, ai_roles_list_value, ai_test_connection_value};
 use marketplace::{
-    list_skill_marketplace, resolve_market_install_entry, ThriveSkillMarketInstallRequest,
+    handle_marketplace_channel, install_skill_marketplace_package, list_skill_marketplace,
+    marketplace_channel_names,
 };
 
 fn requested_skill_name(payload: &Value) -> String {
@@ -48,27 +49,32 @@ pub fn handle_skills_ai_channel(
     channel: &str,
     payload: &Value,
 ) -> Option<Result<Value, String>> {
-    if !matches!(
-        channel,
-        "skills:list"
-            | "skills:read"
-            | "skills:invoke"
-            | "skills:create"
-            | "skills:save"
-            | "skills:disable"
-            | "skills:enable"
-            | "skills:marketplace"
-            | "skills:market-install"
-            | "skills:install-from-repo"
-            | "skills:uninstall"
-            | "ai:roles:list"
-            | "ai:detect-protocol"
-            | "ai:test-connection"
-    ) {
+    if !marketplace_channel_names().contains(&channel)
+        && !matches!(
+            channel,
+            "skills:list"
+                | "skills:read"
+                | "skills:invoke"
+                | "skills:create"
+                | "skills:save"
+                | "skills:disable"
+                | "skills:enable"
+                | "skills:marketplace"
+                | "skills:market-install"
+                | "skills:install-from-repo"
+                | "skills:uninstall"
+                | "ai:roles:list"
+                | "ai:detect-protocol"
+                | "ai:test-connection"
+        )
+    {
         return None;
     }
 
     Some((|| -> Result<Value, String> {
+        if let Some(result) = handle_marketplace_channel(state, channel, payload) {
+            return result;
+        }
         match channel {
             "skills:list" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
@@ -256,68 +262,7 @@ pub fn handle_skills_ai_channel(
                 })
             }
             "skills:marketplace" => list_skill_marketplace(state, payload),
-            "skills:market-install" => {
-                let request: ThriveSkillMarketInstallRequest =
-                    serde_json::from_value(payload.clone()).map_err(|error| {
-                        format!("skills:market-install payload invalid: {error}")
-                    })?;
-                let repo = request
-                    .repo
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToString::to_string)
-                    .or_else(|| {
-                        resolve_market_install_entry(&request)
-                            .ok()
-                            .flatten()
-                            .map(|entry| entry.repo)
-                    });
-                if let Some(repo) = repo {
-                    let workspace = workspace_root(state).ok();
-                    let outcome = install_skills_from_repo(
-                        InstallSkillsFromRepoRequest {
-                            source: repo,
-                            ref_name: request.ref_name.or(request.ref_alias),
-                            paths: Vec::new(),
-                            scope: Some("user".to_string()),
-                            workspace_root: workspace,
-                        },
-                        &preferred_user_skill_root(),
-                    )?;
-                    let _ = refresh_skill_store_catalog(state);
-                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
-                    return Ok(json!({
-                        "success": true,
-                        "source": outcome.source,
-                        "refName": outcome.ref_name,
-                        "scope": outcome.scope,
-                        "installRoot": outcome.install_root,
-                        "installed": outcome.installed,
-                    }));
-                }
-
-                let slug = request.slug.or(request.id).unwrap_or_default();
-                if slug.is_empty() {
-                    return Ok(json!({ "success": false, "error": "缺少技能 slug" }));
-                }
-                let created = build_market_file_skill_record(&slug);
-                let Some(path) = resolve_skill_file_path(&created, None) else {
-                    return Ok(json!({ "success": false, "error": "无法解析技能文件路径" }));
-                };
-                write_skill_record_to_path(&created, &path)?;
-                let _ = refresh_skill_store_catalog(state);
-                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
-                Ok(json!({
-                    "success": true,
-                    "displayName": slug,
-                    "location": created.location,
-                    "path": path.display().to_string(),
-                    "placeholder": true,
-                    "requiresCliRuntimeBootstrap": true,
-                    "summary": "Market skill registered as a placeholder only. External CLI tools and runtimes must be provisioned through cli_runtime.*."
-                }))
-            }
+            "skills:market-install" => install_skill_marketplace_package(state, payload),
             "skills:install-from-repo" => {
                 let source = payload_string(payload, "source")
                     .or_else(|| payload_string(payload, "url"))

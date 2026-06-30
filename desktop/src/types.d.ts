@@ -199,17 +199,50 @@ export interface ThrivePluginDiscoverLocalResponse {
 
 export interface ThriveSkillMarketplaceItem {
   id: string;
+  packageId?: string;
+  marketId?: string;
+  marketName?: string;
+  sourceKind?: string;
   name: string;
   author: string;
   description: string;
-  repo: string;
+  repo?: string | null;
+  refName?: string | null;
+  paths?: string[];
+  version?: string | null;
+  kind?: string;
+  channel?: string | null;
+  tags?: string[];
+  riskLevel?: string | null;
+  trustLevel?: string;
+  installedVersion?: string | null;
+  updateAvailable?: boolean;
+  installable?: boolean;
+  error?: string | null;
   installed?: boolean;
+}
+
+export interface SkillMarketSource {
+  id: string;
+  name: string;
+  kind: 'legacy-thrive' | 'github' | 'git' | 'local' | 'url' | 'redskill-cli' | 'redbox-server' | string;
+  enabled: boolean;
+  priority: number;
+  trustLevel: 'official' | 'curated' | 'community' | string;
+  source?: string | null;
+  registryUrl?: string | null;
+  repo?: string | null;
+  refName?: string | null;
+  description?: string | null;
 }
 
 export interface ThriveSkillMarketplaceResponse {
   success: boolean;
   registryUrl?: string;
+  sources?: SkillMarketSource[];
+  items?: ThriveSkillMarketplaceItem[];
   skills: ThriveSkillMarketplaceItem[];
+  warnings?: Array<{ marketId: string; marketName: string; error: string }>;
   error?: string;
 }
 
@@ -1899,8 +1932,19 @@ declare global {
         enable: (payload: { name: string }) => Promise<unknown>;
         disable: (payload: { name: string }) => Promise<unknown>;
         uninstall: (payload: { name: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
-        marketplace: (payload?: { url?: string }) => Promise<ThriveSkillMarketplaceResponse>;
-        marketInstall: (payload: { slug?: string; id?: string; repo?: string; tag?: string; ref?: string; refName?: string }) => Promise<unknown>;
+        marketplace: (payload?: { url?: string; marketId?: string; query?: string }) => Promise<ThriveSkillMarketplaceResponse>;
+        marketplaceList: (payload?: { marketId?: string; query?: string; includeDisabledSources?: boolean }) => Promise<ThriveSkillMarketplaceResponse>;
+        readMarketplacePackage: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string }) => Promise<unknown>;
+        installMarketplace: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
+        updateMarketplaceInstalled: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
+        marketInstall: (payload: { marketId?: string; packageId?: string; slug?: string; id?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
+        marketSources: {
+          list: () => Promise<{ success: boolean; sources: SkillMarketSource[]; error?: string }>;
+          refresh: () => Promise<{ success: boolean; sources: SkillMarketSource[]; error?: string }>;
+          add: (payload: Partial<SkillMarketSource>) => Promise<{ success: boolean; source?: SkillMarketSource; sources?: SkillMarketSource[]; error?: string }>;
+          update: (payload: Partial<SkillMarketSource> & { id: string }) => Promise<{ success: boolean; source?: SkillMarketSource; sources?: SkillMarketSource[]; error?: string }>;
+          remove: (payload: { id: string }) => Promise<{ success: boolean; removedId?: string; sources?: SkillMarketSource[]; error?: string }>;
+        };
         installFromRepo: (payload: {
           source?: string;
           url?: string;
