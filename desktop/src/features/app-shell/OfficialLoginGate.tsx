@@ -548,6 +548,17 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           发送验证码
                         </button>
                       </div>
+                      <input
+                        type="text"
+                        value={smsForm.inviteCode}
+                        onChange={(event) => setSmsForm((prev) => ({ ...prev, inviteCode: event.target.value }))}
+                        placeholder="邀请码（新用户选填）"
+                        autoComplete="off"
+                        autoCapitalize="characters"
+                        spellCheck={false}
+                        disabled={authBusy}
+                        className={inputClassName}
+                      />
                       <button
                         type="submit"
                         disabled={authBusy}
