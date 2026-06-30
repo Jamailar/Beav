@@ -71,6 +71,7 @@ import type {
   DiagnosticsPendingReport,
   CodexPluginMarketplaceItem,
   NotificationSettingsPayload,
+  SkillMarketSource,
   ThriveSkillMarketplaceItem,
   ThrivePluginMarketplaceItem,
   ThrivePluginSummary,
@@ -875,6 +876,19 @@ export function Settings({
   const [areBuiltinSkillsExpanded, setAreBuiltinSkillsExpanded] = useState(false);
   const [isSkillMarketplaceOpen, setIsSkillMarketplaceOpen] = useState(false);
   const [skillMarketplaceItems, setSkillMarketplaceItems] = useState<ThriveSkillMarketplaceItem[]>([]);
+  const [skillMarketSources, setSkillMarketSources] = useState<SkillMarketSource[]>([]);
+  const [skillMarketplaceSelectedMarketId, setSkillMarketplaceSelectedMarketId] = useState('');
+  const [isSkillMarketSourcesOpen, setIsSkillMarketSourcesOpen] = useState(false);
+  const [skillMarketSourceBusyId, setSkillMarketSourceBusyId] = useState('');
+  const [skillMarketSourceDraft, setSkillMarketSourceDraft] = useState({
+    name: '',
+    kind: 'github',
+    source: '',
+    registryUrl: '',
+    refName: '',
+  });
+  const [redskillIdentifierInput, setRedskillIdentifierInput] = useState('');
+  const [isRedskillInstalling, setIsRedskillInstalling] = useState(false);
   const [isSkillMarketplaceLoading, setIsSkillMarketplaceLoading] = useState(false);
   const [skillMarketplaceBusyId, setSkillMarketplaceBusyId] = useState('');
   const [isCreatingTeamAdvisor, setIsCreatingTeamAdvisor] = useState(false);
@@ -901,6 +915,11 @@ export function Settings({
     () => settingsSkills.filter((skill) => !skill.isBuiltin),
     [settingsSkills]
   );
+  const selectedSkillMarketSource = useMemo(
+    () => skillMarketSources.find((source) => source.id === skillMarketplaceSelectedMarketId) || null,
+    [skillMarketSources, skillMarketplaceSelectedMarketId]
+  );
+  const isRedskillSourceSelected = selectedSkillMarketSource?.kind === 'redskill-cli';
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
@@ -4994,14 +5013,18 @@ export function Settings({
     }
   }, [loadSettingsSkills]);
 
-  const loadSkillMarketplace = useCallback(async () => {
+  const loadSkillMarketplace = useCallback(async (marketId = skillMarketplaceSelectedMarketId) => {
     setIsSkillMarketplaceLoading(true);
     try {
-      const result = await window.ipcRenderer.skills.marketplace();
+      const result = await window.ipcRenderer.skills.marketplace({
+        marketId: marketId || undefined,
+      });
       if (result.success === false) {
         throw new Error(result.error || '技能市场加载失败');
       }
-      setSkillMarketplaceItems(Array.isArray(result.skills) ? result.skills : []);
+      const sources = Array.isArray(result.sources) ? result.sources : [];
+      setSkillMarketSources(sources);
+      setSkillMarketplaceItems(Array.isArray(result.items) ? result.items : Array.isArray(result.skills) ? result.skills : []);
       setSettingsSkillStatusMessage('');
     } catch (error) {
       console.error('Failed to load skill marketplace:', error);
@@ -5010,12 +5033,139 @@ export function Settings({
     } finally {
       setIsSkillMarketplaceLoading(false);
     }
-  }, []);
+  }, [skillMarketplaceSelectedMarketId]);
 
   const openSkillMarketplace = useCallback(() => {
     setIsSkillMarketplaceOpen(true);
     void loadSkillMarketplace();
   }, [loadSkillMarketplace]);
+
+  const handleSelectSkillMarketSource = useCallback((marketId: string) => {
+    setSkillMarketplaceSelectedMarketId(marketId);
+    void loadSkillMarketplace(marketId);
+  }, [loadSkillMarketplace]);
+
+  const handleAddSkillMarketSource = useCallback(async () => {
+    const name = skillMarketSourceDraft.name.trim();
+    const kind = skillMarketSourceDraft.kind.trim() || 'github';
+    const source = skillMarketSourceDraft.source.trim();
+    const registryUrl = skillMarketSourceDraft.registryUrl.trim();
+    const sourceRequired = !['redskill-cli'].includes(kind);
+    if (!name || (sourceRequired && !source && !registryUrl)) {
+      setSettingsSkillStatusMessage(sourceRequired ? '市场名称和来源不能为空' : '市场名称不能为空');
+      return;
+    }
+    setSkillMarketSourceBusyId('__new__');
+    setSettingsSkillStatusMessage('');
+    try {
+      const payload = {
+        name,
+        kind,
+        source: kind === 'url' || kind === 'legacy-thrive' ? undefined : source || undefined,
+        repo: kind === 'github' || kind === 'git' ? source : undefined,
+        registryUrl: kind === 'url' || kind === 'legacy-thrive' || kind === 'redbox-server' ? registryUrl || source : undefined,
+        refName: skillMarketSourceDraft.refName.trim() || undefined,
+        enabled: true,
+        trustLevel: kind === 'local' ? 'curated' : (kind === 'redskill-cli' || kind === 'redbox-server') ? 'official' : 'community',
+      };
+      const result = await window.ipcRenderer.skills.marketSources.add(payload) as {
+        success?: boolean;
+        error?: string;
+        sources?: SkillMarketSource[];
+      };
+      if (result.success === false) {
+        throw new Error(result.error || '市场源添加失败');
+      }
+      setSkillMarketSourceDraft({ name: '', kind: 'github', source: '', registryUrl: '', refName: '' });
+      setSkillMarketSources(Array.isArray(result.sources) ? result.sources : []);
+      setSettingsSkillStatusMessage(`已添加市场 ${name}`);
+      await loadSkillMarketplace(skillMarketplaceSelectedMarketId);
+    } catch (error) {
+      console.error('Failed to add skill marketplace source:', error);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '市场源添加失败');
+    } finally {
+      setSkillMarketSourceBusyId('');
+    }
+  }, [loadSkillMarketplace, skillMarketSourceDraft, skillMarketplaceSelectedMarketId]);
+
+  const handleInstallRedskillIdentifier = useCallback(async () => {
+    const identifier = redskillIdentifierInput.trim();
+    if (!identifier) {
+      setSettingsSkillStatusMessage('RedSkill identifier 不能为空');
+      return;
+    }
+    const marketId = selectedSkillMarketSource?.id || 'redskill-official';
+    setIsRedskillInstalling(true);
+    setSkillMarketplaceBusyId(`redskill:${identifier}`);
+    setSettingsSkillStatusMessage(`正在安装 RedSkill ${identifier}`);
+    try {
+      const result = await window.ipcRenderer.skills.marketInstall({
+        marketId,
+        packageId: identifier,
+      }) as {
+        success?: boolean;
+        error?: string;
+        installed?: Array<{ name?: string }>;
+        requiresAgentRestart?: boolean;
+      };
+      if (result.success === false) {
+        throw new Error(result.error || 'RedSkill 安装失败');
+      }
+      setRedskillIdentifierInput('');
+      setSettingsSkillStatusMessage(
+        result.requiresAgentRestart ? `已安装 ${identifier}，建议重启 Agent` : `已安装 ${identifier}`
+      );
+      await Promise.all([
+        loadSettingsSkills(),
+        loadSkillMarketplace(skillMarketplaceSelectedMarketId),
+      ]);
+      tabWarmRef.current.skills = true;
+    } catch (error) {
+      console.error('Failed to install RedSkill identifier:', error);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : 'RedSkill 安装失败');
+    } finally {
+      setIsRedskillInstalling(false);
+      setSkillMarketplaceBusyId('');
+    }
+  }, [
+    loadSettingsSkills,
+    loadSkillMarketplace,
+    redskillIdentifierInput,
+    selectedSkillMarketSource?.id,
+    skillMarketplaceSelectedMarketId,
+  ]);
+
+  const handleRemoveSkillMarketSource = useCallback(async (source: SkillMarketSource) => {
+    const confirmed = await appConfirm(`移除技能市场“${source.name}”？`, {
+      title: '移除技能市场',
+      confirmLabel: '移除',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    setSkillMarketSourceBusyId(source.id);
+    setSettingsSkillStatusMessage('');
+    try {
+      const result = await window.ipcRenderer.skills.marketSources.remove({ id: source.id }) as {
+        success?: boolean;
+        error?: string;
+        sources?: SkillMarketSource[];
+      };
+      if (result.success === false) {
+        throw new Error(result.error || '市场源移除失败');
+      }
+      const nextSources = Array.isArray(result.sources) ? result.sources : [];
+      setSkillMarketSources(nextSources);
+      const nextSelected = skillMarketplaceSelectedMarketId === source.id ? '' : skillMarketplaceSelectedMarketId;
+      setSkillMarketplaceSelectedMarketId(nextSelected);
+      setSettingsSkillStatusMessage(`已移除市场 ${source.name}`);
+      await loadSkillMarketplace(nextSelected);
+    } catch (error) {
+      console.error('Failed to remove skill marketplace source:', error);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '市场源移除失败');
+    } finally {
+      setSkillMarketSourceBusyId('');
+    }
+  }, [loadSkillMarketplace, skillMarketplaceSelectedMarketId]);
 
   const handleUninstallSettingsSkill = useCallback(async (skill: SettingsSkill) => {
     if (skill.isBuiltin) return;
@@ -5052,7 +5202,11 @@ export function Settings({
     try {
       const result = await window.ipcRenderer.skills.marketInstall({
         id: skill.id,
-        repo: skill.repo,
+        packageId: skill.packageId,
+        marketId: skill.marketId,
+        repo: skill.repo || undefined,
+        refName: skill.refName || undefined,
+        paths: skill.paths,
       }) as {
         success?: boolean;
         error?: string;
@@ -7343,7 +7497,7 @@ export function Settings({
                     onMouseDown={() => setIsSkillMarketplaceOpen(false)}
                   >
                     <div
-                      className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl"
+                      className="flex max-h-[82vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl"
                       onMouseDown={(event) => event.stopPropagation()}
                     >
                       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -7368,6 +7522,151 @@ export function Settings({
                           </button>
                         </div>
                       </div>
+                      <div className="border-b border-border bg-surface-secondary/20 px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            value={skillMarketplaceSelectedMarketId}
+                            onChange={(event) => handleSelectSkillMarketSource(event.target.value)}
+                            className="h-8 rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
+                          >
+                            <option value="">全部市场</option>
+                            {skillMarketSources.map((source) => (
+                              <option key={source.id} value={source.id}>
+                                {source.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => setIsSkillMarketSourcesOpen((value) => !value)}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                          >
+                            <SettingsIcon className="h-3.5 w-3.5" />
+                            来源
+                          </button>
+                          <div className="ml-auto text-[11px] text-text-tertiary">
+                            {skillMarketplaceItems.length} 个技能
+                          </div>
+                        </div>
+                        {isSkillMarketSourcesOpen && (
+                          <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+                            <div className="overflow-hidden rounded-lg border border-border bg-surface-primary">
+                              {skillMarketSources.length === 0 ? (
+                                <div className="px-3 py-3 text-xs text-text-tertiary">暂无市场来源</div>
+                              ) : (
+                                <div className="divide-y divide-border">
+                                  {skillMarketSources.map((source) => (
+                                    <div key={source.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                                      <div className="min-w-0">
+                                        <div className="flex min-w-0 items-center gap-2">
+                                          <span className="truncate text-xs font-medium text-text-primary">{source.name}</span>
+                                          <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{source.kind}</span>
+                                          {!source.enabled ? (
+                                            <span className="rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-600">已停用</span>
+                                          ) : null}
+                                        </div>
+                                        <div className="mt-1 truncate font-mono text-[10px] text-text-tertiary">
+                                          {source.repo || source.source || source.registryUrl || source.id}
+                                        </div>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleRemoveSkillMarketSource(source)}
+                                        disabled={skillMarketSourceBusyId === source.id}
+                                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-border text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-red-500 disabled:opacity-50"
+                                        aria-label="移除市场"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <div className="space-y-2 rounded-lg border border-border bg-surface-primary p-3">
+                              <input
+                                value={skillMarketSourceDraft.name}
+                                onChange={(event) => setSkillMarketSourceDraft((prev) => ({ ...prev, name: event.target.value }))}
+                                placeholder="市场名称"
+                                className="h-8 w-full rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
+                              />
+                              <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-2">
+                                <select
+                                  value={skillMarketSourceDraft.kind}
+                                  onChange={(event) => setSkillMarketSourceDraft((prev) => ({ ...prev, kind: event.target.value }))}
+                                  className="h-8 rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
+                                >
+                                  <option value="github">GitHub</option>
+                                  <option value="local">本地</option>
+                                  <option value="url">URL</option>
+                                  <option value="legacy-thrive">Thrive</option>
+                                  <option value="redbox-server">RedBox 服务端</option>
+                                  <option value="redskill-cli">RedSkill</option>
+                                </select>
+                                <input
+                                  value={skillMarketSourceDraft.source}
+                                  onChange={(event) => setSkillMarketSourceDraft((prev) => ({ ...prev, source: event.target.value }))}
+                                  placeholder={
+                                    skillMarketSourceDraft.kind === 'local'
+                                      ? '/path/to/redbox-market'
+                                      : skillMarketSourceDraft.kind === 'redskill-cli'
+                                        ? '安装脚本 URL，可留空'
+                                        : skillMarketSourceDraft.kind === 'redbox-server'
+                                          ? 'https://api.ziz.hk/api/v1/skill-market'
+                                          : 'owner/repo 或 registry URL'
+                                  }
+                                  className="h-8 min-w-0 rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
+                                />
+                              </div>
+                              <input
+                                value={skillMarketSourceDraft.refName}
+                                onChange={(event) => setSkillMarketSourceDraft((prev) => ({ ...prev, refName: event.target.value }))}
+                                placeholder="ref，默认 main"
+                                className="h-8 w-full rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void handleAddSkillMarketSource()}
+                                disabled={skillMarketSourceBusyId === '__new__'}
+                                className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-accent-primary px-2.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                                {skillMarketSourceBusyId === '__new__' ? '添加中' : '添加市场'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {isRedskillSourceSelected && (
+                          <div className="mt-3 rounded-lg border border-border bg-surface-primary p-3">
+                            <div className="flex flex-col gap-2 sm:flex-row">
+                              <input
+                                value={redskillIdentifierInput}
+                                onChange={(event) => setRedskillIdentifierInput(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    void handleInstallRedskillIdentifier();
+                                  }
+                                }}
+                                placeholder="RedSkill identifier，例如 abc"
+                                className="h-8 min-w-0 flex-1 rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void handleInstallRedskillIdentifier()}
+                                disabled={isRedskillInstalling || !redskillIdentifierInput.trim()}
+                                className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md bg-accent-primary px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                {isRedskillInstalling ? '安装中' : '安装'}
+                              </button>
+                            </div>
+                            <div className="mt-2 font-mono text-[10px] text-text-tertiary">
+                              curl -fsSL https://fe-video-qc.xhscdn.com/fe-platform-file/104101b8320fbjem2620653u0hejenq0004pf88g6ask5i.sh | bash
+                            </div>
+                          </div>
+                        )}
+                      </div>
                       <div className="min-h-0 flex-1 overflow-auto">
                         {isSkillMarketplaceLoading && skillMarketplaceItems.length === 0 ? (
                           <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-tertiary">
@@ -7380,8 +7679,10 @@ export function Settings({
                           <div className="divide-y divide-border">
                             {skillMarketplaceItems.map((skill) => {
                               const busy = skillMarketplaceBusyId === skill.id;
+                              const sourceLabel = skill.marketName || skill.sourceKind || 'market';
+                              const versionLabel = skill.version ? `v${skill.version}` : null;
                               return (
-                                <div key={`${skill.repo}:${skill.id}`} className="px-4 py-3">
+                                <div key={`${skill.marketId || 'market'}:${skill.packageId || skill.id}`} className="px-4 py-3">
                                   <div className="flex items-start justify-between gap-3">
                                     <div className="min-w-0">
                                       <div className="flex flex-wrap items-center gap-2">
@@ -7389,23 +7690,35 @@ export function Settings({
                                         {skill.installed ? (
                                           <span className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500">已安装</span>
                                         ) : null}
+                                        {skill.updateAvailable ? (
+                                          <span className="rounded bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">可更新</span>
+                                        ) : null}
                                       </div>
                                       <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
                                         {skill.description || skill.repo}
                                       </div>
                                       <div className="mt-2 flex flex-wrap gap-1.5">
-                                        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.id}</span>
-                                        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.repo}</span>
+                                        <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{sourceLabel}</span>
+                                        {versionLabel ? (
+                                          <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{versionLabel}</span>
+                                        ) : null}
+                                        {skill.riskLevel ? (
+                                          <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{skill.riskLevel}</span>
+                                        ) : null}
+                                        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.packageId || skill.id}</span>
+                                        {skill.repo ? (
+                                          <span className="max-w-[360px] truncate rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.repo}</span>
+                                        ) : null}
                                       </div>
                                     </div>
                                     <button
                                       type="button"
                                       onClick={() => void handleInstallMarketplaceSkill(skill)}
-                                      disabled={busy || Boolean(skill.installed)}
+                                      disabled={busy || (Boolean(skill.installed) && !skill.updateAvailable) || skill.installable === false}
                                       className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                                     >
                                       <Download className="h-3 w-3" />
-                                      {skill.installed ? '已安装' : busy ? '安装中' : '安装'}
+                                      {busy ? '安装中' : skill.updateAvailable ? '更新' : skill.installed ? '已安装' : '安装'}
                                     </button>
                                   </div>
                                 </div>
