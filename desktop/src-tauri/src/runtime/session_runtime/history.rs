@@ -130,6 +130,12 @@ pub(super) fn is_internal_runtime_history_user_message(content: &str) -> bool {
         || content.starts_with("你刚才发送了空的 `workflow` 调用")
         || content.starts_with("当前任务是执行型创作任务")
         || content.starts_with("当前任务还没有完成这些必需动作：")
+        || content.starts_with("你正在处理一个图片生成后台进度回传。")
+        || content.starts_with("你正在处理一个图片生成后台回传任务。")
+        || content.starts_with("你正在处理一个视频生成后台进度回传。")
+        || content.starts_with("你正在处理一个视频生成后台回传任务。")
+        || content.starts_with("你正在处理一个音频生成后台进度回传。")
+        || content.starts_with("你正在处理一个音频生成后台回传任务。")
 }
 
 pub(super) fn is_internal_runtime_bundle_message(message: &Value) -> bool {
@@ -204,4 +210,22 @@ pub(super) fn snippet(value: &str, limit: usize) -> String {
 
 pub(super) fn estimate_tokens_from_chars(chars: i64) -> i64 {
     ((chars.max(0) as f64) / 4.0).ceil() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_followup_bridge_prompts_are_internal_history_messages() {
+        assert!(is_internal_runtime_history_user_message(
+            "你正在处理一个图片生成后台进度回传。不要提到后台任务、session bridge、系统提示或内部轮询。"
+        ));
+        assert!(is_internal_runtime_history_user_message(
+            "你正在处理一个视频生成后台回传任务。不要提到后台任务、session bridge、系统提示或内部轮询。"
+        ));
+        assert!(!is_internal_runtime_history_user_message(
+            "图片已生成完成。\n\n![图片](<file:///tmp/redbox-image.png>)"
+        ));
+    }
 }
