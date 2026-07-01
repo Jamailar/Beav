@@ -206,6 +206,11 @@ export interface ThriveSkillMarketplaceItem {
   name: string;
   author: string;
   description: string;
+  avatarUrl?: string | null;
+  iconUrl?: string | null;
+  logoUrl?: string | null;
+  imageUrl?: string | null;
+  thumbnailUrl?: string | null;
   repo?: string | null;
   refName?: string | null;
   paths?: string[];
@@ -216,6 +221,7 @@ export interface ThriveSkillMarketplaceItem {
   riskLevel?: string | null;
   trustLevel?: string;
   installedVersion?: string | null;
+  installedSkillNames?: string[];
   updateAvailable?: boolean;
   installable?: boolean;
   error?: string | null;
@@ -244,6 +250,36 @@ export interface ThriveSkillMarketplaceResponse {
   skills: ThriveSkillMarketplaceItem[];
   warnings?: Array<{ marketId: string; marketName: string; error: string }>;
   error?: string;
+}
+
+export interface SkillMarketplaceInstalledSkill {
+  name?: string;
+  sourcePath?: string;
+  path?: string;
+  replaced?: boolean;
+}
+
+export interface SkillMarketplaceInstallVerification {
+  name: string;
+  requestedName?: string;
+  found: boolean;
+  activationReady: boolean;
+  location?: string | null;
+  sourceScope?: string | null;
+  disabled?: boolean;
+}
+
+export interface SkillMarketplaceInstallResponse {
+  success?: boolean;
+  error?: string;
+  source?: string;
+  refName?: string | null;
+  scope?: string;
+  installRoot?: string;
+  installed?: SkillMarketplaceInstalledSkill[];
+  verified?: SkillMarketplaceInstallVerification[];
+  activationReady?: boolean;
+  requiresAgentRestart?: boolean;
 }
 
 export interface ThrivePluginHomeWidget {
@@ -1935,9 +1971,10 @@ declare global {
         marketplace: (payload?: { url?: string; marketId?: string; query?: string }) => Promise<ThriveSkillMarketplaceResponse>;
         marketplaceList: (payload?: { marketId?: string; query?: string; includeDisabledSources?: boolean }) => Promise<ThriveSkillMarketplaceResponse>;
         readMarketplacePackage: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string }) => Promise<unknown>;
-        installMarketplace: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
-        updateMarketplaceInstalled: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
-        marketInstall: (payload: { marketId?: string; packageId?: string; slug?: string; id?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
+        cacheMarketplaceAvatar: <T = unknown>(payload: { url: string }) => Promise<T>;
+        installMarketplace: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<SkillMarketplaceInstallResponse>;
+        updateMarketplaceInstalled: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<SkillMarketplaceInstallResponse>;
+        marketInstall: (payload: { marketId?: string; packageId?: string; slug?: string; id?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<SkillMarketplaceInstallResponse>;
         marketSources: {
           list: () => Promise<{ success: boolean; sources: SkillMarketSource[]; error?: string }>;
           refresh: () => Promise<{ success: boolean; sources: SkillMarketSource[]; error?: string }>;

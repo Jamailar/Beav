@@ -18,6 +18,7 @@ export function createSkillsBridge(core: BridgeCore) {
       marketplace: (payload?: Record<string, unknown>) => core.invokeChannel('skills:marketplace', payload || {}) as Promise<any>,
       marketplaceList: (payload?: Record<string, unknown>) => core.invokeChannel('skills:marketplace:list', payload || {}) as Promise<any>,
       readMarketplacePackage: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('skills:marketplace:read-package', payload) as Promise<T>,
+      cacheMarketplaceAvatar: <T = unknown>(payload: { url: string }) => core.invokeChannel('skills:marketplace:cache-avatar', payload) as Promise<T>,
       installMarketplace: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('skills:marketplace:install', payload) as Promise<T>,
       updateMarketplaceInstalled: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('skills:marketplace:update-installed', payload) as Promise<T>,
       marketInstall: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('skills:market-install', payload) as Promise<T>,

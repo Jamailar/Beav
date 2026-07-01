@@ -156,6 +156,23 @@ function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkill
   };
 }
 
+function normalizePendingSkillMentions(pendingMessage: PendingChatMessage): ChatSkillMentionOption[] {
+  const byName = new Map<string, ChatSkillMentionOption>();
+  const add = (item: SkillMentionCatalogRecord | string | null | undefined) => {
+    const record = typeof item === 'string' ? { name: item } : item;
+    if (!record) return;
+    const normalized = normalizeSkillMentionRecord(record);
+    if (!normalized) return;
+    byName.set(normalized.name, normalized);
+  };
+  (pendingMessage.skillMentions || []).forEach(add);
+  const activeSkills = pendingMessage.taskHints?.activeSkills;
+  if (byName.size === 0 && Array.isArray(activeSkills)) {
+    activeSkills.forEach(add);
+  }
+  return [...byName.values()];
+}
+
 function normalizeAssetMentionRecord(item: AssetMentionCatalogRecord): ChatAssetMentionOption | null {
   const id = String(item.id || '').trim();
   const name = String(item.name || '').trim();
@@ -2408,8 +2425,10 @@ export function Chat({
           fileCount: item.fileCount,
           hasTranscript: item.hasTranscript,
         }));
+      const draftSkillMentions = normalizePendingSkillMentions(pendingMessage);
       setInput(String(pendingMessage.content || ''));
       setSelectedKnowledgeMentions(draftKnowledgeReferences);
+      setSelectedSkillMentions(draftSkillMentions);
       if (pendingMessageAttachments.length > 0) {
         setPendingAttachments(pendingMessageAttachments);
       }
@@ -4599,11 +4618,12 @@ export function Chat({
 
   const currentAttachmentActionKey = attachmentActionKey(pendingAttachments);
   const attachmentActionKindValue = attachmentShortcutKind(pendingAttachment);
+  const isNewAttachmentActionSession = isEmptySession && messages.length === 0;
   const showAttachmentActionOverlay = Boolean(
     showComposerShortcuts &&
     showComposer &&
     allowFileUpload &&
-    isEmptySession &&
+    isNewAttachmentActionSession &&
     pendingAttachment &&
     attachmentActionKindValue &&
     currentAttachmentActionKey &&
@@ -4614,7 +4634,8 @@ export function Chat({
   const dismissAttachmentActionOverlay = useCallback(() => {
     if (!currentAttachmentActionKey) return;
     setDismissedAttachmentActionKey(currentAttachmentActionKey);
-  }, [currentAttachmentActionKey]);
+    activateComposerInput('composer');
+  }, [activateComposerInput, currentAttachmentActionKey]);
   const applyAttachmentAction = useCallback((shortcut: ChatShortcut) => {
     if (currentAttachmentActionKey) {
       setDismissedAttachmentActionKey(currentAttachmentActionKey);

@@ -22,7 +22,7 @@ import { useRedClawShellNavigation } from './features/app-shell/useRedClawShellN
 import { useSettingsShellNavigation } from './features/app-shell/useSettingsShellNavigation';
 import { useSubjectsModal } from './features/app-shell/useSubjectsModal';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
-import type { GenerationIntent, ImmersiveMode } from './features/app-shell/types';
+import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
 
 export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
@@ -110,6 +110,10 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setActiveManuscriptEditorFile,
     setImmersiveMode,
   });
+
+  const handleTrySkillInChat = useCallback((message: PendingChatMessage) => {
+    navigateToRedClaw(message);
+  }, [navigateToRedClaw]);
 
   const {
     pendingGenerationIntent,
@@ -213,7 +217,10 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
         {shouldRenderView(mountedViews, currentView, persistentViews, 'skills') && (
           <div className={currentView === 'skills' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'skills' ? <ViewLoadingFallback /> : null}>
-              <SkillsPage isActive={currentView === 'skills'} />
+              <SkillsPage
+                isActive={currentView === 'skills'}
+                onTrySkillInChat={handleTrySkillInChat}
+              />
             </Suspense>
           </div>
         )}
