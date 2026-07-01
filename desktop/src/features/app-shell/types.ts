@@ -56,12 +56,22 @@ export type LegacyNavigateEventDetail = {
 
 export type AppNavigateEventDetail = AppIntent | LegacyNavigateEventDetail;
 
+export interface PendingChatSkillMention {
+  name: string;
+  description?: string;
+  location?: string;
+  sourceScope?: string;
+  isBuiltin?: boolean;
+  aliases?: string[];
+}
+
 export interface PendingChatMessage {
   content: string;
   displayContent?: string;
   sessionRouting?: 'current' | 'new';
   deliveryMode?: 'send' | 'draft';
   taskHints?: AuthoringTaskHints;
+  skillMentions?: PendingChatSkillMention[];
   knowledgeReferences?: Array<{
     id: string;
     title: string;

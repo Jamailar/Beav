@@ -1325,8 +1325,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     if ((nextMember?.id || '') !== (selectedMemberMention?.id || '')) {
       onSelectedMemberMentionChange?.(nextMember);
     }
-    const skillNames = new Set(readEditorMentionKeys(editor, 'skill'));
-    const nextSkills = skillMentionOptions.filter((skill) => skillNames.has(skill.name));
+    const skillNames = readEditorMentionKeys(editor, 'skill');
+    const nextSkills = skillNames
+      .map((name) => (
+        skillMentionOptions.find((skill) => skill.name === name)
+        || selectedSkillMentions.find((skill) => skill.name === name)
+        || { name }
+      ));
     if (
       nextSkills.length !== selectedSkillMentions.length
       || nextSkills.some((skill, index) => skill.name !== selectedSkillMentions[index]?.name)
@@ -1394,6 +1399,39 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     setIsEditorEmpty(false);
     syncHeight();
   }, [syncHeight, value]);
+
+  useEffect(() => {
+    const editor = textareaRef.current;
+    if (!editor || selectedSkillMentions.length === 0) return;
+    const existingNames = new Set(readEditorMentionKeys(editor, 'skill'));
+    const missingSkills = selectedSkillMentions.filter((skill) => skill.name && !existingNames.has(skill.name));
+    if (missingSkills.length === 0) return;
+
+    const wasFocused = document.activeElement === editor;
+    const hasMeaningfulContent = Boolean(readEditorText(editor).trim() || editor.querySelector('[data-inline-mention]'));
+    if (!hasMeaningfulContent) {
+      editor.replaceChildren();
+    }
+    missingSkills.forEach((skill) => {
+      if (editor.childNodes.length > 0) {
+        const lastText = editor.lastChild?.textContent || '';
+        if (!/\s$/.test(lastText)) {
+          editor.appendChild(document.createTextNode(' '));
+        }
+      }
+      editor.appendChild(createMentionTokenElement('skill', skill.name, skill.name, darkEmbedded));
+      editor.appendChild(document.createTextNode(' '));
+    });
+    setIsEditorEmpty(false);
+    syncHeight();
+    if (wasFocused) {
+      window.requestAnimationFrame(() => {
+        editor.focus({ preventScroll: true });
+        placeEditorCaretAtEnd(editor);
+        syncHeight();
+      });
+    }
+  }, [darkEmbedded, selectedSkillMentions, syncHeight]);
 
   useEffect(() => {
     if (!showModelPicker) return;
