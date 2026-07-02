@@ -10,11 +10,10 @@ import {
     PlayCircle,
     RefreshCw,
     Search,
-    X,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { PendingChatMessage } from '../features/app-shell/types';
-import type { SkillMarketIntroNote, SkillMarketSource, SkillMarketplaceInstallResponse, ThriveSkillMarketplaceItem } from '../types';
+import type { SkillMarketCollection, SkillMarketIntroNote, SkillMarketSource, SkillMarketplaceInstallResponse, ThriveSkillMarketplaceItem } from '../types';
 
 const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -24,6 +23,7 @@ const marketItemKey = (skill: ThriveSkillMarketplaceItem) => (
 
 type MarketplaceCacheEntry = {
     sources: SkillMarketSource[];
+    collections: SkillMarketCollection[];
     items: ThriveSkillMarketplaceItem[];
 };
 
@@ -56,6 +56,7 @@ const MARKETPLACE_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-cache:v2';
 const MAX_AVATAR_CACHE_CONCURRENCY = 4;
 const RETIRED_SKILL_MARKET_SOURCE_IDS = new Set(['thrive-community']);
 const RED_SKILL_TAG_LABEL = 'RED skill';
+const CATEGORY_SECTION_PREVIEW_ITEMS = 6;
 const SKILL_CATEGORY_LABELS = [
     '调研与选题',
     '热点追踪',
@@ -126,6 +127,18 @@ function recordText(record: Record<string, unknown>, keys: string[]) {
 function recordList(value: unknown) {
     if (!Array.isArray(value)) return [];
     return value.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+function uniqueAssetUrls(values: string[]) {
+    const seen = new Set<string>();
+    const output: string[] = [];
+    values.forEach((value) => {
+        const url = httpsAssetUrl(value);
+        if (!isHttpUrl(url) || seen.has(url)) return;
+        seen.add(url);
+        output.push(url);
+    });
+    return output;
 }
 
 function recordNumber(record: Record<string, unknown>, keys: string[]) {
@@ -315,12 +328,34 @@ function skillIntroNote(skill: ThriveSkillMarketplaceItem) {
     return skill.introNote || skill.intro_note || null;
 }
 
+function collectionKey(collection: SkillMarketCollection) {
+    return String(collection.collectionKey || collection.collection_key || collection.id || collection.title || '').trim();
+}
+
+function collectionPackageKeys(collection: SkillMarketCollection) {
+    const values = Array.isArray(collection.packageKeys)
+        ? collection.packageKeys
+        : Array.isArray(collection.package_keys)
+            ? collection.package_keys
+            : [];
+    return values.map((value) => String(value || '').trim()).filter(Boolean);
+}
+
+function collectionImageUrl(collection: SkillMarketCollection) {
+    return String(collection.avatarUrl || collection.avatar_url || collection.coverUrl || collection.cover_url || '').trim();
+}
+
+function collectionTitle(collection: SkillMarketCollection) {
+    return String(collection.title || collection.collectionKey || collection.collection_key || collection.id || '技能合集').trim();
+}
+
 type SkillIntroNoteView = {
     title: string;
     contentText: string;
     noteHref: string;
     noteType: string;
     coverUrl: string;
+    images: string[];
     playbackUrl: string;
     authorName: string;
     authorAvatarUrl: string;
@@ -335,9 +370,12 @@ function normalizeSkillIntroNote(note?: SkillMarketIntroNote | null): SkillIntro
     const noteUrl = recordText(note, ['resolvedNoteUrl', 'resolved_note_url', 'noteUrl', 'note_url']);
     const noteHref = isHttpUrl(noteUrl) ? noteUrl : '';
     const noteType = recordText(note, ['noteType', 'note_type']);
-    const images = recordList(note.images);
+    const images = uniqueAssetUrls([
+        recordText(note, ['coverUrl', 'cover_url']),
+        ...recordList(note.images),
+    ]);
     const playbackUrl = selectPlayableIntroVideoUrl(note.video);
-    const coverUrl = httpsAssetUrl(recordText(note, ['coverUrl', 'cover_url']) || images[0]);
+    const coverUrl = images[0] || '';
     const authorName = recordText(note, ['authorName', 'author_name']);
     const authorAvatarUrl = httpsAssetUrl(recordText(note, ['authorAvatarUrl', 'author_avatar_url']));
     const tags = recordList(note.tags);
@@ -351,13 +389,14 @@ function normalizeSkillIntroNote(note?: SkillMarketIntroNote | null): SkillIntro
     const stats = statItems
         .map(([label, value]) => ({ label, value: formatIntroCount(value) }))
         .filter((item) => item.value);
-    if (!title && !contentText && !coverUrl && !noteHref) return null;
+    if (!title && !contentText && !coverUrl && !playbackUrl && !noteHref) return null;
     return {
         title,
         contentText,
         noteHref,
         noteType,
         coverUrl,
+        images,
         playbackUrl,
         authorName,
         authorAvatarUrl,
@@ -476,6 +515,7 @@ function isRetiredSkillMarketItem(item: ThriveSkillMarketplaceItem) {
 function sanitizeMarketplaceCacheEntry(entry: MarketplaceCacheEntry): MarketplaceCacheEntry {
     return {
         sources: entry.sources.filter((source) => !isRetiredSkillMarketSourceId(source.id)),
+        collections: Array.isArray(entry.collections) ? entry.collections : [],
         items: entry.items.filter((item) => !isRetiredSkillMarketItem(item)),
     };
 }
@@ -483,9 +523,10 @@ function sanitizeMarketplaceCacheEntry(entry: MarketplaceCacheEntry): Marketplac
 function asMarketplaceCacheEntry(value: unknown): MarketplaceCacheEntry | null {
     if (!isRecord(value)) return null;
     const sources = Array.isArray(value.sources) ? value.sources as SkillMarketSource[] : [];
+    const collections = Array.isArray(value.collections) ? value.collections as SkillMarketCollection[] : [];
     const items = Array.isArray(value.items) ? value.items as ThriveSkillMarketplaceItem[] : [];
-    const entry = sanitizeMarketplaceCacheEntry({ sources, items });
-    if (entry.sources.length === 0 && entry.items.length === 0) return null;
+    const entry = sanitizeMarketplaceCacheEntry({ sources, collections, items });
+    if (entry.sources.length === 0 && entry.collections.length === 0 && entry.items.length === 0) return null;
     return entry;
 }
 
@@ -513,7 +554,7 @@ function persistSkillMarketCache() {
         const entries: Record<string, MarketplaceCacheEntry> = {};
         skillMarketCache.forEach((entry, key) => {
             const sanitized = sanitizeMarketplaceCacheEntry(entry);
-            if (sanitized.sources.length > 0 || sanitized.items.length > 0) {
+            if (sanitized.sources.length > 0 || sanitized.collections.length > 0 || sanitized.items.length > 0) {
                 entries[key] = sanitized;
             }
         });
@@ -540,6 +581,7 @@ function cachedMarketplaceEntry(cacheKey: string, marketId: string): Marketplace
     if (!all) return undefined;
     return sanitizeMarketplaceCacheEntry({
         sources: all.sources,
+        collections: all.collections,
         items: all.items.filter((item) => item.marketId === marketId),
     });
 }
@@ -687,13 +729,13 @@ function SkillTag({ children, active = false }: { children: ReactNode; active?: 
 
 function SkillIntroNotePanel({ note }: { note?: SkillMarketIntroNote | null }) {
     const intro = normalizeSkillIntroNote(note);
-    const [isOpen, setIsOpen] = useState(false);
-    const [failedCoverUrl, setFailedCoverUrl] = useState('');
-    const showCover = Boolean(intro?.coverUrl && failedCoverUrl !== intro.coverUrl);
+    const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+    const [failedMediaUrl, setFailedMediaUrl] = useState('');
 
     useEffect(() => {
-        setFailedCoverUrl('');
-    }, [intro?.coverUrl]);
+        setSelectedImageIndex(0);
+        setFailedMediaUrl('');
+    }, [intro?.coverUrl, intro?.noteHref]);
 
     if (!intro) return null;
 
@@ -702,143 +744,142 @@ function SkillIntroNotePanel({ note }: { note?: SkillMarketIntroNote | null }) {
     const badgeClassName = isVideoNote ? 'bg-red-500/90 text-white' : 'bg-rose-500/90 text-white';
     const title = intro.title || '小红书笔记';
     const authorInitial = (intro.authorName || '小红书用户').slice(0, 1);
+    const imageIndex = intro.images.length > 0 ? Math.min(selectedImageIndex, intro.images.length - 1) : 0;
+    const mediaUrl = isVideoNote ? intro.coverUrl : (intro.images[imageIndex] || intro.coverUrl);
+    const showMedia = Boolean(mediaUrl && failedMediaUrl !== mediaUrl);
+    const previousImage = () => {
+        if (intro.images.length <= 1) return;
+        setSelectedImageIndex((current) => (current <= 0 ? intro.images.length - 1 : current - 1));
+    };
+    const nextImage = () => {
+        if (intro.images.length <= 1) return;
+        setSelectedImageIndex((current) => (current >= intro.images.length - 1 ? 0 : current + 1));
+    };
 
     return (
-        <>
-            <section className="space-y-3">
-                <h2 className="text-sm font-semibold text-text-primary">小红书笔记</h2>
-                <button
-                    type="button"
-                    onClick={() => setIsOpen(true)}
-                    className="group relative mb-4 w-full max-w-[260px] overflow-hidden rounded-lg border border-black/[0.04] bg-white text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
-                >
-                    <div className="relative aspect-[3/4] w-full overflow-hidden bg-black/[0.02]">
-                        <span className={clsx('absolute right-3 top-3 z-10 rounded-lg border border-white/20 px-2 py-1 text-[9px] font-bold uppercase tracking-widest shadow-sm backdrop-blur-md', badgeClassName)}>
+        <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-text-primary">说明书</h2>
+            <div className="overflow-hidden rounded-2xl border border-border bg-surface-primary/75">
+                <div className="grid min-h-[360px] lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+                    <div className="relative flex min-h-[320px] flex-col bg-black/[0.03]">
+                        <span className={clsx('absolute right-3 top-3 z-10 rounded-lg px-2 py-1 text-[10px] font-bold shadow-sm backdrop-blur-md', badgeClassName)}>
                             {noteLabel}
                         </span>
-                        {showCover ? (
-                            <img
-                                src={intro.coverUrl}
-                                alt=""
-                                className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
-                                loading="lazy"
-                                decoding="async"
-                                onError={() => setFailedCoverUrl(intro.coverUrl)}
-                            />
-                        ) : (
-                            <div className="flex h-full w-full items-center justify-center text-text-tertiary">
-                                {isVideoNote ? <PlayCircle className="h-8 w-8 opacity-30" /> : <FileText className="h-8 w-8 opacity-30" />}
-                            </div>
-                        )}
-                        {isVideoNote ? (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/10 opacity-0 transition-opacity group-hover:opacity-100">
-                                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/30 bg-white/20 text-white shadow-xl backdrop-blur-md">
-                                    <PlayCircle className="h-5 w-5" />
-                                </div>
-                            </div>
-                        ) : null}
-                    </div>
-                    <div className="p-4">
-                        <div className="line-clamp-2 text-[14px] font-extrabold leading-tight tracking-tight text-text-primary transition-colors group-hover:text-accent-primary">
-                            {title}
-                        </div>
-                    </div>
-                </button>
-            </section>
-
-            {isOpen ? (
-                <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
-                    onClick={() => setIsOpen(false)}
-                >
-                    <div
-                        className="mx-4 grid max-h-[90vh] w-full max-w-[980px] grid-cols-[minmax(0,1fr)_360px] overflow-hidden rounded-[28px] border border-white/20 bg-white shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] max-[900px]:grid-cols-1"
-                        onClick={(event) => event.stopPropagation()}
-                    >
-                        <div className="relative flex min-h-[520px] items-center justify-center bg-[#f8f5f0] max-[900px]:min-h-[320px]">
+                        <div className="relative flex min-h-0 flex-1 items-center justify-center">
                             {isVideoNote && intro.playbackUrl ? (
                                 <video
                                     src={intro.playbackUrl}
-                                    poster={showCover ? intro.coverUrl : undefined}
-                                    className="max-h-full max-w-full bg-black"
+                                    poster={showMedia ? mediaUrl : undefined}
+                                    className="max-h-[520px] w-full bg-black object-contain"
                                     controls
                                     playsInline
                                     preload="metadata"
                                 />
-                            ) : showCover ? (
+                            ) : showMedia ? (
                                 <img
-                                    src={intro.coverUrl}
+                                    src={mediaUrl}
                                     alt=""
-                                    className="max-h-full max-w-full object-contain"
+                                    className="max-h-[520px] w-full object-contain"
                                     loading="lazy"
                                     decoding="async"
-                                    onError={() => setFailedCoverUrl(intro.coverUrl)}
+                                    onError={() => setFailedMediaUrl(mediaUrl)}
                                 />
                             ) : (
-                                <div className="text-sm font-semibold text-text-tertiary">暂无媒体</div>
+                                <div className="flex h-full min-h-[260px] w-full items-center justify-center text-text-tertiary">
+                                    {isVideoNote ? <PlayCircle className="h-9 w-9 opacity-35" /> : <FileText className="h-9 w-9 opacity-35" />}
+                                </div>
                             )}
+                            {!isVideoNote && intro.images.length > 1 ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={previousImage}
+                                        className="absolute left-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-text-primary shadow-sm ring-1 ring-black/10 transition-colors hover:bg-white"
+                                        aria-label="上一张"
+                                    >
+                                        <ArrowLeft className="h-4 w-4" />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={nextImage}
+                                        className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-text-primary shadow-sm ring-1 ring-black/10 transition-colors hover:bg-white"
+                                        aria-label="下一张"
+                                    >
+                                        <ArrowRight className="h-4 w-4" />
+                                    </button>
+                                </>
+                            ) : null}
                         </div>
-                        <div className="flex min-h-0 flex-col border-l border-black/[0.06] bg-white max-[900px]:border-l-0">
-                            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-black/[0.06] px-5 py-4">
-                                <div className="flex min-w-0 items-center gap-3">
-                                    <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-black/[0.04] ring-1 ring-black/[0.05]">
-                                        {intro.authorAvatarUrl ? (
-                                            <img src={intro.authorAvatarUrl} alt="" className="h-full w-full object-cover" />
-                                        ) : (
-                                            <div className="flex h-full w-full items-center justify-center text-sm font-bold text-text-tertiary">{authorInitial}</div>
+                        {!isVideoNote && intro.images.length > 1 ? (
+                            <div className="flex gap-2 overflow-x-auto border-t border-border/70 bg-surface-primary/90 p-2.5 custom-scrollbar">
+                                {intro.images.map((url, index) => (
+                                    <button
+                                        key={url}
+                                        type="button"
+                                        onClick={() => setSelectedImageIndex(index)}
+                                        className={clsx(
+                                            'relative h-14 w-11 shrink-0 overflow-hidden rounded-lg border transition-colors',
+                                            index === imageIndex ? 'border-accent-primary ring-2 ring-accent-primary/20' : 'border-border hover:border-text-tertiary/40'
                                         )}
-                                    </div>
-                                    <div className="min-w-0">
-                                        <div className="truncate text-[16px] font-semibold text-text-primary">{intro.authorName || '小红书用户'}</div>
-                                    </div>
+                                        aria-label={`查看第 ${index + 1} 张图`}
+                                    >
+                                        <img src={url} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                                        <span className="absolute bottom-1 right-1 rounded bg-black/55 px-1 text-[9px] font-semibold text-white">{index + 1}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
+                    <div className="min-w-0 border-l border-border/70 bg-surface-primary max-lg:border-l-0 max-lg:border-t">
+                        <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+                            <div className="flex min-w-0 items-center gap-3">
+                                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-black/[0.04] ring-1 ring-black/[0.05]">
+                                    {intro.authorAvatarUrl ? (
+                                        <img src={intro.authorAvatarUrl} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center text-sm font-bold text-text-tertiary">{authorInitial}</div>
+                                    )}
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setIsOpen(false)}
-                                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary transition-all hover:bg-black/[0.08] hover:text-text-primary active:scale-90"
-                                    aria-label="关闭"
+                                <div className="truncate text-sm font-semibold text-text-primary">{intro.authorName || '小红书用户'}</div>
+                            </div>
+                            {intro.noteHref ? (
+                                <a
+                                    href={intro.noteHref}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl bg-black/[0.04] px-3 text-[12px] font-bold text-text-secondary transition-colors hover:bg-black/[0.08] hover:text-text-primary"
                                 >
-                                    <X className="h-4 w-4" />
-                                </button>
-                            </div>
-                            <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
-                                <div className="space-y-4 px-5 py-5">
-                                    <h1 className="text-[19px] font-extrabold leading-snug tracking-tight text-text-primary">{title}</h1>
-                                    {intro.contentText ? (
-                                        <div className="whitespace-pre-wrap text-[15px] leading-[1.72] text-text-primary">{intro.contentText}</div>
-                                    ) : null}
-                                    {intro.tags.length > 0 ? (
-                                        <div className="flex flex-wrap gap-2 pt-1">
-                                            {intro.tags.map((tag) => (
-                                                <span key={tag} className="text-[14px] font-semibold text-[#24599a]">#{tag}</span>
-                                            ))}
-                                        </div>
-                                    ) : null}
-                                    {intro.stats.length > 0 ? (
-                                        <div className="flex flex-wrap gap-x-4 gap-y-2 pt-1 text-[12px] font-medium text-text-tertiary">
-                                            {intro.stats.map((item) => (
-                                                <span key={item.label}>{item.value} {item.label}</span>
-                                            ))}
-                                        </div>
-                                    ) : null}
-                                    {intro.noteHref ? (
-                                        <a
-                                            href={intro.noteHref}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-black/[0.04] px-3 text-[12px] font-bold text-text-secondary transition-colors hover:bg-black/[0.08] hover:text-text-primary"
-                                        >
-                                            <ExternalLink className="h-3.5 w-3.5" />
-                                            打开原文
-                                        </a>
-                                    ) : null}
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                    原笔记
+                                </a>
+                            ) : null}
+                        </div>
+                        <div className="space-y-4 px-4 py-4">
+                            <h3 className="text-[18px] font-extrabold leading-snug tracking-tight text-text-primary">{title}</h3>
+                            {intro.contentText ? (
+                                <div className="max-h-[360px] overflow-y-auto whitespace-pre-wrap pr-1 text-sm leading-7 text-text-secondary custom-scrollbar">
+                                    {intro.contentText}
                                 </div>
-                            </div>
+                            ) : null}
+                            {intro.tags.length > 0 ? (
+                                <div className="flex flex-wrap gap-2 pt-1">
+                                    {intro.tags.map((tag) => (
+                                        <span key={tag} className="text-[13px] font-semibold text-[#24599a]">#{tag}</span>
+                                    ))}
+                                </div>
+                            ) : null}
+                            {intro.stats.length > 0 ? (
+                                <div className="flex flex-wrap gap-x-4 gap-y-2 pt-1 text-[12px] font-medium text-text-tertiary">
+                                    {intro.stats.map((item) => (
+                                        <span key={item.label}>{item.value} {item.label}</span>
+                                    ))}
+                                </div>
+                            ) : null}
                         </div>
                     </div>
                 </div>
-            ) : null}
-        </>
+            </div>
+        </section>
     );
 }
 
@@ -1040,6 +1081,27 @@ function SkillAuthorHomeHeader({ profile }: { profile: SkillAuthorProfile }) {
     );
 }
 
+function CollectionAvatar({ collection }: { collection: SkillMarketCollection }) {
+    const imageUrl = collectionImageUrl(collection);
+    const [failedUrl, setFailedUrl] = useState('');
+    const title = collectionTitle(collection);
+    const showImage = imageUrl && failedUrl !== imageUrl;
+
+    return showImage ? (
+        <img
+            src={imageUrl}
+            alt=""
+            className="h-12 w-12 shrink-0 rounded-xl border border-border object-cover"
+            loading="lazy"
+            onError={() => setFailedUrl(imageUrl)}
+        />
+    ) : (
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-surface-primary text-sm font-semibold leading-none text-text-tertiary">
+            {skillInitials(title)}
+        </span>
+    );
+}
+
 function EmptyPanel({ title, action }: { title: string; action?: ReactNode }) {
     return (
         <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-primary/45 text-center">
@@ -1061,7 +1123,9 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
     const initialMarketCache = initialMarketplaceCache();
     const [marketItems, setMarketItems] = useState<ThriveSkillMarketplaceItem[]>(() => initialMarketCache?.items || []);
     const [marketSources, setMarketSources] = useState<SkillMarketSource[]>(() => initialMarketCache?.sources || []);
+    const [marketCollections, setMarketCollections] = useState<SkillMarketCollection[]>(() => initialMarketCache?.collections || []);
     const [selectedCategory, setSelectedCategory] = useState('');
+    const [selectedCollectionKey, setSelectedCollectionKey] = useState('');
     const [query, setQuery] = useState('');
     const [isMarketLoading, setIsMarketLoading] = useState(() => !initialMarketCache);
     const [busyMarketItemId, setBusyMarketItemId] = useState('');
@@ -1083,9 +1147,25 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
         return counts;
     }, [marketItems]);
 
+    const selectedCollection = useMemo(
+        () => marketCollections.find((collection) => collectionKey(collection) === selectedCollectionKey) || null,
+        [marketCollections, selectedCollectionKey],
+    );
+
     const filteredMarketItems = useMemo(() => {
         const normalizedQuery = normalizeKey(query);
+        const selectedPackageKeys = new Set(
+            selectedCollection
+                ? collectionPackageKeys(selectedCollection).map((key) => normalizeKey(key))
+                : [],
+        );
         return marketItems.filter((item) => {
+            if (selectedPackageKeys.size > 0) {
+                const itemKey = normalizeKey(item.packageId || item.id || item.name);
+                if (!selectedPackageKeys.has(itemKey)) {
+                    return false;
+                }
+            }
             const displayTags = skillDisplayTags(item);
             const categoryMatches = !selectedCategory || skillMatchesCategory(item, selectedCategory);
             const queryMatches = !normalizedQuery || [
@@ -1101,7 +1181,7 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
             ].some((value) => normalizeKey(value).includes(normalizedQuery));
             return categoryMatches && queryMatches;
         });
-    }, [marketItems, query, selectedCategory]);
+    }, [marketItems, query, selectedCategory, selectedCollection]);
 
     const categoryMarketSections = useMemo(() => (
         SKILL_CATEGORY_LABELS
@@ -1127,11 +1207,11 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
         [selectedAuthorKey, allKnownMarketItems],
     );
 
-    const hasFocusedFilters = Boolean(query.trim() || selectedCategory);
+    const hasFocusedFilters = Boolean(query.trim() || selectedCategory || selectedCollectionKey);
     const primaryMarketItems = hasFocusedFilters ? filteredMarketItems : filteredMarketItems.slice(0, 6);
     const secondaryMarketItems = hasFocusedFilters ? [] : filteredMarketItems.slice(6);
     const primarySectionTitle = hasFocusedFilters
-        ? (selectedCategory || '搜索结果')
+        ? (selectedCollection?.title || selectedCategory || '搜索结果')
         : '精选';
     const showCategorySections = !hasFocusedFilters && categoryMarketSections.length > 0;
 
@@ -1142,6 +1222,7 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
         const cached = cachedMarketplaceEntry(cacheKey, marketId);
         if (cached) {
             setMarketSources(cached.sources);
+            setMarketCollections(cached.collections);
             setMarketItems(cached.items);
             setStatusMessage('');
             setIsMarketLoading(false);
@@ -1157,9 +1238,11 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                 throw new Error(result.error || '技能市场加载失败');
             }
             const sources = Array.isArray(result.sources) ? result.sources : [];
+            const collections = Array.isArray(result.collections) ? result.collections : [];
             const items = Array.isArray(result.items) ? result.items : Array.isArray(result.skills) ? result.skills : [];
-            setSkillMarketCacheEntry(cacheKey, { sources, items });
+            setSkillMarketCacheEntry(cacheKey, { sources, collections, items });
             setMarketSources(sources);
+            setMarketCollections(collections);
             setMarketItems(items);
             setStatusMessage('');
         } catch (error) {
@@ -1191,7 +1274,7 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
         setStatusMessage('');
 
         const cached = skillDetailCache.get(key);
-        if (cached) return;
+        if (cached && skillIntroNote(cached.item || skill)) return;
 
         const requestId = detailRequestRef.current + 1;
         detailRequestRef.current = requestId;
@@ -1329,10 +1412,19 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
         });
     }, [onTrySkillInChat]);
 
-    const renderMarketItem = (skill: ThriveSkillMarketplaceItem) => {
+    const openCategoryPage = (category: string) => {
+        setSelectedCategory(category);
+        setSelectedCollectionKey('');
+        setQuery('');
+    };
+
+    const renderMarketItem = (skill: ThriveSkillMarketplaceItem, hiddenCategory = '') => {
         const key = marketItemKey(skill);
         const installed = Boolean(skill.installed);
-        const displayTags = skillDisplayTags(skill).slice(0, 2);
+        const hiddenCategoryLabel = skillCategoryLabel(hiddenCategory);
+        const displayTags = skillDisplayTags(skill)
+            .filter((tag) => !hiddenCategoryLabel || skillCategoryLabel(tag) !== hiddenCategoryLabel)
+            .slice(0, 2);
         return (
             <button
                 key={key}
@@ -1354,26 +1446,98 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                     <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
                         {skill.description || skill.repo || '暂无描述'}
                     </p>
-                    <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
-                        {displayTags.map((tag) => (
-                            <SkillTag key={`${key}:tag:${tag}`}>{tag}</SkillTag>
-                        ))}
-                    </div>
+                    {displayTags.length > 0 ? (
+                        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                            {displayTags.map((tag) => (
+                                <SkillTag key={`${key}:tag:${tag}`}>{tag}</SkillTag>
+                            ))}
+                        </div>
+                    ) : null}
                 </div>
             </button>
         );
     };
 
-    const renderMarketSection = (title: string, items: ThriveSkillMarketplaceItem[], countLabel?: string, sectionKey?: string) => {
+    const renderMarketSection = (
+        title: string,
+        items: ThriveSkillMarketplaceItem[],
+        countLabel?: string,
+        sectionKey?: string,
+        options: {
+            hiddenCategory?: string;
+            previewLimit?: number;
+            onViewAll?: () => void;
+        } = {},
+    ) => {
         if (items.length === 0) return null;
+        const visibleItems = options.previewLimit ? items.slice(0, options.previewLimit) : items;
+        const canViewAll = Boolean(options.onViewAll && visibleItems.length < items.length);
         return (
             <section key={sectionKey || title} className="space-y-3">
                 <div className="flex items-end justify-between gap-3 border-b border-divider pb-3">
                     <h2 className="text-base font-semibold text-text-primary">{title}</h2>
-                    <span className="text-xs text-text-tertiary">{countLabel || `${items.length} 个技能`}</span>
+                    <div className="flex items-center gap-3">
+                        <span className="text-xs text-text-tertiary">{countLabel || `${items.length} 个技能`}</span>
+                        {canViewAll ? (
+                            <button
+                                type="button"
+                                onClick={options.onViewAll}
+                                className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
+                            >
+                                查看全部
+                                <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.8} />
+                            </button>
+                        ) : null}
+                    </div>
                 </div>
                 <div className="grid grid-cols-1 gap-x-8 gap-y-3 lg:grid-cols-2">
-                    {items.map(renderMarketItem)}
+                    {visibleItems.map((item) => renderMarketItem(item, options.hiddenCategory))}
+                </div>
+            </section>
+        );
+    };
+
+    const renderCollectionSection = () => {
+        if (marketCollections.length === 0) return null;
+        return (
+            <section className="space-y-3">
+                <div className="flex items-end justify-between gap-3 border-b border-divider pb-3">
+                    <h2 className="text-base font-semibold text-text-primary">精选合集</h2>
+                    <span className="text-xs text-text-tertiary">{marketCollections.length} 个合集</span>
+                </div>
+                <div className="grid grid-cols-1 gap-x-8 gap-y-3 lg:grid-cols-2">
+                    {marketCollections.map((collection) => {
+                        const key = collectionKey(collection);
+                        const title = collectionTitle(collection);
+                        const packageKeys = collectionPackageKeys(collection);
+                        const description = String(collection.subtitle || collection.description || '').trim();
+                        return (
+                            <button
+                                key={key || title}
+                                type="button"
+                                onClick={() => {
+                                    setSelectedCollectionKey(key);
+                                    setSelectedCategory('');
+                                    setQuery('');
+                                }}
+                                className="group flex w-full min-w-0 items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-surface-primary/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/35"
+                            >
+                                <CollectionAvatar collection={collection} />
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                        <h3 className="truncate text-sm font-semibold text-text-primary">{title}</h3>
+                                        {packageKeys.length > 0 ? (
+                                            <span className="shrink-0 rounded-full bg-surface-primary px-1.5 py-0.5 text-[10px] font-medium text-text-tertiary">{packageKeys.length}</span>
+                                        ) : null}
+                                    </div>
+                                    {description ? (
+                                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">{description}</p>
+                                    ) : null}
+                                </div>
+                                <ArrowRight className="h-4 w-4 shrink-0 text-text-tertiary transition-colors group-hover:text-text-primary" strokeWidth={1.7} />
+                            </button>
+                        );
+                    })}
                 </div>
             </section>
         );
@@ -1619,10 +1783,13 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                         <div className="flex flex-wrap items-center gap-2">
                             <button
                                 type="button"
-                                onClick={() => setSelectedCategory('')}
+                                onClick={() => {
+                                    setSelectedCategory('');
+                                    setSelectedCollectionKey('');
+                                }}
                                 className={clsx(
                                     'inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs font-medium transition-colors',
-                                    !selectedCategory
+                                    !selectedCategory && !selectedCollectionKey
                                         ? 'bg-accent-primary text-[rgb(var(--color-primary-text))]'
                                         : 'text-text-secondary hover:bg-surface-primary hover:text-text-primary'
                                 )}
@@ -1634,7 +1801,7 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                                 <button
                                     key={category}
                                     type="button"
-                                    onClick={() => setSelectedCategory(category)}
+                                    onClick={() => openCategoryPage(category)}
                                     className={clsx(
                                         'inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs font-medium transition-colors',
                                         selectedCategory === category
@@ -1646,6 +1813,16 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                                     <span className="opacity-75">{categoryCounts.get(category) || 0}</span>
                                 </button>
                             ))}
+                            {selectedCollection ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedCollectionKey('')}
+                                    className="inline-flex h-8 items-center gap-2 rounded-full bg-accent-primary px-3 text-xs font-medium text-[rgb(var(--color-primary-text))] transition-colors hover:bg-accent-hover"
+                                >
+                                    {collectionTitle(selectedCollection)}
+                                    <span className="opacity-75">{collectionPackageKeys(selectedCollection).length}</span>
+                                </button>
+                            ) : null}
                         </div>
 
                     </section>
@@ -1657,17 +1834,28 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                                 正在读取市场
                             </div>
                         ) : filteredMarketItems.length === 0 ? (
-                            <EmptyPanel title="没有找到匹配的技能" />
+                            <>
+                                {!hasFocusedFilters ? renderCollectionSection() : null}
+                                <EmptyPanel title="没有找到匹配的技能" />
+                            </>
                         ) : showCategorySections ? (
                             <>
+                                {!hasFocusedFilters ? renderCollectionSection() : null}
                                 {categoryMarketSections.map((section) => (
-                                    renderMarketSection(section.title, section.items, undefined, `category:${section.title}`)
+                                    renderMarketSection(section.title, section.items, undefined, `category:${section.title}`, {
+                                        hiddenCategory: section.title,
+                                        previewLimit: CATEGORY_SECTION_PREVIEW_ITEMS,
+                                        onViewAll: () => openCategoryPage(section.title),
+                                    })
                                 ))}
                                 {renderMarketSection('更多技能', uncategorizedMarketItems, undefined, 'uncategorized')}
                             </>
                         ) : (
                             <>
-                                {renderMarketSection(primarySectionTitle, primaryMarketItems, `${filteredMarketItems.length} 个技能`)}
+                                {!hasFocusedFilters ? renderCollectionSection() : null}
+                                {renderMarketSection(primarySectionTitle, primaryMarketItems, `${filteredMarketItems.length} 个技能`, undefined, {
+                                    hiddenCategory: selectedCategory,
+                                })}
                                 {renderMarketSection('更多技能', secondaryMarketItems)}
                             </>
                         )}

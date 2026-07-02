@@ -19,6 +19,7 @@ mod chat_title;
 mod cli_runtime;
 mod command_execution;
 mod commands;
+mod deep_link;
 mod desktop_io;
 mod diagnostics;
 mod document_ingest;
@@ -140,6 +141,10 @@ fn main() {
     register_global_debug_store(Arc::clone(&shared_store));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {
+            // The deep-link plugin receives the URL event through this plugin.
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
@@ -197,7 +202,10 @@ fn main() {
             commands::system::app_update::app_install_update,
             commands::redclaw::redclaw_runner_status
         ])
-        .setup(startup::run_setup_restore_sequence)
+        .setup(|app| {
+            deep_link::install(app)?;
+            startup::run_setup_restore_sequence(app)
+        })
         .build(tauri::generate_context!())
         .expect("failed to build desktop app")
         .run(|app, event| {

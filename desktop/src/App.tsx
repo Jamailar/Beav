@@ -24,6 +24,7 @@ import { useSubjectsModal } from './features/app-shell/useSubjectsModal';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
 import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
+import { useDeepLinkRouter } from './features/deep-link/useDeepLinkRouter';
 
 export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
 
@@ -131,6 +132,12 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setRedClawNavigationAction,
     setApprovalTargetDocketId,
     setPendingGenerationIntent,
+  });
+
+  useDeepLinkRouter({
+    navigateToView,
+    navigateToRedClaw,
+    setRedClawNavigationAction,
   });
 
   const {

@@ -344,6 +344,11 @@ pub(crate) fn classify_auth_error(error: &str) -> AuthErrorKind {
         || normalized.contains("refresh_token_expired")
         || normalized.contains("token_expired")
         || normalized.contains("token expired")
+        || normalized.contains("authentication required")
+        || normalized.contains("auth_required")
+        || normalized.contains("登录态已失效")
+        || normalized.contains("登录失效")
+        || normalized.contains("请重新登录")
         || normalized.contains("旧账号体系")
         || normalized.contains("legacy account realm")
     {
@@ -1123,6 +1128,14 @@ mod tests {
         );
         assert_eq!(
             classify_auth_error("refresh token expired"),
+            AuthErrorKind::ReauthRequired
+        );
+        assert_eq!(
+            classify_auth_error("Authentication required"),
+            AuthErrorKind::ReauthRequired
+        );
+        assert_eq!(
+            classify_auth_error("auth_required"),
             AuthErrorKind::ReauthRequired
         );
         assert_eq!(

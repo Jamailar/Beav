@@ -292,10 +292,41 @@ export interface SkillMarketSource {
   description?: string | null;
 }
 
+export interface SkillMarketCollection {
+  id: string;
+  collectionKey?: string;
+  collection_key?: string;
+  marketId?: string;
+  marketName?: string;
+  sourceKind?: string;
+  title: string;
+  subtitle?: string | null;
+  description?: string | null;
+  avatarUrl?: string | null;
+  avatar_url?: string | null;
+  coverUrl?: string | null;
+  cover_url?: string | null;
+  homepageUrl?: string | null;
+  homepage_url?: string | null;
+  externalUrl?: string | null;
+  external_url?: string | null;
+  author?: string | null;
+  authorAvatarUrl?: string | null;
+  author_avatar_url?: string | null;
+  authorHomepageUrl?: string | null;
+  author_homepage_url?: string | null;
+  packageKeys?: string[];
+  package_keys?: string[];
+  skillCount?: number;
+  skill_count?: number;
+  tags?: string[];
+}
+
 export interface ThriveSkillMarketplaceResponse {
   success: boolean;
   registryUrl?: string;
   sources?: SkillMarketSource[];
+  collections?: SkillMarketCollection[];
   items?: ThriveSkillMarketplaceItem[];
   skills: ThriveSkillMarketplaceItem[];
   warnings?: Array<{ marketId: string; marketName: string; error: string }>;
@@ -1983,6 +2014,11 @@ declare global {
           jobs?: Array<Record<string, unknown>>;
           error?: string;
         }>;
+      };
+      deepLink: {
+        consumePending: <T = { success?: boolean; items?: Array<Record<string, unknown>> }>() => Promise<T>;
+        onOpen: (listener: (...args: unknown[]) => void) => void;
+        offOpen: (listener: (...args: unknown[]) => void) => void;
       };
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       plugins: {

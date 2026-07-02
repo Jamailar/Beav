@@ -22,6 +22,53 @@ fn analytics_order_snapshot(order: &Value, payload: &Value) -> Value {
     next
 }
 
+fn payment_order_has_trade_no(order: &Value) -> bool {
+    payload_string(order, "out_trade_no")
+        .or_else(|| payload_string(order, "outTradeNo"))
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn payment_order_has_target(order: &Value) -> bool {
+    [
+        "payment_url",
+        "paymentUrl",
+        "payment_form",
+        "paymentForm",
+        "url",
+        "code_url",
+        "qr_code",
+        "qrCode",
+    ]
+    .into_iter()
+    .any(|key| {
+        payload_string(order, key)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    })
+}
+
+fn create_order_error_payload(error: impl Into<String>) -> Value {
+    let error = error.into();
+    let message = if auth::classify_auth_error(&error) == auth::AuthErrorKind::ReauthRequired {
+        "登录状态已失效，请重新登录后再充值".to_string()
+    } else {
+        format!("创建支付订单失败：{error}")
+    };
+    json!({ "success": false, "error": message })
+}
+
+fn unwrap_payment_order_response(response: crate::HttpJsonResponse) -> Result<Value, String> {
+    if !(200..300).contains(&response.status) {
+        return Err(response_error_message(&response.body));
+    }
+    let order = official_unwrap_response_payload(&response.body);
+    if !payment_order_has_trade_no(&order) || !payment_order_has_target(&order) {
+        return Err("订单返回缺少支付信息".to_string());
+    }
+    Ok(order)
+}
+
 pub(super) fn handle_billing_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -132,7 +179,7 @@ pub(super) fn handle_billing_channel(
             let points_to_deduct = payload_i64(payload, "pointsToDeduct")
                 .or_else(|| payload_i64(payload, "points_to_deduct"))
                 .unwrap_or(0);
-            let remote_order = run_authenticated_official_request_skip_preflight_refresh(
+            let remote_order = run_authenticated_official_request_response(
                 app,
                 state,
                 &mut settings,
@@ -149,28 +196,11 @@ pub(super) fn handle_billing_channel(
                     "pointsToDeduct": points_to_deduct,
                 })),
                 request_generation,
-            )
-            .map(|response| official_unwrap_response_payload(&response));
-            let order = match remote_order {
+            );
+            let order = match remote_order.and_then(unwrap_payment_order_response) {
                 Ok(order) => order,
-                Err(error) if product_id.is_some() => {
-                    return Ok(json!({ "success": false, "error": error }));
-                }
-                Err(_) => {
-                    let out_trade_no = make_id("order");
-                    let payment_form =
-                        create_official_payment_form(&out_trade_no, amount, &subject);
-                    json!({
-                        "id": out_trade_no,
-                        "out_trade_no": out_trade_no,
-                        "outTradeNo": out_trade_no,
-                        "status": "PENDING",
-                        "trade_status": "PENDING",
-                        "amount": amount,
-                        "subject": subject,
-                        "payment_form": payment_form,
-                        "created_at": now_iso(),
-                    })
+                Err(error) => {
+                    return Ok(create_order_error_payload(error));
                 }
             };
             let mut orders = official_settings_orders(&settings);
@@ -199,48 +229,42 @@ pub(super) fn handle_billing_channel(
             let mut settings = settings_snapshot.clone();
             let amount = payload_f64(payload, "amount").unwrap_or(9.9);
             let out_trade_no = make_id("wxpay");
-            let order = run_authenticated_official_request(
-                        app,
-                        state,
-                        &mut settings,
-                        "POST",
-                        "/payments/orders/wechat-native",
-                        Some(json!({
-                            "product_id": payload_string(payload, "productId").filter(|value| !value.trim().is_empty()),
-                            "productId": payload_string(payload, "productId").filter(|value| !value.trim().is_empty()),
-                            "amount": amount,
-                            "amount_yuan": amount,
-                            "subject": payload_string(payload, "subject").unwrap_or_else(|| format!("积分充值 ¥{amount:.2}")),
-                        })),
-                        request_generation,
-                    )
-                    .or_else(|_| {
-                        run_authenticated_official_request(
-                            app,
-                            state,
-                            &mut settings,
-                            "POST",
-                            "/wechat/pay/native",
-                            Some(json!({
-                                "amount": amount,
-                                "out_trade_no": out_trade_no,
-                            })),
-                            request_generation,
-                        )
-                    })
-                    .map(|response| official_unwrap_response_payload(&response))
-                    .unwrap_or_else(|_| {
-                        json!({
-                            "id": out_trade_no,
-                            "out_trade_no": out_trade_no,
-                            "outTradeNo": out_trade_no,
-                            "status": "PENDING",
-                            "trade_status": "PENDING",
-                            "amount": amount,
-                            "code_url": format!("weixin://wxpay/bizpayurl?pr={}", out_trade_no),
-                            "created_at": now_iso(),
-                        })
-                    });
+            let order = run_authenticated_official_request_response(
+                app,
+                state,
+                &mut settings,
+                "POST",
+                "/payments/orders/wechat-native",
+                Some(json!({
+                    "product_id": payload_string(payload, "productId").filter(|value| !value.trim().is_empty()),
+                    "productId": payload_string(payload, "productId").filter(|value| !value.trim().is_empty()),
+                    "amount": amount,
+                    "amount_yuan": amount,
+                    "subject": payload_string(payload, "subject").unwrap_or_else(|| format!("积分充值 ¥{amount:.2}")),
+                })),
+                request_generation,
+            )
+            .or_else(|_| {
+                run_authenticated_official_request_response(
+                    app,
+                    state,
+                    &mut settings,
+                    "POST",
+                    "/wechat/pay/native",
+                    Some(json!({
+                        "amount": amount,
+                        "out_trade_no": out_trade_no,
+                    })),
+                    request_generation,
+                )
+            })
+            .and_then(unwrap_payment_order_response);
+            let order = match order {
+                Ok(order) => order,
+                Err(error) => {
+                    return Ok(create_order_error_payload(error));
+                }
+            };
             let mut orders = official_settings_orders(&settings);
             orders.insert(0, order.clone());
             write_settings_json_array(&mut settings, "redbox_auth_orders_json", &orders);
@@ -389,7 +413,7 @@ pub(super) fn handle_billing_channel(
                 "amount": amount,
                 "currency": payload_string(payload, "currency").unwrap_or_else(|| "CNY".to_string()),
             });
-            let order = run_authenticated_official_request(
+            let order = run_authenticated_official_request_response(
                 app,
                 state,
                 &mut settings,
@@ -399,7 +423,7 @@ pub(super) fn handle_billing_channel(
                 request_generation,
             )
             .or_else(|_| {
-                run_authenticated_official_request(
+                run_authenticated_official_request_response(
                     app,
                     state,
                     &mut settings,
@@ -409,17 +433,13 @@ pub(super) fn handle_billing_channel(
                     request_generation,
                 )
             })
-            .unwrap_or_else(|_| {
-                json!({
-                    "id": make_id("official-order"),
-                    "status": "PENDING",
-                    "trade_status": "PENDING",
-                    "payment_url": official_base_url_from_settings(&settings),
-                    "amount": amount.unwrap_or(0.0),
-                    "product_id": product_id,
-                    "created_at": now_iso(),
-                })
-            });
+            .and_then(unwrap_payment_order_response);
+            let order = match order {
+                Ok(order) => order,
+                Err(error) => {
+                    return Ok(create_order_error_payload(error));
+                }
+            };
             apply_official_settings_update(
                 app,
                 state,
@@ -461,5 +481,41 @@ pub(super) fn handle_billing_channel(
             Ok(result)
         })()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unwrap_payment_order_response_accepts_real_payment_target() {
+        let order = unwrap_payment_order_response(crate::HttpJsonResponse {
+            status: 201,
+            body: json!({
+                "out_trade_no": "ALI20260702100127D2CE3D22",
+                "payment_form": "<form id=\"alipaysubmit\"></form>"
+            }),
+        })
+        .expect("valid page-pay order should pass");
+
+        assert_eq!(
+            payload_string(&order, "out_trade_no").as_deref(),
+            Some("ALI20260702100127D2CE3D22")
+        );
+    }
+
+    #[test]
+    fn unwrap_payment_order_response_rejects_missing_payment_target() {
+        let error = unwrap_payment_order_response(crate::HttpJsonResponse {
+            status: 201,
+            body: json!({
+                "out_trade_no": "order-1782984364553",
+                "status": "PENDING"
+            }),
+        })
+        .expect_err("orders without a payment target must not be treated as payable");
+
+        assert_eq!(error, "订单返回缺少支付信息");
     }
 }

@@ -37,7 +37,9 @@ serde_yaml = "0.9"
 sha2 = "0.10.8"
 shell-words = "1.1.0"
 tauri = { version = "2.0.0", features = ["protocol-asset"] }
+tauri-plugin-deep-link = "2.0.0"
 tauri-plugin-notification = "2.0.0"
+tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 tauri-plugin-updater = "2.0.0"
 tantivy = "0.26.0"
 tar = "0.4.43"

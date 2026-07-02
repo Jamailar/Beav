@@ -28,6 +28,7 @@ pub fn handle_system_channel(
         | "app:check-update"
         | "app:open-release-page"
         | "app:open-external-url"
+        | "app:deep-link-consume-pending"
         | "app:startup-migration-start"
         | "app:startup-migration-status"
         | "app:open-knowledge-api-guide"
@@ -67,6 +68,7 @@ pub fn handle_system_channel(
                 }
                 "app:open-release-page" => app_actions::open_release_page(payload),
                 "app:open-external-url" => app_actions::open_external_url(payload),
+                "app:deep-link-consume-pending" => Ok(crate::deep_link::consume_pending_events()),
                 "app:startup-migration-status" => crate::startup_migration_status_value(state),
                 "app:startup-migration-start" => crate::start_startup_migration(app, state),
                 "app:open-knowledge-api-guide" => app_actions::open_knowledge_api_guide(app),
