@@ -2184,13 +2184,102 @@ impl<'a> AppCliExecutor<'a> {
                         .or_else(|| payload_string_alias(payload, &["scope"])),
                 }),
             ),
-            "market-install" => self.call_channel(
-                "skills:market-install",
+            "marketplace" | "market-list" => self.call_channel(
+                "skills:marketplace:list",
                 json!({
-                    "slug": args
-                        .string(&["slug"])
+                    "marketId": args
+                        .string(&["market-id", "marketId"])
+                        .or_else(|| payload_string_alias(payload, &["marketId", "market-id"])),
+                    "query": args
+                        .string(&["query", "q"])
+                        .or_else(|| payload_string_alias(payload, &["query", "q"])),
+                }),
+            ),
+            "market-package-read" | "market-read" => self.call_channel(
+                "skills:marketplace:read-package",
+                json!({
+                    "marketId": args
+                        .string(&["market-id", "marketId"])
+                        .or_else(|| payload_string_alias(payload, &["marketId", "market-id"])),
+                    "packageId": args
+                        .string(&["package-id", "packageId", "id", "slug"])
                         .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "skills market-install requires --slug".to_string())?
+                        .or_else(|| payload_string_alias(payload, &["packageId", "package-id", "id", "slug"]))
+                        .ok_or_else(|| "skills market-package-read requires --package-id".to_string())?,
+                }),
+            ),
+            "market-install" => self.call_channel(
+                "skills:marketplace:install",
+                json!({
+                    "marketId": args
+                        .string(&["market-id", "marketId"])
+                        .or_else(|| payload_string_alias(payload, &["marketId", "market-id"])),
+                    "packageId": args
+                        .string(&["package-id", "packageId", "id", "slug"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .or_else(|| payload_string_alias(payload, &["packageId", "package-id", "id", "slug"])),
+                    "repo": args
+                        .string(&["repo", "source", "url"])
+                        .or_else(|| payload_string_alias(payload, &["repo", "source", "url"])),
+                    "ref": args
+                        .string(&["ref"])
+                        .or_else(|| payload_string_alias(payload, &["ref", "refName"])),
+                    "paths": payload_field(payload, "paths").cloned().unwrap_or(Value::Null),
+                    "scope": args
+                        .string(&["scope"])
+                        .or_else(|| payload_string_alias(payload, &["scope"])),
+                }),
+            ),
+            "market-update" => self.call_channel(
+                "skills:marketplace:update-installed",
+                json!({
+                    "marketId": args
+                        .string(&["market-id", "marketId"])
+                        .or_else(|| payload_string_alias(payload, &["marketId", "market-id"])),
+                    "packageId": args
+                        .string(&["package-id", "packageId", "id", "slug"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .or_else(|| payload_string_alias(payload, &["packageId", "package-id", "id", "slug"]))
+                        .ok_or_else(|| "skills market-update requires --package-id".to_string())?,
+                    "scope": args
+                        .string(&["scope"])
+                        .or_else(|| payload_string_alias(payload, &["scope"])),
+                }),
+            ),
+            "market-sources-list" => self.call_channel("skills:market-sources:list", json!({})),
+            "market-source-add" => self.call_channel(
+                "skills:market-sources:add",
+                json!({
+                    "name": args
+                        .string(&["name"])
+                        .or_else(|| payload_string_alias(payload, &["name"]))
+                        .ok_or_else(|| "skills market-source-add requires --name".to_string())?,
+                    "kind": args
+                        .string(&["kind", "type"])
+                        .or_else(|| payload_string_alias(payload, &["kind", "type"]))
+                        .unwrap_or_else(|| "github".to_string()),
+                    "source": args
+                        .string(&["source", "path", "url"])
+                        .or_else(|| payload_string_alias(payload, &["source", "path", "url"])),
+                    "repo": args
+                        .string(&["repo"])
+                        .or_else(|| payload_string_alias(payload, &["repo"])),
+                    "registryUrl": args
+                        .string(&["registry-url", "registryUrl"])
+                        .or_else(|| payload_string_alias(payload, &["registryUrl", "registry-url"])),
+                    "ref": args
+                        .string(&["ref"])
+                        .or_else(|| payload_string_alias(payload, &["ref", "refName"])),
+                }),
+            ),
+            "market-source-remove" => self.call_channel(
+                "skills:market-sources:remove",
+                json!({
+                    "id": args
+                        .string(&["id", "market-id", "marketId"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .or_else(|| payload_string_alias(payload, &["id", "marketId", "market-id"]))
+                        .ok_or_else(|| "skills market-source-remove requires --id".to_string())?,
                 }),
             ),
             "install-from-repo" | "install-from-github" => self.call_channel(

@@ -380,6 +380,7 @@
 | `skills:list` | 1 |
 | `skills:market-install` | 1 |
 | `skills:marketplace` | 1 |
+| `skills:marketplace:cache-avatar` | 1 |
 | `skills:save` | 1 |
 | `skills:uninstall` | 1 |
 | `skip` | 1 |
@@ -945,6 +946,7 @@
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:skills:list` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:skills:market-install` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:skills:marketplace` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai/marketplace.rs:skills:marketplace:cache-avatar` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:skills:save` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/skills_ai.rs:skills:uninstall` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/spaces.rs:spaces:create` | 1 |

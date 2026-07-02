@@ -3818,7 +3818,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <ArrowLeft className="h-4 w-4" />
                         </button>
                     )}
-                    <h1 className={clsx('leading-none font-semibold tracking-[0.01em] text-[rgb(var(--color-text-primary))]', isModalVariant ? 'text-[20px]' : 'text-[26px]')}>资产库</h1>
                     <div className="ml-auto flex items-center gap-3">
                         <button
                             onClick={() => void loadData()}

@@ -1212,6 +1212,20 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("skill.installFromRepo"),
             )
         }
+        ("skill" | "skills", "marketplace" | "market" | "registry") => app_cli_action_call(
+            "skills.manage",
+            payload_with_operation(payload, "marketplaceList"),
+            Some("Operate"),
+            Some("skill.marketplace"),
+        ),
+        ("skill" | "skills", "marketinstall" | "market-install" | "installfrommarket") => {
+            app_cli_action_call(
+                "skills.manage",
+                payload_with_operation(payload, "installFromMarket"),
+                Some("Operate"),
+                Some("skill.installFromMarket"),
+            )
+        }
         ("skill" | "skills", "uninstall" | "delete" | "remove") => app_cli_action_call(
             "skills.manage",
             payload_with_operation(payload, "uninstall"),
@@ -2088,6 +2102,13 @@ fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         "list" | "read" | "get" => Some("skills.inspect"),
         "invoke" => Some("skills.invoke"),
         "install" | "install_from_repo" | "install-from-repo" => Some("skills.manage"),
+        "marketplace"
+        | "market"
+        | "registry"
+        | "market_install"
+        | "market-install"
+        | "install_from_market"
+        | "install-from-market" => Some("skills.manage"),
         "uninstall" | "delete" | "remove" => Some("skills.manage"),
         _ => None,
     };
@@ -2095,6 +2116,11 @@ fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         Some("skills.manage") => {
             let operation = match action {
                 "uninstall" | "delete" | "remove" => "uninstall",
+                "marketplace" | "market" | "registry" => "marketplaceList",
+                "market_install"
+                | "market-install"
+                | "install_from_market"
+                | "install-from-market" => "installFromMarket",
                 _ => "installFromRepo",
             };
             app_cli_action_call(
@@ -3569,6 +3595,54 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("operation")),
             Some(&json!("uninstall"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_skill_marketplace_to_skills_manage() {
+        let listing = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "skills",
+                "operation": "marketplace",
+                "marketId": "thrive-community"
+            }),
+        );
+
+        assert_eq!(listing.name, "workflow");
+        assert_eq!(
+            listing.arguments.get("action"),
+            Some(&json!("skills.manage"))
+        );
+        assert_eq!(
+            listing
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("marketplaceList"))
+        );
+
+        let install = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "skills",
+                "operation": "market-install",
+                "packageId": "wwud",
+                "marketId": "thrive-community"
+            }),
+        );
+
+        assert_eq!(install.name, "workflow");
+        assert_eq!(
+            install.arguments.get("action"),
+            Some(&json!("skills.manage"))
+        );
+        assert_eq!(
+            install
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("operation")),
+            Some(&json!("installFromMarket"))
         );
     }
 

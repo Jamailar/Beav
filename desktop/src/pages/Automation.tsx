@@ -652,8 +652,6 @@ export function Automation({ isActive = true, onOpenRedClawSession }: Automation
       </button>
 
       <main className="automation-content">
-        <h1 className="automation-title">自动化</h1>
-
         <section className="automation-section" aria-label="当前自动化">
           <div className="automation-section-title">当前</div>
           <div className="automation-list">

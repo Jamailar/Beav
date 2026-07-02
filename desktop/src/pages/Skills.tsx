@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
     ArrowLeft,
-    ChevronDown,
+    ArrowRight,
     Download,
     ExternalLink,
     FileText,
     Loader2,
     MessageCircle,
+    PlayCircle,
     RefreshCw,
     Search,
+    X,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { PendingChatMessage } from '../features/app-shell/types';
-import type { SkillMarketSource, SkillMarketplaceInstallResponse, ThriveSkillMarketplaceItem } from '../types';
+import type { SkillMarketIntroNote, SkillMarketSource, SkillMarketplaceInstallResponse, ThriveSkillMarketplaceItem } from '../types';
 
 const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -40,9 +42,29 @@ type MarketplacePackageResponse = MarketplacePackageDetail & {
     error?: string;
 };
 
+type SkillAuthorProfile = {
+    key: string;
+    name: string;
+    avatarUrl: string;
+    homepageUrl: string;
+    bio: string;
+    skills: ThriveSkillMarketplaceItem[];
+};
+
 const ALL_MARKET_CACHE_KEY = '__all__';
-const MARKETPLACE_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-cache:v1';
+const MARKETPLACE_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-cache:v2';
 const MAX_AVATAR_CACHE_CONCURRENCY = 4;
+const RETIRED_SKILL_MARKET_SOURCE_IDS = new Set(['thrive-community']);
+const RED_SKILL_TAG_LABEL = 'RED skill';
+const SKILL_CATEGORY_LABELS = [
+    '调研与选题',
+    '热点追踪',
+    '文案风格',
+    '脚本优化',
+    '图片制作',
+    '视频制作',
+] as const;
+const SKILL_CATEGORY_KEYS = new Set<string>(SKILL_CATEGORY_LABELS.map(normalizeKey));
 const skillMarketCache = new Map<string, MarketplaceCacheEntry>();
 const skillDetailCache = new Map<string, MarketplacePackageDetail>();
 const skillAvatarDataUrlCache = new Map<string, string>();
@@ -83,6 +105,100 @@ function repoHref(repo?: string | null) {
     return '';
 }
 
+function isHttpUrl(value?: string | null) {
+    return /^https?:\/\//i.test(String(value || '').trim());
+}
+
+function httpsAssetUrl(value?: string | null) {
+    const clean = String(value || '').trim();
+    if (!clean) return '';
+    return clean.replace(/^http:\/\//i, 'https://');
+}
+
+function recordText(record: Record<string, unknown>, keys: string[]) {
+    for (const key of keys) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+}
+
+function recordList(value: unknown) {
+    if (!Array.isArray(value)) return [];
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+function recordNumber(record: Record<string, unknown>, keys: string[]) {
+    for (const key of keys) {
+        const value = record[key];
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        if (typeof value === 'string') {
+            const parsed = Number(value.replace(/,/g, '').trim());
+            if (Number.isFinite(parsed)) return parsed;
+        }
+    }
+    return null;
+}
+
+function selectPlayableIntroVideoUrl(video: unknown) {
+    if (!isRecord(video)) return '';
+    const direct = recordText(video, [
+        'playbackUrl',
+        'playback_url',
+        'ossUrl',
+        'oss_url',
+        'fileUrl',
+        'file_url',
+    ]);
+    if (isHttpUrl(direct) || direct.startsWith('/uploads/')) return httpsAssetUrl(direct);
+
+    const candidates: Array<{ url: string; score: number }> = [];
+    const pushCandidate = (url: unknown, score = 0) => {
+        const clean = String(url || '').trim();
+        if (!isHttpUrl(clean) && !clean.startsWith('/uploads/')) return;
+        const lower = clean.toLowerCase();
+        let nextScore = score;
+        if (lower.includes('/259/') || lower.includes('h264') || lower.includes('x264')) nextScore += 40;
+        if (lower.includes('/309/') || lower.includes('h265') || lower.includes('x265') || lower.includes('hevc')) nextScore -= 20;
+        if (lower.includes('.mp4')) nextScore += 10;
+        candidates.push({ url: clean, score: nextScore });
+    };
+
+    const streams = Array.isArray(video.streams) ? video.streams : [];
+    streams.forEach((rawStream) => {
+        if (!isRecord(rawStream)) return;
+        const codec = String(rawStream.codec || rawStream.video_codec || rawStream.videoCodec || '').toLowerCase();
+        const streamType = String(rawStream.stream_type || rawStream.streamType || '').trim();
+        let score = 20;
+        if (codec.includes('264') || streamType === '259') score += 40;
+        if (codec.includes('265') || codec.includes('hevc') || streamType === '309') score -= 20;
+        pushCandidate(rawStream.master_url || rawStream.masterUrl, score);
+        recordList(rawStream.backup_urls || rawStream.backupUrls).forEach((url) => pushCandidate(url, score - 5));
+    });
+
+    recordList(video.urls).forEach((url) => pushCandidate(url, 0));
+    pushCandidate(video.first_url || video.firstUrl, -10);
+    pushCandidate(video.source_url || video.sourceUrl, -20);
+
+    const seen = new Set<string>();
+    return httpsAssetUrl(candidates
+        .filter((item) => {
+            if (seen.has(item.url)) return false;
+            seen.add(item.url);
+            return true;
+        })
+        .sort((left, right) => right.score - left.score)[0]?.url || '');
+}
+
+function formatIntroCount(value: number | null) {
+    if (value === null) return '';
+    if (value >= 10000) {
+        const compact = (value / 10000).toFixed(value >= 100000 ? 0 : 1).replace(/\.0$/, '');
+        return `${compact}万`;
+    }
+    return value.toLocaleString('zh-CN');
+}
+
 function githubOwnerAvatarUrl(repo?: string | null) {
     const clean = String(repo || '').trim();
     if (!clean) return '';
@@ -102,8 +218,214 @@ function skillAvatarUrl(skill: ThriveSkillMarketplaceItem) {
         skill.logoUrl,
         skill.imageUrl,
         skill.thumbnailUrl,
+        skill.authorAvatarUrl,
         githubOwnerAvatarUrl(skill.repo),
     ].map((value) => String(value || '').trim()).find(Boolean) || '';
+}
+
+function redSkillKey(value: unknown) {
+    return normalizeKey(value).replace(/[\s_-]+/g, '');
+}
+
+function isRedSkillTag(value: unknown) {
+    return redSkillKey(value) === 'redskill';
+}
+
+function isRedSkillText(value: unknown) {
+    return redSkillKey(value).includes('redskill');
+}
+
+function skillCategoryLabel(value: unknown) {
+    const normalized = normalizeKey(value);
+    return SKILL_CATEGORY_LABELS.find((category) => normalizeKey(category) === normalized) || '';
+}
+
+function pushUniqueTag(tags: string[], value: unknown) {
+    const clean = String(value || '').trim();
+    if (!clean) return;
+    if (tags.some((tag) => normalizeKey(tag) === normalizeKey(clean))) return;
+    tags.push(clean);
+}
+
+function prioritizeSkillCategoryTags(tags: string[]) {
+    const categories: string[] = [];
+    const rest: string[] = [];
+    tags.forEach((tag) => {
+        const category = skillCategoryLabel(tag);
+        if (category) {
+            pushUniqueTag(categories, category);
+            return;
+        }
+        pushUniqueTag(rest, tag);
+    });
+    return [...categories, ...rest];
+}
+
+function skillDisplayTags(skill: ThriveSkillMarketplaceItem) {
+    const tags: string[] = [];
+    let hasRedSkillTag = false;
+    (skill.tags || []).forEach((tag) => {
+        if (isRedSkillTag(tag)) {
+            hasRedSkillTag = true;
+            return;
+        }
+        pushUniqueTag(tags, tag);
+    });
+    const orderedTags = prioritizeSkillCategoryTags(tags);
+    const isRedSkill = hasRedSkillTag
+        || isRedSkillText(skill.marketName)
+        || isRedSkillText(skill.marketId)
+        || isRedSkillText(skill.sourceKind);
+    if (isRedSkill) {
+        return [RED_SKILL_TAG_LABEL, ...orderedTags.filter((tag) => !isRedSkillTag(tag))];
+    }
+    return orderedTags;
+}
+
+function skillCategories(skill: ThriveSkillMarketplaceItem) {
+    const categories: string[] = [];
+    skillDisplayTags(skill).forEach((tag) => {
+        const category = skillCategoryLabel(tag);
+        if (!category || categories.includes(category)) return;
+        categories.push(category);
+    });
+    return categories;
+}
+
+function primarySkillCategory(skill: ThriveSkillMarketplaceItem) {
+    return skillCategories(skill)[0] || '';
+}
+
+function skillMatchesCategory(skill: ThriveSkillMarketplaceItem, category: string) {
+    const selected = skillCategoryLabel(category);
+    if (!selected) return true;
+    return skillCategories(skill).includes(selected);
+}
+
+function skillAuthorName(skill: ThriveSkillMarketplaceItem) {
+    return String(skill.author || '').trim();
+}
+
+function skillAuthorHref(skill: ThriveSkillMarketplaceItem) {
+    const href = String(skill.authorHomepageUrl || '').trim();
+    return isHttpUrl(href) ? href : '';
+}
+
+function skillIntroNote(skill: ThriveSkillMarketplaceItem) {
+    return skill.introNote || skill.intro_note || null;
+}
+
+type SkillIntroNoteView = {
+    title: string;
+    contentText: string;
+    noteHref: string;
+    noteType: string;
+    coverUrl: string;
+    playbackUrl: string;
+    authorName: string;
+    authorAvatarUrl: string;
+    tags: string[];
+    stats: Array<{ label: string; value: string }>;
+};
+
+function normalizeSkillIntroNote(note?: SkillMarketIntroNote | null): SkillIntroNoteView | null {
+    if (!isRecord(note)) return null;
+    const title = recordText(note, ['title']);
+    const contentText = recordText(note, ['contentText', 'content_text']);
+    const noteUrl = recordText(note, ['resolvedNoteUrl', 'resolved_note_url', 'noteUrl', 'note_url']);
+    const noteHref = isHttpUrl(noteUrl) ? noteUrl : '';
+    const noteType = recordText(note, ['noteType', 'note_type']);
+    const images = recordList(note.images);
+    const playbackUrl = selectPlayableIntroVideoUrl(note.video);
+    const coverUrl = httpsAssetUrl(recordText(note, ['coverUrl', 'cover_url']) || images[0]);
+    const authorName = recordText(note, ['authorName', 'author_name']);
+    const authorAvatarUrl = httpsAssetUrl(recordText(note, ['authorAvatarUrl', 'author_avatar_url']));
+    const tags = recordList(note.tags);
+    const statsRecord = isRecord(note.stats) ? note.stats : {};
+    const statItems = [
+        ['赞', recordNumber(statsRecord, ['likedCount', 'liked_count'])],
+        ['收藏', recordNumber(statsRecord, ['collectedCount', 'collected_count'])],
+        ['评论', recordNumber(statsRecord, ['commentCount', 'comment_count'])],
+        ['分享', recordNumber(statsRecord, ['shareCount', 'share_count'])],
+    ] as const;
+    const stats = statItems
+        .map(([label, value]) => ({ label, value: formatIntroCount(value) }))
+        .filter((item) => item.value);
+    if (!title && !contentText && !coverUrl && !noteHref) return null;
+    return {
+        title,
+        contentText,
+        noteHref,
+        noteType,
+        coverUrl,
+        playbackUrl,
+        authorName,
+        authorAvatarUrl,
+        tags,
+        stats,
+    };
+}
+
+async function openExternalHttpUrl(value: string) {
+    const href = String(value || '').trim();
+    if (!isHttpUrl(href)) return;
+    try {
+        const result = await window.ipcRenderer.openExternalUrl(href);
+        if (result?.success === false) {
+            throw new Error(result.error || 'openExternalUrl failed');
+        }
+    } catch (error) {
+        console.warn('Failed to open external url:', error);
+        window.open(href, '_blank', 'noopener,noreferrer');
+    }
+}
+
+function skillAuthorKey(skill: ThriveSkillMarketplaceItem) {
+    const href = skillAuthorHref(skill);
+    if (href) return `url:${normalizeKey(href)}`;
+    const name = skillAuthorName(skill);
+    if (name) return `name:${normalizeKey(name)}`;
+    return '';
+}
+
+function firstText(values: unknown[]) {
+    return values
+        .map((value) => String(value || '').trim())
+        .find(Boolean) || '';
+}
+
+function authorProfileForKey(authorKey: string, items: ThriveSkillMarketplaceItem[]): SkillAuthorProfile | null {
+    if (!authorKey) return null;
+    const skills = items.filter((item) => skillAuthorKey(item) === authorKey);
+    if (skills.length === 0) return null;
+    return {
+        key: authorKey,
+        name: firstText(skills.map((skill) => skill.author)),
+        avatarUrl: firstText(skills.map((skill) => skill.authorAvatarUrl)),
+        homepageUrl: firstText(skills.map((skill) => skillAuthorHref(skill))),
+        bio: firstText(skills.map((skill) => skill.authorBio)),
+        skills,
+    };
+}
+
+function knownMarketplaceItems(
+    marketItems: ThriveSkillMarketplaceItem[],
+    selectedSkill: ThriveSkillMarketplaceItem | null,
+    selectedSkillDetail: MarketplacePackageDetail | null,
+) {
+    const items = new Map<string, ThriveSkillMarketplaceItem>();
+    marketItems.forEach((item) => {
+        items.set(marketItemKey(item), item);
+    });
+    const detailItem = selectedSkillDetail?.item || selectedSkill;
+    if (detailItem) {
+        const key = marketItemKey(detailItem);
+        items.set(key, {
+            ...(items.get(key) || {}),
+            ...detailItem,
+        });
+    }
+    return [...items.values()];
 }
 
 function pushUniqueSkillName(candidates: string[], value: unknown) {
@@ -141,12 +463,30 @@ function skillRuntimeNameCandidates(skill: ThriveSkillMarketplaceItem) {
     return candidates;
 }
 
+function isRetiredSkillMarketSourceId(value: unknown) {
+    return RETIRED_SKILL_MARKET_SOURCE_IDS.has(normalizeKey(value));
+}
+
+function isRetiredSkillMarketItem(item: ThriveSkillMarketplaceItem) {
+    if (isRetiredSkillMarketSourceId(item.marketId)) return true;
+    return normalizeKey(item.sourceKind) === 'legacy-thrive'
+        && normalizeKey(item.marketName) === 'thrive community';
+}
+
+function sanitizeMarketplaceCacheEntry(entry: MarketplaceCacheEntry): MarketplaceCacheEntry {
+    return {
+        sources: entry.sources.filter((source) => !isRetiredSkillMarketSourceId(source.id)),
+        items: entry.items.filter((item) => !isRetiredSkillMarketItem(item)),
+    };
+}
+
 function asMarketplaceCacheEntry(value: unknown): MarketplaceCacheEntry | null {
     if (!isRecord(value)) return null;
     const sources = Array.isArray(value.sources) ? value.sources as SkillMarketSource[] : [];
     const items = Array.isArray(value.items) ? value.items as ThriveSkillMarketplaceItem[] : [];
-    if (sources.length === 0 && items.length === 0) return null;
-    return { sources, items };
+    const entry = sanitizeMarketplaceCacheEntry({ sources, items });
+    if (entry.sources.length === 0 && entry.items.length === 0) return null;
+    return entry;
 }
 
 function hydrateSkillMarketCache() {
@@ -172,7 +512,10 @@ function persistSkillMarketCache() {
     try {
         const entries: Record<string, MarketplaceCacheEntry> = {};
         skillMarketCache.forEach((entry, key) => {
-            entries[key] = entry;
+            const sanitized = sanitizeMarketplaceCacheEntry(entry);
+            if (sanitized.sources.length > 0 || sanitized.items.length > 0) {
+                entries[key] = sanitized;
+            }
         });
         window.localStorage.setItem(
             MARKETPLACE_CACHE_STORAGE_KEY,
@@ -184,21 +527,21 @@ function persistSkillMarketCache() {
 }
 
 function setSkillMarketCacheEntry(key: string, entry: MarketplaceCacheEntry) {
-    skillMarketCache.set(key, entry);
+    skillMarketCache.set(key, sanitizeMarketplaceCacheEntry(entry));
     persistSkillMarketCache();
 }
 
 function cachedMarketplaceEntry(cacheKey: string, marketId: string): MarketplaceCacheEntry | undefined {
     hydrateSkillMarketCache();
     const exact = skillMarketCache.get(cacheKey);
-    if (exact) return exact;
+    if (exact) return sanitizeMarketplaceCacheEntry(exact);
     if (!marketId) return undefined;
     const all = skillMarketCache.get(ALL_MARKET_CACHE_KEY);
     if (!all) return undefined;
-    return {
+    return sanitizeMarketplaceCacheEntry({
         sources: all.sources,
         items: all.items.filter((item) => item.marketId === marketId),
-    };
+    });
 }
 
 function initialMarketplaceCache() {
@@ -324,17 +667,376 @@ function SkillAvatar({ skill, size = 'list' }: { skill: ThriveSkillMarketplaceIt
 }
 
 function SkillTag({ children, active = false }: { children: ReactNode; active?: boolean }) {
+    const isRedSkill = typeof children === 'string' && isRedSkillTag(children);
     return (
         <span
             className={clsx(
-                'inline-flex h-6 max-w-full items-center rounded-full border px-2.5 text-[11px] font-medium',
+                'inline-flex h-6 max-w-full items-center rounded-full border px-2.5 text-[11px]',
+                isRedSkill ? 'font-bold' : 'font-medium',
                 active
                     ? 'border-accent-primary bg-accent-primary text-[rgb(var(--color-primary-text))]'
+                    : isRedSkill
+                        ? 'border-[#ff2442] bg-[#ff2442] text-white'
                     : 'border-border bg-surface-primary/70 text-text-secondary'
             )}
         >
             <span className="truncate">{children}</span>
         </span>
+    );
+}
+
+function SkillIntroNotePanel({ note }: { note?: SkillMarketIntroNote | null }) {
+    const intro = normalizeSkillIntroNote(note);
+    const [isOpen, setIsOpen] = useState(false);
+    const [failedCoverUrl, setFailedCoverUrl] = useState('');
+    const showCover = Boolean(intro?.coverUrl && failedCoverUrl !== intro.coverUrl);
+
+    useEffect(() => {
+        setFailedCoverUrl('');
+    }, [intro?.coverUrl]);
+
+    if (!intro) return null;
+
+    const isVideoNote = normalizeKey(intro.noteType) === 'video';
+    const noteLabel = isVideoNote ? '小红书视频' : '小红书图文';
+    const badgeClassName = isVideoNote ? 'bg-red-500/90 text-white' : 'bg-rose-500/90 text-white';
+    const title = intro.title || '小红书笔记';
+    const authorInitial = (intro.authorName || '小红书用户').slice(0, 1);
+
+    return (
+        <>
+            <section className="space-y-3">
+                <h2 className="text-sm font-semibold text-text-primary">小红书笔记</h2>
+                <button
+                    type="button"
+                    onClick={() => setIsOpen(true)}
+                    className="group relative mb-4 w-full max-w-[260px] overflow-hidden rounded-lg border border-black/[0.04] bg-white text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
+                >
+                    <div className="relative aspect-[3/4] w-full overflow-hidden bg-black/[0.02]">
+                        <span className={clsx('absolute right-3 top-3 z-10 rounded-lg border border-white/20 px-2 py-1 text-[9px] font-bold uppercase tracking-widest shadow-sm backdrop-blur-md', badgeClassName)}>
+                            {noteLabel}
+                        </span>
+                        {showCover ? (
+                            <img
+                                src={intro.coverUrl}
+                                alt=""
+                                className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
+                                loading="lazy"
+                                decoding="async"
+                                onError={() => setFailedCoverUrl(intro.coverUrl)}
+                            />
+                        ) : (
+                            <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                                {isVideoNote ? <PlayCircle className="h-8 w-8 opacity-30" /> : <FileText className="h-8 w-8 opacity-30" />}
+                            </div>
+                        )}
+                        {isVideoNote ? (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/10 opacity-0 transition-opacity group-hover:opacity-100">
+                                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/30 bg-white/20 text-white shadow-xl backdrop-blur-md">
+                                    <PlayCircle className="h-5 w-5" />
+                                </div>
+                            </div>
+                        ) : null}
+                    </div>
+                    <div className="p-4">
+                        <div className="line-clamp-2 text-[14px] font-extrabold leading-tight tracking-tight text-text-primary transition-colors group-hover:text-accent-primary">
+                            {title}
+                        </div>
+                    </div>
+                </button>
+            </section>
+
+            {isOpen ? (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
+                    onClick={() => setIsOpen(false)}
+                >
+                    <div
+                        className="mx-4 grid max-h-[90vh] w-full max-w-[980px] grid-cols-[minmax(0,1fr)_360px] overflow-hidden rounded-[28px] border border-white/20 bg-white shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] max-[900px]:grid-cols-1"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="relative flex min-h-[520px] items-center justify-center bg-[#f8f5f0] max-[900px]:min-h-[320px]">
+                            {isVideoNote && intro.playbackUrl ? (
+                                <video
+                                    src={intro.playbackUrl}
+                                    poster={showCover ? intro.coverUrl : undefined}
+                                    className="max-h-full max-w-full bg-black"
+                                    controls
+                                    playsInline
+                                    preload="metadata"
+                                />
+                            ) : showCover ? (
+                                <img
+                                    src={intro.coverUrl}
+                                    alt=""
+                                    className="max-h-full max-w-full object-contain"
+                                    loading="lazy"
+                                    decoding="async"
+                                    onError={() => setFailedCoverUrl(intro.coverUrl)}
+                                />
+                            ) : (
+                                <div className="text-sm font-semibold text-text-tertiary">暂无媒体</div>
+                            )}
+                        </div>
+                        <div className="flex min-h-0 flex-col border-l border-black/[0.06] bg-white max-[900px]:border-l-0">
+                            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-black/[0.06] px-5 py-4">
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-black/[0.04] ring-1 ring-black/[0.05]">
+                                        {intro.authorAvatarUrl ? (
+                                            <img src={intro.authorAvatarUrl} alt="" className="h-full w-full object-cover" />
+                                        ) : (
+                                            <div className="flex h-full w-full items-center justify-center text-sm font-bold text-text-tertiary">{authorInitial}</div>
+                                        )}
+                                    </div>
+                                    <div className="min-w-0">
+                                        <div className="truncate text-[16px] font-semibold text-text-primary">{intro.authorName || '小红书用户'}</div>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsOpen(false)}
+                                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary transition-all hover:bg-black/[0.08] hover:text-text-primary active:scale-90"
+                                    aria-label="关闭"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            </div>
+                            <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
+                                <div className="space-y-4 px-5 py-5">
+                                    <h1 className="text-[19px] font-extrabold leading-snug tracking-tight text-text-primary">{title}</h1>
+                                    {intro.contentText ? (
+                                        <div className="whitespace-pre-wrap text-[15px] leading-[1.72] text-text-primary">{intro.contentText}</div>
+                                    ) : null}
+                                    {intro.tags.length > 0 ? (
+                                        <div className="flex flex-wrap gap-2 pt-1">
+                                            {intro.tags.map((tag) => (
+                                                <span key={tag} className="text-[14px] font-semibold text-[#24599a]">#{tag}</span>
+                                            ))}
+                                        </div>
+                                    ) : null}
+                                    {intro.stats.length > 0 ? (
+                                        <div className="flex flex-wrap gap-x-4 gap-y-2 pt-1 text-[12px] font-medium text-text-tertiary">
+                                            {intro.stats.map((item) => (
+                                                <span key={item.label}>{item.value} {item.label}</span>
+                                            ))}
+                                        </div>
+                                    ) : null}
+                                    {intro.noteHref ? (
+                                        <a
+                                            href={intro.noteHref}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-black/[0.04] px-3 text-[12px] font-bold text-text-secondary transition-colors hover:bg-black/[0.08] hover:text-text-primary"
+                                        >
+                                            <ExternalLink className="h-3.5 w-3.5" />
+                                            打开原文
+                                        </a>
+                                    ) : null}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+        </>
+    );
+}
+
+function SkillAuthorPill({ skill, clickable = false }: { skill: ThriveSkillMarketplaceItem; clickable?: boolean }) {
+    const authorName = skillAuthorName(skill);
+    const href = clickable ? skillAuthorHref(skill) : '';
+    const avatarUrl = String(skill.authorAvatarUrl || '').trim();
+    const [cachedAvatarUrl, setCachedAvatarUrl] = useState(() => skillAvatarDataUrlCache.get(avatarUrl) || '');
+    const [failedUrl, setFailedUrl] = useState('');
+    const imageUrl = cachedAvatarUrl;
+    const showImage = imageUrl && failedUrl !== imageUrl;
+    const title = String(skill.authorBio || authorName).trim() || undefined;
+    const className = clsx(
+        'inline-flex h-6 min-w-0 max-w-full items-center gap-1.5 rounded-full border border-border bg-surface-primary/70 px-2.5 text-[11px] font-medium text-text-secondary',
+        href && 'transition-colors hover:bg-surface-primary hover:text-text-primary'
+    );
+
+    useEffect(() => {
+        let cancelled = false;
+        setFailedUrl('');
+        const cached = skillAvatarDataUrlCache.get(avatarUrl) || '';
+        setCachedAvatarUrl(cached);
+        if (!avatarUrl || cached) return;
+        void loadCachedSkillAvatar(avatarUrl).then((dataUrl) => {
+            if (!cancelled) setCachedAvatarUrl(dataUrl);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [avatarUrl]);
+
+    if (!authorName) return null;
+
+    const content = (
+        <>
+            {showImage ? (
+                <img
+                    src={imageUrl}
+                    alt=""
+                    className="h-4 w-4 shrink-0 rounded-full object-cover"
+                    loading="lazy"
+                    onError={() => setFailedUrl(imageUrl)}
+                />
+            ) : (
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-surface-secondary text-[9px] font-semibold leading-none text-text-tertiary">
+                    {skillInitials(authorName)}
+                </span>
+            )}
+            <span className="truncate">{authorName}</span>
+            {href ? <ExternalLink className="h-3 w-3 shrink-0" strokeWidth={1.7} /> : null}
+        </>
+    );
+
+    if (href) {
+        return (
+            <a href={href} target="_blank" rel="noreferrer" title={title} className={className}>
+                {content}
+            </a>
+        );
+    }
+
+    return (
+        <span title={title} className={className}>
+            {content}
+        </span>
+    );
+}
+
+function SkillAuthorPanel({ skill, onOpen }: { skill: ThriveSkillMarketplaceItem; onOpen?: () => void }) {
+    const authorName = skillAuthorName(skill);
+    const avatarUrl = String(skill.authorAvatarUrl || '').trim();
+    const authorBio = String(skill.authorBio || '').trim();
+    const [cachedAvatarUrl, setCachedAvatarUrl] = useState(() => skillAvatarDataUrlCache.get(avatarUrl) || '');
+    const [failedUrl, setFailedUrl] = useState('');
+    const imageUrl = cachedAvatarUrl;
+    const showImage = imageUrl && failedUrl !== imageUrl;
+
+    useEffect(() => {
+        let cancelled = false;
+        setFailedUrl('');
+        const cached = skillAvatarDataUrlCache.get(avatarUrl) || '';
+        setCachedAvatarUrl(cached);
+        if (!avatarUrl || cached) return;
+        void loadCachedSkillAvatar(avatarUrl).then((dataUrl) => {
+            if (!cancelled) setCachedAvatarUrl(dataUrl);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [avatarUrl]);
+
+    if (!authorName) return null;
+
+    const body = (
+        <div className={clsx(
+            'flex min-w-0 items-center gap-3 rounded-lg border border-border bg-surface-primary/45 px-3 py-3',
+            onOpen && 'transition-colors hover:bg-surface-primary'
+        )}>
+            {showImage ? (
+                <img
+                    src={imageUrl}
+                    alt=""
+                    className="h-12 w-12 shrink-0 rounded-full object-cover"
+                    loading="lazy"
+                    onError={() => setFailedUrl(imageUrl)}
+                />
+            ) : (
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-surface-secondary text-sm font-semibold leading-none text-text-tertiary">
+                    {skillInitials(authorName)}
+                </span>
+            )}
+            <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-text-primary">{authorName}</span>
+                    {onOpen ? (
+                        <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-primary">
+                            查看主页
+                            <ArrowRight className="h-3 w-3" strokeWidth={1.7} />
+                        </span>
+                    ) : null}
+                </div>
+                {authorBio ? (
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">{authorBio}</p>
+                ) : null}
+            </div>
+        </div>
+    );
+
+    return (
+        <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-text-primary">作者</h2>
+            {onOpen ? (
+                <button type="button" onClick={onOpen} className="block w-full text-left">
+                    {body}
+                </button>
+            ) : body}
+        </section>
+    );
+}
+
+function SkillAuthorHomeHeader({ profile }: { profile: SkillAuthorProfile }) {
+    const avatarUrl = profile.avatarUrl;
+    const [cachedAvatarUrl, setCachedAvatarUrl] = useState(() => skillAvatarDataUrlCache.get(avatarUrl) || '');
+    const [failedUrl, setFailedUrl] = useState('');
+    const imageUrl = cachedAvatarUrl;
+    const showImage = imageUrl && failedUrl !== imageUrl;
+
+    useEffect(() => {
+        let cancelled = false;
+        setFailedUrl('');
+        const cached = skillAvatarDataUrlCache.get(avatarUrl) || '';
+        setCachedAvatarUrl(cached);
+        if (!avatarUrl || cached) return;
+        void loadCachedSkillAvatar(avatarUrl).then((dataUrl) => {
+            if (!cancelled) setCachedAvatarUrl(dataUrl);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [avatarUrl]);
+
+    return (
+        <section className="space-y-5 pb-2">
+            <div className="flex min-w-0 items-start gap-4">
+                {showImage ? (
+                    <img
+                        src={imageUrl}
+                        alt=""
+                        className="h-20 w-20 shrink-0 rounded-2xl border border-border object-cover"
+                        loading="lazy"
+                        onError={() => setFailedUrl(imageUrl)}
+                    />
+                ) : (
+                    <span className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-primary text-lg font-semibold leading-none text-text-tertiary">
+                        {skillInitials(profile.name)}
+                    </span>
+                )}
+                <div className="min-w-0 flex-1">
+                    <h1 className="truncate text-[26px] font-semibold leading-tight text-text-primary">{profile.name}</h1>
+                    {profile.bio ? (
+                        <p className="mt-2 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-text-tertiary">{profile.bio}</p>
+                    ) : null}
+                    <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
+                        <SkillTag>{`${profile.skills.length} 个技能`}</SkillTag>
+                        {profile.homepageUrl ? (
+                            <button
+                                type="button"
+                                onClick={() => void openExternalHttpUrl(profile.homepageUrl)}
+                                className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-full border border-border bg-surface-primary/70 px-2.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
+                            >
+                                <span className="truncate">小红书主页</span>
+                                <ExternalLink className="h-3 w-3 shrink-0" strokeWidth={1.7} />
+                            </button>
+                        ) : null}
+                    </div>
+                </div>
+            </div>
+        </section>
     );
 }
 
@@ -357,76 +1059,81 @@ type SkillsProps = {
 
 export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
     const initialMarketCache = initialMarketplaceCache();
-    const selectedMarketIdRef = useRef('');
     const [marketItems, setMarketItems] = useState<ThriveSkillMarketplaceItem[]>(() => initialMarketCache?.items || []);
     const [marketSources, setMarketSources] = useState<SkillMarketSource[]>(() => initialMarketCache?.sources || []);
-    const [selectedMarketId, setSelectedMarketId] = useState('');
-    const [selectedTag, setSelectedTag] = useState('');
+    const [selectedCategory, setSelectedCategory] = useState('');
     const [query, setQuery] = useState('');
     const [isMarketLoading, setIsMarketLoading] = useState(() => !initialMarketCache);
     const [busyMarketItemId, setBusyMarketItemId] = useState('');
     const [statusMessage, setStatusMessage] = useState('');
-    const [sourcesOpen, setSourcesOpen] = useState(false);
     const [selectedSkill, setSelectedSkill] = useState<ThriveSkillMarketplaceItem | null>(null);
     const [selectedSkillDetail, setSelectedSkillDetail] = useState<MarketplacePackageDetail | null>(null);
+    const [selectedAuthorKey, setSelectedAuthorKey] = useState('');
     const [isSkillDetailLoading, setIsSkillDetailLoading] = useState(false);
     const marketRequestRef = useRef(0);
     const detailRequestRef = useRef(0);
 
-    const marketItemCountBySource = useMemo(() => {
-        const counts = new Map<string, number>();
+    const categoryCounts = useMemo(() => {
+        const counts = new Map<string, number>(SKILL_CATEGORY_LABELS.map((category) => [category, 0] as [string, number]));
         marketItems.forEach((item) => {
-            const sourceId = item.marketId || '';
-            if (!sourceId) return;
-            counts.set(sourceId, (counts.get(sourceId) || 0) + 1);
-        });
-        return counts;
-    }, [marketItems]);
-
-    const tags = useMemo(() => {
-        const counts = new Map<string, number>();
-        marketItems.forEach((item) => {
-            (item.tags || []).forEach((tag) => {
-                const normalized = String(tag || '').trim();
-                if (!normalized) return;
-                counts.set(normalized, (counts.get(normalized) || 0) + 1);
+            skillCategories(item).forEach((category) => {
+                counts.set(category, (counts.get(category) || 0) + 1);
             });
         });
-        return [...counts.entries()]
-            .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-            .slice(0, 10)
-            .map(([tag]) => tag);
+        return counts;
     }, [marketItems]);
 
     const filteredMarketItems = useMemo(() => {
         const normalizedQuery = normalizeKey(query);
         return marketItems.filter((item) => {
-            const sourceMatches = !selectedMarketId || item.marketId === selectedMarketId;
-            const tagMatches = !selectedTag || (item.tags || []).some((tag) => normalizeKey(tag) === normalizeKey(selectedTag));
+            const displayTags = skillDisplayTags(item);
+            const categoryMatches = !selectedCategory || skillMatchesCategory(item, selectedCategory);
             const queryMatches = !normalizedQuery || [
                 item.name,
                 item.author,
+                item.authorBio,
+                item.authorHomepageUrl,
                 item.description,
                 item.repo,
                 item.packageId,
                 item.id,
-                ...(item.tags || []),
+                ...displayTags,
             ].some((value) => normalizeKey(value).includes(normalizedQuery));
-            return sourceMatches && tagMatches && queryMatches;
+            return categoryMatches && queryMatches;
         });
-    }, [marketItems, query, selectedMarketId, selectedTag]);
+    }, [marketItems, query, selectedCategory]);
 
-    const selectedSource = useMemo(
-        () => marketSources.find((source) => source.id === selectedMarketId) || null,
-        [marketSources, selectedMarketId],
+    const categoryMarketSections = useMemo(() => (
+        SKILL_CATEGORY_LABELS
+            .map((category) => ({
+                title: category,
+                items: filteredMarketItems.filter((item) => primarySkillCategory(item) === category),
+            }))
+            .filter((section) => section.items.length > 0)
+    ), [filteredMarketItems]);
+
+    const uncategorizedMarketItems = useMemo(
+        () => filteredMarketItems.filter((item) => !primarySkillCategory(item)),
+        [filteredMarketItems],
     );
 
-    const hasFocusedFilters = Boolean(query.trim() || selectedMarketId || selectedTag);
+    const allKnownMarketItems = useMemo(
+        () => knownMarketplaceItems(marketItems, selectedSkill, selectedSkillDetail),
+        [marketItems, selectedSkill, selectedSkillDetail],
+    );
+
+    const selectedAuthorProfile = useMemo(
+        () => authorProfileForKey(selectedAuthorKey, allKnownMarketItems),
+        [selectedAuthorKey, allKnownMarketItems],
+    );
+
+    const hasFocusedFilters = Boolean(query.trim() || selectedCategory);
     const primaryMarketItems = hasFocusedFilters ? filteredMarketItems : filteredMarketItems.slice(0, 6);
     const secondaryMarketItems = hasFocusedFilters ? [] : filteredMarketItems.slice(6);
     const primarySectionTitle = hasFocusedFilters
-        ? (selectedTag || selectedSource?.name || '搜索结果')
+        ? (selectedCategory || '搜索结果')
         : '精选';
+    const showCategorySections = !hasFocusedFilters && categoryMarketSections.length > 0;
 
     const loadMarketplace = useCallback(async (marketId = '', options: { force?: boolean } = {}) => {
         const requestId = marketRequestRef.current + 1;
@@ -468,25 +1175,17 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
     }, []);
 
     const refreshAll = useCallback(async (force = false) => {
-        await loadMarketplace(selectedMarketId, { force });
-    }, [loadMarketplace, selectedMarketId]);
-
-    useEffect(() => {
-        selectedMarketIdRef.current = selectedMarketId;
-    }, [selectedMarketId]);
+        await loadMarketplace('', { force });
+    }, [loadMarketplace]);
 
     useEffect(() => {
         if (!isActive) return;
-        void loadMarketplace(selectedMarketIdRef.current);
+        void loadMarketplace('');
     }, [isActive, loadMarketplace]);
-
-    const handleSelectMarketSource = useCallback((marketId: string) => {
-        setSelectedMarketId(marketId);
-        void loadMarketplace(marketId);
-    }, [loadMarketplace]);
 
     const handleOpenSkillHome = useCallback(async (skill: ThriveSkillMarketplaceItem) => {
         const key = marketItemKey(skill);
+        setSelectedAuthorKey('');
         setSelectedSkill(skill);
         setSelectedSkillDetail(skillDetailCache.get(key) || null);
         setStatusMessage('');
@@ -530,7 +1229,20 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
         detailRequestRef.current += 1;
         setSelectedSkill(null);
         setSelectedSkillDetail(null);
+        setSelectedAuthorKey('');
         setIsSkillDetailLoading(false);
+        setStatusMessage('');
+    }, []);
+
+    const handleOpenAuthorHome = useCallback((skill: ThriveSkillMarketplaceItem) => {
+        const authorKey = skillAuthorKey(skill);
+        if (!authorKey) return;
+        setSelectedAuthorKey(authorKey);
+        setStatusMessage('');
+    }, []);
+
+    const handleCloseAuthorHome = useCallback(() => {
+        setSelectedAuthorKey('');
         setStatusMessage('');
     }, []);
 
@@ -620,6 +1332,7 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
     const renderMarketItem = (skill: ThriveSkillMarketplaceItem) => {
         const key = marketItemKey(skill);
         const installed = Boolean(skill.installed);
+        const displayTags = skillDisplayTags(skill).slice(0, 2);
         return (
             <button
                 key={key}
@@ -641,15 +1354,20 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                     <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
                         {skill.description || skill.repo || '暂无描述'}
                     </p>
+                    <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                        {displayTags.map((tag) => (
+                            <SkillTag key={`${key}:tag:${tag}`}>{tag}</SkillTag>
+                        ))}
+                    </div>
                 </div>
             </button>
         );
     };
 
-    const renderMarketSection = (title: string, items: ThriveSkillMarketplaceItem[], countLabel?: string) => {
+    const renderMarketSection = (title: string, items: ThriveSkillMarketplaceItem[], countLabel?: string, sectionKey?: string) => {
         if (items.length === 0) return null;
         return (
-            <section className="space-y-3">
+            <section key={sectionKey || title} className="space-y-3">
                 <div className="flex items-end justify-between gap-3 border-b border-divider pb-3">
                     <h2 className="text-base font-semibold text-text-primary">{title}</h2>
                     <span className="text-xs text-text-tertiary">{countLabel || `${items.length} 个技能`}</span>
@@ -660,6 +1378,28 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
             </section>
         );
     };
+
+    const renderAuthorHome = () => (
+        <div className="space-y-7 pb-10">
+            <button
+                type="button"
+                onClick={handleCloseAuthorHome}
+                className="inline-flex h-8 items-center gap-2 rounded-full px-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
+            >
+                <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.8} />
+                返回
+            </button>
+
+            {selectedAuthorProfile ? (
+                <>
+                    <SkillAuthorHomeHeader profile={selectedAuthorProfile} />
+                    {renderMarketSection('技能', selectedAuthorProfile.skills, `${selectedAuthorProfile.skills.length} 个技能`)}
+                </>
+            ) : (
+                <EmptyPanel title="没有找到作者信息" />
+            )}
+        </div>
+    );
 
     const visibleStatusMessage = statusMessage && !statusMessage.startsWith('已') && !statusMessage.startsWith('正在')
         ? statusMessage
@@ -681,9 +1421,10 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
         const detailInstalled = Boolean(detailItem.installed);
         const canInstall = detailItem.installable !== false && (!detailInstalled || Boolean(detailItem.updateAvailable));
         const canTryInChat = detailInstalled && !detailItem.updateAvailable && Boolean(onTrySkillInChat);
+        const detailTags = skillDisplayTags(detailItem);
+        const introNote = skillIntroNote(detailItem);
         const details = [
             ['来源', sourceLabel],
-            ['作者', detailItem.author],
             ['版本', detailItem.version ? `v${detailItem.version}` : ''],
             ['包 ID', detailItem.packageId || detailItem.id],
             ['类型', detailItem.kind],
@@ -701,7 +1442,7 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                     返回
                 </button>
 
-                <section className="space-y-5 border-b border-divider pb-6">
+                <section className="space-y-5 pb-2">
                     <div className="flex items-start gap-4">
                         <SkillAvatar skill={detailItem} size="detail" />
                         <div className="min-w-0 flex-1">
@@ -720,7 +1461,7 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                             <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
                                 <SkillTag>{sourceLabel}</SkillTag>
                                 {detailItem.version ? <SkillTag>{`v${detailItem.version}`}</SkillTag> : null}
-                                {(detailItem.tags || []).map((tag) => (
+                                {detailTags.map((tag) => (
                                     <SkillTag key={`${marketItemKey(detailItem)}:${tag}`}>{tag}</SkillTag>
                                 ))}
                             </div>
@@ -788,7 +1529,11 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                             </section>
                         ) : null}
 
-                        <section className="grid gap-x-10 gap-y-4 border-t border-divider pt-5 sm:grid-cols-2">
+                        <SkillIntroNotePanel note={introNote} />
+
+                        <SkillAuthorPanel skill={detailItem} onOpen={() => handleOpenAuthorHome(detailItem)} />
+
+                        <section className="grid gap-x-10 gap-y-4 sm:grid-cols-2">
                             {details.map(([label, value]) => (
                                 <div key={label} className="min-w-0">
                                     <div className="text-[11px] font-medium text-text-tertiary">{label}</div>
@@ -811,6 +1556,18 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
             </div>
         );
     };
+
+    if (selectedAuthorKey) {
+        return (
+            <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-text-primary">
+                <div className="min-h-0 flex-1 overflow-y-auto px-10 py-10 sm:px-16 lg:px-24 xl:px-32 custom-scrollbar">
+                    <div className="mx-auto w-full max-w-[880px]">
+                        {renderAuthorHome()}
+                    </div>
+                </div>
+            </main>
+        );
+    }
 
     if (selectedSkill) {
         return (
@@ -862,96 +1619,35 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                         <div className="flex flex-wrap items-center gap-2">
                             <button
                                 type="button"
-                                onClick={() => handleSelectMarketSource('')}
+                                onClick={() => setSelectedCategory('')}
                                 className={clsx(
                                     'inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs font-medium transition-colors',
-                                    !selectedMarketId
+                                    !selectedCategory
                                         ? 'bg-accent-primary text-[rgb(var(--color-primary-text))]'
                                         : 'text-text-secondary hover:bg-surface-primary hover:text-text-primary'
                                 )}
                             >
-                                全部来源
+                                全部分类
                                 <span className="opacity-75">{marketItems.length}</span>
                             </button>
-                            {marketSources.map((source) => (
+                            {SKILL_CATEGORY_LABELS.map((category) => (
                                 <button
-                                    key={source.id}
+                                    key={category}
                                     type="button"
-                                    onClick={() => handleSelectMarketSource(source.id)}
+                                    onClick={() => setSelectedCategory(category)}
                                     className={clsx(
-                                        'inline-flex h-8 max-w-[180px] items-center gap-2 rounded-full px-3 text-xs font-medium transition-colors',
-                                        selectedMarketId === source.id
+                                        'inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs font-medium transition-colors',
+                                        selectedCategory === category
                                             ? 'bg-accent-primary text-[rgb(var(--color-primary-text))]'
                                             : 'text-text-secondary hover:bg-surface-primary hover:text-text-primary'
                                     )}
                                 >
-                                    <span className="truncate">{source.name}</span>
-                                    <span className="shrink-0 opacity-75">{marketItemCountBySource.get(source.id) || 0}</span>
+                                    {category}
+                                    <span className="opacity-75">{categoryCounts.get(category) || 0}</span>
                                 </button>
                             ))}
-                            <button
-                                type="button"
-                                onClick={() => setSourcesOpen((value) => !value)}
-                                className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-primary hover:text-text-primary"
-                                aria-label="查看市场来源"
-                                title="来源"
-                            >
-                                <ChevronDown className={clsx('h-4 w-4 transition-transform', !sourcesOpen && '-rotate-90')} />
-                            </button>
                         </div>
 
-                        {tags.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setSelectedTag('')}
-                                    className={clsx(
-                                        'inline-flex h-7 items-center rounded-full px-2.5 text-[11px] font-medium transition-colors',
-                                        !selectedTag
-                                            ? 'bg-surface-primary text-text-primary shadow-[inset_0_0_0_1px_rgb(var(--color-border))]'
-                                            : 'text-text-tertiary hover:bg-surface-primary hover:text-text-primary'
-                                    )}
-                                >
-                                    全部标签
-                                </button>
-                                {tags.map((tag) => (
-                                    <button
-                                        key={tag}
-                                        type="button"
-                                        onClick={() => setSelectedTag(tag)}
-                                        className={clsx(
-                                            'inline-flex h-7 max-w-[150px] items-center rounded-full px-2.5 text-[11px] font-medium transition-colors',
-                                            selectedTag === tag
-                                                ? 'bg-surface-primary text-text-primary shadow-[inset_0_0_0_1px_rgb(var(--color-border))]'
-                                                : 'text-text-tertiary hover:bg-surface-primary hover:text-text-primary'
-                                        )}
-                                    >
-                                        <span className="truncate">{tag}</span>
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-
-                        {sourcesOpen && (
-                            <div className="grid gap-2 rounded-xl border border-border bg-surface-primary/35 p-3 sm:grid-cols-2 lg:grid-cols-3">
-                                {marketSources.length === 0 ? (
-                                    <div className="text-xs text-text-tertiary">暂无市场来源</div>
-                                ) : marketSources.map((source) => (
-                                    <div key={source.id} className="min-w-0 rounded-lg border border-border bg-surface-primary/65 px-3 py-2">
-                                        <div className="flex min-w-0 items-center gap-2">
-                                            <span className={clsx('h-2 w-2 shrink-0 rounded-full', source.enabled ? 'bg-status-success' : 'bg-text-tertiary')} />
-                                            <span className="truncate text-xs font-semibold text-text-primary">{source.name}</span>
-                                            <span className="shrink-0 rounded-full bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-tertiary">
-                                                {source.trustLevel || source.kind}
-                                            </span>
-                                        </div>
-                                        <div className="mt-1 truncate font-mono text-[10px] text-text-tertiary">
-                                            {source.repo || source.source || source.registryUrl || source.id}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
                     </section>
 
                     <div className="space-y-10 pb-10">
@@ -962,6 +1658,13 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
                             </div>
                         ) : filteredMarketItems.length === 0 ? (
                             <EmptyPanel title="没有找到匹配的技能" />
+                        ) : showCategorySections ? (
+                            <>
+                                {categoryMarketSections.map((section) => (
+                                    renderMarketSection(section.title, section.items, undefined, `category:${section.title}`)
+                                ))}
+                                {renderMarketSection('更多技能', uncategorizedMarketItems, undefined, 'uncategorized')}
+                            </>
                         ) : (
                             <>
                                 {renderMarketSection(primarySectionTitle, primaryMarketItems, `${filteredMarketItems.length} 个技能`)}

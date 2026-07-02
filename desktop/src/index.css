@@ -1574,18 +1574,18 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 28px;
-  min-width: 52px;
-  padding: 0 15px;
+  height: 22px;
+  min-width: 38px;
+  padding: 0 10px;
   border: none;
   border-radius: 999px;
   background: #95bd5d;
   color: #fff;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
-  box-shadow: 0 8px 18px rgb(102 139 54 / 0.16);
+  box-shadow: 0 5px 12px rgb(102 139 54 / 0.14);
 }
 
 .app-titlebar-update-button:hover {
@@ -1601,7 +1601,7 @@ select {
   outline: none;
   box-shadow:
     0 0 0 2px rgb(149 189 93 / 0.22),
-    0 8px 18px rgb(102 139 54 / 0.18);
+    0 5px 12px rgb(102 139 54 / 0.16);
 }
 
 .app-global-search-backdrop {
@@ -1972,16 +1972,7 @@ select {
   box-sizing: border-box;
   width: 100%;
   margin: 0 auto;
-  padding: 78px var(--automation-page-gutter) 56px;
-}
-
-.automation-title {
-  margin: 0;
-  color: rgb(92 107 115 / 1);
-  font-size: 28px;
-  font-weight: 400;
-  line-height: 1.2;
-  letter-spacing: 0;
+  padding: 48px var(--automation-page-gutter) 56px;
 }
 
 .automation-new-button {
@@ -2008,7 +1999,7 @@ select {
 }
 
 .automation-section {
-  margin-top: 48px;
+  margin-top: 0;
 }
 
 .automation-section-title {

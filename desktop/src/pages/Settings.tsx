@@ -17,6 +17,7 @@ import {
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { AdvisorModal, AdvisorSettingsPanel, type Advisor } from './Advisors';
 import { subscribeSettingsUpdated } from '../bridge/appEvents';
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import {
   type AgentTaskSnapshot,
@@ -5036,9 +5037,11 @@ export function Settings({
   }, [skillMarketplaceSelectedMarketId]);
 
   const openSkillMarketplace = useCallback(() => {
-    setIsSkillMarketplaceOpen(true);
-    void loadSkillMarketplace();
-  }, [loadSkillMarketplace]);
+    dispatchAppIntent({
+      type: 'view.open',
+      view: 'skills',
+    });
+  }, []);
 
   const handleSelectSkillMarketSource = useCallback((marketId: string) => {
     setSkillMarketplaceSelectedMarketId(marketId);
@@ -7599,7 +7602,6 @@ export function Settings({
                                   <option value="github">GitHub</option>
                                   <option value="local">本地</option>
                                   <option value="url">URL</option>
-                                  <option value="legacy-thrive">Thrive</option>
                                   <option value="redbox-server">RedBox 服务端</option>
                                   <option value="redskill-cli">RedSkill</option>
                                 </select>

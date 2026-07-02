@@ -14,6 +14,8 @@ const SETTINGS_SKILL_MARKET_SOURCES_KEY: &str = "skill_market_sources";
 const REDBOX_MARKET_KIND_SKILL_PACK: &str = "skill-pack";
 const MARKET_PROVENANCE_FILENAME: &str = ".redbox-market.json";
 const REDBOX_SERVER_SKILL_MARKET_URL: &str = "https://api.ziz.hk/api/v1/skill-market";
+const LEGACY_THRIVE_MARKET_SOURCE_ID: &str = "thrive-community";
+const RED_SKILL_TAG_LABEL: &str = "RED skill";
 const THRIVE_SKILL_DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/ThrivingOS/Thrive-release/main/community-skills.json";
 const REDSKILL_INSTALL_SCRIPT_URL: &str =
@@ -153,6 +155,11 @@ struct SkillMarketItem {
     source_kind: String,
     name: String,
     author: String,
+    author_avatar_url: Option<String>,
+    author_homepage_url: Option<String>,
+    author_bio: Option<String>,
+    author_verified: bool,
+    intro_note: Option<Value>,
     description: String,
     avatar_url: Option<String>,
     repo: Option<String>,
@@ -373,7 +380,7 @@ pub(super) fn list_skill_marketplace(
     let skills = serde_json::to_value(&items).map_err(|error| error.to_string())?;
     Ok(json!({
         "success": true,
-        "registryUrl": THRIVE_SKILL_DEFAULT_REGISTRY_URL,
+        "registryUrl": REDBOX_SERVER_SKILL_MARKET_URL,
         "sources": skill_market_sources(state)?,
         "items": skills,
         "skills": skills,
@@ -629,10 +636,21 @@ fn read_skill_marketplace_package(
             continue;
         }
         let items = load_skill_market_source_items(&source, &installed).unwrap_or_default();
-        if let Some(item) = items
+        if let Some(mut item) = items
             .into_iter()
             .find(|item| item.package_id == package_id || item.id == package_id)
         {
+            if source.kind == "redbox-server" {
+                let base = redbox_server_skill_market_base_url(&source)?;
+                let detail_url = format!("{base}/skills/{}", url_path_segment(&item.package_id));
+                if let Ok(detail) = http_get_redbox_server_json::<Value>(&detail_url) {
+                    if let Ok(detail_item) =
+                        redbox_server_entry_to_item(&source, &detail, &installed)
+                    {
+                        item = detail_item;
+                    }
+                }
+            }
             let manifest = read_market_item_manifest_value(&source, &item).unwrap_or(Value::Null);
             return Ok(json!({
                 "success": true,
@@ -968,19 +986,6 @@ fn default_skill_market_sources() -> Vec<SkillMarketSource> {
             description: Some("RedBox 官方精选技能市场".to_string()),
         },
         SkillMarketSource {
-            id: "thrive-community".to_string(),
-            name: "Thrive Community".to_string(),
-            kind: "legacy-thrive".to_string(),
-            enabled: true,
-            priority: 30,
-            trust_level: "community".to_string(),
-            source: None,
-            registry_url: Some(THRIVE_SKILL_DEFAULT_REGISTRY_URL.to_string()),
-            repo: None,
-            ref_name: None,
-            description: Some("Legacy Thrive community skill registry".to_string()),
-        },
-        SkillMarketSource {
             id: "redskill-official".to_string(),
             name: "小红书 RedSkill 官方".to_string(),
             kind: "redskill-cli".to_string(),
@@ -1001,11 +1006,17 @@ fn default_skill_market_sources() -> Vec<SkillMarketSource> {
 
 fn legacy_thrive_source_for_url(url: Option<String>) -> SkillMarketSource {
     SkillMarketSource {
+        id: "legacy-thrive-url".to_string(),
+        name: "Legacy Thrive".to_string(),
+        kind: "legacy-thrive".to_string(),
+        enabled: true,
+        priority: 100,
+        trust_level: "community".to_string(),
+        source: None,
         registry_url: url.or_else(|| Some(THRIVE_SKILL_DEFAULT_REGISTRY_URL.to_string())),
-        ..default_skill_market_sources()
-            .into_iter()
-            .next()
-            .unwrap_or_default()
+        repo: None,
+        ref_name: None,
+        description: Some("Legacy Thrive compatibility registry".to_string()),
     }
 }
 
@@ -1025,8 +1036,21 @@ fn sanitize_market_sources(sources: &mut Vec<SkillMarketSource>) {
             source.trust_level = "community".to_string();
         }
     }
+    sources.retain(|source| !is_retired_builtin_market_source(source));
     sources.sort_by_key(|item| item.priority);
     sources.dedup_by(|left, right| left.id == right.id);
+}
+
+fn is_retired_builtin_market_source(source: &SkillMarketSource) -> bool {
+    if source.id == LEGACY_THRIVE_MARKET_SOURCE_ID {
+        return true;
+    }
+    source.kind == "legacy-thrive"
+        && source
+            .registry_url
+            .as_deref()
+            .or(source.source.as_deref())
+            .is_some_and(|url| url.trim() == THRIVE_SKILL_DEFAULT_REGISTRY_URL)
 }
 
 fn source_from_request(
@@ -1234,6 +1258,11 @@ fn legacy_entries_to_items(
                 source_kind: source.kind.clone(),
                 name: entry.name,
                 author: entry.author,
+                author_avatar_url: None,
+                author_homepage_url: None,
+                author_bio: None,
+                author_verified: false,
+                intro_note: None,
                 description: entry.description,
                 avatar_url: first_avatar_url(&[
                     entry.avatar_url.as_deref(),
@@ -1315,17 +1344,35 @@ fn load_redbox_server_market_items(
         .ok_or_else(|| "RedBox skill market response is missing items".to_string())?;
     let mut items = Vec::new();
     for entry in entries {
-        let package_id = value_first_string(entry, &["package_key", "packageKey", "id"])
-            .ok_or_else(|| "RedBox skill entry missing package_key".to_string())?;
-        let name =
-            value_first_string(entry, &["title", "name"]).unwrap_or_else(|| package_id.clone());
-        let description = value_first_string(entry, &["short_description", "shortDescription"])
-            .or_else(|| value_first_string(entry, &["description"]))
-            .unwrap_or_default();
-        let version = value_first_string(entry, &["latest_version", "latestVersion"]);
-        let author = entry
-            .get("publisher")
-            .and_then(|publisher| {
+        items.push(redbox_server_entry_to_item(source, entry, installed)?);
+    }
+    Ok(items)
+}
+
+fn redbox_server_entry_to_item(
+    source: &SkillMarketSource,
+    entry: &Value,
+    installed: &HashMap<String, InstalledMarketProvenance>,
+) -> Result<SkillMarketItem, String> {
+    let package_id = value_first_string(entry, &["package_key", "packageKey", "id"])
+        .ok_or_else(|| "RedBox skill entry missing package_key".to_string())?;
+    let name = value_first_string(entry, &["title", "name"]).unwrap_or_else(|| package_id.clone());
+    let description = value_first_string(entry, &["short_description", "shortDescription"])
+        .or_else(|| value_first_string(entry, &["description"]))
+        .unwrap_or_default();
+    let version = value_first_string(entry, &["latest_version", "latestVersion"]);
+    let publisher = entry.get("publisher");
+    let xiaohongshu_profile = publisher.and_then(|publisher| {
+        publisher
+            .get("xiaohongshu_profile")
+            .or_else(|| publisher.get("xiaohongshuProfile"))
+    });
+    let author = xiaohongshu_profile
+        .and_then(|profile| {
+            value_first_string(profile, &["nickname", "display_name", "displayName"])
+        })
+        .or_else(|| {
+            publisher.and_then(|publisher| {
                 value_first_string(
                     publisher,
                     &[
@@ -1336,24 +1383,17 @@ fn load_redbox_server_market_items(
                     ],
                 )
             })
-            .unwrap_or_else(|| "RedBox".to_string());
-        let avatar_url = value_first_string(
-            entry,
-            &[
-                "avatar_url",
-                "avatarUrl",
-                "icon_url",
-                "iconUrl",
-                "logo_url",
-                "logoUrl",
-                "image_url",
-                "imageUrl",
-                "thumbnail_url",
-                "thumbnailUrl",
-            ],
-        )
+        })
+        .unwrap_or_else(|| "RedBox".to_string());
+    let author_avatar_url = xiaohongshu_profile
+        .and_then(|profile| {
+            value_first_string(
+                profile,
+                &["avatar_url", "avatarUrl", "image_url", "imageUrl"],
+            )
+        })
         .or_else(|| {
-            entry.get("publisher").and_then(|publisher| {
+            publisher.and_then(|publisher| {
                 value_first_string(
                     publisher,
                     &[
@@ -1367,53 +1407,120 @@ fn load_redbox_server_market_items(
                 )
             })
         });
-        let market_name = entry
-            .get("source")
-            .and_then(|source_value| {
-                value_first_string(source_value, &["display_name", "displayName"])
+    let author_homepage_url = xiaohongshu_profile
+        .and_then(|profile| {
+            value_first_string(
+                profile,
+                &[
+                    "profile_url",
+                    "profileUrl",
+                    "homepage_url",
+                    "homepageUrl",
+                    "url",
+                ],
+            )
+        })
+        .or_else(|| {
+            publisher.and_then(|publisher| {
+                value_first_string(
+                    publisher,
+                    &[
+                        "homepage_url",
+                        "homepageUrl",
+                        "profile_url",
+                        "profileUrl",
+                        "url",
+                    ],
+                )
             })
-            .unwrap_or_else(|| source.name.clone());
-        let mut tags = value_string_list(entry.get("tags"));
-        tags.sort();
-        tags.dedup();
-        let installed_state = installed_market_state(installed, &source.id, &name, &package_id);
-        let installed_version = installed_state.and_then(|value| value.version.clone());
-        let installed_skill_names = installed_market_skill_names(installed_state);
-        let update_available = installed_version
-            .as_deref()
-            .zip(version.as_deref())
-            .is_some_and(|(left, right)| left != right);
-        items.push(SkillMarketItem {
-            id: scoped_market_item_id(&source.id, &package_id),
-            package_id,
-            market_id: source.id.clone(),
-            market_name,
-            source_kind: source.kind.clone(),
-            name,
-            author,
-            description,
-            avatar_url,
-            repo: None,
-            ref_name: None,
-            paths: Vec::new(),
-            version,
-            kind: REDBOX_MARKET_KIND_SKILL_PACK.to_string(),
-            channel: Some("official".to_string()),
-            tags,
-            risk_level: value_first_string(entry, &["risk_level", "riskLevel"])
-                .or_else(|| Some("low".to_string())),
-            trust_level: source.trust_level.clone(),
-            manifest_path: None,
-            package_path: None,
-            installed: installed_state.is_some(),
-            installed_skill_names,
-            installed_version,
-            update_available,
-            installable: true,
-            error: None,
         });
+    let author_bio = xiaohongshu_profile
+        .and_then(|profile| value_first_string(profile, &["bio", "description"]))
+        .or_else(|| {
+            publisher.and_then(|publisher| value_first_string(publisher, &["bio", "description"]))
+        });
+    let author_verified = publisher
+        .and_then(|publisher| {
+            value_first_bool(publisher, &["verified", "is_verified", "isVerified"])
+        })
+        .unwrap_or(false);
+    let avatar_url = value_first_string(
+        entry,
+        &[
+            "avatar_url",
+            "avatarUrl",
+            "icon_url",
+            "iconUrl",
+            "logo_url",
+            "logoUrl",
+            "image_url",
+            "imageUrl",
+            "thumbnail_url",
+            "thumbnailUrl",
+        ],
+    )
+    .or_else(|| author_avatar_url.clone());
+    let source_value = entry.get("source");
+    let source_key = source_value.and_then(|source_value| {
+        value_first_string(source_value, &["source_key", "sourceKey", "key"])
+    });
+    let market_name = source_value
+        .and_then(|source_value| value_first_string(source_value, &["display_name", "displayName"]))
+        .unwrap_or_else(|| source.name.clone());
+    let mut tags = value_string_list(entry.get("tags"));
+    let is_redskill_entry = source_key.as_deref().is_some_and(is_redskill_market_label)
+        || is_redskill_market_label(&market_name)
+        || is_redskill_market_label(&source.id)
+        || is_redskill_market_label(&source.name);
+    if is_redskill_entry {
+        canonicalize_redskill_tags(&mut tags);
     }
-    Ok(items)
+    tags.sort();
+    tags.dedup();
+    let installed_state = installed_market_state(installed, &source.id, &name, &package_id);
+    let installed_version = installed_state.and_then(|value| value.version.clone());
+    let installed_skill_names = installed_market_skill_names(installed_state);
+    let update_available = installed_version
+        .as_deref()
+        .zip(version.as_deref())
+        .is_some_and(|(left, right)| left != right);
+    Ok(SkillMarketItem {
+        id: scoped_market_item_id(&source.id, &package_id),
+        package_id,
+        market_id: source.id.clone(),
+        market_name,
+        source_kind: source.kind.clone(),
+        name,
+        author,
+        author_avatar_url,
+        author_homepage_url,
+        author_bio,
+        author_verified,
+        intro_note: entry
+            .get("intro_note")
+            .or_else(|| entry.get("introNote"))
+            .cloned(),
+        description,
+        avatar_url,
+        repo: None,
+        ref_name: None,
+        paths: Vec::new(),
+        version,
+        kind: REDBOX_MARKET_KIND_SKILL_PACK.to_string(),
+        channel: Some("official".to_string()),
+        tags,
+        risk_level: value_first_string(entry, &["risk_level", "riskLevel"])
+            .or_else(|| Some("low".to_string())),
+        trust_level: source.trust_level.clone(),
+        manifest_path: None,
+        package_path: None,
+        installed: installed_state.is_some(),
+        installed_skill_names,
+        installed_version,
+        update_available,
+        installable: true,
+        error: None,
+    })
 }
 
 fn redbox_registry_entries_from_value(
@@ -1521,6 +1628,11 @@ fn redbox_entries_to_items(
                 .or(entry.author)
                 .clone()
                 .unwrap_or_else(|| "Unknown".to_string()),
+            author_avatar_url: None,
+            author_homepage_url: None,
+            author_bio: None,
+            author_verified: false,
+            intro_note: None,
             description: manifest
                 .description
                 .clone()
@@ -2476,6 +2588,11 @@ fn value_first_string(value: &Value, keys: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn value_first_bool(value: &Value, keys: &[&str]) -> Option<bool> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_bool))
+}
+
 fn value_string_list(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(Value::as_array)
@@ -2498,6 +2615,35 @@ fn first_avatar_url(values: &[Option<&str>]) -> Option<String> {
         .map(|value| value.trim())
         .find(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn redskill_market_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '-' && *character != '_')
+        .flat_map(|character| character.to_lowercase())
+        .collect()
+}
+
+fn is_redskill_market_label(value: &str) -> bool {
+    redskill_market_key(value).contains("redskill")
+}
+
+fn is_redskill_tag_value(value: &str) -> bool {
+    redskill_market_key(value) == "redskill"
+}
+
+fn canonicalize_redskill_tags(tags: &mut Vec<String>) {
+    let mut has_redskill_tag = false;
+    for tag in tags.iter_mut() {
+        if is_redskill_tag_value(tag) {
+            *tag = RED_SKILL_TAG_LABEL.to_string();
+            has_redskill_tag = true;
+        }
+    }
+    if !has_redskill_tag {
+        tags.push(RED_SKILL_TAG_LABEL.to_string());
+    }
 }
 
 fn marketplace_avatar_cache_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -2665,6 +2811,72 @@ mod tests {
         assert_eq!(
             state.and_then(|item| item.version.as_deref()),
             Some("1.0.0")
+        );
+    }
+
+    #[test]
+    fn default_skill_market_sources_exclude_retired_thrive_community() {
+        let sources = default_skill_market_sources();
+
+        assert!(sources.iter().any(|source| source.id == "redbox-official"));
+        assert!(sources
+            .iter()
+            .any(|source| source.id == "redskill-official"));
+        assert!(!sources
+            .iter()
+            .any(|source| source.id == LEGACY_THRIVE_MARKET_SOURCE_ID));
+    }
+
+    #[test]
+    fn sanitize_market_sources_removes_retired_thrive_community() {
+        let mut sources = vec![
+            SkillMarketSource {
+                id: LEGACY_THRIVE_MARKET_SOURCE_ID.to_string(),
+                name: "Thrive Community".to_string(),
+                kind: "legacy-thrive".to_string(),
+                enabled: true,
+                priority: 30,
+                trust_level: "community".to_string(),
+                source: None,
+                registry_url: Some(THRIVE_SKILL_DEFAULT_REGISTRY_URL.to_string()),
+                repo: None,
+                ref_name: None,
+                description: None,
+            },
+            SkillMarketSource {
+                id: "custom".to_string(),
+                name: "Custom".to_string(),
+                kind: "url".to_string(),
+                enabled: true,
+                priority: 40,
+                trust_level: "community".to_string(),
+                source: None,
+                registry_url: Some(
+                    "https://github.com/acme/skills/raw/main/registry.json".to_string(),
+                ),
+                repo: None,
+                ref_name: None,
+                description: None,
+            },
+        ];
+
+        sanitize_market_sources(&mut sources);
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, "custom");
+    }
+
+    #[test]
+    fn explicit_legacy_thrive_url_keeps_compatibility_adapter() {
+        let source = legacy_thrive_source_for_url(Some(
+            "https://github.com/acme/skills/raw/main/community-skills.json".to_string(),
+        ));
+
+        assert_eq!(source.kind, "legacy-thrive");
+        assert_eq!(source.id, "legacy-thrive-url");
+        assert_eq!(
+            source.registry_url.as_deref(),
+            Some("https://github.com/acme/skills/raw/main/community-skills.json")
         );
     }
 
