@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft, Server, Store, X, MessageSquareText } from 'lucide-react';
+import { Save, RefreshCw, FolderOpen, Wrench, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft, Server, Store, MessageSquareText } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
@@ -17,7 +17,6 @@ import {
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { AdvisorModal, AdvisorSettingsPanel, type Advisor } from './Advisors';
 import { subscribeSettingsUpdated } from '../bridge/appEvents';
-import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import {
   type AgentTaskSnapshot,
@@ -72,8 +71,6 @@ import type {
   DiagnosticsPendingReport,
   CodexPluginMarketplaceItem,
   NotificationSettingsPayload,
-  SkillMarketSource,
-  ThriveSkillMarketplaceItem,
   ThrivePluginMarketplaceItem,
   ThrivePluginSummary,
 } from '../types';
@@ -147,9 +144,7 @@ import {
   DEFAULT_AI_MODEL_ROUTES,
   normalizeModelKey,
   cloneModelForVoiceTtsModel,
-  SettingsSkill,
   McpServerDraft,
-  formatSettingsSkillSource,
   formatMcpTime,
   mcpDraftFromServer,
   mcpServerFromDraft,
@@ -870,28 +865,6 @@ export function Settings({
   const [teamAdvisors, setTeamAdvisors] = useState<Advisor[]>([]);
   const [isTeamAdvisorsLoading, setIsTeamAdvisorsLoading] = useState(false);
   const [teamAdvisorBusyId, setTeamAdvisorBusyId] = useState<string | null>(null);
-  const [settingsSkills, setSettingsSkills] = useState<SettingsSkill[]>([]);
-  const [isSettingsSkillsLoading, setIsSettingsSkillsLoading] = useState(false);
-  const [settingsSkillBusyName, setSettingsSkillBusyName] = useState('');
-  const [settingsSkillStatusMessage, setSettingsSkillStatusMessage] = useState('');
-  const [areBuiltinSkillsExpanded, setAreBuiltinSkillsExpanded] = useState(false);
-  const [isSkillMarketplaceOpen, setIsSkillMarketplaceOpen] = useState(false);
-  const [skillMarketplaceItems, setSkillMarketplaceItems] = useState<ThriveSkillMarketplaceItem[]>([]);
-  const [skillMarketSources, setSkillMarketSources] = useState<SkillMarketSource[]>([]);
-  const [skillMarketplaceSelectedMarketId, setSkillMarketplaceSelectedMarketId] = useState('');
-  const [isSkillMarketSourcesOpen, setIsSkillMarketSourcesOpen] = useState(false);
-  const [skillMarketSourceBusyId, setSkillMarketSourceBusyId] = useState('');
-  const [skillMarketSourceDraft, setSkillMarketSourceDraft] = useState({
-    name: '',
-    kind: 'github',
-    source: '',
-    registryUrl: '',
-    refName: '',
-  });
-  const [redskillIdentifierInput, setRedskillIdentifierInput] = useState('');
-  const [isRedskillInstalling, setIsRedskillInstalling] = useState(false);
-  const [isSkillMarketplaceLoading, setIsSkillMarketplaceLoading] = useState(false);
-  const [skillMarketplaceBusyId, setSkillMarketplaceBusyId] = useState('');
   const [isCreatingTeamAdvisor, setIsCreatingTeamAdvisor] = useState(false);
   const [editingTeamAdvisor, setEditingTeamAdvisor] = useState<Advisor | null>(null);
   const [settingsTeamAdvisor, setSettingsTeamAdvisor] = useState<Advisor | null>(null);
@@ -908,19 +881,6 @@ export function Settings({
   const [aiPricingError, setAiPricingError] = useState('');
   const [aiPricingActiveGroup, setAiPricingActiveGroup] = useState('');
   const [aiPricingSearch, setAiPricingSearch] = useState('');
-  const builtinSettingsSkills = useMemo(
-    () => settingsSkills.filter((skill) => skill.isBuiltin),
-    [settingsSkills]
-  );
-  const editableSettingsSkills = useMemo(
-    () => settingsSkills.filter((skill) => !skill.isBuiltin),
-    [settingsSkills]
-  );
-  const selectedSkillMarketSource = useMemo(
-    () => skillMarketSources.find((source) => source.id === skillMarketplaceSelectedMarketId) || null,
-    [skillMarketSources, skillMarketplaceSelectedMarketId]
-  );
-  const isRedskillSourceSelected = selectedSkillMarketSource?.kind === 'redskill-cli';
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
@@ -1303,7 +1263,6 @@ export function Settings({
     ai: false,
     team: false,
     platforms: false,
-    skills: false,
     mcp: false,
     tools: false,
     profile: false,
@@ -1315,7 +1274,6 @@ export function Settings({
     ai: false,
     team: false,
     platforms: false,
-    skills: false,
     mcp: false,
     tools: false,
     profile: false,
@@ -4956,283 +4914,6 @@ export function Settings({
     }
   }, []);
 
-  const loadSettingsSkills = useCallback(async () => {
-    setIsSettingsSkillsLoading(true);
-    try {
-      const list = await window.ipcRenderer.listSkills();
-      const normalized = (Array.isArray(list) ? list : [])
-        .map((skill) => ({
-          name: String(skill.name || '').trim(),
-          description: String(skill.description || '').trim(),
-          location: String(skill.location || '').trim(),
-          sourceScope: skill.sourceScope,
-          isBuiltin: Boolean(skill.isBuiltin || skill.sourceScope === 'builtin'),
-          disabled: Boolean(skill.disabled),
-        }))
-        .filter((skill) => skill.name);
-      normalized.sort((left, right) => {
-        const leftBuiltIn = left.isBuiltin ? 0 : 1;
-        const rightBuiltIn = right.isBuiltin ? 0 : 1;
-        return leftBuiltIn - rightBuiltIn || left.name.localeCompare(right.name);
-      });
-      setSettingsSkills(normalized);
-      return normalized;
-    } catch (error) {
-      console.error('Failed to load skills:', error);
-      setSettingsSkillStatusMessage('技能列表读取失败');
-      return [];
-    } finally {
-      setIsSettingsSkillsLoading(false);
-    }
-  }, []);
-
-  const handleToggleSettingsSkill = useCallback(async (skill: SettingsSkill) => {
-    if (skill.isBuiltin) return;
-    const nextDisabled = !skill.disabled;
-    setSettingsSkillBusyName(skill.name);
-    setSettingsSkillStatusMessage('');
-    setSettingsSkills((prev) => prev.map((item) => (
-      item.name === skill.name ? { ...item, disabled: nextDisabled } : item
-    )));
-    try {
-      const action = nextDisabled ? window.ipcRenderer.skills.disable : window.ipcRenderer.skills.enable;
-      const result = await action({ name: skill.name }) as { success?: boolean; error?: string };
-      if (result && result.success === false) {
-        throw new Error(result.error || '技能状态保存失败');
-      }
-      setSettingsSkillStatusMessage(nextDisabled ? `已关闭 ${skill.name}` : `已打开 ${skill.name}`);
-      await loadSettingsSkills();
-      tabWarmRef.current.skills = true;
-    } catch (error) {
-      console.error('Failed to update skill state:', error);
-      setSettingsSkills((prev) => prev.map((item) => (
-        item.name === skill.name ? { ...item, disabled: skill.disabled } : item
-      )));
-      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能状态保存失败');
-    } finally {
-      setSettingsSkillBusyName('');
-    }
-  }, [loadSettingsSkills]);
-
-  const loadSkillMarketplace = useCallback(async (marketId = skillMarketplaceSelectedMarketId) => {
-    setIsSkillMarketplaceLoading(true);
-    try {
-      const result = await window.ipcRenderer.skills.marketplace({
-        marketId: marketId || undefined,
-      });
-      if (result.success === false) {
-        throw new Error(result.error || '技能市场加载失败');
-      }
-      const sources = Array.isArray(result.sources) ? result.sources : [];
-      setSkillMarketSources(sources);
-      setSkillMarketplaceItems(Array.isArray(result.items) ? result.items : Array.isArray(result.skills) ? result.skills : []);
-      setSettingsSkillStatusMessage('');
-    } catch (error) {
-      console.error('Failed to load skill marketplace:', error);
-      setSkillMarketplaceItems([]);
-      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能市场加载失败');
-    } finally {
-      setIsSkillMarketplaceLoading(false);
-    }
-  }, [skillMarketplaceSelectedMarketId]);
-
-  const openSkillMarketplace = useCallback(() => {
-    dispatchAppIntent({
-      type: 'view.open',
-      view: 'skills',
-    });
-  }, []);
-
-  const handleSelectSkillMarketSource = useCallback((marketId: string) => {
-    setSkillMarketplaceSelectedMarketId(marketId);
-    void loadSkillMarketplace(marketId);
-  }, [loadSkillMarketplace]);
-
-  const handleAddSkillMarketSource = useCallback(async () => {
-    const name = skillMarketSourceDraft.name.trim();
-    const kind = skillMarketSourceDraft.kind.trim() || 'github';
-    const source = skillMarketSourceDraft.source.trim();
-    const registryUrl = skillMarketSourceDraft.registryUrl.trim();
-    const sourceRequired = !['redskill-cli'].includes(kind);
-    if (!name || (sourceRequired && !source && !registryUrl)) {
-      setSettingsSkillStatusMessage(sourceRequired ? '市场名称和来源不能为空' : '市场名称不能为空');
-      return;
-    }
-    setSkillMarketSourceBusyId('__new__');
-    setSettingsSkillStatusMessage('');
-    try {
-      const payload = {
-        name,
-        kind,
-        source: kind === 'url' || kind === 'legacy-thrive' ? undefined : source || undefined,
-        repo: kind === 'github' || kind === 'git' ? source : undefined,
-        registryUrl: kind === 'url' || kind === 'legacy-thrive' || kind === 'redbox-server' ? registryUrl || source : undefined,
-        refName: skillMarketSourceDraft.refName.trim() || undefined,
-        enabled: true,
-        trustLevel: kind === 'local' ? 'curated' : (kind === 'redskill-cli' || kind === 'redbox-server') ? 'official' : 'community',
-      };
-      const result = await window.ipcRenderer.skills.marketSources.add(payload) as {
-        success?: boolean;
-        error?: string;
-        sources?: SkillMarketSource[];
-      };
-      if (result.success === false) {
-        throw new Error(result.error || '市场源添加失败');
-      }
-      setSkillMarketSourceDraft({ name: '', kind: 'github', source: '', registryUrl: '', refName: '' });
-      setSkillMarketSources(Array.isArray(result.sources) ? result.sources : []);
-      setSettingsSkillStatusMessage(`已添加市场 ${name}`);
-      await loadSkillMarketplace(skillMarketplaceSelectedMarketId);
-    } catch (error) {
-      console.error('Failed to add skill marketplace source:', error);
-      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '市场源添加失败');
-    } finally {
-      setSkillMarketSourceBusyId('');
-    }
-  }, [loadSkillMarketplace, skillMarketSourceDraft, skillMarketplaceSelectedMarketId]);
-
-  const handleInstallRedskillIdentifier = useCallback(async () => {
-    const identifier = redskillIdentifierInput.trim();
-    if (!identifier) {
-      setSettingsSkillStatusMessage('RedSkill identifier 不能为空');
-      return;
-    }
-    const marketId = selectedSkillMarketSource?.id || 'redskill-official';
-    setIsRedskillInstalling(true);
-    setSkillMarketplaceBusyId(`redskill:${identifier}`);
-    setSettingsSkillStatusMessage(`正在安装 RedSkill ${identifier}`);
-    try {
-      const result = await window.ipcRenderer.skills.marketInstall({
-        marketId,
-        packageId: identifier,
-      }) as {
-        success?: boolean;
-        error?: string;
-        installed?: Array<{ name?: string }>;
-        requiresAgentRestart?: boolean;
-      };
-      if (result.success === false) {
-        throw new Error(result.error || 'RedSkill 安装失败');
-      }
-      setRedskillIdentifierInput('');
-      setSettingsSkillStatusMessage(
-        result.requiresAgentRestart ? `已安装 ${identifier}，建议重启 Agent` : `已安装 ${identifier}`
-      );
-      await Promise.all([
-        loadSettingsSkills(),
-        loadSkillMarketplace(skillMarketplaceSelectedMarketId),
-      ]);
-      tabWarmRef.current.skills = true;
-    } catch (error) {
-      console.error('Failed to install RedSkill identifier:', error);
-      setSettingsSkillStatusMessage(error instanceof Error ? error.message : 'RedSkill 安装失败');
-    } finally {
-      setIsRedskillInstalling(false);
-      setSkillMarketplaceBusyId('');
-    }
-  }, [
-    loadSettingsSkills,
-    loadSkillMarketplace,
-    redskillIdentifierInput,
-    selectedSkillMarketSource?.id,
-    skillMarketplaceSelectedMarketId,
-  ]);
-
-  const handleRemoveSkillMarketSource = useCallback(async (source: SkillMarketSource) => {
-    const confirmed = await appConfirm(`移除技能市场“${source.name}”？`, {
-      title: '移除技能市场',
-      confirmLabel: '移除',
-      tone: 'danger',
-    });
-    if (!confirmed) return;
-    setSkillMarketSourceBusyId(source.id);
-    setSettingsSkillStatusMessage('');
-    try {
-      const result = await window.ipcRenderer.skills.marketSources.remove({ id: source.id }) as {
-        success?: boolean;
-        error?: string;
-        sources?: SkillMarketSource[];
-      };
-      if (result.success === false) {
-        throw new Error(result.error || '市场源移除失败');
-      }
-      const nextSources = Array.isArray(result.sources) ? result.sources : [];
-      setSkillMarketSources(nextSources);
-      const nextSelected = skillMarketplaceSelectedMarketId === source.id ? '' : skillMarketplaceSelectedMarketId;
-      setSkillMarketplaceSelectedMarketId(nextSelected);
-      setSettingsSkillStatusMessage(`已移除市场 ${source.name}`);
-      await loadSkillMarketplace(nextSelected);
-    } catch (error) {
-      console.error('Failed to remove skill marketplace source:', error);
-      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '市场源移除失败');
-    } finally {
-      setSkillMarketSourceBusyId('');
-    }
-  }, [loadSkillMarketplace, skillMarketplaceSelectedMarketId]);
-
-  const handleUninstallSettingsSkill = useCallback(async (skill: SettingsSkill) => {
-    if (skill.isBuiltin) return;
-    const confirmed = await appConfirm(`删除技能“${skill.name}”？`, {
-      title: '删除技能',
-      confirmLabel: '删除',
-      tone: 'danger',
-    });
-    if (!confirmed) return;
-    setSettingsSkillBusyName(skill.name);
-    setSettingsSkillStatusMessage('');
-    try {
-      const result = await window.ipcRenderer.skills.uninstall({ name: skill.name }) as { success?: boolean; error?: string };
-      if (result && result.success === false) {
-        throw new Error(result.error || '技能删除失败');
-      }
-      setSettingsSkillStatusMessage(`已删除 ${skill.name}`);
-      await loadSettingsSkills();
-      if (isSkillMarketplaceOpen) {
-        await loadSkillMarketplace();
-      }
-      tabWarmRef.current.skills = true;
-    } catch (error) {
-      console.error('Failed to uninstall skill:', error);
-      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能删除失败');
-    } finally {
-      setSettingsSkillBusyName('');
-    }
-  }, [isSkillMarketplaceOpen, loadSettingsSkills, loadSkillMarketplace]);
-
-  const handleInstallMarketplaceSkill = useCallback(async (skill: ThriveSkillMarketplaceItem) => {
-    setSkillMarketplaceBusyId(skill.id);
-    setSettingsSkillStatusMessage(`正在安装 ${skill.name}`);
-    try {
-      const result = await window.ipcRenderer.skills.marketInstall({
-        id: skill.id,
-        packageId: skill.packageId,
-        marketId: skill.marketId,
-        repo: skill.repo || undefined,
-        refName: skill.refName || undefined,
-        paths: skill.paths,
-      }) as {
-        success?: boolean;
-        error?: string;
-        installed?: Array<{ name?: string }>;
-      };
-      if (result.success === false) {
-        throw new Error(result.error || '技能安装失败');
-      }
-      const installedName = result.installed?.[0]?.name || skill.name;
-      setSettingsSkillStatusMessage(`已安装 ${installedName}`);
-      await Promise.all([
-        loadSettingsSkills(),
-        loadSkillMarketplace(),
-      ]);
-      tabWarmRef.current.skills = true;
-    } catch (error) {
-      console.error('Failed to install marketplace skill:', error);
-      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能安装失败');
-    } finally {
-      setSkillMarketplaceBusyId('');
-    }
-  }, [loadSettingsSkills, loadSkillMarketplace]);
-
   const persistTeamAdvisorOrder = useCallback(async (items: Advisor[]) => {
     await Promise.all(items.map((advisor, index) => (
       window.ipcRenderer.advisors.update({
@@ -5501,8 +5182,6 @@ export function Settings({
         });
       } else if (tab === 'team') {
         await loadTeamAdvisors();
-      } else if (tab === 'skills') {
-        await loadSettingsSkills();
       } else if (tab === 'mcp') {
         await loadMcpRuntimeData();
       } else if (tab === 'tools') {
@@ -5540,7 +5219,6 @@ export function Settings({
     loadMcpRuntimeData,
     loadPendingDiagnosticReports,
     loadRecentDebugLogs,
-    loadSettingsSkills,
     loadTeamAdvisors,
     loadRuntimeHooks,
     loadRuntimeRoles,
@@ -5584,7 +5262,7 @@ export function Settings({
       if (activeTab === 'profile' && !redclawProfileDirtyRef.current) {
         void ensureTabResourcesLoaded('profile', true);
       }
-      if (activeTab === 'general' || activeTab === 'tools' || activeTab === 'skills' || activeTab === 'mcp') {
+      if (activeTab === 'general' || activeTab === 'tools' || activeTab === 'mcp') {
         tabWarmRef.current[activeTab] = false;
         void ensureTabResourcesLoaded(activeTab, true);
       }
@@ -5694,9 +5372,6 @@ export function Settings({
     }
     if (activeTab === 'team') {
       void ensureTabResourcesLoaded('team');
-    }
-    if (activeTab === 'skills') {
-      void ensureTabResourcesLoaded('skills');
     }
     if (activeTab === 'mcp') {
       void ensureTabResourcesLoaded('mcp');
@@ -6551,71 +6226,11 @@ export function Settings({
     </div>
   );
 
-  const renderSettingsSkillRow = useCallback((skill: SettingsSkill) => {
-    const isBusy = settingsSkillBusyName === skill.name;
-    const enabled = skill.isBuiltin || !skill.disabled;
-    return (
-      <div key={skill.location || skill.name} className="flex items-center justify-between gap-4 px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-medium text-text-primary">{skill.name}</span>
-            <span className={clsx(
-              'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
-              skill.isBuiltin
-                ? 'bg-accent-primary/10 text-accent-primary'
-                : 'bg-surface-secondary text-text-tertiary'
-            )}>
-              {formatSettingsSkillSource(skill.sourceScope)}
-            </span>
-          </div>
-          {skill.description && (
-            <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
-              {skill.description}
-            </div>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void handleToggleSettingsSkill(skill)}
-            disabled={skill.isBuiltin || isBusy}
-            role="switch"
-            aria-checked={enabled}
-            aria-label={`${enabled ? '关闭' : '打开'}技能 ${skill.name}`}
-            title={skill.isBuiltin ? '内置技能不可关闭' : (enabled ? '关闭技能' : '打开技能')}
-            className={clsx(
-              'ui-switch-track disabled:cursor-not-allowed',
-              skill.isBuiltin && 'opacity-70',
-              isBusy && 'opacity-60'
-            )}
-            data-size="sm"
-            data-state={enabled ? 'on' : 'off'}
-          >
-            <span className="ui-switch-thumb" />
-          </button>
-          {!skill.isBuiltin && (
-            <button
-              type="button"
-              onClick={() => void handleUninstallSettingsSkill(skill)}
-              disabled={isBusy}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-text-tertiary transition-colors hover:border-brand-red/30 hover:bg-brand-red/10 hover:text-brand-red disabled:opacity-50"
-              aria-label={`删除技能 ${skill.name}`}
-              title="删除技能"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }, [handleToggleSettingsSkill, handleUninstallSettingsSkill, settingsSkillBusyName]);
-
   const allTabs = useMemo<Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }>>(() => [
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
     { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
     { id: 'team', labelKey: 'settings.tabs.team', icon: Users },
     { id: 'platforms', labelKey: 'settings.tabs.platforms', icon: Store },
-    { id: 'skills', labelKey: 'settings.tabs.skills', icon: Star },
     { id: 'mcp', labelKey: 'settings.tabs.mcp', icon: Server },
     { id: 'remote', labelKey: 'settings.tabs.remote', icon: MessageSquareText },
     { id: 'profile', labelKey: 'settings.tabs.profile', icon: FileText },
@@ -7410,329 +7025,6 @@ export function Settings({
                 onDragOver={handleTeamAdvisorDragOver}
                 onDragEnd={handleTeamAdvisorDragEnd}
               />
-            )}
-
-            {activeTab === 'skills' && (
-              <div className="space-y-6">
-                <section className="space-y-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h2 className="text-lg font-medium text-text-primary">技能</h2>
-                      <p className="mt-1 text-xs text-text-tertiary">管理当前可用技能。内置技能由系统依赖，始终保持打开。</p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={openSkillMarketplace}
-                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
-                      >
-                        <Store className="h-3.5 w-3.5" />
-                        技能市场
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void loadSettingsSkills()}
-                        disabled={isSettingsSkillsLoading}
-                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
-                      >
-                        <RefreshCw className={clsx('h-3.5 w-3.5', isSettingsSkillsLoading && 'animate-spin')} />
-                        刷新
-                      </button>
-                    </div>
-                  </div>
-
-                  {settingsSkillStatusMessage && (
-                    <div className="rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs text-text-secondary">
-                      {settingsSkillStatusMessage}
-                    </div>
-                  )}
-                </section>
-
-                <section className="overflow-hidden rounded-xl border border-border bg-surface-primary">
-                  {isSettingsSkillsLoading && settingsSkills.length === 0 ? (
-                    <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-tertiary">
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                      正在读取技能
-                    </div>
-                  ) : settingsSkills.length === 0 ? (
-                    <div className="px-4 py-5 text-sm text-text-tertiary">暂无技能</div>
-                  ) : (
-                    <div className="divide-y divide-border">
-                      {builtinSettingsSkills.length > 0 && (
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => setAreBuiltinSkillsExpanded((value) => !value)}
-                            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-secondary/40"
-                            aria-expanded={areBuiltinSkillsExpanded}
-                          >
-                            <div className="min-w-0">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <ChevronDown className={clsx(
-                                  'h-4 w-4 shrink-0 text-text-tertiary transition-transform',
-                                  !areBuiltinSkillsExpanded && '-rotate-90'
-                                )} />
-                                <span className="text-sm font-medium text-text-primary">内置技能</span>
-                                <span className="rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-medium text-accent-primary">
-                                  {builtinSettingsSkills.length}
-                                </span>
-                              </div>
-                            </div>
-                            <span className="shrink-0 text-xs text-text-tertiary">
-                              {areBuiltinSkillsExpanded ? '收起' : '展开'}
-                            </span>
-                          </button>
-                          {areBuiltinSkillsExpanded && (
-                            <div className="divide-y divide-border border-t border-border bg-surface-secondary/10">
-                              {builtinSettingsSkills.map(renderSettingsSkillRow)}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {editableSettingsSkills.map(renderSettingsSkillRow)}
-                    </div>
-                  )}
-                </section>
-
-                {isSkillMarketplaceOpen && (
-                  <div
-                    className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 px-5 py-6"
-                    onMouseDown={() => setIsSkillMarketplaceOpen(false)}
-                  >
-                    <div
-                      className="flex max-h-[82vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl"
-                      onMouseDown={(event) => event.stopPropagation()}
-                    >
-                      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-                        <h3 className="text-sm font-medium text-text-primary">技能市场</h3>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void loadSkillMarketplace()}
-                            disabled={isSkillMarketplaceLoading}
-                            className="flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
-                          >
-                            <RefreshCw className={clsx('h-3 w-3', isSkillMarketplaceLoading && 'animate-spin')} />
-                            刷新
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsSkillMarketplaceOpen(false)}
-                            className="flex h-8 w-8 items-center justify-center rounded border border-border text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                            aria-label="关闭"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </div>
-                      <div className="border-b border-border bg-surface-secondary/20 px-4 py-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <select
-                            value={skillMarketplaceSelectedMarketId}
-                            onChange={(event) => handleSelectSkillMarketSource(event.target.value)}
-                            className="h-8 rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
-                          >
-                            <option value="">全部市场</option>
-                            {skillMarketSources.map((source) => (
-                              <option key={source.id} value={source.id}>
-                                {source.name}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => setIsSkillMarketSourcesOpen((value) => !value)}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
-                          >
-                            <SettingsIcon className="h-3.5 w-3.5" />
-                            来源
-                          </button>
-                          <div className="ml-auto text-[11px] text-text-tertiary">
-                            {skillMarketplaceItems.length} 个技能
-                          </div>
-                        </div>
-                        {isSkillMarketSourcesOpen && (
-                          <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
-                            <div className="overflow-hidden rounded-lg border border-border bg-surface-primary">
-                              {skillMarketSources.length === 0 ? (
-                                <div className="px-3 py-3 text-xs text-text-tertiary">暂无市场来源</div>
-                              ) : (
-                                <div className="divide-y divide-border">
-                                  {skillMarketSources.map((source) => (
-                                    <div key={source.id} className="flex items-center justify-between gap-3 px-3 py-2">
-                                      <div className="min-w-0">
-                                        <div className="flex min-w-0 items-center gap-2">
-                                          <span className="truncate text-xs font-medium text-text-primary">{source.name}</span>
-                                          <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{source.kind}</span>
-                                          {!source.enabled ? (
-                                            <span className="rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-600">已停用</span>
-                                          ) : null}
-                                        </div>
-                                        <div className="mt-1 truncate font-mono text-[10px] text-text-tertiary">
-                                          {source.repo || source.source || source.registryUrl || source.id}
-                                        </div>
-                                      </div>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleRemoveSkillMarketSource(source)}
-                                        disabled={skillMarketSourceBusyId === source.id}
-                                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-border text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-red-500 disabled:opacity-50"
-                                        aria-label="移除市场"
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                            <div className="space-y-2 rounded-lg border border-border bg-surface-primary p-3">
-                              <input
-                                value={skillMarketSourceDraft.name}
-                                onChange={(event) => setSkillMarketSourceDraft((prev) => ({ ...prev, name: event.target.value }))}
-                                placeholder="市场名称"
-                                className="h-8 w-full rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
-                              />
-                              <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-2">
-                                <select
-                                  value={skillMarketSourceDraft.kind}
-                                  onChange={(event) => setSkillMarketSourceDraft((prev) => ({ ...prev, kind: event.target.value }))}
-                                  className="h-8 rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
-                                >
-                                  <option value="github">GitHub</option>
-                                  <option value="local">本地</option>
-                                  <option value="url">URL</option>
-                                  <option value="redbox-server">RedBox 服务端</option>
-                                  <option value="redskill-cli">RedSkill</option>
-                                </select>
-                                <input
-                                  value={skillMarketSourceDraft.source}
-                                  onChange={(event) => setSkillMarketSourceDraft((prev) => ({ ...prev, source: event.target.value }))}
-                                  placeholder={
-                                    skillMarketSourceDraft.kind === 'local'
-                                      ? '/path/to/redbox-market'
-                                      : skillMarketSourceDraft.kind === 'redskill-cli'
-                                        ? '安装脚本 URL，可留空'
-                                        : skillMarketSourceDraft.kind === 'redbox-server'
-                                          ? 'https://api.ziz.hk/api/v1/skill-market'
-                                          : 'owner/repo 或 registry URL'
-                                  }
-                                  className="h-8 min-w-0 rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
-                                />
-                              </div>
-                              <input
-                                value={skillMarketSourceDraft.refName}
-                                onChange={(event) => setSkillMarketSourceDraft((prev) => ({ ...prev, refName: event.target.value }))}
-                                placeholder="ref，默认 main"
-                                className="h-8 w-full rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => void handleAddSkillMarketSource()}
-                                disabled={skillMarketSourceBusyId === '__new__'}
-                                className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-accent-primary px-2.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                                {skillMarketSourceBusyId === '__new__' ? '添加中' : '添加市场'}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                        {isRedskillSourceSelected && (
-                          <div className="mt-3 rounded-lg border border-border bg-surface-primary p-3">
-                            <div className="flex flex-col gap-2 sm:flex-row">
-                              <input
-                                value={redskillIdentifierInput}
-                                onChange={(event) => setRedskillIdentifierInput(event.target.value)}
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter') {
-                                    event.preventDefault();
-                                    void handleInstallRedskillIdentifier();
-                                  }
-                                }}
-                                placeholder="RedSkill identifier，例如 abc"
-                                className="h-8 min-w-0 flex-1 rounded-md border border-border bg-surface-primary px-2 text-xs text-text-primary outline-none focus:border-accent-primary"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => void handleInstallRedskillIdentifier()}
-                                disabled={isRedskillInstalling || !redskillIdentifierInput.trim()}
-                                className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md bg-accent-primary px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                                {isRedskillInstalling ? '安装中' : '安装'}
-                              </button>
-                            </div>
-                            <div className="mt-2 font-mono text-[10px] text-text-tertiary">
-                              curl -fsSL https://fe-video-qc.xhscdn.com/fe-platform-file/104101b8320fbjem2620653u0hejenq0004pf88g6ask5i.sh | bash
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <div className="min-h-0 flex-1 overflow-auto">
-                        {isSkillMarketplaceLoading && skillMarketplaceItems.length === 0 ? (
-                          <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-tertiary">
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                            正在读取市场
-                          </div>
-                        ) : skillMarketplaceItems.length === 0 ? (
-                          <div className="px-4 py-8 text-center text-xs text-text-tertiary">市场暂无技能</div>
-                        ) : (
-                          <div className="divide-y divide-border">
-                            {skillMarketplaceItems.map((skill) => {
-                              const busy = skillMarketplaceBusyId === skill.id;
-                              const sourceLabel = skill.marketName || skill.sourceKind || 'market';
-                              const versionLabel = skill.version ? `v${skill.version}` : null;
-                              return (
-                                <div key={`${skill.marketId || 'market'}:${skill.packageId || skill.id}`} className="px-4 py-3">
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <div className="truncate text-sm font-medium text-text-primary">{skill.name}</div>
-                                        {skill.installed ? (
-                                          <span className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500">已安装</span>
-                                        ) : null}
-                                        {skill.updateAvailable ? (
-                                          <span className="rounded bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">可更新</span>
-                                        ) : null}
-                                      </div>
-                                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
-                                        {skill.description || skill.repo}
-                                      </div>
-                                      <div className="mt-2 flex flex-wrap gap-1.5">
-                                        <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{sourceLabel}</span>
-                                        {versionLabel ? (
-                                          <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{versionLabel}</span>
-                                        ) : null}
-                                        {skill.riskLevel ? (
-                                          <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{skill.riskLevel}</span>
-                                        ) : null}
-                                        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.packageId || skill.id}</span>
-                                        {skill.repo ? (
-                                          <span className="max-w-[360px] truncate rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.repo}</span>
-                                        ) : null}
-                                      </div>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleInstallMarketplaceSkill(skill)}
-                                      disabled={busy || (Boolean(skill.installed) && !skill.updateAvailable) || skill.installable === false}
-                                      className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                                    >
-                                      <Download className="h-3 w-3" />
-                                      {busy ? '安装中' : skill.updateAvailable ? '更新' : skill.installed ? '已安装' : '安装'}
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
             )}
 
             {activeTab === 'mcp' && (

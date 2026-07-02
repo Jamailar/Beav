@@ -215,7 +215,7 @@ export const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
   },
 ];
 
-export type SettingsTab = 'general' | 'ai' | 'team' | 'platforms' | 'skills' | 'mcp' | 'tools' | 'profile' | 'remote' | 'experimental';
+export type SettingsTab = 'general' | 'ai' | 'team' | 'platforms' | 'mcp' | 'tools' | 'profile' | 'remote' | 'experimental';
 export type SettingsNavigationTarget = {
   tab?: SettingsTab;
   aiModelSubTab?: 'custom' | 'login';
