@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { playNotificationSound, RUNTIME_SUCCESS_SOUND_ASSET_URL } from './audio';
 import {
@@ -10,11 +11,13 @@ import {
   mapRuntimeErrorToNotification,
   mapRuntimeTaskNodeFailureToNotification,
   mapRuntimeToolConfirmToNotification,
+  shouldShowInNotificationCenter,
   shouldShowSystemNotification,
 } from './policy';
 import { useNotificationStore } from './store';
 import { showSystemNotification } from './systemAdapter';
 import { showNotificationToast } from './toastAdapter';
+import { notificationClient } from './notificationClient';
 import {
   DEFAULT_NOTIFICATION_SETTINGS,
   parseNotificationSettings,
@@ -69,10 +72,10 @@ export function NotificationsHost({ currentView, children = null }: Notification
     const handleSettingsUpdated = () => {
       void loadSettings();
     };
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    const unsubscribeSettingsUpdated = subscribeSettingsUpdated(handleSettingsUpdated);
     return () => {
       cancelled = true;
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+      unsubscribeSettingsUpdated();
     };
   }, []);
 
@@ -90,7 +93,7 @@ export function NotificationsHost({ currentView, children = null }: Notification
       }
       fingerprintsRef.current.set(fingerprint, now);
 
-      if (notification.showInCenter !== false) {
+      if (shouldShowInNotificationCenter(notification)) {
         push(notification);
       }
       showNotificationToast(notification, settings, openCenter);
@@ -106,6 +109,16 @@ export function NotificationsHost({ currentView, children = null }: Notification
     };
 
     const runtimeDispose = subscribeRuntimeEventStream({
+      eventTypes: [
+        'runtime:done',
+        'runtime:task-node-changed',
+        'runtime:checkpoint',
+        'runtime:cli-escalation-requested',
+      ],
+      checkpointTypes: [
+        'chat.error',
+        'chat.tool_confirm_request',
+      ],
       onChatDone: (payload) => {
         void deliver(mapRuntimeDoneToNotification(payload, currentContextSnapshot(currentView), settingsRef.current));
       },
@@ -131,14 +144,80 @@ export function NotificationsHost({ currentView, children = null }: Notification
     };
 
     window.ipcRenderer.generation.onJobUpdated(handleGenerationUpdated);
-    window.ipcRenderer.on('redclaw:task-event', handleRedclawTaskEvent);
+    window.ipcRenderer.redclawRunner.onTaskEvent(handleRedclawTaskEvent);
 
     return () => {
       runtimeDispose();
       window.ipcRenderer.generation.offJobUpdated(handleGenerationUpdated);
-      window.ipcRenderer.off('redclaw:task-event', handleRedclawTaskEvent);
+      window.ipcRenderer.redclawRunner.offTaskEvent(handleRedclawTaskEvent);
     };
   }, [currentView, openCenter, push]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const syncIfForeground = (reason: 'login' | 'focus' | 'business_action') => {
+      if (!mounted) return;
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
+      void notificationClient.sync(reason);
+      notificationClient.startForegroundPolling();
+    };
+
+    void notificationClient.hydrate()
+      .finally(() => {
+        if (mounted) {
+          syncIfForeground('login');
+        }
+      });
+
+    const handleFocus = () => syncIfForeground('focus');
+    const handleBlur = () => notificationClient.stopPolling();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncIfForeground('focus');
+      } else {
+        notificationClient.stopPolling();
+      }
+    };
+    const handleBusinessAction = () => syncIfForeground('business_action');
+    const handleAuthStateChanged = (
+      event:
+        | { payload?: { status?: string; loggedIn?: boolean } | null }
+        | { status?: string; loggedIn?: boolean }
+        | null
+        | undefined,
+      payloadArg?: { status?: string; loggedIn?: boolean } | null,
+    ) => {
+      const payload = payloadArg !== undefined
+        ? payloadArg
+        : (event && typeof event === 'object' && 'payload' in event)
+          ? event.payload
+          : event;
+      const snapshot = (payload || null) as { status?: string; loggedIn?: boolean } | null;
+      const status = String(snapshot?.status || '');
+      if (snapshot?.loggedIn && status !== 'anonymous' && status !== 'reauthRequired') {
+        void notificationClient.hydrate().finally(() => syncIfForeground('login'));
+        return;
+      }
+      notificationClient.stopPolling();
+      notificationClient.clearLocalState();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('redbox:feedback-report-submitted', handleBusinessAction);
+    window.ipcRenderer.auth.onStateChanged(handleAuthStateChanged);
+    return () => {
+      mounted = false;
+      notificationClient.stopPolling();
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('redbox:feedback-report-submitted', handleBusinessAction);
+      window.ipcRenderer.auth.offStateChanged(handleAuthStateChanged);
+    };
+  }, []);
 
   return <>{children}</>;
 }

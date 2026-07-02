@@ -29,6 +29,12 @@ export interface SubjectVoiceInput {
   scriptText?: string;
 }
 
+export interface SubjectVideoInput {
+  name?: string;
+  dataUrl?: string;
+  relativePath?: string;
+}
+
 export interface SubjectRecord {
   id: string;
   name: string;
@@ -38,6 +44,7 @@ export interface SubjectRecord {
   attributes: SubjectAttribute[];
   imagePaths: string[];
   voicePath?: string;
+  videoPath?: string;
   voiceScript?: string;
   createdAt: string;
   updatedAt: string;
@@ -49,6 +56,8 @@ export interface SubjectEntry extends SubjectRecord {
   primaryPreviewUrl?: string;
   absoluteVoicePath?: string;
   voicePreviewUrl?: string;
+  absoluteVideoPath?: string;
+  videoPreviewUrl?: string;
 }
 
 interface SubjectCatalog {
@@ -68,8 +77,20 @@ const DEFAULT_CATALOG: SubjectCatalog = {
 
 const BUILTIN_SUBJECT_CATEGORIES: SubjectCategory[] = [
   {
+    id: 'subject_cat_brand',
+    name: '品牌',
+    createdAt: '1970-01-01T00:00:00.000Z',
+    updatedAt: '1970-01-01T00:00:00.000Z',
+  },
+  {
     id: 'subject_cat_person',
-    name: '人物',
+    name: '角色',
+    createdAt: '1970-01-01T00:00:00.000Z',
+    updatedAt: '1970-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'subject_cat_item',
+    name: '物品',
     createdAt: '1970-01-01T00:00:00.000Z',
     updatedAt: '1970-01-01T00:00:00.000Z',
   },
@@ -79,7 +100,17 @@ const BUILTIN_SUBJECT_CATEGORIES: SubjectCategory[] = [
     createdAt: '1970-01-01T00:00:00.000Z',
     updatedAt: '1970-01-01T00:00:00.000Z',
   },
+  {
+    id: 'subject_cat_scene',
+    name: '场景',
+    createdAt: '1970-01-01T00:00:00.000Z',
+    updatedAt: '1970-01-01T00:00:00.000Z',
+  },
 ];
+
+const LEGACY_CATEGORY_NAME_ALIASES: Record<string, string> = {
+  人物: '角色',
+};
 
 const DEFAULT_CATEGORIES: SubjectCategoriesFile = {
   version: 1,
@@ -92,6 +123,11 @@ function nowIso(): string {
 
 function normalizeText(input: unknown): string {
   return String(input || '').trim();
+}
+
+function canonicalSubjectCategoryName(input: unknown): string {
+  const name = normalizeText(input);
+  return LEGACY_CATEGORY_NAME_ALIASES[name] || name;
 }
 
 function normalizeList(input: unknown): string[] {
@@ -120,6 +156,45 @@ function normalizeAttributes(input: SubjectAttribute[] | unknown): SubjectAttrib
   return result;
 }
 
+function builtinCategoryForName(name: string): SubjectCategory | undefined {
+  const canonicalName = canonicalSubjectCategoryName(name);
+  return BUILTIN_SUBJECT_CATEGORIES.find((item) => item.name === canonicalName);
+}
+
+function buildBuiltinCategoryIdRemaps(categories: SubjectCategory[]): Map<string, string> {
+  const remaps = new Map<string, string>();
+  for (const category of categories) {
+    const builtin = builtinCategoryForName(category.name);
+    if (builtin && category.id && category.id !== builtin.id) {
+      remaps.set(category.id, builtin.id);
+    }
+  }
+  return remaps;
+}
+
+async function migrateSubjectCategoryRefs(categoryIdRemaps: Map<string, string>): Promise<boolean> {
+  if (categoryIdRemaps.size === 0) return false;
+  const catalog = await readCatalog();
+  let changed = false;
+  const changedSubjects: SubjectRecord[] = [];
+  const subjects = catalog.subjects.map((subject) => {
+    const nextCategoryId = subject.categoryId ? categoryIdRemaps.get(subject.categoryId) : undefined;
+    if (!nextCategoryId || nextCategoryId === subject.categoryId) return subject;
+    changed = true;
+    const nextSubject = {
+      ...subject,
+      categoryId: nextCategoryId,
+      updatedAt: nowIso(),
+    };
+    changedSubjects.push(nextSubject);
+    return nextSubject;
+  });
+  if (!changed) return false;
+  await writeCatalog({ version: 1, subjects });
+  await Promise.all(changedSubjects.map((subject) => writeSubjectFile(subject)));
+  return true;
+}
+
 function normalizeRelativeStorePath(input: string): string {
   const normalized = path.normalize(String(input || '')).replace(/\\/g, '/').replace(/^\.\/+/, '');
   if (!normalized || normalized === '.' || normalized === '..') {
@@ -140,7 +215,7 @@ function sanitizeFileName(input: string): string {
   return normalized || `image-${Date.now()}`;
 }
 
-function buildManagedAssetName(prefix: 'image' | 'voice', ext: string, index?: number): string {
+function buildManagedAssetName(prefix: 'image' | 'voice' | 'video', ext: string, index?: number): string {
   const stamp = Date.now();
   const suffix = randomUUID().slice(0, 8);
   const ordinal = Number.isFinite(index) ? `-${Number(index) + 1}` : '';
@@ -174,6 +249,10 @@ function getSubjectImagesDir(subjectId: string): string {
 
 function getSubjectVoiceDir(subjectId: string): string {
   return path.join(getSubjectDir(subjectId), 'voice');
+}
+
+function getSubjectVideoDir(subjectId: string): string {
+  return path.join(getSubjectDir(subjectId), 'video');
 }
 
 async function ensureSubjectsRoot(): Promise<void> {
@@ -212,13 +291,15 @@ async function readCategoriesFile(): Promise<SubjectCategoriesFile> {
         version: 1,
         categories: parsed.categories.map((item) => ({
           id: normalizeText(item.id),
-          name: normalizeText(item.name),
+          name: canonicalSubjectCategoryName(item.name),
           createdAt: normalizeText(item.createdAt) || nowIso(),
           updatedAt: normalizeText(item.updatedAt) || nowIso(),
         })),
       };
+      const categoryIdRemaps = buildBuiltinCategoryIdRemaps(normalized.categories);
+      const migratedRefs = await migrateSubjectCategoryRefs(categoryIdRemaps);
       const merged = ensureBuiltinCategories(normalized.categories);
-      if (merged.changed) {
+      if (merged.changed || migratedRefs) {
         await writeCategoriesFile({ version: 1, categories: merged.categories });
       }
       return {
@@ -243,7 +324,12 @@ async function writeCategoriesFile(data: SubjectCategoriesFile): Promise<void> {
 }
 
 function ensureBuiltinCategories(categories: SubjectCategory[]): { categories: SubjectCategory[]; changed: boolean } {
-  const next = [...categories];
+  const next = categories
+    .map((category) => ({
+      ...category,
+      name: canonicalSubjectCategoryName(category.name),
+    }))
+    .filter((category) => category.id && category.name);
   let changed = false;
   for (const builtin of BUILTIN_SUBJECT_CATEGORIES) {
     const byId = next.find((item) => item.id === builtin.id);
@@ -257,10 +343,21 @@ function ensureBuiltinCategories(categories: SubjectCategory[]): { categories: S
       changed = true;
     }
   }
+  const builtinNames = new Set(BUILTIN_SUBJECT_CATEGORIES.map((item) => item.name));
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const category = next[index];
+    if (!isBuiltinCategoryId(category.id) && builtinNames.has(category.name)) {
+      next.splice(index, 1);
+      changed = true;
+    }
+  }
   next.sort((a, b) => {
-    const aBuiltin = BUILTIN_SUBJECT_CATEGORIES.some((item) => item.id === a.id) ? 0 : 1;
-    const bBuiltin = BUILTIN_SUBJECT_CATEGORIES.some((item) => item.id === b.id) ? 0 : 1;
+    const aBuiltinIndex = BUILTIN_SUBJECT_CATEGORIES.findIndex((item) => item.id === a.id);
+    const bBuiltinIndex = BUILTIN_SUBJECT_CATEGORIES.findIndex((item) => item.id === b.id);
+    const aBuiltin = aBuiltinIndex >= 0 ? 0 : 1;
+    const bBuiltin = bBuiltinIndex >= 0 ? 0 : 1;
     if (aBuiltin !== bBuiltin) return aBuiltin - bBuiltin;
+    if (aBuiltinIndex >= 0 && bBuiltinIndex >= 0) return aBuiltinIndex - bBuiltinIndex;
     return a.name.localeCompare(b.name, 'zh-CN');
   });
   return { categories: next, changed };
@@ -282,6 +379,7 @@ function normalizeSubjectRecord(input: SubjectRecord): SubjectRecord {
       ? input.imagePaths.map((item) => normalizeRelativeStorePath(String(item || ''))).filter(Boolean)
       : [],
     voicePath: normalizeText(input.voicePath) ? normalizeRelativeStorePath(String(input.voicePath || '')) : undefined,
+    videoPath: normalizeText(input.videoPath) ? normalizeRelativeStorePath(String(input.videoPath || '')) : undefined,
     voiceScript: normalizeText(input.voiceScript) || undefined,
     createdAt: normalizeText(input.createdAt) || nowIso(),
     updatedAt: normalizeText(input.updatedAt) || nowIso(),
@@ -296,6 +394,8 @@ async function writeSubjectFile(subject: SubjectRecord): Promise<void> {
 
 function extFromMime(mimeType: string): string {
   const lower = mimeType.toLowerCase();
+  if (lower.includes('video/mp4')) return 'mp4';
+  if (lower.includes('quicktime')) return 'mov';
   if (lower.includes('mpeg')) return 'mp3';
   if (lower.includes('wav')) return 'wav';
   if (lower.includes('aac')) return 'aac';
@@ -408,6 +508,48 @@ async function materializeSubjectVoice(subjectId: string, input: SubjectVoiceInp
   return { voicePath: relative, voiceScript: scriptText };
 }
 
+async function materializeSubjectVideo(subjectId: string, input: SubjectVideoInput | undefined, existingPath?: string): Promise<{ videoPath?: string }> {
+  const subjectDir = getSubjectDir(subjectId);
+  const videoDir = getSubjectVideoDir(subjectId);
+  await fs.mkdir(videoDir, { recursive: true });
+
+  const normalizedInput = input && typeof input === 'object' ? input : undefined;
+  if (!normalizedInput) {
+    if (existingPath) {
+      await fs.rm(path.join(subjectDir, existingPath), { force: true });
+    }
+    return {};
+  }
+
+  const existingRelative = normalizeText(normalizedInput.relativePath);
+  if (existingRelative) {
+    const normalizedRelative = normalizeRelativeStorePath(existingRelative);
+    const absolute = path.join(subjectDir, normalizedRelative);
+    await fs.access(absolute);
+    if (existingPath && existingPath !== normalizedRelative) {
+      await fs.rm(path.join(subjectDir, existingPath), { force: true });
+    }
+    return { videoPath: normalizedRelative };
+  }
+
+  const dataUrl = normalizeText(normalizedInput.dataUrl);
+  if (!dataUrl) {
+    if (existingPath) {
+      await fs.rm(path.join(subjectDir, existingPath), { force: true });
+    }
+    return {};
+  }
+
+  const { buffer, ext } = decodeDataUrl(dataUrl);
+  const fileName = buildManagedAssetName('video', ext);
+  const relative = normalizeRelativeStorePath(path.join('video', fileName));
+  await fs.writeFile(path.join(subjectDir, relative), buffer);
+  if (existingPath && existingPath !== relative) {
+    await fs.rm(path.join(subjectDir, existingPath), { force: true });
+  }
+  return { videoPath: relative };
+}
+
 async function enrichSubject(subject: SubjectRecord): Promise<SubjectEntry> {
   const subjectDir = getSubjectDir(subject.id);
   const absoluteImagePaths = subject.imagePaths.map((relative) => path.join(subjectDir, relative));
@@ -434,6 +576,18 @@ async function enrichSubject(subject: SubjectRecord): Promise<SubjectEntry> {
       // ignore missing voice
     }
   }
+  let absoluteVideoPath: string | undefined;
+  let videoPreviewUrl: string | undefined;
+  if (subject.videoPath) {
+    const videoAbsolute = path.join(subjectDir, subject.videoPath);
+    try {
+      await fs.access(videoAbsolute);
+      absoluteVideoPath = videoAbsolute;
+      videoPreviewUrl = toAppAssetUrl(videoAbsolute);
+    } catch {
+      // ignore missing video
+    }
+  }
   return {
     ...subject,
     absoluteImagePaths: existingAbsoluteImagePaths,
@@ -441,12 +595,14 @@ async function enrichSubject(subject: SubjectRecord): Promise<SubjectEntry> {
     primaryPreviewUrl: previewUrls[0],
     absoluteVoicePath,
     voicePreviewUrl,
+    absoluteVideoPath,
+    videoPreviewUrl,
   };
 }
 
 export async function listSubjectCategories(): Promise<SubjectCategory[]> {
   const data = await readCategoriesFile();
-  return [...data.categories].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+  return [...data.categories];
 }
 
 export async function createSubjectCategory(name: string): Promise<SubjectCategory> {
@@ -542,6 +698,7 @@ export async function createSubject(input: {
   attributes?: SubjectAttribute[];
   images?: SubjectImageInput[];
   voice?: SubjectVoiceInput;
+  video?: SubjectVideoInput;
 }): Promise<SubjectEntry> {
   const name = normalizeText(input.name);
   if (!name) {
@@ -563,6 +720,8 @@ export async function createSubject(input: {
   const voiceResult = await materializeSubjectVoice(id, input.voice, undefined);
   subject.voicePath = voiceResult.voicePath;
   subject.voiceScript = voiceResult.voiceScript;
+  const videoResult = await materializeSubjectVideo(id, input.video, undefined);
+  subject.videoPath = videoResult.videoPath;
   await writeSubjectFile(subject);
   const catalog = await readCatalog();
   catalog.subjects.push(subject);
@@ -579,6 +738,7 @@ export async function updateSubject(input: {
   attributes?: SubjectAttribute[];
   images?: SubjectImageInput[];
   voice?: SubjectVoiceInput;
+  video?: SubjectVideoInput;
 }): Promise<SubjectEntry> {
   const existing = await getSubject(input.id);
   const next: SubjectRecord = {
@@ -590,6 +750,7 @@ export async function updateSubject(input: {
     attributes: input.attributes !== undefined ? normalizeAttributes(input.attributes) : existing.attributes,
     imagePaths: existing.imagePaths,
     voicePath: existing.voicePath,
+    videoPath: existing.videoPath,
     voiceScript: existing.voiceScript,
     updatedAt: nowIso(),
   };
@@ -603,6 +764,10 @@ export async function updateSubject(input: {
     const voiceResult = await materializeSubjectVoice(existing.id, input.voice, existing.voicePath);
     next.voicePath = voiceResult.voicePath;
     next.voiceScript = voiceResult.voiceScript;
+  }
+  if (input.video !== undefined) {
+    const videoResult = await materializeSubjectVideo(existing.id, input.video, existing.videoPath);
+    next.videoPath = videoResult.videoPath;
   }
   await writeSubjectFile(next);
   const catalog = await readCatalog();

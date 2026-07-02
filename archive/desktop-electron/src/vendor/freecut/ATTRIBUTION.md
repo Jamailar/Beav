@@ -7,8 +7,7 @@ RedBox integration.
 
 - Vendored path: `src/vendor/freecut/**`
 - Primary RedBox integration points:
-  - `src/components/manuscripts/VendoredFreecutTimeline.tsx`
-  - `src/components/manuscripts/freecutTimelineBridge.ts`
+  - `src/components/manuscripts/freecutTimelineCapabilities.ts`
   - `src/vendor/freecut/features/timeline/deps/*`
 
 ## Upstream Origin

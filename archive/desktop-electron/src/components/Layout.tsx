@@ -1,131 +1,127 @@
-import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package, AlertCircle, Sparkles, ListTodo, Bell } from 'lucide-react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { MessageSquare, Settings as SettingsIcon, FolderOpen, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Sun, Moon, AlertCircle, Bell, BookOpenText, Clock3, Download, Edit, Folder, MessageSquareWarning, ShieldCheck, Plug, Trash2 } from 'lucide-react';
 import { clsx } from 'clsx';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import type { ImmersiveMode, ViewType } from '../App';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
-import { appAlert } from '../utils/appDialogs';
+import { APP_BRAND } from '../config/brand';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import { uiMeasure } from '../utils/uiDebug';
-
-const appLogo = '/Box.png';
+import { AppGlobalSearchOverlay } from '../features/app-shell/AppGlobalSearchOverlay';
+import { AppSpaceRenameDialog } from '../features/app-shell/AppSpaceRenameDialog';
+import { AppTitleBar, getAppTitleBarPlatform } from '../features/app-shell/AppTitleBar';
+import { AppUpdateNoticeModal } from '../features/app-shell/AppUpdateNoticeModal';
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
+import type { ImmersiveMode, ViewType } from '../features/app-shell/types';
+import { useAppUpdateNotice } from '../features/app-shell/useAppUpdateNotice';
+import { useGlobalKnowledgeSearch } from '../features/app-shell/useGlobalKnowledgeSearch';
+import { useLayoutSidebar } from '../features/app-shell/useLayoutSidebar';
+import { useLayoutSpaces } from '../features/app-shell/useLayoutSpaces';
+import { useLayoutTheme } from '../features/app-shell/useLayoutTheme';
+import { useI18n, type I18nKey } from '../i18n';
 
 interface LayoutProps {
   children: ReactNode;
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
   immersiveMode?: ImmersiveMode;
+  hideGlobalSidebar?: boolean;
   globalNotice?: string | null;
+  globalSidebarContent?: ReactNode;
+  activeModalView?: ViewType;
+  onOpenFeedbackReport?: () => void;
+  renderTitleBarContent?: (context: { currentView: ViewType }) => ReactNode;
+  renderTitleBarActions?: (context: { currentView: ViewType }) => ReactNode;
 }
 
-const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; group?: string }[] = [
-  // { id: 'chat', label: 'AI 对话', icon: MessageSquare },
-  { id: 'knowledge', label: '知识库', icon: FolderOpen },
-  { id: 'wander', label: '漫步', icon: Dices },
-  { id: 'manuscripts', label: '稿件', icon: FileEdit },
-  { id: 'redclaw', label: 'RedClaw', icon: Bot },
-  { id: 'workboard', label: '任务', icon: ListTodo },
-  { id: 'subjects', label: '主体', icon: Package },
-  { id: 'team', label: '团队', icon: Users },
-  { id: 'cover-studio', label: '封面', icon: ImagePlus },
-  { id: 'generation-studio', label: '创作', icon: Sparkles },
-  { id: 'media-library', label: '媒体', icon: Image },
-  { id: 'settings', label: '设置', icon: SettingsIcon },
-  // { id: 'archives', label: '档案', icon: Archive },
-  // { id: 'skills', label: '技能库', icon: Lightbulb },
+type SidebarNavItem = {
+  key: string;
+  id: ViewType;
+  labelKey: I18nKey;
+  icon: typeof MessageSquare;
+  primary?: boolean;
+  redclawAction?: 'new';
+};
+
+const NAV_ITEMS: SidebarNavItem[] = [
+  { key: 'new-chat', id: 'redclaw', labelKey: 'nav.newChat', icon: Edit, primary: true, redclawAction: 'new' },
+  { key: 'search', id: 'knowledge', labelKey: 'nav.search', icon: BookOpenText, primary: true },
+  { key: 'assets', id: 'subjects', labelKey: 'nav.assets', icon: Folder, primary: true },
+  { key: 'automation', id: 'automation', labelKey: 'nav.automation', icon: Clock3, primary: true },
+  { key: 'skills', id: 'skills', labelKey: 'nav.skills', icon: Plug, primary: true },
+  { key: 'free-creation', id: 'generation-studio', labelKey: 'nav.home', icon: Pencil },
+  { key: 'wander', id: 'wander', labelKey: 'nav.wander', icon: Dices },
 ];
 
-interface WorkspaceSpace {
-  id: string;
-  name: string;
-}
+const APPROVAL_POLL_INTERVAL_MS = 3500;
 
-interface AppUpdateNoticePayload {
-  currentVersion: string;
-  latestVersion: string;
-  htmlUrl: string;
-  name: string;
-  publishedAt: string;
-  body: string;
-}
-
-type SpaceDialogMode = 'create' | 'rename';
-type ThemeMode = 'light' | 'dark';
-
-const THEME_STORAGE_KEY = 'redbox:theme-mode:v1';
-const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
-const SIDEBAR_CONTENT_ANIMATION_MS = 170;
-
-function readInitialThemeMode(): ThemeMode {
-  if (typeof window === 'undefined') return 'light';
-  const saved = String(window.localStorage.getItem(THEME_STORAGE_KEY) || '').trim().toLowerCase();
-  if (saved === 'light' || saved === 'dark') {
-    return saved;
-  }
-  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-
-function readInitialSidebarCollapsed(): boolean {
-  if (typeof window === 'undefined') return false;
-  return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
-}
-
-export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null }: LayoutProps) {
-  const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
+export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, onOpenFeedbackReport, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const [appVersion, setAppVersion] = useState('');
-  const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readInitialSidebarCollapsed);
-  const [isSidebarAnimating, setIsSidebarAnimating] = useState(false);
-  const [sidebarAnimationDirection, setSidebarAnimationDirection] = useState<'collapsing' | 'expanding' | null>(null);
-  const [activeSpaceId, setActiveSpaceId] = useState<string>('');
-  const [isSwitchingSpace, setIsSwitchingSpace] = useState(false);
-  const [isSpaceMenuOpen, setIsSpaceMenuOpen] = useState(false);
-  const [hoveredSpaceId, setHoveredSpaceId] = useState<string | null>(null);
-  const [isSpaceDialogOpen, setIsSpaceDialogOpen] = useState(false);
-  const [spaceDialogMode, setSpaceDialogMode] = useState<SpaceDialogMode>('create');
-  const [spaceDialogName, setSpaceDialogName] = useState('');
-  const [spaceDialogTargetId, setSpaceDialogTargetId] = useState<string | null>(null);
-  const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
-  const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
-  const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
+  const { t } = useI18n();
+  const { themeMode, setManualThemeMode } = useLayoutTheme(immersiveMode);
+  const titleBarPlatform = getAppTitleBarPlatform();
+  const usesAppTitleBar = titleBarPlatform !== null;
+  const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
+  const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [firstPendingApprovalRequestId, setFirstPendingApprovalRequestId] = useState('');
   const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
   const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
-  const spaceMenuRef = useRef<HTMLDivElement | null>(null);
-  const sidebarAnimationTimerRef = useRef<number | null>(null);
-  const isFixedViewportView = currentView === 'manuscripts';
-  const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
-  const activeSpaceName = useMemo(
-    () => spaces.find((space) => space.id === activeSpaceId)?.name || '暂无空间',
-    [activeSpaceId, spaces]
-  );
-
-  const loadSpaces = useCallback(async () => {
-    try {
-      const result = await uiMeasure('layout', 'load_spaces', async () => (
-        window.ipcRenderer.spaces.list() as Promise<{ spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null>
-      )) as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
-      setSpaces(result?.spaces || []);
-      setActiveSpaceId(result?.activeSpaceId || '');
-    } catch (error) {
-      console.error('Failed to load spaces:', error);
-      setSpaces([]);
-      setActiveSpaceId('');
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadSpaces();
-
-    const handleSpaceChanged = () => {
-      void loadSpaces();
-    };
-    window.ipcRenderer.on('space:changed', handleSpaceChanged);
-    return () => {
-      window.ipcRenderer.off('space:changed', handleSpaceChanged);
-    };
-  }, [loadSpaces]);
+  const {
+    globalSearchInputRef,
+    globalSearchQuery,
+    setGlobalSearchQuery,
+    globalSearchResults,
+    isGlobalSearchLoading,
+    isGlobalSearchVisible,
+    isGlobalSearchClosing,
+    openGlobalSearch,
+    closeGlobalSearch,
+    submitGlobalSearch,
+    navigateToGlobalSearch,
+  } = useGlobalKnowledgeSearch(onNavigate);
+  const {
+    sidebarWidth,
+    isSidebarAnimating,
+    sidebarVisualCollapsed,
+    toggleSidebarCollapsed,
+    startSidebarResize,
+  } = useLayoutSidebar();
+  const {
+    spaces,
+    activeSpaceId,
+    activeSpaceName,
+    isSwitchingSpace,
+    isSpaceMenuOpen,
+    setIsSpaceMenuOpen,
+    hoveredSpaceId,
+    setHoveredSpaceId,
+    isSpaceDialogOpen,
+    spaceDialogMode,
+    spaceDialogName,
+    setSpaceDialogName,
+    isSpaceDialogSubmitting,
+    deletingSpaceId,
+    spaceMenuRef,
+    handleSwitchSpace,
+    openCreateSpaceDialog,
+    openRenameSpaceDialog,
+    handleDeleteSpace,
+    closeSpaceDialog,
+    submitSpaceDialog,
+  } = useLayoutSpaces(sidebarVisualCollapsed);
+  const {
+    updateNotice,
+    hasInstallableUpdate,
+    closeUpdateNotice,
+    updatePublishedDateLabel,
+    isOpeningReleasePage,
+    installState,
+    isInstallingUpdate,
+    openInstallableUpdateNotice,
+    openReleasePage,
+    installUpdate,
+  } = useAppUpdateNotice();
+  const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
 
   useEffect(() => {
     const loadVersion = async () => {
@@ -142,216 +138,93 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, []);
 
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (!spaceMenuRef.current) return;
-      if (!spaceMenuRef.current.contains(event.target as Node)) {
-        setIsSpaceMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isSpaceMenuOpen) {
-      setHoveredSpaceId(null);
-    }
-  }, [isSpaceMenuOpen]);
-
-  useEffect(() => {
-    const effectiveTheme = immersiveMode === 'dark' ? 'dark' : themeMode;
-    const root = document.documentElement;
-    root.setAttribute('data-theme', effectiveTheme);
-    root.classList.toggle('dark', effectiveTheme === 'dark');
-    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
-  }, [immersiveMode, themeMode]);
-
-  useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
-  }, [isSidebarCollapsed]);
-
-  useEffect(() => () => {
-    if (sidebarAnimationTimerRef.current !== null) {
-      window.clearTimeout(sidebarAnimationTimerRef.current);
-    }
-  }, []);
-
-  useEffect(() => {
-    const handleUpdateNotice = (_event: unknown, payload: AppUpdateNoticePayload) => {
-      if (!payload || !payload.latestVersion) return;
-      setUpdateNotice(payload);
-    };
-    window.ipcRenderer.on('app:update-available', handleUpdateNotice);
-    return () => {
-      window.ipcRenderer.off('app:update-available', handleUpdateNotice);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!updateNotice) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setUpdateNotice(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [updateNotice]);
-
-  const updatePublishedDateLabel = useMemo(() => {
-    if (!updateNotice?.publishedAt) return '';
-    const ts = Date.parse(updateNotice.publishedAt);
-    if (!Number.isFinite(ts)) return '';
-    return new Date(ts).toLocaleDateString();
-  }, [updateNotice?.publishedAt]);
-
-  const openReleasePage = useCallback(async () => {
-    if (!updateNotice?.htmlUrl || isOpeningReleasePage) return;
-    setIsOpeningReleasePage(true);
-    try {
-      const result = await window.ipcRenderer.openAppReleasePage(updateNotice.htmlUrl);
-      if (!result?.success) {
-        void appAlert(result?.error || '打开下载页面失败');
-      }
-    } catch (error) {
-      console.error('Failed to open release page:', error);
-      void appAlert('打开下载页面失败');
-    } finally {
-      setIsOpeningReleasePage(false);
-    }
-  }, [isOpeningReleasePage, updateNotice?.htmlUrl]);
-
-  const handleSwitchSpace = useCallback(async (nextSpaceId: string) => {
-    if (!nextSpaceId || nextSpaceId === activeSpaceId) return;
-    setIsSwitchingSpace(true);
-    try {
-      const result = await window.ipcRenderer.spaces.switch(nextSpaceId) as { success?: boolean; error?: string } | null;
-      if (!result?.success) {
-        void appAlert(result?.error || '切换空间失败');
-        return;
-      }
-      setIsSpaceMenuOpen(false);
-      window.location.reload();
-    } catch (error) {
-      console.error('Failed to switch space:', error);
-      void appAlert('切换空间失败，请重试');
-    } finally {
-      setIsSwitchingSpace(false);
-    }
-  }, [activeSpaceId]);
-
-  const openCreateSpaceDialog = useCallback(() => {
-    setIsSpaceMenuOpen(false);
-    setSpaceDialogMode('create');
-    setSpaceDialogTargetId(null);
-    setSpaceDialogName('');
-    setIsSpaceDialogOpen(true);
-  }, []);
-
-  const openRenameSpaceDialog = useCallback((space: WorkspaceSpace) => {
-    setIsSpaceMenuOpen(false);
-    setSpaceDialogMode('rename');
-    setSpaceDialogTargetId(space.id);
-    setSpaceDialogName(space.name);
-    setIsSpaceDialogOpen(true);
-  }, []);
-
-  const closeSpaceDialog = useCallback(() => {
-    if (isSpaceDialogSubmitting) return;
-    setIsSpaceDialogOpen(false);
-    setSpaceDialogName('');
-    setSpaceDialogTargetId(null);
-  }, [isSpaceDialogSubmitting]);
-
-  const toggleSidebarCollapsed = useCallback(() => {
-    setIsSpaceMenuOpen(false);
-    if (isSidebarAnimating) return;
-
-    if (sidebarAnimationTimerRef.current !== null) {
-      window.clearTimeout(sidebarAnimationTimerRef.current);
-      sidebarAnimationTimerRef.current = null;
-    }
-
-    setIsSidebarAnimating(true);
-
-    if (isSidebarCollapsed) {
-      setSidebarAnimationDirection('expanding');
-      setIsSidebarCollapsed(false);
-      sidebarAnimationTimerRef.current = window.setTimeout(() => {
-        setIsSidebarAnimating(false);
-        setSidebarAnimationDirection(null);
-        sidebarAnimationTimerRef.current = null;
-      }, SIDEBAR_CONTENT_ANIMATION_MS);
-      return;
-    }
-
-    setSidebarAnimationDirection('collapsing');
-    sidebarAnimationTimerRef.current = window.setTimeout(() => {
-      setIsSidebarCollapsed(true);
-      setIsSidebarAnimating(false);
-      setSidebarAnimationDirection(null);
-      sidebarAnimationTimerRef.current = null;
-    }, SIDEBAR_CONTENT_ANIMATION_MS);
-  }, [isSidebarAnimating, isSidebarCollapsed]);
-
-  const submitSpaceDialog = useCallback(async () => {
-    const trimmedName = spaceDialogName.trim();
-    if (!trimmedName) {
-      void appAlert('空间名称不能为空');
-      return;
-    }
-
-    setIsSpaceDialogSubmitting(true);
-    try {
-      if (spaceDialogMode === 'create') {
-        const result = await window.ipcRenderer.spaces.create(trimmedName) as { success?: boolean; space?: WorkspaceSpace; error?: string } | null;
-        if (!result?.success || !result.space) {
-          void appAlert(result?.error || '创建空间失败');
-          return;
+    if (immersiveMode) return;
+    let disposed = false;
+    const loadPendingApprovals = async () => {
+      try {
+        const requests = await window.ipcRenderer.sessionBridge.listPermissions();
+        if (disposed) return;
+        const pending = Array.isArray(requests)
+          ? requests.filter((item) => item?.status === 'pending')
+          : [];
+        setPendingApprovalCount(pending.length);
+        setFirstPendingApprovalRequestId(String(pending[0]?.id || ''));
+      } catch {
+        if (!disposed) {
+          setPendingApprovalCount(0);
+          setFirstPendingApprovalRequestId('');
         }
-        setIsSpaceDialogOpen(false);
-        setSpaceDialogName('');
-        setSpaceDialogTargetId(null);
-        await loadSpaces();
-        await handleSwitchSpace(result.space.id);
-        return;
       }
+    };
+    void loadPendingApprovals();
+    const timer = window.setInterval(() => {
+      void loadPendingApprovals();
+    }, APPROVAL_POLL_INTERVAL_MS);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [immersiveMode]);
 
-      if (!spaceDialogTargetId) {
-        void appAlert('未找到要重命名的空间');
-        return;
-      }
-
-      const result = await window.ipcRenderer.spaces.rename({ id: spaceDialogTargetId, name: trimmedName }) as { success?: boolean; error?: string } | null;
-      if (!result?.success) {
-        void appAlert(result?.error || '重命名失败');
-        return;
-      }
-
-      setIsSpaceDialogOpen(false);
-      setSpaceDialogName('');
-      setSpaceDialogTargetId(null);
-      await loadSpaces();
-    } catch (error) {
-      console.error('Failed to submit space dialog:', error);
-      void appAlert(spaceDialogMode === 'create' ? '创建空间失败，请重试' : '重命名空间失败，请重试');
-    } finally {
-      setIsSpaceDialogSubmitting(false);
+  const handleSidebarNavigate = useCallback((item: SidebarNavItem) => {
+    if (item.key === 'search') {
+      openGlobalSearch();
+      return;
     }
-  }, [handleSwitchSpace, loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId]);
+    if (item.redclawAction) {
+      dispatchAppIntent({
+        type: 'redclaw.open',
+        action: item.redclawAction,
+      });
+      return;
+    }
+    onNavigate(item.id);
+  }, [onNavigate, openGlobalSearch]);
 
   return (
     <div
       className={clsx(
-        'relative flex h-screen w-full overflow-hidden text-text-primary',
+        'app-layout-shell relative flex h-screen w-full overflow-hidden text-text-primary',
+        !immersiveMode && !hideGlobalSidebar && 'app-layout-shell--layered',
         immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-background'
       )}
     >
+      <AppTitleBar
+        immersiveMode={immersiveMode}
+        enabled={usesAppTitleBar}
+        platform={titleBarPlatform}
+        content={titleBarContent}
+        isSidebarCollapsed={sidebarVisualCollapsed}
+        toggleSidebarCollapsed={toggleSidebarCollapsed}
+        openGlobalSearch={openGlobalSearch}
+        openCurrentReleaseNotes={() => void openInstallableUpdateNotice()}
+        showUpdateButton={hasInstallableUpdate}
+        notificationDrawerOpen={notificationDrawerOpen}
+        unreadNotificationCount={unreadNotificationCount}
+        toggleNotificationDrawer={toggleNotificationDrawer}
+        themeMode={themeMode}
+        setManualThemeMode={setManualThemeMode}
+        extraActions={(
+          <>
+            {titleBarActions}
+            {onOpenFeedbackReport && (
+              <button
+                type="button"
+                onClick={onOpenFeedbackReport}
+                className="app-titlebar-button"
+                title="反馈问题"
+                aria-label="反馈问题"
+                data-no-window-drag
+              >
+                <MessageSquareWarning className="w-[13px] h-[13px]" strokeWidth={1.75} />
+              </button>
+            )}
+          </>
+        )}
+      />
+
       {globalNotice && (
-        <div className="pointer-events-none absolute left-1/2 top-3 z-[80] -translate-x-1/2">
+        <div className={clsx('pointer-events-none absolute left-1/2 z-[80] -translate-x-1/2', usesAppTitleBar ? 'top-[calc(var(--app-titlebar-height)+0.75rem)]' : 'top-3')}>
           <div className="inline-flex items-center gap-2 rounded-full border border-red-200/80 bg-red-50/96 px-4 py-2 text-[12px] font-medium text-red-700 shadow-[0_12px_30px_-18px_rgba(220,38,38,0.55)] backdrop-blur">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
             <span className="whitespace-nowrap">{globalNotice}</span>
@@ -360,92 +233,103 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       )}
 
       {/* Sidebar */}
-      {!immersiveMode && (
+      {!immersiveMode && !hideGlobalSidebar && (
         <aside
           className={clsx(
             'app-sidebar-shell bg-surface-secondary/85 border-r border-border flex flex-col shrink-0 overflow-hidden',
+            usesAppTitleBar && 'pt-[var(--app-titlebar-height)]',
             isSidebarAnimating && 'app-sidebar-shell--animating',
-            isSidebarCollapsed ? 'w-[4.5rem]' : 'w-[9rem]'
+            sidebarVisualCollapsed ? 'app-sidebar-shell--collapsed' : 'app-sidebar-shell--expanded'
           )}
+          style={!sidebarVisualCollapsed ? { '--app-sidebar-expanded-width': `${sidebarWidth}px` } as React.CSSProperties : undefined}
         >
-          {/* App Title */}
-          <div
-            className={clsx(
-              'border-b border-border/50',
-              sidebarVisualCollapsed
-                ? 'px-2 py-3 flex flex-col items-center gap-2'
-                : 'h-11 px-4 flex items-center'
-            )}
-          >
+          {!usesAppTitleBar && (
             <div
-              className={clsx('flex items-center min-w-0', sidebarVisualCollapsed ? 'justify-center' : 'gap-2')}
-              title={appVersion ? `红盒子 v${appVersion}` : '红盒子'}
+              className={clsx(
+                'border-b border-border/50',
+                sidebarVisualCollapsed
+                  ? 'px-2 py-3 flex flex-col items-center gap-2'
+                  : 'h-11 px-4 flex items-center'
+              )}
             >
-              <img src={appLogo} alt="RedBox" className="w-[18px] h-[18px] shrink-0" />
-              <span
-                className={clsx(
-                  'font-medium text-[14px] tracking-[0.01em] truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-150 ease-out',
-                  sidebarVisualCollapsed ? 'max-w-0 opacity-0 -translate-x-1' : 'max-w-[7rem] opacity-100 translate-x-0'
-                )}
+              <div
+                className={clsx('flex items-center min-w-0', sidebarVisualCollapsed ? 'justify-center' : 'gap-2')}
+                title={appVersion ? `红盒子 v${appVersion}` : '红盒子'}
               >
-                红盒子
-              </span>
+                <img src={appLogo} alt="RedBox" className="w-[18px] h-[18px] shrink-0" />
+                <span
+                  className={clsx(
+                    'font-medium text-[14px] tracking-[0.01em] truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-150 ease-out',
+                    sidebarVisualCollapsed ? 'max-w-0 opacity-0 -translate-x-1' : 'max-w-[7rem] opacity-100 translate-x-0'
+                  )}
+                >
+                  红盒子
+                </span>
+              </div>
+              <div className={clsx('flex items-center gap-2', sidebarVisualCollapsed ? 'flex-col' : 'ml-auto')}>
+                <button
+                  type="button"
+                  onClick={toggleSidebarCollapsed}
+                  className="h-7 w-7 rounded-lg text-text-secondary hover:text-text-primary transition-colors inline-flex items-center justify-center"
+                  title={sidebarVisualCollapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
+                  aria-label={sidebarVisualCollapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
+                >
+                  {sidebarVisualCollapsed
+                    ? <ChevronRight className="w-[14px] h-[14px]" strokeWidth={1.75} />
+                    : <ChevronLeft className="w-[14px] h-[14px]" strokeWidth={1.75} />}
+                </button>
+              </div>
             </div>
-            <div className={clsx('flex items-center gap-2', sidebarVisualCollapsed ? 'flex-col' : 'ml-auto')}>
-              <button
-                type="button"
-                onClick={toggleSidebarCollapsed}
-                className="h-7 w-7 rounded-lg text-text-secondary hover:text-text-primary transition-colors inline-flex items-center justify-center"
-                title={isSidebarCollapsed ? '展开侧边栏' : '折叠为仅图标'}
-                aria-label={isSidebarCollapsed ? '展开侧边栏' : '折叠为仅图标'}
-              >
-                {isSidebarCollapsed
-                  ? <ChevronRight className="w-[14px] h-[14px]" strokeWidth={1.75} />
-                  : <ChevronLeft className="w-[14px] h-[14px]" strokeWidth={1.75} />}
-              </button>
-            </div>
-          </div>
+          )}
 
           {/* Navigation */}
-          <nav className={clsx('flex-1 py-3 space-y-1.5', sidebarVisualCollapsed ? 'px-2' : 'px-2.5')}>
-            {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+          <nav className={clsx('app-sidebar-nav', visibleGlobalSidebarContent ? 'shrink-0' : 'flex-1', sidebarVisualCollapsed ? 'app-sidebar-nav--collapsed' : 'app-sidebar-nav--expanded')}>
+            {NAV_ITEMS.map((item) => {
+              const { key, id, labelKey, icon: Icon, primary, redclawAction } = item;
+              const label = t(labelKey);
+              const isActive = !redclawAction && (currentView === id || activeModalView === id);
+              return (
               <button
-                key={id}
+                key={key}
                 type="button"
-                data-guide-id={`nav-${id}`}
+                data-guide-id={`nav-${key}`}
                 onClick={() => {
-                  onNavigate(id);
+                  handleSidebarNavigate(item);
                 }}
                 title={label}
                 aria-label={label}
                 className={clsx(
-                  'w-full rounded-xl transition-all tracking-[0.01em] font-normal inline-flex items-center',
-                  sidebarVisualCollapsed ? 'h-11 justify-center px-0' : 'gap-3 px-3.5 py-2.5 text-[13px]',
-                  id === 'subjects'
-                    ? (
-                      currentView === id
-                        ? 'bg-transparent text-accent-primary shadow-none'
-                        : 'bg-transparent text-text-secondary/90 hover:bg-transparent hover:text-text-primary'
-                    )
-                    : (
-                      currentView === id
-                        ? 'bg-surface-primary text-accent-primary shadow-sm'
-                        : 'text-text-secondary/90 hover:bg-surface-primary/55 hover:text-text-primary'
-                    )
+                  'app-sidebar-nav-item relative w-full rounded-xl transition-all font-normal inline-flex items-center',
+                  sidebarVisualCollapsed ? 'app-sidebar-nav-item--collapsed justify-center' : 'app-sidebar-nav-item--expanded',
+                  primary && 'app-sidebar-nav-item--primary',
+                  isActive
+                    ? 'app-sidebar-nav-item--active-special shadow-none'
+                    : 'app-sidebar-nav-item--plain'
                 )}
               >
-                <Icon className="w-[15px] h-[15px] shrink-0" strokeWidth={1.75} />
+                {key === 'new-chat' ? (
+                  <img src={APP_BRAND.logoSrc} alt="" className="app-sidebar-nav-icon shrink-0 object-contain" aria-hidden="true" />
+                ) : (
+                  <Icon className="app-sidebar-nav-icon shrink-0" strokeWidth={1.35} />
+                )}
                 <span
                   className={clsx(
-                    'truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-150 ease-out',
-                    sidebarVisualCollapsed ? 'max-w-0 opacity-0 translate-x-1' : 'max-w-[7rem] opacity-100 translate-x-0'
+                    'app-sidebar-nav-label truncate whitespace-nowrap',
+                    sidebarVisualCollapsed ? 'app-sidebar-nav-label--collapsed' : 'app-sidebar-nav-label--expanded'
                   )}
                 >
                   {label}
                 </span>
               </button>
-            ))}
+              );
+            })}
           </nav>
+
+          {visibleGlobalSidebarContent && (
+            <div className="min-h-0 flex-1 overflow-hidden px-2 pb-3 flex flex-col">
+              {visibleGlobalSidebarContent}
+            </div>
+          )}
 
           {/* Footer */}
           <div className={clsx('border-t border-border', sidebarVisualCollapsed ? 'px-2 py-3 flex flex-col items-center gap-2.5' : 'px-4 py-3 space-y-2.5')}>
@@ -456,15 +340,15 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                   sidebarVisualCollapsed ? 'max-h-0 opacity-0 -translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
                 )}
               >
-                空间
+                {t('layout.space')}
               </div>
               <div ref={spaceMenuRef} className="relative">
                 <button
                   type="button"
                   onClick={() => setIsSpaceMenuOpen((prev) => !prev)}
                   disabled={isSwitchingSpace}
-                  title={sidebarVisualCollapsed ? `当前空间：${activeSpaceName}` : undefined}
-                  aria-label={sidebarVisualCollapsed ? `当前空间：${activeSpaceName}` : undefined}
+                  title={sidebarVisualCollapsed ? `${t('layout.space')}: ${activeSpaceName}` : undefined}
+                  aria-label={sidebarVisualCollapsed ? `${t('layout.space')}: ${activeSpaceName}` : undefined}
                   className={clsx(
                     'rounded-lg border border-border bg-surface-primary text-text-primary disabled:opacity-50',
                     sidebarVisualCollapsed
@@ -485,19 +369,21 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 {isSpaceMenuOpen && (
                   <div
                     className={clsx(
-                      'absolute rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden',
+                      'app-space-menu absolute rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden',
                       sidebarVisualCollapsed ? 'bottom-0 left-full ml-2 w-56' : 'left-0 right-0 bottom-full mb-1.5'
                     )}
                   >
                     <div className="max-h-44 overflow-y-auto">
                       {spaces.length === 0 ? (
                         <div className="h-9 px-2.5 text-[12px] text-text-tertiary flex items-center">
-                          暂无空间
+                          {t('layout.noSpace')}
                         </div>
                       ) : (
                         spaces.map((space) => {
                           const isActive = space.id === activeSpaceId;
                           const showEdit = hoveredSpaceId === space.id;
+                          const canDelete = space.id !== 'default';
+                          const isDeleting = deletingSpaceId === space.id;
                           return (
                             <div
                               key={space.id}
@@ -528,10 +414,28 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                                   'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-opacity',
                                   showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
                                 )}
-                                title="重命名空间"
+                                title={t('layout.renameSpace')}
                               >
                                 <Pencil className="w-[12px] h-[12px]" strokeWidth={1.75} />
                               </button>
+                              {canDelete && (
+                                <button
+                                  type="button"
+                                  disabled={isDeleting}
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void handleDeleteSpace(space);
+                                  }}
+                                  className={clsx(
+                                    'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-red-500 hover:bg-surface-primary disabled:opacity-50 transition-opacity',
+                                    showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                                  )}
+                                  title={t('layout.deleteSpace')}
+                                >
+                                  <Trash2 className="w-[12px] h-[12px]" strokeWidth={1.75} />
+                                </button>
+                              )}
                             </div>
                           );
                         })
@@ -548,46 +452,225 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                       className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
                     >
                       <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                      新建空间
+                      {t('layout.createSpace')}
                     </button>
                   </div>
                 )}
               </div>
             </div>
+            {sidebarVisualCollapsed && (
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('settings')}
+                  className={clsx(
+                    'h-8 w-8 rounded-lg border border-border bg-surface-primary transition-colors inline-flex items-center justify-center shrink-0',
+                    currentView === 'settings'
+                      ? 'text-accent-primary'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
+                  )}
+                  title={t('nav.settings')}
+                  aria-label={t('nav.settings')}
+                >
+                  <SettingsIcon className="w-[14px] h-[14px]" strokeWidth={1.75} />
+                </button>
+                {onOpenFeedbackReport && (
+                  <button
+                    type="button"
+                    onClick={onOpenFeedbackReport}
+                    className="h-8 w-8 rounded-lg border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                    title="反馈问题"
+                    aria-label="反馈问题"
+                  >
+                    <MessageSquareWarning className="w-[14px] h-[14px]" strokeWidth={1.75} />
+                  </button>
+                )}
+                {!usesAppTitleBar && (
+                  <button
+                    type="button"
+                    onClick={toggleNotificationDrawer}
+                    className="relative h-8 w-8 rounded-lg border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                    title={notificationDrawerOpen ? t('layout.closeNotificationCenter') : t('layout.openNotificationCenter')}
+                    aria-label={notificationDrawerOpen ? t('layout.closeNotificationCenter') : t('layout.openNotificationCenter')}
+                  >
+                    <Bell className="w-[14px] h-[14px]" strokeWidth={1.75} />
+                    {unreadNotificationCount > 0 && (
+                      <span className="absolute -right-1 -top-1 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
+                        {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                      </span>
+                    )}
+                  </button>
+                )}
+                {!usesAppTitleBar && hasInstallableUpdate && (
+                  <button
+                    type="button"
+                    onClick={() => void openInstallableUpdateNotice()}
+                    className="h-8 w-8 rounded-lg border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                    title={t('layout.softwareUpdate')}
+                    aria-label={t('layout.softwareUpdate')}
+                  >
+                    <Download className="w-[14px] h-[14px]" strokeWidth={1.75} />
+                  </button>
+                )}
+                {(pendingApprovalCount > 0 || currentView === 'approval') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (firstPendingApprovalRequestId) {
+                        dispatchAppIntent({
+                          type: 'approval.open',
+                          requestId: firstPendingApprovalRequestId,
+                        });
+                        return;
+                      }
+                      onNavigate('approval');
+                    }}
+                    className={clsx(
+                      'relative h-8 w-8 rounded-lg border border-border bg-surface-primary transition-colors inline-flex items-center justify-center shrink-0',
+                      currentView === 'approval'
+                        ? 'text-accent-primary'
+                        : 'text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
+                    )}
+                    title="待审批"
+                    aria-label="待审批"
+                  >
+                    <ShieldCheck className="w-[14px] h-[14px]" strokeWidth={1.75} />
+                    {pendingApprovalCount > 0 && (
+                      <span className="absolute -right-1 -top-1 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
+                        {pendingApprovalCount > 9 ? '9+' : pendingApprovalCount}
+                      </span>
+                    )}
+                  </button>
+                )}
+                {!usesAppTitleBar && (
+                  <button
+                    type="button"
+                    onClick={() => setManualThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+                    className="h-8 w-8 rounded-lg border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                    title={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
+                    aria-label={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
+                  >
+                    {themeMode === 'dark'
+                      ? <Sun className="w-[14px] h-[14px]" strokeWidth={1.75} />
+                      : <Moon className="w-[14px] h-[14px]" strokeWidth={1.75} />}
+                  </button>
+                )}
+              </div>
+            )}
             <div
               className={clsx(
-                'flex items-center justify-center gap-2 text-[11px] text-text-tertiary/90 overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
+                'app-sidebar-footer-meta flex items-center justify-center gap-2 text-[11px] text-text-tertiary/90 overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
                 sidebarVisualCollapsed ? 'max-h-0 opacity-0 translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
               )}
             >
               <button
                 type="button"
-                onClick={toggleNotificationDrawer}
-                className="relative h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
-                title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
-                aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
-              >
-                <Bell className="w-[11px] h-[11px]" strokeWidth={1.75} />
-                {unreadNotificationCount > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
-                    {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
-                  </span>
+                onClick={() => onNavigate('settings')}
+                className={clsx(
+                  'h-5 w-5 rounded-md border border-border bg-surface-primary transition-colors inline-flex items-center justify-center shrink-0',
+                  currentView === 'settings'
+                    ? 'text-accent-primary'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
                 )}
-              </button>
-              <button
-                type="button"
-                onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
-                className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
-                title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-                aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+                title={t('nav.settings')}
+                aria-label={t('nav.settings')}
               >
-                {themeMode === 'dark'
-                  ? <Sun className="w-[11px] h-[11px]" strokeWidth={1.75} />
-                  : <Moon className="w-[11px] h-[11px]" strokeWidth={1.75} />}
+                <SettingsIcon className="w-[11px] h-[11px]" strokeWidth={1.75} />
               </button>
+              {onOpenFeedbackReport && (
+                <button
+                  type="button"
+                  onClick={onOpenFeedbackReport}
+                  className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                  title="反馈问题"
+                  aria-label="反馈问题"
+                >
+                  <MessageSquareWarning className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                </button>
+              )}
+              {!usesAppTitleBar && (
+                <button
+                  type="button"
+                  onClick={toggleNotificationDrawer}
+                  className="relative h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                  title={notificationDrawerOpen ? t('layout.closeNotificationCenter') : t('layout.openNotificationCenter')}
+                  aria-label={notificationDrawerOpen ? t('layout.closeNotificationCenter') : t('layout.openNotificationCenter')}
+                >
+                  <Bell className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                  {unreadNotificationCount > 0 && (
+                    <span className="absolute -right-1.5 -top-1.5 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
+                      {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                    </span>
+                  )}
+                </button>
+              )}
+              {!usesAppTitleBar && hasInstallableUpdate && (
+                <button
+                  type="button"
+                  onClick={() => void openInstallableUpdateNotice()}
+                  className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                  title={t('layout.softwareUpdate')}
+                  aria-label={t('layout.softwareUpdate')}
+                >
+                  <Download className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                </button>
+              )}
+              {(pendingApprovalCount > 0 || currentView === 'approval') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (firstPendingApprovalRequestId) {
+                      dispatchAppIntent({
+                        type: 'approval.open',
+                        requestId: firstPendingApprovalRequestId,
+                      });
+                      return;
+                    }
+                    onNavigate('approval');
+                  }}
+                  className={clsx(
+                    'relative h-5 w-5 rounded-md border border-border bg-surface-primary transition-colors inline-flex items-center justify-center shrink-0',
+                    currentView === 'approval'
+                      ? 'text-accent-primary'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
+                  )}
+                  title="待审批"
+                  aria-label="待审批"
+                >
+                  <ShieldCheck className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                  {pendingApprovalCount > 0 && (
+                    <span className="absolute -right-1.5 -top-1.5 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
+                      {pendingApprovalCount > 9 ? '9+' : pendingApprovalCount}
+                    </span>
+                  )}
+                </button>
+              )}
+              {!usesAppTitleBar && (
+                <button
+                  type="button"
+                  onClick={() => setManualThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+                  className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                  title={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
+                  aria-label={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
+                >
+                  {themeMode === 'dark'
+                    ? <Sun className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                    : <Moon className="w-[11px] h-[11px]" strokeWidth={1.75} />}
+                </button>
+              )}
               <span>{appVersion ? `v${appVersion}` : 'v--'}</span>
             </div>
           </div>
+          {!sidebarVisualCollapsed && (
+            <div
+              className="app-sidebar-resize-handle"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整侧边栏宽度"
+              title="调整侧边栏宽度"
+              onPointerDown={startSidebarResize}
+            />
+          )}
         </aside>
       )}
 
@@ -595,6 +678,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       <main
         className={clsx(
           'app-main-shell flex-1 flex flex-col min-w-0 relative',
+          usesAppTitleBar && 'pt-[var(--app-titlebar-height)]',
+          !immersiveMode && !hideGlobalSidebar && 'app-main-shell--layered',
           immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-surface-primary'
         )}
       >
@@ -602,7 +687,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <div
           className={clsx(
             'flex-1',
-            isFixedViewportView ? 'min-h-0 flex flex-col overflow-hidden' : 'overflow-auto'
+            'overflow-auto'
           )}
         >
           {children}
@@ -610,133 +695,44 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       </main>
 
       {isSpaceDialogOpen && (
-        <div
-          className="fixed inset-0 z-[120] bg-black/30 flex items-center justify-center"
-          onMouseDown={closeSpaceDialog}
-        >
-          <div
-            className="w-80 rounded-lg border border-border bg-surface-primary shadow-xl p-4 space-y-3"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="text-sm font-medium text-text-primary">
-              {spaceDialogMode === 'create' ? '新建空间' : '重命名空间'}
-            </div>
-            <input
-              autoFocus
-              value={spaceDialogName}
-              onChange={(event) => setSpaceDialogName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void submitSpaceDialog();
-                } else if (event.key === 'Escape') {
-                  closeSpaceDialog();
-                }
-              }}
-              className="w-full h-9 rounded-md border border-border bg-surface-secondary px-3 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-              placeholder="请输入空间名称"
-            />
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={closeSpaceDialog}
-                disabled={isSpaceDialogSubmitting}
-                className="h-8 px-3 text-xs rounded-md border border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary disabled:opacity-50"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => {
-                  void submitSpaceDialog();
-                }}
-                disabled={isSpaceDialogSubmitting}
-                className="h-8 px-3 text-xs rounded-md bg-accent-primary text-white hover:bg-accent-hover disabled:opacity-50"
-              >
-                {isSpaceDialogSubmitting ? '处理中...' : '确定'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <AppSpaceRenameDialog
+          name={spaceDialogName}
+          setName={setSpaceDialogName}
+          isSubmitting={isSpaceDialogSubmitting}
+          title={t(spaceDialogMode === 'create' ? 'layout.createSpace' : 'layout.renameSpace')}
+          submit={submitSpaceDialog}
+          close={closeSpaceDialog}
+        />
       )}
 
       {updateNotice && (
-        <div
-          className="fixed inset-0 z-[140] bg-black/45 flex items-center justify-center px-6 py-6"
-          onMouseDown={() => setUpdateNotice(null)}
-        >
-          <div
-            className="w-full max-w-5xl max-h-[86vh] bg-surface-primary border border-border rounded-3xl shadow-2xl flex flex-col"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="px-8 pt-6 pb-4 border-b border-border flex items-center justify-between gap-3">
-              <h2 className="text-2xl font-semibold text-text-primary">软件更新</h2>
-              <button
-                type="button"
-                onClick={() => setUpdateNotice(null)}
-                className="h-9 w-9 rounded-lg border border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center"
-                title="关闭"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="px-8 py-6 border-b border-border">
-              <div className="flex items-center justify-between gap-6">
-                <div className="flex items-center gap-4">
-                  <div className="h-12 w-12 rounded-xl bg-surface-secondary text-text-secondary inline-flex items-center justify-center">
-                    <Download className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <div className="text-3xl font-semibold text-text-primary leading-tight">发现新版本</div>
-                    <div className="text-xl text-text-secondary mt-1">→ {updateNotice.latestVersion}</div>
-                    <div className="text-xs text-text-tertiary mt-2">
-                      当前版本 {updateNotice.currentVersion}
-                      {updatePublishedDateLabel ? ` · 发布于 ${updatePublishedDateLabel}` : ''}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void openReleasePage();
-                  }}
-                  disabled={isOpeningReleasePage}
-                  className="h-11 px-5 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 transition-colors whitespace-nowrap"
-                >
-                  {isOpeningReleasePage ? '打开中...' : '下载并安装'}
-                </button>
-              </div>
-            </div>
-
-            <div className="px-8 py-6 overflow-y-auto min-h-0">
-              <div className="text-3xl font-semibold text-text-primary mb-4">
-                {updateNotice.name || 'Release Notes'}
-              </div>
-              <div
-                className={clsx(
-                  'text-base leading-7 text-text-secondary',
-                  '[&_h1]:text-3xl [&_h1]:font-semibold [&_h1]:text-text-primary [&_h1]:mt-8 [&_h1]:mb-4',
-                  '[&_h2]:text-2xl [&_h2]:font-semibold [&_h2]:text-text-primary [&_h2]:mt-7 [&_h2]:mb-3',
-                  '[&_h3]:text-xl [&_h3]:font-semibold [&_h3]:text-text-primary [&_h3]:mt-6 [&_h3]:mb-3',
-                  '[&_p]:my-3',
-                  '[&_ul]:list-disc [&_ul]:pl-6 [&_ul]:my-3',
-                  '[&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:my-3',
-                  '[&_li]:my-1.5',
-                  '[&_a]:text-accent-primary [&_a]:underline',
-                  '[&_img]:rounded-xl [&_img]:border [&_img]:border-border [&_img]:my-4 [&_img]:max-w-full',
-                  '[&_code]:bg-surface-secondary [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-sm',
-                  '[&_pre]:bg-surface-secondary [&_pre]:border [&_pre]:border-border [&_pre]:rounded-lg [&_pre]:p-4 [&_pre]:overflow-x-auto [&_pre]:my-4'
-                )}
-              >
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {String(updateNotice.body || '').trim() || '暂无更新说明。'}
-                </ReactMarkdown>
-              </div>
-            </div>
-          </div>
-        </div>
+        <AppUpdateNoticeModal
+          notice={updateNotice}
+          publishedDateLabel={updatePublishedDateLabel}
+          isOpeningReleasePage={isOpeningReleasePage}
+          isInstallingUpdate={isInstallingUpdate}
+          installState={installState}
+          openReleasePage={openReleasePage}
+          installUpdate={installUpdate}
+          closeNotice={closeUpdateNotice}
+        />
       )}
 
       <NotificationCenterDrawer />
+
+      {isGlobalSearchVisible && (
+        <AppGlobalSearchOverlay
+          inputRef={globalSearchInputRef}
+          query={globalSearchQuery}
+          setQuery={setGlobalSearchQuery}
+          results={globalSearchResults}
+          isLoading={isGlobalSearchLoading}
+          isClosing={isGlobalSearchClosing}
+          closeSearch={closeGlobalSearch}
+          submitSearch={submitGlobalSearch}
+          navigateToSearch={navigateToGlobalSearch}
+        />
+      )}
     </div>
   );
 }

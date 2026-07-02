@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2 } from 'lucide-react';
+import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2, Music2 } from 'lucide-react';
 import clsx from 'clsx';
-import type { GenerationIntent } from '../App';
+import type { GenerationIntent } from '../features/app-shell/types';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import { MediaAssetPreviewOverlay } from './media-library/MediaAssetPreviewOverlay';
+import { APP_BRAND } from '../config/brand';
 
 type MediaAssetSource = 'generated' | 'planned' | 'imported';
 
 interface MediaAsset {
     id: string;
     source: MediaAssetSource;
+    sourceDomain?: string;
+    sourceLink?: string;
     projectId?: string;
     title?: string;
     prompt?: string;
@@ -30,6 +33,8 @@ interface MediaAsset {
     updatedAt: string;
     absolutePath?: string;
     previewUrl?: string;
+    thumbnailUrl?: string;
+    thumbnail_url?: string;
     exists?: boolean;
 }
 
@@ -37,6 +42,9 @@ interface MediaListResponse {
     success?: boolean;
     error?: string;
     assets?: MediaAsset[];
+    total?: number;
+    nextCursor?: string | null;
+    hasMore?: boolean;
 }
 
 interface FileNode {
@@ -57,6 +65,8 @@ interface GeneratedAsset {
     title?: string;
     prompt?: string;
     previewUrl?: string;
+    thumbnailUrl?: string;
+    thumbnail_url?: string;
     mimeType?: string;
     exists?: boolean;
     projectId?: string;
@@ -141,6 +151,17 @@ const VIDEO_GENERATION_MODE_OPTIONS = [
     { value: 'continuation', label: '视频续写' },
 ] as const;
 
+function logMediaThumbnailDebug(event: string, fields: Record<string, unknown>) {
+    console.info('[video-thumbnail]', event, fields);
+    void window.ipcRenderer?.logs?.appendRenderer?.({
+        level: 'debug',
+        category: 'media.thumbnail',
+        event,
+        message: event,
+        fields,
+    }).catch(() => undefined);
+}
+
 function normalizeMediaAssetSource(source: unknown): MediaAssetSource {
     const normalized = String(source || '').trim().toLowerCase();
     if (normalized === 'generated' || normalized === 'planned' || normalized === 'imported') {
@@ -150,16 +171,118 @@ function normalizeMediaAssetSource(source: unknown): MediaAssetSource {
 }
 
 function normalizeMediaAsset(asset: MediaAsset): MediaAsset {
-    return {
+    const legacyAsset = asset as MediaAsset & {
+        mime_type?: string;
+        relative_path?: string;
+        absolute_path?: string;
+        preview_url?: string;
+    };
+    const normalized = {
         ...asset,
         source: normalizeMediaAssetSource(asset.source),
+        mimeType: asset.mimeType || legacyAsset.mime_type,
+        relativePath: asset.relativePath || legacyAsset.relative_path,
+        absolutePath: asset.absolutePath || legacyAsset.absolute_path,
+        previewUrl: asset.previewUrl || legacyAsset.preview_url,
+        thumbnailUrl: asset.thumbnailUrl || asset.thumbnail_url,
+    };
+    if (isVideoAsset(normalized)) {
+        console.info('[video-thumbnail] media.normalize', {
+            id: normalized.id,
+            title: normalized.title,
+            mimeType: normalized.mimeType,
+            previewUrl: normalized.previewUrl,
+            absolutePath: normalized.absolutePath,
+            relativePath: normalized.relativePath,
+            thumbnailUrl: normalized.thumbnailUrl,
+            exists: normalized.exists,
+        });
+    }
+    return normalized;
+}
+
+function normalizeGeneratedAsset(asset: GeneratedAsset): GeneratedAsset {
+    const legacyAsset = asset as GeneratedAsset & {
+        mime_type?: string;
+        relative_path?: string;
+        preview_url?: string;
+    };
+    return {
+        ...asset,
+        mimeType: asset.mimeType || legacyAsset.mime_type,
+        relativePath: asset.relativePath || legacyAsset.relative_path,
+        previewUrl: asset.previewUrl || legacyAsset.preview_url,
+        thumbnailUrl: asset.thumbnailUrl || asset.thumbnail_url,
     };
 }
 
-function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
+function isVideoAsset(asset: { mimeType?: string; relativePath?: string; absolutePath?: string; previewUrl?: string }): boolean {
     const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return false;
     if (mimeType.startsWith('video/')) return true;
-    return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
+    const source = String(asset.relativePath || asset.absolutePath || asset.previewUrl || '').trim();
+    return /\.(mp4|webm|mov|m4v|avi|mkv)(?:[?#].*)?$/i.test(source);
+}
+
+function getMediaAssetPosterUrl(asset: { mimeType?: string; thumbnailUrl?: string; previewUrl?: string; absolutePath?: string; relativePath?: string }): string {
+    if (isVideoAsset(asset)) {
+        return asset.thumbnailUrl || '';
+    }
+    return asset.thumbnailUrl || asset.previewUrl || asset.absolutePath || asset.relativePath || '';
+}
+
+function getMediaAssetPlayableUrl(asset: { previewUrl?: string; absolutePath?: string; relativePath?: string }): string {
+    return asset.previewUrl || asset.absolutePath || asset.relativePath || '';
+}
+
+function isAudioAsset(asset: { mimeType?: string; relativePath?: string; absolutePath?: string; previewUrl?: string }): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return true;
+    const source = String(asset.relativePath || asset.absolutePath || asset.previewUrl || '').trim();
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i.test(source);
+}
+
+function isTtsAsset(asset: Pick<MediaAsset, 'provider' | 'providerTemplate' | 'sourceDomain' | 'sourceLink'>): boolean {
+    return asset.provider === 'voice'
+        || asset.providerTemplate === 'tts'
+        || asset.sourceDomain === 'voice'
+        || String(asset.sourceLink || '').startsWith('voice:');
+}
+
+function AudioAssetCover({
+    label,
+    src,
+    onReady,
+}: {
+    label: string;
+    src: string;
+    onReady?: () => void;
+}) {
+    return (
+        <div className="flex aspect-[16/7] min-h-[132px] flex-col justify-between gap-4 bg-surface-secondary px-4 py-4">
+            <div className="flex flex-1 items-center justify-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-accent-primary/20 bg-accent-primary/10 text-accent-primary shadow-sm">
+                    <Music2 className="h-7 w-7" />
+                </div>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 text-xs font-medium text-text-secondary truncate">{label}</div>
+                <span className="shrink-0 rounded-md border border-border bg-surface-primary/70 px-2 py-0.5 text-[10px] text-text-tertiary">
+                    音频
+                </span>
+            </div>
+            {src ? (
+                <audio
+                    src={resolveAssetUrl(src)}
+                    className="w-full"
+                    controls
+                    preload="metadata"
+                    onClick={(event) => event.stopPropagation()}
+                    onLoadedMetadata={onReady}
+                />
+            ) : null}
+        </div>
+    );
 }
 
 const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -177,7 +300,7 @@ function flattenManuscripts(nodes: FileNode[]): string[] {
                 walk(item.children || []);
                 continue;
             }
-            if (item.path.endsWith('.md')) {
+            if (item.path.endsWith('.md') || !item.isDirectory) {
                 result.push(item.path);
             }
         }
@@ -261,6 +384,7 @@ function inferMediaAspectRatio(asset: MediaAsset): number {
     if (explicitAspectRatio && Number.isFinite(explicitAspectRatio) && explicitAspectRatio > 0) {
         return explicitAspectRatio;
     }
+    if (isAudioAsset(asset)) return 16 / 5;
     return isVideoAsset(asset) ? 16 / 9 : 3 / 4;
 }
 
@@ -305,7 +429,7 @@ export function MediaLibrary({
     const [model, setModel] = useState('');
     const [aspectRatio, setAspectRatio] = useState('3:4');
     const [size, setSize] = useState('');
-    const [quality, setQuality] = useState('auto');
+    const [quality, setQuality] = useState('medium');
     const [generationMode, setGenerationMode] = useState<'text-to-image' | 'reference-guided' | 'image-to-image'>('text-to-image');
     const [referenceImages, setReferenceImages] = useState<Array<{ name: string; dataUrl: string }>>([]);
     const [isReadingRefImages, setIsReadingRefImages] = useState(false);
@@ -329,6 +453,9 @@ export function MediaLibrary({
     const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
     const [videoGenError, setVideoGenError] = useState('');
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
+    const [mediaNextCursor, setMediaNextCursor] = useState<string | null>(null);
+    const [mediaTotal, setMediaTotal] = useState(0);
+    const [isLoadingMoreMedia, setIsLoadingMoreMedia] = useState(false);
     const [expandedAssetId, setExpandedAssetId] = useState<string | null>(null);
     const [contextMenu, setContextMenu] = useState<MediaAssetContextMenuState>({
         visible: false,
@@ -344,6 +471,7 @@ export function MediaLibrary({
     const hasLoadedSnapshotRef = useRef(false);
     const loadDataRequestRef = useRef(0);
     const loadSettingsRequestRef = useRef(0);
+    const deletedAssetIdsRef = useRef<Set<string>>(new Set());
     const assetCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
     const loadData = useCallback(async () => {
@@ -355,8 +483,8 @@ export function MediaLibrary({
         setError('');
         try {
             const [mediaResult, tree] = await Promise.all([
-                window.ipcRenderer.invoke('media:list', { limit: 500 }) as Promise<MediaListResponse>,
-                window.ipcRenderer.invoke('manuscripts:list') as Promise<FileNode[]>,
+                window.ipcRenderer.media.list({ limit: 500 }) as Promise<MediaListResponse>,
+                window.ipcRenderer.manuscripts.list() as Promise<FileNode[]>,
             ]);
             if (requestId !== loadDataRequestRef.current) return;
 
@@ -365,8 +493,11 @@ export function MediaLibrary({
             } else {
                 const nextAssets = (Array.isArray(mediaResult.assets) ? mediaResult.assets : [])
                     .map(normalizeMediaAsset)
+                    .filter((asset) => !deletedAssetIdsRef.current.has(asset.id))
                     .sort(compareMediaAssetsByCreatedAtDesc);
                 setAssets(nextAssets);
+                setMediaNextCursor(typeof mediaResult.nextCursor === 'string' ? mediaResult.nextCursor : null);
+                setMediaTotal(Number.isFinite(mediaResult.total) ? Number(mediaResult.total) : nextAssets.length);
                 setDrafts((prev) => Object.fromEntries(
                     Object.entries(prev).filter(([assetId]) => nextAssets.some((asset) => asset.id === assetId))
                 ));
@@ -390,6 +521,38 @@ export function MediaLibrary({
         }
     }, []);
 
+    const loadMoreMedia = useCallback(async () => {
+        if (!mediaNextCursor || isLoadingMoreMedia) return;
+        setIsLoadingMoreMedia(true);
+        try {
+            const mediaResult = await window.ipcRenderer.media.list({
+                limit: 500,
+                cursor: mediaNextCursor,
+            }) as MediaListResponse;
+            if (!mediaResult?.success) {
+                setError(mediaResult?.error || '加载更多媒体失败');
+                return;
+            }
+            const nextAssets = (Array.isArray(mediaResult.assets) ? mediaResult.assets : [])
+                .map(normalizeMediaAsset)
+                .filter((asset) => !deletedAssetIdsRef.current.has(asset.id));
+            setAssets((current) => {
+                const seen = new Set(current.map((asset) => asset.id));
+                return [...current, ...nextAssets.filter((asset) => !seen.has(asset.id))]
+                    .sort(compareMediaAssetsByCreatedAtDesc);
+            });
+            setMediaNextCursor(typeof mediaResult.nextCursor === 'string' ? mediaResult.nextCursor : null);
+            setMediaTotal((current) => (
+                Number.isFinite(mediaResult.total) ? Number(mediaResult.total) : Math.max(current, assets.length + nextAssets.length)
+            ));
+        } catch (error) {
+            console.error('Failed to load more media:', error);
+            setError('加载更多媒体失败');
+        } finally {
+            setIsLoadingMoreMedia(false);
+        }
+    }, [assets.length, isLoadingMoreMedia, mediaNextCursor]);
+
     useEffect(() => {
         if (!isActive) return;
         void loadData();
@@ -406,7 +569,7 @@ export function MediaLibrary({
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' || next.image_quality === 'medium' || next.image_quality === 'high' ? next.image_quality : 'medium');
         } catch (e) {
             if (requestId !== loadSettingsRequestRef.current) return;
             console.error('Failed to load image settings:', e);
@@ -419,13 +582,14 @@ export function MediaLibrary({
     }, [isActive, loadSettings]);
 
     useEffect(() => {
+        if (!isActive) return;
         const updateColumnCount = () => {
             setMasonryColumnCount(getMasonryColumnCount(window.innerWidth));
         };
         updateColumnCount();
         window.addEventListener('resize', updateColumnCount);
         return () => window.removeEventListener('resize', updateColumnCount);
-    }, []);
+    }, [isActive]);
 
     useEffect(() => {
         if (!contextMenu.visible) return;
@@ -497,6 +661,7 @@ export function MediaLibrary({
     }, [filteredAssets]);
 
     useEffect(() => {
+        if (!isActive) return;
         if (filteredAssets.length === 0) return;
         const frame = window.requestAnimationFrame(() => {
             for (const asset of filteredAssets) {
@@ -504,7 +669,7 @@ export function MediaLibrary({
             }
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [filteredAssets, masonryColumnCount, measureAssetCard]);
+    }, [filteredAssets, isActive, masonryColumnCount, measureAssetCard]);
 
     const masonryColumns = useMemo(() => {
         const columns = Array.from({ length: masonryColumnCount }, () => [] as MediaAsset[]);
@@ -564,7 +729,7 @@ export function MediaLibrary({
         const draft = getDraft(asset);
         setWorkingId(asset.id);
         try {
-            const result = await window.ipcRenderer.invoke('media:update', {
+            const result = await window.ipcRenderer.media.update({
                 assetId: asset.id,
                 title: draft.title,
                 projectId: draft.projectId,
@@ -591,7 +756,7 @@ export function MediaLibrary({
         }
         setWorkingId(asset.id);
         try {
-            const result = await window.ipcRenderer.invoke('media:bind', {
+            const result = await window.ipcRenderer.media.bind({
                 assetId: asset.id,
                 manuscriptPath,
             }) as { success?: boolean; error?: string };
@@ -618,7 +783,7 @@ export function MediaLibrary({
         if (!confirmed) return;
         setWorkingId(asset.id);
         try {
-            const result = await window.ipcRenderer.invoke('media:delete', {
+            const result = await window.ipcRenderer.media.delete({
                 assetId: asset.id,
             }) as { success?: boolean; error?: string };
             if (!result?.success) {
@@ -630,12 +795,21 @@ export function MediaLibrary({
                 delete next[asset.id];
                 return next;
             });
+            deletedAssetIdsRef.current.add(asset.id);
+            setAssets((prev) => prev.filter((item) => item.id !== asset.id));
             setBindTarget((prev) => {
                 const next = { ...prev };
                 delete next[asset.id];
                 return next;
             });
             setExpandedAssetId((prev) => prev === asset.id ? null : prev);
+            setPreviewAsset((prev) => prev?.asset.id === asset.id ? null : prev);
+            setMeasuredCardHeights((prev) => {
+                if (!(asset.id in prev)) return prev;
+                const next = { ...prev };
+                delete next[asset.id];
+                return next;
+            });
             await loadData();
         } catch (e) {
             console.error('Failed to delete media asset:', e);
@@ -644,6 +818,23 @@ export function MediaLibrary({
             setWorkingId(null);
         }
     }, [loadData]);
+
+    const handleShowAssetInFolder = useCallback(async (asset: MediaAsset) => {
+        const source = asset.absolutePath || asset.relativePath || asset.previewUrl || '';
+        if (!source) {
+            void appAlert('媒体资产没有可打开的文件路径');
+            return;
+        }
+        try {
+            const result = await window.ipcRenderer.files.showInFolder({ source }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                void appAlert(result?.error || '打开文件夹失败');
+            }
+        } catch (error) {
+            console.error('Failed to show media asset in folder:', error);
+            void appAlert('打开文件夹失败');
+        }
+    }, []);
 
     const openAssetContextMenu = useCallback((event: React.MouseEvent, asset: MediaAsset) => {
         event.preventDefault();
@@ -656,7 +847,11 @@ export function MediaLibrary({
     }, []);
 
     const openAssetPreview = useCallback((asset: MediaAsset) => {
-        const src = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+        const src = resolveAssetUrl(
+            isVideoAsset(asset) || isAudioAsset(asset)
+                ? getMediaAssetPlayableUrl(asset)
+                : getMediaAssetPosterUrl(asset),
+        );
         if (!src || !asset.exists) return;
         setPreviewAsset({ asset, src });
     }, []);
@@ -677,7 +872,7 @@ export function MediaLibrary({
             const effectiveMode = referenceImages.length > 0
                 ? generationMode
                 : 'text-to-image';
-            const result = await window.ipcRenderer.invoke('image-gen:generate', {
+            const result = await window.ipcRenderer.imageGeneration.generate({
                 prompt,
                 bypassPromptOptimizer: true,
                 projectId: genProjectId.trim() || undefined,
@@ -690,14 +885,14 @@ export function MediaLibrary({
                 providerTemplate: settings.image_provider_template || undefined,
                 aspectRatio: aspectRatio.trim() || undefined,
                 size: size.trim() || undefined,
-                quality: quality.trim() || undefined,
+                quality: quality.trim() || 'medium',
             }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
 
             if (!result?.success) {
                 setGenError(result?.error || '生图失败');
                 return;
             }
-            setGeneratedAssets(Array.isArray(result.assets) ? result.assets : []);
+            setGeneratedAssets(Array.isArray(result.assets) ? result.assets.map(normalizeGeneratedAsset) : []);
             await loadData();
         } catch (e) {
             console.error('Failed to generate images:', e);
@@ -773,7 +968,7 @@ export function MediaLibrary({
         setIsGeneratingVideo(true);
         setVideoGenError('');
         try {
-            const result = await window.ipcRenderer.invoke('video-gen:generate', {
+            const result = await window.ipcRenderer.videoGeneration.generate({
                 prompt: videoPrompt,
                 projectId: videoProjectId.trim() || undefined,
                 title: videoTitle.trim() || undefined,
@@ -793,7 +988,7 @@ export function MediaLibrary({
                 setVideoGenError(result?.error || '生视频失败');
                 return;
             }
-            setGeneratedVideoAssets(Array.isArray(result.assets) ? result.assets : []);
+            setGeneratedVideoAssets(Array.isArray(result.assets) ? result.assets.map(normalizeGeneratedAsset) : []);
             await loadData();
         } catch (e) {
             console.error('Failed to generate videos:', e);
@@ -878,7 +1073,7 @@ export function MediaLibrary({
     }, []);
 
     return (
-        <div className="h-full flex flex-col bg-background">
+        <div className="min-h-full flex flex-col bg-background text-text-primary">
             <div className="border-b border-border px-4 py-2 bg-surface-secondary/45">
                 <div className="flex items-center gap-2 min-w-0">
                     <div className="w-7 h-7 rounded-md bg-accent-primary/15 border border-accent-primary/20 text-accent-primary flex items-center justify-center shrink-0">
@@ -891,7 +1086,7 @@ export function MediaLibrary({
 
                     <div className="hidden xl:flex items-center gap-1.5 min-w-0 ml-2">
                         <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-primary/70 text-text-secondary whitespace-nowrap">
-                            总资产 {sourceStats.all}
+                            总资产 {mediaTotal || sourceStats.all}
                         </span>
                         <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border whitespace-nowrap', SOURCE_META.generated.chipClass)}>
                             已生成 {sourceStats.generated}
@@ -932,7 +1127,7 @@ export function MediaLibrary({
                             </span>
                         </button>
                         <button
-                            onClick={() => void window.ipcRenderer.invoke('media:open-root')}
+                            onClick={() => void window.ipcRenderer.media.openRoot()}
                             className="h-7 px-2.5 text-[11px] rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
                         >
                             <span className="inline-flex items-center gap-1">
@@ -1012,7 +1207,7 @@ export function MediaLibrary({
                 </div>
             </div>
 
-            <div className="flex-1 overflow-auto p-6">
+            <div className="flex-1 overflow-auto bg-background p-6">
                 {loading && filteredAssets.length === 0 && assets.length === 0 ? (
                     <div className="text-sm text-text-tertiary">正在加载媒体库...</div>
                 ) : error ? (
@@ -1020,9 +1215,10 @@ export function MediaLibrary({
                 ) : filteredAssets.length === 0 ? (
                     <div className="text-sm text-text-tertiary">暂无媒体资产</div>
                 ) : (
-                    <div className="flex items-start gap-4">
-                        {masonryColumns.map((columnAssets, columnIndex) => (
-                            <div key={`media-masonry-column-${columnIndex}`} className="min-w-0 flex-1 space-y-4">
+                    <div className="space-y-4">
+                        <div className="flex items-start gap-4">
+                            {masonryColumns.map((columnAssets, columnIndex) => (
+                                <div key={`media-masonry-column-${columnIndex}`} className="min-w-0 flex-1 space-y-4">
                                 {columnAssets.map((asset) => {
                                     const draft = getDraft(asset);
                                     const sourceMeta = SOURCE_META[asset.source] ?? SOURCE_META.imported;
@@ -1049,24 +1245,49 @@ export function MediaLibrary({
                                             </div>
 
                                             <div className="bg-surface-secondary">
-                                                {asset.previewUrl && asset.exists ? (
-                                                    isVideoAsset(asset) ? (
-                                                        <video
-                                                            src={resolveAssetUrl(asset.previewUrl)}
-                                                            className="block w-full h-auto bg-black"
-                                                            controls
-                                                            preload="metadata"
-                                                            onClick={(event) => event.stopPropagation()}
-                                                            onLoadedMetadata={() => measureAssetCard(asset.id)}
+                                                {isAudioAsset(asset) ? (
+                                                    asset.exists ? (
+                                                        <AudioAssetCover
+                                                            label={isTtsAsset(asset) ? '声音合成' : '音频'}
+                                                            src={getMediaAssetPlayableUrl(asset)}
+                                                            onReady={() => measureAssetCard(asset.id)}
                                                         />
                                                     ) : (
-                                                        <img
-                                                            src={resolveAssetUrl(asset.previewUrl)}
-                                                            alt={asset.title || asset.id}
-                                                            className="block w-full h-auto"
-                                                            onLoad={() => measureAssetCard(asset.id)}
-                                                        />
+                                                        <div className="flex aspect-[16/7] min-h-[132px] flex-col items-center justify-center gap-2 bg-surface-secondary px-4 text-center text-xs text-text-tertiary">
+                                                            <Music2 className="h-7 w-7 text-accent-primary/70" />
+                                                            音频文件不可用
+                                                        </div>
                                                     )
+                                                ) : isVideoAsset(asset) ? (
+                                                    asset.thumbnailUrl && asset.exists ? (
+                                                        <img
+                                                            src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
+                                                            alt={asset.title || asset.id}
+                                                            className="block w-full h-auto bg-surface-secondary object-cover"
+                                                            onLoad={() => measureAssetCard(asset.id)}
+                                                            onError={() => logMediaThumbnailDebug('media.card.img-error', {
+                                                                id: asset.id,
+                                                                title: asset.title,
+                                                                thumbnailUrl: asset.thumbnailUrl,
+                                                                resolvedUrl: resolveAssetUrl(getMediaAssetPosterUrl(asset)),
+                                                                previewUrl: asset.previewUrl,
+                                                                absolutePath: asset.absolutePath,
+                                                                relativePath: asset.relativePath,
+                                                                exists: asset.exists,
+                                                            })}
+                                                        />
+                                                    ) : (
+                                                        <div className="flex aspect-video items-center justify-center bg-surface-secondary text-text-tertiary">
+                                                            <Clapperboard className="h-5 w-5" />
+                                                        </div>
+                                                    )
+                                                ) : (asset.thumbnailUrl || asset.previewUrl || asset.absolutePath || asset.relativePath) && asset.exists ? (
+                                                    <img
+                                                        src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
+                                                        alt={asset.title || asset.id}
+                                                        className="block w-full h-auto"
+                                                        onLoad={() => measureAssetCard(asset.id)}
+                                                    />
                                                 ) : (
                                                     <div className="min-h-[220px] w-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
                                                         {asset.source === 'planned' ? '计划素材（尚未生成）' : (isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
@@ -1078,7 +1299,7 @@ export function MediaLibrary({
                                                 <div>
                                                     <div className="text-sm font-medium text-text-primary break-words">{draft.title || asset.title || asset.id}</div>
                                                     <div className="text-[11px] text-text-tertiary truncate">
-                                                        {draft.projectId || asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || 'auto'}
+                                                        {draft.projectId || asset.projectId || '未设置项目ID'} · {isTtsAsset(asset) ? 'TTS' : (asset.aspectRatio || asset.size || 'auto')}
                                                     </div>
                                                 </div>
                                                 <div className="text-[11px] text-text-tertiary truncate">
@@ -1091,8 +1312,22 @@ export function MediaLibrary({
                                         </div>
                                     );
                                 })}
+                                </div>
+                            ))}
+                        </div>
+                        {mediaNextCursor && (
+                            <div className="flex justify-center">
+                                <button
+                                    type="button"
+                                    onClick={() => void loadMoreMedia()}
+                                    disabled={isLoadingMoreMedia}
+                                    className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-surface-primary px-3 text-xs text-text-secondary transition hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <RefreshCw className={clsx('h-3.5 w-3.5', isLoadingMoreMedia && 'animate-spin')} />
+                                    {isLoadingMoreMedia ? '加载中' : '加载更多'}
+                                </button>
                             </div>
-                        ))}
+                        )}
                     </div>
                 )}
             </div>
@@ -1105,12 +1340,16 @@ export function MediaLibrary({
                     <button
                         type="button"
                         onClick={() => {
-                            setExpandedAssetId(contextMenu.asset!.id);
+                            const asset = contextMenu.asset;
                             setContextMenu({ visible: false, x: 0, y: 0, asset: null });
+                            if (asset) {
+                                void handleShowAssetInFolder(asset);
+                            }
                         }}
                         className={getLiquidGlassMenuItemClassName()}
                     >
-                        编辑
+                        <FolderOpen className="h-4 w-4" />
+                        文件夹中打开
                     </button>
                     <button
                         type="button"
@@ -1123,6 +1362,7 @@ export function MediaLibrary({
                         }}
                         className={getLiquidGlassMenuItemClassName({ destructive: true })}
                     >
+                        <Trash2 className="h-4 w-4" />
                         删除
                     </button>
                 </LiquidGlassMenuPanel>
@@ -1338,12 +1578,16 @@ export function MediaLibrary({
                                     <option value="1024x1024">1024x1024</option>
                                     <option value="1024x1536">1024x1536</option>
                                     <option value="1536x1024">1536x1024</option>
+                                    <option value="1536x2048">1536x2048</option>
+                                    <option value="2048x1536">2048x1536</option>
+                                    <option value="1152x2048">1152x2048</option>
+                                    <option value="2048x1152">2048x1152</option>
                                     <option value="auto">auto</option>
                                 </select>
                                 <select value={quality} onChange={(event) => setQuality(event.target.value)} className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary">
-                                    <option value="standard">standard</option>
+                                    <option value="low">low</option>
+                                    <option value="medium">medium</option>
                                     <option value="high">high</option>
-                                    <option value="auto">auto</option>
                                 </select>
                                 <select value={count} onChange={(event) => setCount(Number(event.target.value))} className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary">
                                     <option value={1}>1 张</option>
@@ -1374,24 +1618,50 @@ export function MediaLibrary({
                                         <Sparkles className="w-4 h-4 text-accent-primary" />
                                         最新生成结果（{generatedAssets.length}）
                                     </div>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         {generatedAssets.map((asset) => (
                                             <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                                                {asset.previewUrl && asset.exists ? (
-                                                    isVideoAsset(asset) ? (
-                                                        <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-[4/5] object-cover bg-black" controls preload="metadata" />
+                                                {isAudioAsset(asset) ? (
+                                                    asset.exists ? (
+                                                        <AudioAssetCover
+                                                            label="音频"
+                                                            src={asset.previewUrl || asset.relativePath || ''}
+                                                        />
                                                     ) : (
-                                                        <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full aspect-[4/5] object-cover" />
+                                                        <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
                                                     )
+                                                ) : isVideoAsset(asset) ? (
+                                                    asset.thumbnailUrl && asset.exists ? (
+                                                        <img
+                                                            src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
+                                                            alt={asset.title || asset.id}
+                                                            className="w-full aspect-video object-cover bg-surface-secondary"
+                                                            onError={() => logMediaThumbnailDebug('media.generated-card.img-error', {
+                                                                id: asset.id,
+                                                                title: asset.title,
+                                                                thumbnailUrl: asset.thumbnailUrl,
+                                                                resolvedUrl: resolveAssetUrl(getMediaAssetPosterUrl(asset)),
+                                                                previewUrl: asset.previewUrl,
+                                                                relativePath: asset.relativePath,
+                                                                exists: asset.exists,
+                                                            })}
+                                                        />
+                                                    ) : (
+                                                        <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary">
+                                                            <Clapperboard className="h-5 w-5" />
+                                                        </div>
+                                                    )
+                                                ) : (asset.thumbnailUrl || asset.previewUrl || asset.relativePath) && asset.exists ? (
+                                                    <img src={resolveAssetUrl(asset.previewUrl || asset.thumbnailUrl || asset.relativePath || '')} alt={asset.title || asset.id} className="w-full aspect-video object-cover" />
                                                 ) : (
-                                                    <div className="w-full aspect-[4/5] bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
+                                                    <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
                                                 )}
                                                 <div className="p-3 space-y-1.5">
                                                     <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>
                                                     <div className="text-[11px] text-text-tertiary truncate">{asset.projectId || '(无项目ID)'}</div>
                                                     <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || asset.size || ''} · {asset.quality || ''}</div>
                                                     <button
-                                                        onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                                        onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
                                                         className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
                                                     >
                                                         <span className="inline-flex items-center gap-1">
@@ -1435,7 +1705,7 @@ export function MediaLibrary({
                         <div className="p-5 space-y-4">
                             {!hasVideoConfig && (
                                 <div className="text-xs text-status-error">
-                                    未检测到可用的 RedBox 官方视频配置。请先登录或配置 RedBox 官方 AI 源。
+                                    未检测到可用的 {APP_BRAND.displayName} 官方视频配置。请先登录或配置 {APP_BRAND.displayName} 官方供应商。
                                 </div>
                             )}
 
@@ -1708,20 +1978,35 @@ export function MediaLibrary({
                                         <Sparkles className="w-4 h-4 text-accent-primary" />
                                         最新生视频结果（{generatedVideoAssets.length}）
                                     </div>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         {generatedVideoAssets.map((asset) => (
                                             <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                                                {asset.previewUrl && asset.exists ? (
-                                                    <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-[4/5] object-cover bg-black" controls preload="metadata" />
+                                                {asset.thumbnailUrl && asset.exists ? (
+                                                    <img
+                                                        src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
+                                                        alt={asset.title || asset.id}
+                                                        className="w-full aspect-video object-cover bg-surface-secondary"
+                                                        onError={() => logMediaThumbnailDebug('media.generated-video-card.img-error', {
+                                                            id: asset.id,
+                                                            title: asset.title,
+                                                            thumbnailUrl: asset.thumbnailUrl,
+                                                            resolvedUrl: resolveAssetUrl(getMediaAssetPosterUrl(asset)),
+                                                            previewUrl: asset.previewUrl,
+                                                            relativePath: asset.relativePath,
+                                                            exists: asset.exists,
+                                                        })}
+                                                    />
                                                 ) : (
-                                                    <div className="w-full aspect-[4/5] bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
+                                                    <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary">
+                                                        <Clapperboard className="h-5 w-5" />
+                                                    </div>
                                                 )}
                                                 <div className="p-3 space-y-1.5">
                                                     <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>
                                                     <div className="text-[11px] text-text-tertiary truncate">{asset.projectId || '(无项目ID)'}</div>
                                                     <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || ''} · {asset.size || ''}</div>
                                                     <button
-                                                        onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                                        onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
                                                         className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
                                                     >
                                                         <span className="inline-flex items-center gap-1">

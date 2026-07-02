@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+    ArrowLeft,
     ExternalLink,
     FolderOpen,
     ImagePlus,
@@ -15,8 +16,6 @@ import { appAlert, appConfirm } from '../utils/appDialogs';
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 
-type AiProtocol = 'openai' | 'gemini';
-
 interface SettingsShape {
     api_endpoint?: string;
     api_key?: string;
@@ -27,6 +26,13 @@ interface SettingsShape {
     image_provider_template?: string;
     image_quality?: string;
     active_space_id?: string;
+}
+
+interface WorkspaceSpace {
+    id: string;
+    name: string;
+    createdAt?: string;
+    updatedAt?: string;
 }
 
 interface CoverTemplate {
@@ -93,6 +99,8 @@ interface CoverTemplateListResponse {
 
 interface CoverStudioProps {
     isActive?: boolean;
+    onExecutionStateChange?: (active: boolean) => void;
+    onReturnHome?: () => void;
 }
 
 interface CoverGenerationJob {
@@ -156,113 +164,6 @@ const inferImageTemplateByProvider = (provider: string, currentTemplate = ''): s
         return 'ark-seedream-native';
     }
     return 'openai-images';
-};
-
-const IMAGE_TEMPLATE_DEFAULT_ENDPOINTS: Record<string, string> = {
-    'openai-images': 'https://api.openai.com/v1',
-    'gemini-openai-images': 'https://generativelanguage.googleapis.com/v1beta/openai',
-    'gemini-imagen-native': 'https://generativelanguage.googleapis.com/v1beta',
-    'dashscope-wan-native': 'https://dashscope.aliyuncs.com',
-    'ark-seedream-native': 'https://ark.cn-beijing.volces.com/api/v3',
-    'midjourney-proxy': 'http://127.0.0.1:8080',
-    'jimeng-openai-wrapper': '',
-    'gemini-generate-content': 'https://generativelanguage.googleapis.com/v1beta',
-    'jimeng-images': '',
-};
-
-const resolveDefaultImageEndpoint = (provider: string, template: string): string => {
-    const normalizedTemplate = inferImageTemplateByProvider(provider, template);
-    if (Object.prototype.hasOwnProperty.call(IMAGE_TEMPLATE_DEFAULT_ENDPOINTS, normalizedTemplate)) {
-        return IMAGE_TEMPLATE_DEFAULT_ENDPOINTS[normalizedTemplate];
-    }
-    return IMAGE_TEMPLATE_DEFAULT_ENDPOINTS['openai-images'];
-};
-
-const resolveImageModelFetchProtocol = (template: string): AiProtocol => {
-    const normalized = String(template || '').trim();
-    if (normalized === 'gemini-openai-images' || normalized === 'gemini-imagen-native' || normalized === 'gemini-generate-content') {
-        return 'gemini';
-    }
-    return 'openai';
-};
-
-const resolveImageModelFetchPresetId = (provider: string, template: string, endpoint: string): string | undefined => {
-    const normalizedProvider = String(provider || '').trim().toLowerCase();
-    const normalizedTemplate = String(template || '').trim().toLowerCase();
-    const normalizedEndpoint = String(endpoint || '').trim().toLowerCase();
-    const merged = `${normalizedProvider} ${normalizedTemplate} ${normalizedEndpoint}`;
-
-    if (merged.includes('buts')) return 'buts';
-    if (
-        normalizedTemplate === 'dashscope-wan-native'
-        || merged.includes('dashscope')
-        || merged.includes('bailian')
-        || merged.includes('wan')
-    ) {
-        return 'dashscope';
-    }
-    if (
-        normalizedTemplate === 'ark-seedream-native'
-        || merged.includes('ark')
-        || merged.includes('volc')
-        || merged.includes('seedream')
-        || merged.includes('doubao')
-        || merged.includes('jimeng')
-    ) {
-        return 'ark';
-    }
-    if (
-        normalizedTemplate === 'gemini-openai-images'
-        || normalizedTemplate === 'gemini-imagen-native'
-        || normalizedTemplate === 'gemini-generate-content'
-        || merged.includes('gemini')
-        || merged.includes('generativelanguage.googleapis.com')
-    ) {
-        return 'gemini';
-    }
-    if (merged.includes('openrouter')) return 'openrouter';
-    if (merged.includes('deepseek')) return 'deepseek';
-    if (merged.includes('minimax')) return 'minimax-cn';
-    if (merged.includes('api.openai.com') || normalizedTemplate === 'openai-images') return 'openai';
-    return undefined;
-};
-
-const normalizeImageModelFetchBaseURL = (baseURL: string, template: string): string => {
-    const normalizedBase = String(baseURL || '').trim().replace(/\/+$/, '');
-    if (!normalizedBase) return '';
-    if (template === 'gemini-openai-images' && /generativelanguage\.googleapis\.com/i.test(normalizedBase)) {
-        return normalizedBase.replace(/\/openai(?:\/.*)?$/i, '');
-    }
-    if (template === 'dashscope-wan-native') {
-        const stripped = normalizedBase
-            .replace(/\/compatible-mode\/v\d+(\.\d+)?(?:\/.*)?$/i, '')
-            .replace(/\/api\/v1(?:\/.*)?$/i, '')
-            .replace(/\/v1(?:\/.*)?$/i, '');
-        return `${stripped}/compatible-mode/v1`;
-    }
-    return normalizedBase;
-};
-
-const isImageTemplateRemoteModelFetchEnabled = (template: string): boolean => {
-    const normalized = String(template || '').trim();
-    return (
-        normalized === 'openai-images' ||
-        normalized === 'gemini-openai-images' ||
-        normalized === 'gemini-imagen-native' ||
-        normalized === 'gemini-generate-content' ||
-        normalized === 'dashscope-wan-native' ||
-        normalized === 'ark-seedream-native'
-    );
-};
-
-const isLikelyLocalEndpoint = (baseURL: string): boolean => {
-    const normalized = String(baseURL || '').toLowerCase();
-    return (
-        normalized.includes('127.0.0.1') ||
-        normalized.includes('localhost') ||
-        normalized.includes('0.0.0.0') ||
-        normalized.includes('::1')
-    );
 };
 
 const TITLE_TYPE_OPTIONS: Array<{ value: CoverTitleEntry['type']; label: string }> = [
@@ -341,7 +242,7 @@ const normalizeTemplate = (raw: unknown): CoverTemplate | null => {
         titleGuide: String(item.titleGuide || item.prompt || ''),
         promptSwitches: normalizePromptSwitches(item.promptSwitches),
         model: String(item.model || 'gpt-image-1'),
-        quality: String(item.quality || 'auto'),
+        quality: String(item.quality || 'medium'),
         count: Math.max(1, Math.min(4, Number.isFinite(count) ? Math.floor(count) : 1)),
         updatedAt: String(item.updatedAt || new Date().toISOString()),
         prompt: String(item.prompt || ''),
@@ -359,9 +260,10 @@ const normalizeTitleEntries = (entries: CoverTitleEntry[]): Array<{ type: string
         .slice(0, 20);
 };
 
-export function CoverStudio({ isActive = false }: CoverStudioProps) {
+export function CoverStudio({ isActive = false, onExecutionStateChange, onReturnHome }: CoverStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [spaceId, setSpaceId] = useState('default');
+    const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
 
     const [templates, setTemplates] = useState<CoverTemplate[]>([]);
     const [activeTemplateId, setActiveTemplateId] = useState('');
@@ -369,7 +271,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const [templateImage, setTemplateImage] = useState<{ name: string; dataUrl: string } | null>(null);
     const [count, setCount] = useState(1);
     const [model, setModel] = useState('gpt-image-1');
-    const [quality, setQuality] = useState('auto');
+    const [quality, setQuality] = useState('medium');
 
     const [baseImage, setBaseImage] = useState<{ name: string; dataUrl: string } | null>(null);
     const [promptSwitches, setPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_PROMPT_SWITCHES);
@@ -387,6 +289,10 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const [recentAssets, setRecentAssets] = useState<CoverAsset[]>([]);
 
     const storageKey = useMemo(() => getTemplateStorageKey(spaceId), [spaceId]);
+    const activeSpaceName = useMemo(
+        () => spaces.find((space) => space.id === spaceId)?.name || spaceId,
+        [spaceId, spaces]
+    );
     const normalizeTemplateList = useCallback((items: unknown[] | undefined): CoverTemplate[] => (
         Array.isArray(items)
             ? items.map(normalizeTemplate).filter((item): item is CoverTemplate => Boolean(item)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -401,9 +307,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const hasImageConfig = Boolean(resolvedEndpoint) && Boolean(resolvedApiKey);
     const normalizedTitles = useMemo(() => normalizeTitleEntries(titleEntries), [titleEntries]);
     const normalizedTitlePrompt = useMemo(() => titlePrompt.trim(), [titlePrompt]);
-    const hasRequiredInputs = Boolean(templateImage?.dataUrl)
-        && Boolean(baseImage?.dataUrl)
-        && (
+    const hasRequiredInputs = (
             titleInputMode === 'prompt'
                 ? Boolean(normalizedTitlePrompt)
                 : normalizedTitles.length > 0
@@ -413,12 +317,16 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         [generationJobs]
     );
 
+    useEffect(() => {
+        onExecutionStateChange?.(pendingJobCount > 0);
+    }, [onExecutionStateChange, pendingJobCount]);
+
     const resetEditor = useCallback(() => {
         setActiveTemplateId('');
         setTemplateImage(null);
         setCount(1);
         setModel(settings.image_model || 'gpt-image-1');
-        setQuality(settings.image_quality || 'auto');
+        setQuality(settings.image_quality === 'low' || settings.image_quality === 'medium' || settings.image_quality === 'high' ? settings.image_quality : 'medium');
         setBaseImage(null);
         setPromptSwitches(DEFAULT_PROMPT_SWITCHES);
         setTitleInputMode('titles');
@@ -434,15 +342,28 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
             setSettings(next);
             setSpaceId(next.active_space_id || 'default');
             setModel(next.image_model || 'gpt-image-1');
-            setQuality(next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' || next.image_quality === 'medium' || next.image_quality === 'high' ? next.image_quality : 'medium');
         } catch (error) {
             console.error('Failed to load cover settings:', error);
         }
     }, []);
 
+    const loadSpaceContext = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.spaces.list() as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
+            const nextSpaces = Array.isArray(result?.spaces) ? result.spaces : [];
+            setSpaces(nextSpaces);
+            if (result?.activeSpaceId) {
+                setSpaceId(result.activeSpaceId);
+            }
+        } catch (error) {
+            console.error('Failed to load cover spaces:', error);
+        }
+    }, []);
+
     const loadRecentAssets = useCallback(async () => {
         try {
-            const result = await window.ipcRenderer.invoke('cover:list', { limit: 120 }) as CoverListResponse;
+            const result = await window.ipcRenderer.cover.list({ limit: 120 }) as CoverListResponse;
             if (!result?.success) {
                 setRecentAssets([]);
                 return;
@@ -510,8 +431,20 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     useEffect(() => {
         if (!isActive) return;
         void loadSettings();
+        void loadSpaceContext();
         void loadRecentAssets();
-    }, [isActive, loadRecentAssets, loadSettings]);
+    }, [isActive, loadRecentAssets, loadSettings, loadSpaceContext]);
+
+    useEffect(() => {
+        const handleSpaceChanged = () => {
+            void loadSettings();
+            void loadSpaceContext();
+        };
+        window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
+        return () => {
+            window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
+        };
+    }, [loadSettings, loadSpaceContext]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -547,7 +480,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         setActiveTemplateId(template.id);
         setCount(Math.max(1, Math.min(4, Number(template.count) || 1)));
         setModel(template.model || 'gpt-image-1');
-        setQuality(template.quality || 'auto');
+        setQuality(template.quality === 'low' || template.quality === 'medium' || template.quality === 'high' ? template.quality : 'medium');
         setPromptSwitches(normalizePromptSwitches(template.promptSwitches));
         setTemplateImage(template.templateImage
             ? { name: `${template.name}-模板图`, dataUrl: template.templateImage }
@@ -663,14 +596,6 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     }, []);
 
     const handleGenerate = useCallback(() => {
-        if (!templateImage?.dataUrl) {
-            setGenerateError('请先上传模板图');
-            return;
-        }
-        if (!baseImage?.dataUrl) {
-            setGenerateError('请先上传底图');
-            return;
-        }
         if (titleInputMode === 'prompt' && !normalizedTitlePrompt) {
             setGenerateError('请先填写提示词');
             return;
@@ -681,6 +606,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         }
 
         setGenerateError('');
+        onExecutionStateChange?.(true);
         const jobId = createCoverGenerationJobId();
         const submittedAt = new Date().toISOString();
         const summary = titleInputMode === 'prompt'
@@ -699,9 +625,9 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
 
         void (async () => {
             try {
-                const result = await window.ipcRenderer.invoke('cover:generate', {
-                    templateImage: templateImage.dataUrl,
-                    baseImage: baseImage.dataUrl,
+                const result = await window.ipcRenderer.cover.generate({
+                    templateImage: templateImage?.dataUrl || undefined,
+                    baseImage: baseImage?.dataUrl || undefined,
                     titles: normalizedTitles,
                     titleMode: titleInputMode,
                     titlePrompt: titleInputMode === 'prompt' ? normalizedTitlePrompt : undefined,
@@ -713,7 +639,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                     model: model.trim() || undefined,
                     provider: settings.image_provider || undefined,
                     providerTemplate: imageTemplate || undefined,
-                    quality: quality.trim() || undefined,
+                    quality: quality.trim() || 'medium',
                 }) as { success?: boolean; error?: string; assets?: CoverAsset[] };
 
                 if (!result?.success) {
@@ -749,6 +675,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         model,
         normalizedTitlePrompt,
         normalizedTitles,
+        onExecutionStateChange,
         promptSwitches,
         quality,
         settings.image_provider,
@@ -762,7 +689,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     }, []);
 
     return (
-        <div className="flex h-full min-h-0 bg-background overflow-hidden">
+        <div className="flex h-full min-h-0 overflow-hidden">
             <div className="flex-1 min-h-0 flex overflow-hidden">
                 <div className="w-80 border-r border-border bg-surface-secondary/30 flex flex-col shrink-0">
                     <div className="p-4 border-b border-border flex items-center justify-between">
@@ -773,7 +700,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                         <span className="text-[11px] text-text-tertiary">{templates.length}</span>
                     </div>
                     <div className="px-4 py-2 text-[11px] text-text-tertiary border-b border-border">
-                        空间：<span className="font-mono">{spaceId}</span>
+                        空间：<span className="font-medium text-text-secondary">{activeSpaceName}</span>
                     </div>
 
                     <div className="flex-1 overflow-auto p-2">
@@ -854,10 +781,21 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                 <div className="flex-1 min-w-0 flex flex-col">
                     <div className="px-6 py-2.5 border-b border-border bg-surface-primary/60 space-y-1">
                         <div className="flex items-center gap-3">
+                            {onReturnHome && (
+                                <button
+                                    type="button"
+                                    onClick={onReturnHome}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-primary text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                    aria-label="返回主页"
+                                    title="返回主页"
+                                >
+                                    <ArrowLeft className="h-4 w-4" />
+                                </button>
+                            )}
                             <h1 className="text-lg font-semibold text-text-primary">封面</h1>
                             <div className="ml-auto flex items-center gap-2">
                                 <button
-                                    onClick={() => void window.ipcRenderer.invoke('cover:open-root')}
+                                    onClick={() => void window.ipcRenderer.cover.openRoot()}
                                     className="px-2 py-1 text-[11px] rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
                                 >
                                     <span className="inline-flex items-center gap-1">
@@ -896,7 +834,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div className="border border-border rounded-lg p-3 space-y-2 bg-surface-secondary/10">
-                                    <div className="text-xs font-medium text-text-primary">图1 模板图（必填）</div>
+                                    <div className="text-xs font-medium text-text-primary">模板图</div>
                                     <label
                                         className={clsx(
                                             'group relative block rounded border overflow-hidden aspect-[3/4] transition-colors',
@@ -924,7 +862,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                                 </div>
 
                                 <div className="border border-border rounded-lg p-3 space-y-2 bg-surface-secondary/10">
-                                    <div className="text-xs font-medium text-text-primary">图2 底图（必填）</div>
+                                    <div className="text-xs font-medium text-text-primary">底图</div>
                                     <label
                                         className={clsx(
                                             'group relative block rounded border overflow-hidden aspect-[3/4] transition-colors',
@@ -1080,9 +1018,9 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                                     onChange={(event) => setQuality(event.target.value)}
                                     className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none"
                                 >
-                                    <option value="standard">standard</option>
+                                    <option value="low">low</option>
+                                    <option value="medium">medium</option>
                                     <option value="high">high</option>
-                                    <option value="auto">auto</option>
                                 </select>
                                 <select
                                     value={count}
@@ -1208,7 +1146,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                                                                 <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>
                                                                 <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || '3:4'} · {asset.quality || ''}</div>
                                                                 <button
-                                                                    onClick={() => void window.ipcRenderer.invoke('cover:open', { assetId: asset.id })}
+                                                                    onClick={() => void window.ipcRenderer.cover.open({ assetId: asset.id })}
                                                                     className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
                                                                 >
                                                                     <span className="inline-flex items-center gap-1">
@@ -1236,7 +1174,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                                     {recentAssets.map((asset) => (
                                         <button
                                             key={asset.id}
-                                            onClick={() => void window.ipcRenderer.invoke('cover:open', { assetId: asset.id })}
+                                            onClick={() => void window.ipcRenderer.cover.open({ assetId: asset.id })}
                                             className="text-left border border-border rounded-lg overflow-hidden bg-surface-primary hover:shadow-sm transition-shadow"
                                         >
                                             {asset.previewUrl && asset.exists ? (

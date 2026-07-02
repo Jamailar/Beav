@@ -1,6 +1,7 @@
 import type { RuntimeUnifiedEvent } from '../types';
 
 type UnknownRecord = Record<string, unknown>;
+type RuntimeEventType = RuntimeUnifiedEvent['eventType'];
 
 type RuntimeEnvelopeMeta = {
   runtimeId?: string;
@@ -12,6 +13,8 @@ type RuntimeScopedPayload = {
   runtimeId?: string;
   parentRuntimeId?: string;
 };
+
+export type RuntimeMessagePhase = 'commentary' | 'final_answer' | 'thought' | string;
 
 type TaskScopedPayload = RuntimeScopedPayload & {
   taskId: string;
@@ -33,11 +36,13 @@ export interface ToolConfirmRequestPayload {
 }
 
 export interface RuntimeEventStreamHandlers {
+  eventTypes?: readonly RuntimeEventType[];
+  checkpointTypes?: readonly string[];
   getActiveSessionId?: () => string | null | undefined;
   onPhaseStart?: (payload: RuntimeScopedPayload & { phase: string; runtimeMode: string }) => void;
   onThoughtStart?: (payload: RuntimeScopedPayload) => void;
-  onThoughtDelta?: (payload: RuntimeScopedPayload & { content: string }) => void;
-  onResponseDelta?: (payload: RuntimeScopedPayload & { content: string }) => void;
+  onThoughtDelta?: (payload: RuntimeScopedPayload & { content: string; messagePhase: RuntimeMessagePhase }) => void;
+  onResponseDelta?: (payload: RuntimeScopedPayload & { content: string; messagePhase: RuntimeMessagePhase }) => void;
   onChatDone?: (payload: RuntimeScopedPayload & {
     status: string;
     content: string;
@@ -129,6 +134,7 @@ export interface RuntimeEventStreamHandlers {
   onCliEscalationRequested?: (payload: RuntimeScopedPayload & {
     escalationId: string;
     executionId?: string;
+    reviewDocketId?: string;
     title: string;
     description: string;
     reason?: string;
@@ -151,43 +157,40 @@ export interface RuntimeEventStreamHandlers {
     summary: string;
     raw: UnknownRecord;
   }) => void;
-  onCreativeChatUserMessage?: (payload: { roomId: string; message: UnknownRecord }) => void;
-  onCreativeChatAdvisorStart?: (payload: {
-    roomId: string;
-    advisorId: string;
-    advisorName: string;
-    advisorAvatar: string;
-    phase: string;
+  onCollabSessionChanged?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    session: UnknownRecord;
+    raw: UnknownRecord;
   }) => void;
-  onCreativeChatThinking?: (payload: {
-    roomId: string;
-    advisorId: string;
-    thinkingType: string;
-    content: string;
+  onCollabMemberChanged?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    member: UnknownRecord;
+    raw: UnknownRecord;
   }) => void;
-  onCreativeChatRag?: (payload: {
-    roomId: string;
-    advisorId: string;
-    ragType: string;
-    content: string;
-    sources: string[];
+  onCollabTaskChanged?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    task: UnknownRecord;
+    raw: UnknownRecord;
   }) => void;
-  onCreativeChatTool?: (payload: {
-    roomId: string;
-    advisorId: string;
-    toolType: string;
-    tool: UnknownRecord;
+  onCollabReportSubmitted?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    report: UnknownRecord;
+    raw: UnknownRecord;
   }) => void;
-  onCreativeChatStream?: (payload: {
-    roomId: string;
-    advisorId: string;
-    advisorName: string;
-    advisorAvatar: string;
-    content: string;
-    done: boolean;
+  onCollabMessageDelivered?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    message: UnknownRecord;
+    raw: UnknownRecord;
   }) => void;
-  onCreativeChatDone?: (payload: { roomId: string }) => void;
-  onCreativeChatError?: (payload: { roomId: string; error: UnknownRecord }) => void;
+  onCollabReportTick?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    outcome: UnknownRecord;
+    raw: UnknownRecord;
+  }) => void;
+  onAcpConversationChanged?: (payload: RuntimeScopedPayload & {
+    eventType: Extract<RuntimeEventType, 'runtime:acp-message-stored' | 'runtime:acp-run-created' | 'runtime:acp-run-started' | 'runtime:acp-run-completed'>;
+    raw: UnknownRecord;
+  }) => void;
 }
 
 function toRecord(value: unknown): UnknownRecord {
@@ -216,6 +219,65 @@ function toOptionalNumber(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function parseJsonObject(value: string): UnknownRecord | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as UnknownRecord
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function checkpointTypeFromSummary(value: string): string {
+  const match = value.match(/"checkpointType"\s*:\s*"([^"]+)"/);
+  return match?.[1] || '';
+}
+
+function normalizeCheckpointPayload(payload: UnknownRecord): {
+  checkpointType: string;
+  checkpointPayload: UnknownRecord;
+  summary: string;
+} {
+  let checkpointType = toText(payload.checkpointType || payload.checkpoint_type);
+  let checkpointPayload = toRecord(payload.payload);
+  let summary = toText(payload.summary);
+
+  if ((!checkpointType || Object.keys(checkpointPayload).length === 0) && summary) {
+    const parsed = parseJsonObject(summary);
+    if (parsed) {
+      checkpointType = checkpointType || toText(parsed.checkpointType || parsed.checkpoint_type);
+      checkpointPayload = Object.keys(checkpointPayload).length > 0
+        ? checkpointPayload
+        : toRecord(parsed.payload);
+      summary = toText(parsed.summary) || summary;
+    } else {
+      checkpointType = checkpointType || checkpointTypeFromSummary(summary);
+    }
+  }
+
+  if (!checkpointType && summary) {
+    checkpointType = checkpointTypeFromSummary(summary);
+  }
+
+  if (
+    checkpointType === 'chat.error'
+    && Object.keys(checkpointPayload).length === 0
+    && summary
+  ) {
+    checkpointPayload = {
+      detail: summary,
+      message: '执行异常',
+      raw: summary,
+    };
+  }
+
+  return { checkpointType, checkpointPayload, summary };
 }
 
 function normalizeToolConfirmRequest(value: unknown): ToolConfirmRequestPayload | null {
@@ -289,16 +351,23 @@ function normalizeRuntimeEventType(value: unknown): RuntimeUnifiedEvent['eventTy
     case 'runtime:cli-escalation-requested':
     case 'runtime:cli-escalation-resolved':
     case 'runtime:cli-verification-finished':
+    case 'runtime:collab-session-changed':
+    case 'runtime:collab-member-changed':
+    case 'runtime:collab-task-changed':
+    case 'runtime:collab-report-submitted':
+    case 'runtime:collab-message-delivered':
+    case 'runtime:collab-report-tick':
+    case 'runtime:acp-message-stored':
+    case 'runtime:acp-run-created':
+    case 'runtime:acp-run-started':
+    case 'runtime:acp-run-completed':
       return eventType;
     default:
       return null;
   }
 }
 
-function parseRuntimeEnvelope(envelope: unknown): RuntimeUnifiedEvent | null {
-  const record = toRecord(envelope);
-  const eventType = normalizeRuntimeEventType(record.eventType);
-  if (!eventType) return null;
+function parseRuntimeEnvelopeRecord(record: UnknownRecord, eventType: RuntimeEventType): RuntimeUnifiedEvent {
   return {
     eventType,
     sessionId: toText(record.sessionId) || null,
@@ -308,6 +377,13 @@ function parseRuntimeEnvelope(envelope: unknown): RuntimeUnifiedEvent | null {
     payload: toRecord(record.payload),
     timestamp: Number(record.timestamp || Date.now()),
   };
+}
+
+function parseRuntimeEnvelope(envelope: unknown): RuntimeUnifiedEvent | null {
+  const record = toRecord(envelope);
+  const eventType = normalizeRuntimeEventType(record.eventType);
+  if (!eventType) return null;
+  return parseRuntimeEnvelopeRecord(record, eventType);
 }
 
 function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope: RuntimeUnifiedEvent): void {
@@ -339,11 +415,12 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     const content = String(payload.content || '');
     if (!content) return;
     const stream = toText(payload.stream || 'response');
+    const messagePhase = toText(payload.messagePhase || (stream === 'thought' ? 'thought' : 'final_answer'));
     if (stream === 'thought') {
-      handlers.onThoughtDelta?.({ sessionId, ...runtimeMeta, content });
+      handlers.onThoughtDelta?.({ sessionId, ...runtimeMeta, content, messagePhase });
       return;
     }
-    handlers.onResponseDelta?.({ sessionId, ...runtimeMeta, content });
+    handlers.onResponseDelta?.({ sessionId, ...runtimeMeta, content, messagePhase });
     return;
   }
 
@@ -461,6 +538,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       ...runtimeMeta,
       escalationId: toText(payload.escalationId || payload.id),
       executionId: toOptionalText(payload.executionId),
+      reviewDocketId: toOptionalText(payload.reviewDocketId),
       title: toText(payload.title) || 'CLI 需要额外权限',
       description: toText(payload.description || payload.message),
       reason: toOptionalText(payload.reason),
@@ -493,6 +571,87 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       executionId: toText(payload.executionId || payload.id),
       status: toText(payload.status) || (payload.success === false ? 'failed' : 'completed'),
       summary: toText(payload.summary || payload.message || payload.error),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-session-changed') {
+    handlers.onCollabSessionChanged?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      session: toRecord(payload.session),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-member-changed') {
+    handlers.onCollabMemberChanged?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      member: toRecord(payload.member),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-task-changed') {
+    handlers.onCollabTaskChanged?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      task: toRecord(payload.task),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-report-submitted') {
+    handlers.onCollabReportSubmitted?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      report: toRecord(payload.report),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-message-delivered') {
+    handlers.onCollabMessageDelivered?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      message: toRecord(payload.message),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-report-tick') {
+    handlers.onCollabReportTick?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      outcome: toRecord(payload.outcome),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (
+    envelope.eventType === 'runtime:acp-message-stored'
+    || envelope.eventType === 'runtime:acp-run-created'
+    || envelope.eventType === 'runtime:acp-run-started'
+    || envelope.eventType === 'runtime:acp-run-completed'
+  ) {
+    handlers.onAcpConversationChanged?.({
+      sessionId,
+      ...runtimeMeta,
+      eventType: envelope.eventType,
       raw: payload,
     });
     return;
@@ -547,9 +706,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
   }
 
   if (envelope.eventType === 'runtime:checkpoint') {
-    const checkpointType = toText(payload.checkpointType);
-    const checkpointPayload = toRecord(payload.payload);
-    const summary = toText(payload.summary);
+    const { checkpointType, checkpointPayload, summary } = normalizeCheckpointPayload(payload);
     handlers.onTaskCheckpointSaved?.({
       sessionId,
       ...runtimeMeta,
@@ -605,102 +762,30 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       });
       return;
     }
-    if (checkpointType === 'creative_chat.user_message') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatUserMessage?.({
-        roomId,
-        message: toRecord(checkpointPayload.message),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.advisor_start') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatAdvisorStart?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        advisorName: toText(checkpointPayload.advisorName),
-        advisorAvatar: toText(checkpointPayload.advisorAvatar),
-        phase: toText(checkpointPayload.phase),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.thinking') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatThinking?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        thinkingType: toText(checkpointPayload.type),
-        content: toText(checkpointPayload.content),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.rag') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatRag?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        ragType: toText(checkpointPayload.type),
-        content: toText(checkpointPayload.content),
-        sources: toTextArray(checkpointPayload.sources),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.tool') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatTool?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        toolType: toText(checkpointPayload.type),
-        tool: toRecord(checkpointPayload.tool),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.stream') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatStream?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        advisorName: toText(checkpointPayload.advisorName),
-        advisorAvatar: toText(checkpointPayload.advisorAvatar),
-        content: String(checkpointPayload.content || ''),
-        done: Boolean(checkpointPayload.done),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.done') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatDone?.({ roomId });
-      return;
-    }
-    if (checkpointType === 'creative_chat.error') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatError?.({
-        roomId,
-        error: checkpointPayload,
-      });
-      return;
-    }
   }
 }
 
 export function subscribeRuntimeEventStream(handlers: RuntimeEventStreamHandlers): () => void {
+  const eventTypeFilter = handlers.eventTypes ? new Set<RuntimeEventType>(handlers.eventTypes) : null;
+  const checkpointTypeFilter = handlers.checkpointTypes ? new Set<string>(handlers.checkpointTypes) : null;
+
   const listener = (_event: unknown, envelope?: unknown) => {
-    const parsed = parseRuntimeEnvelope(envelope);
-    if (!parsed) return;
-    const sessionId = toText(parsed.sessionId);
+    const record = toRecord(envelope);
+    const eventType = normalizeRuntimeEventType(record.eventType);
+    if (!eventType) return;
+    if (eventTypeFilter && !eventTypeFilter.has(eventType)) return;
+    if (checkpointTypeFilter && eventType === 'runtime:checkpoint') {
+      const checkpointType = toText(toRecord(record.payload).checkpointType);
+      if (!checkpointTypeFilter.has(checkpointType)) return;
+    }
+
+    const sessionId = toText(record.sessionId);
     if (shouldSkipBySession(handlers, sessionId)) return;
+    const parsed = parseRuntimeEnvelopeRecord(record, eventType);
     dispatchRuntimeEnvelope(handlers, parsed);
   };
-  window.ipcRenderer.on('runtime:event', listener as (...args: unknown[]) => void);
+  window.ipcRenderer.runtime.onEvent(listener as (...args: unknown[]) => void);
   return () => {
-    window.ipcRenderer.off('runtime:event', listener as (...args: unknown[]) => void);
+    window.ipcRenderer.runtime.offEvent(listener as (...args: unknown[]) => void);
   };
 }

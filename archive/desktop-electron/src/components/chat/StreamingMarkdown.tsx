@@ -1,8 +1,7 @@
 import React, { memo, useMemo } from 'react';
 import ReactMarkdown, { Components, UrlTransform } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { SAFE_REMARK_PLUGINS } from '../../utils/markdownRemarkPlugins';
 
-const REMARK_PLUGINS = [remarkGfm];
 const CODE_FENCE_PATTERN = /(^|\n)```/g;
 
 const hasUnclosedCodeFence = (content: string): boolean => {
@@ -43,7 +42,7 @@ export const StreamingMarkdown = memo(({
   return (
     <div className={className}>
       <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
+        remarkPlugins={SAFE_REMARK_PLUGINS}
         components={components}
         urlTransform={urlTransform}
       >

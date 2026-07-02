@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 
 export interface OfficialAiPanelProps {
   onReloadSettings: (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => Promise<void> | void;
+  onOpenPricing?: () => void;
 }
 
 export interface OfficialAiPanelModule {
@@ -10,7 +11,7 @@ export interface OfficialAiPanelModule {
 }
 
 export const hasOfficialAiPanel = true;
-export const officialAiPanelTabLabel = '登录';
+export const officialAiPanelTabLabel = '官方账号';
 
 export const loadOfficialAiPanelModule = async (): Promise<OfficialAiPanelModule | null> => {
   try {

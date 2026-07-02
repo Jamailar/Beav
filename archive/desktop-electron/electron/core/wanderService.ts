@@ -38,6 +38,8 @@ export type WanderRunOptions = {
     multiChoice?: boolean;
     deepThink?: boolean;
     requestId?: string;
+    sourceMode?: string;
+    guidedTopic?: string;
     persistHistory?: boolean;
     reportProgress?: (status: string) => void;
 };
@@ -125,6 +127,7 @@ function buildWanderDeepAgentPrompt(params: {
     itemsText: string;
     longTermContextSection: string;
     multiChoice: boolean;
+    guidedTopic?: string;
 }): string {
     const outputRequirement = params.multiChoice
         ? [
@@ -145,6 +148,16 @@ function buildWanderDeepAgentPrompt(params: {
             '5) content_direction 必须是可直接创作的内容方向说明。',
         ].join('\n');
 
+    const guidedTopic = String(params.guidedTopic || '').trim();
+    const guidedSection = guidedTopic
+        ? [
+            '选题方向约束：',
+            `用户指定的选题方向是「${guidedTopic}」。`,
+            '你仍然必须阅读和分析素材，但最终选题必须优先围绕这个方向收敛；如果素材不完全匹配，请选择最接近、最能落地的角度。',
+            '',
+        ].join('\n')
+        : '';
+
     return [
         '你现在处于 RedBox 的「漫步深度思考」Agent 模式。',
         '你需要自主完成：分析素材 -> 发散选题 -> 收敛方向 -> 产出最终结构化结果。',
@@ -158,6 +171,7 @@ function buildWanderDeepAgentPrompt(params: {
         '',
         outputRequirement,
         '',
+        guidedSection,
         '你收到的随机素材如下：',
         params.itemsText,
         '',
@@ -170,6 +184,7 @@ async function runWanderDeepThinkWithAgent(params: {
     items: WanderItem[];
     longTermContextSection: string;
     multiChoice: boolean;
+    guidedTopic?: string;
     reportProgress?: (status: string) => void;
 }): Promise<string> {
     const safeRequestId = params.requestId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || `${Date.now()}`;
@@ -180,6 +195,7 @@ async function runWanderDeepThinkWithAgent(params: {
         itemsText,
         longTermContextSection: params.longTermContextSection,
         multiChoice: params.multiChoice,
+        guidedTopic: params.guidedTopic,
     });
 
     const existingSession = getChatSession(sessionId);
@@ -529,6 +545,7 @@ async function requestWanderCompletion(params: {
 export async function runWanderBrainstorm(options: WanderRunOptions = {}): Promise<WanderRunResult> {
     const requestId = String(options.requestId || '').trim() || `wander-${Date.now()}`;
     const reportProgress = options.reportProgress;
+    const guidedTopic = String(options.sourceMode === 'guided' ? options.guidedTopic || '' : '').trim();
     reportProgress?.('正在初始化漫步任务...');
 
     const settings = getSettings() as {
@@ -569,6 +586,7 @@ export async function runWanderBrainstorm(options: WanderRunOptions = {}): Promi
             items,
             longTermContextSection,
             multiChoice,
+            guidedTopic,
             reportProgress,
         });
     } else {

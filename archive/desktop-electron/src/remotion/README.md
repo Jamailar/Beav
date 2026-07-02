@@ -10,8 +10,8 @@
 ## Relationship
 
 - CLI 渲染脚本在 [remotion/render.mjs](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/remotion/render.mjs)
-- 编辑器侧协议和预览壳层在 `src/components/manuscripts/`
-- 视频编辑器状态在 `src/features/video-editor/`
+- 编辑器侧协议在 `src/components/manuscripts/remotion/`
+- 稿件编辑器状态在 `src/components/manuscripts/ManuscriptEditorHost.tsx`
 
 ## Rules
 

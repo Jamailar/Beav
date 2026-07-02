@@ -1,0 +1,744 @@
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type LucideIcon,
+  Bot,
+  BrainCircuit,
+  ChevronLeft,
+  Check,
+  Database,
+  Download,
+  FileText,
+  FolderOpen,
+  Image,
+  MessageSquareText,
+  PenTool,
+  Rocket,
+  Sparkles,
+  UserRound,
+  Zap,
+} from 'lucide-react';
+import { APP_BRAND } from '../../config/brand';
+import { setAppAcquisitionSource, STEPS, markAppOnboardingSeen } from './constants';
+
+interface AppOnboardingProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+interface VisualCard {
+  icon: LucideIcon;
+  title: string;
+  desc: string;
+  meta?: string;
+  chips?: Array<{ icon: LucideIcon; color: string }>;
+  tone: string;
+}
+
+interface OnboardingStepContent {
+  eyebrow: string;
+  title: string;
+  desc: string;
+  acquisitionSurvey?: boolean;
+  cards?: VisualCard[];
+  brandRename?: {
+    previousName: string;
+    currentName: string;
+    previousIconSrc: string;
+    currentIconSrc: string;
+  };
+  image?: {
+    src: string;
+    alt: string;
+  };
+  video?: {
+    src: string;
+    title: string;
+    desc: string;
+  };
+}
+
+interface AcquisitionSourceOption {
+  value: string;
+  label: string;
+}
+
+const ACQUISITION_OTHER_VALUE = 'other';
+
+const ACQUISITION_SOURCES: AcquisitionSourceOption[] = [
+  { value: 'xiaohongshu', label: '小红书' },
+  { value: 'bilibili', label: 'B站' },
+  { value: 'wechat_article', label: '公众号/文章' },
+  { value: 'search', label: '搜索引擎' },
+  { value: 'github', label: 'GitHub' },
+  { value: 'friend_referral', label: '朋友推荐' },
+  { value: 'ai_recommendation', label: 'AI 工具推荐' },
+  { value: 'other', label: '其他' },
+];
+
+const ONBOARDING_DRAG_REGION_STYLE = {
+  WebkitAppRegion: 'drag',
+  appRegion: 'drag',
+} as CSSProperties & { WebkitAppRegion: 'drag'; appRegion: 'drag' };
+
+function randomizeAcquisitionSources(): AcquisitionSourceOption[] {
+  const shuffled = ACQUISITION_SOURCES.filter((source) => source.value !== ACQUISITION_OTHER_VALUE);
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  const other = ACQUISITION_SOURCES.find((source) => source.value === ACQUISITION_OTHER_VALUE);
+  return other ? [...shuffled, other] : shuffled;
+}
+
+const STEP_CONTENT: OnboardingStepContent[] = [
+  {
+    eyebrow: '品牌更名',
+    title: 'RedBox 正式更名为 Beav。',
+    desc: '产品能力和本地数据会继续保留；从 2.5.0 开始，新的应用名称和图标会统一使用 Beav。',
+    brandRename: {
+      previousName: 'RedBox',
+      currentName: 'Beav',
+      previousIconSrc: '/onboarding/brand/redbox-logo.png',
+      currentIconSrc: '/onboarding/brand/beav-logo.png',
+    },
+  },
+  {
+    eyebrow: '一个小问题',
+    title: `你是从哪里知道 ${APP_BRAND.displayName} 的？`,
+    desc: '选择一个最接近的来源，帮助我们判断应该把产品打磨和发布重点放在哪里。',
+    acquisitionSurvey: true,
+  },
+  {
+    eyebrow: '空间管理',
+    title: '一个空间，对应一个账号。',
+    desc: '把不同账号放进不同空间，资料、工作流和 AI 上下文会按空间隔离，切换空间就是切换账号边界。',
+    cards: [
+      {
+        icon: UserRound,
+        title: '账号独立',
+        desc: '每个空间只服务一个账号，适合把不同客户、品牌或个人账号分开管理。',
+        meta: '一个空间一个账号',
+        tone: 'bg-sky-100 text-sky-600',
+      },
+      {
+        icon: Database,
+        title: '资料隔离',
+        desc: '知识库、素材、任务和生成记录跟随空间保存，不会混进其他账号。',
+        chips: [
+          { icon: FolderOpen, color: 'bg-amber-100 text-amber-600' },
+          { icon: Database, color: 'bg-emerald-100 text-emerald-600' },
+        ],
+        tone: 'bg-emerald-100 text-emerald-600',
+      },
+      {
+        icon: Check,
+        title: '切换清晰',
+        desc: '需要运营另一个账号时，先切到对应空间，再继续采集、创作和发布。',
+        chips: [
+          { icon: UserRound, color: 'bg-violet-100 text-violet-600' },
+          { icon: Check, color: 'bg-emerald-100 text-emerald-600' },
+        ],
+        tone: 'bg-violet-100 text-violet-600',
+      },
+    ],
+  },
+  {
+    eyebrow: '本地创作工作台',
+    title: `${APP_BRAND.displayName} 帮你把灵感变成内容资产。`,
+    desc: '导入笔记、视频和资料，沉淀成可复用知识，再用 AI 串起文案、图片、封面和视频制作。',
+    cards: [
+      {
+        icon: Database,
+        title: '收拢素材与知识',
+        desc: '把笔记、视频、文档和灵感统一放进本地知识库。',
+        meta: '本地优先',
+        chips: [
+          { icon: FolderOpen, color: 'bg-sky-100 text-sky-600' },
+          { icon: Database, color: 'bg-emerald-100 text-emerald-600' },
+        ],
+        tone: 'bg-sky-100 text-sky-600',
+      },
+      {
+        icon: BrainCircuit,
+        title: '理解创作目标',
+        desc: '基于你的素材和任务要求，整理选题、角度与执行步骤。',
+        chips: [
+          { icon: MessageSquareText, color: 'bg-rose-100 text-rose-600' },
+          { icon: BrainCircuit, color: 'bg-violet-100 text-violet-600' },
+          { icon: PenTool, color: 'bg-amber-100 text-amber-600' },
+        ],
+        tone: 'bg-violet-100 text-violet-600',
+      },
+      {
+        icon: Sparkles,
+        title: '生成可发布内容',
+        desc: '文案、套图、封面和短视频工程可以在同一个工作流里推进。',
+        chips: [
+          { icon: PenTool, color: 'bg-orange-100 text-orange-600' },
+          { icon: Image, color: 'bg-cyan-100 text-cyan-600' },
+          { icon: Sparkles, color: 'bg-pink-100 text-pink-600' },
+        ],
+        tone: 'bg-orange-100 text-orange-600',
+      },
+    ],
+  },
+  {
+    eyebrow: '文件拖动快捷键',
+    title: '拖入文件时，按住快捷键切换处理方式。',
+    desc: '视频里展示了完整手势；拖动过程中按住快捷键，直接选择文件要交给哪个入口处理。',
+    video: {
+      src: '/onboarding/file-drag-shortcuts-demo.mp4',
+      title: '文件拖动快捷键',
+      desc: '拖动文件时按住快捷键，快速切换文件处理入口。',
+    },
+  },
+  {
+    eyebrow: '小红书评论洞察',
+    title: '下载评论区，把真实需求变成选题。',
+    desc: '在小红书页面采集评论，保存到知识库，再让 AI 从追问、反驳和高频痛点里生成内容方向。',
+    cards: [
+      {
+        icon: Download,
+        title: '采集评论',
+        desc: '在小红书笔记页抓取评论快照，保留原始语境。',
+        meta: '浏览器插件',
+        tone: 'bg-rose-100 text-rose-600',
+      },
+      {
+        icon: FileText,
+        title: '保存数据',
+        desc: '笔记和评论分开入库，后续可检索、复用和导出。',
+        chips: [
+          { icon: Database, color: 'bg-emerald-100 text-emerald-600' },
+          { icon: FileText, color: 'bg-sky-100 text-sky-600' },
+        ],
+        tone: 'bg-sky-100 text-sky-600',
+      },
+      {
+        icon: Sparkles,
+        title: '生成洞察',
+        desc: '从追问、反驳和高频痛点里提炼内容切口。',
+        chips: [
+          { icon: MessageSquareText, color: 'bg-violet-100 text-violet-600' },
+          { icon: Sparkles, color: 'bg-amber-100 text-amber-600' },
+        ],
+        tone: 'bg-violet-100 text-violet-600',
+      },
+    ],
+  },
+  {
+    eyebrow: '准备就绪',
+    title: `现在可以开始使用 ${APP_BRAND.displayName}。`,
+    desc: '导入第一条知识，或者直接打开对话，把你的创作任务交给 AI 工作台推进。',
+    cards: [
+      {
+        icon: Rocket,
+        title: '导入第一份素材',
+        desc: '从资料、链接或视频开始，快速建立第一个创作上下文。',
+        meta: '知识库',
+        tone: 'bg-orange-100 text-orange-600',
+      },
+      {
+        icon: Bot,
+        title: '发起一次 AI 对话',
+        desc: '告诉 AI 你要做什么，获取可执行的下一步。',
+        chips: [
+          { icon: MessageSquareText, color: 'bg-sky-100 text-sky-600' },
+          { icon: Bot, color: 'bg-violet-100 text-violet-600' },
+        ],
+        tone: 'bg-violet-100 text-violet-600',
+      },
+      {
+        icon: Zap,
+        title: '保存成工作流',
+        desc: '常用任务可以沉淀为自动化，让后台持续处理。',
+        chips: [
+          { icon: Zap, color: 'bg-yellow-100 text-yellow-600' },
+          { icon: Check, color: 'bg-emerald-100 text-emerald-600' },
+        ],
+        tone: 'bg-yellow-100 text-yellow-600',
+      },
+    ],
+  },
+];
+
+function StepDot({ index, current }: { index: number; current: number }) {
+  const active = index === current;
+  const done = index < current;
+
+  return (
+    <div
+      className={`h-2.5 w-2.5 rounded-full transition-colors ${
+        active ? 'bg-zinc-950' : done ? 'bg-zinc-300' : 'bg-zinc-200'
+      }`}
+    />
+  );
+}
+
+function VisualCard({ card }: { card: VisualCard }) {
+  const Icon = card.icon;
+
+  return (
+    <div className="flex min-h-[clamp(178px,22vh,240px)] w-full flex-col rounded-[22px] border border-zinc-100 bg-white px-[clamp(22px,2.2vw,34px)] py-[clamp(22px,2.8vh,34px)] text-left shadow-[0_18px_55px_rgba(120,75,45,0.08)]">
+      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${card.tone}`}>
+        <Icon className="h-5 w-5" strokeWidth={1.9} />
+      </div>
+      <div className="mt-5 min-w-0 flex-1">
+        <div className="text-[clamp(21px,1.45vw,30px)] font-semibold leading-tight text-zinc-950">{card.title}</div>
+        <div className="mt-3 text-[clamp(15px,1.05vw,20px)] font-medium leading-[1.5] text-zinc-500">{card.desc}</div>
+        {card.meta ? (
+          <div className="mt-4 inline-flex items-center gap-2 text-sm text-zinc-400">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-400">
+              <MessageSquareText className="h-3.5 w-3.5" strokeWidth={1.8} />
+            </span>
+            {card.meta}
+          </div>
+        ) : null}
+        {card.chips && card.chips.length > 0 ? (
+          <div className="mt-5 flex items-center">
+            {card.chips.map((chip, index) => {
+              const ChipIcon = chip.icon;
+              return (
+                <div
+                  key={index}
+                  className={`flex h-7 w-7 items-center justify-center rounded-full border-2 border-white ${chip.color} ${
+                    index > 0 ? '-ml-1.5' : ''
+                  }`}
+                >
+                  <ChipIcon className="h-3.5 w-3.5" strokeWidth={2} />
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function VideoShortcutPreview({ video }: { video: { src: string; title: string; desc: string } }) {
+  return (
+    <div className="relative z-10 flex w-full flex-col items-center">
+      <div className="flex w-full max-w-[980px] justify-center overflow-hidden rounded-[28px] bg-zinc-950 shadow-[0_30px_90px_rgba(24,24,27,0.14)]">
+        <video
+          src={video.src}
+          className="block h-auto max-h-[54vh] w-full bg-zinc-950 object-contain"
+          controls
+          autoPlay
+          muted
+          loop
+          playsInline
+          aria-label={video.title}
+        />
+      </div>
+      <div className="mt-[3vh] max-w-[860px] text-center">
+        <div className="text-[clamp(24px,2.1vw,42px)] font-semibold leading-tight text-zinc-950">{video.title}</div>
+        <p className="mt-3 text-[clamp(16px,1.18vw,22px)] font-medium leading-[1.5] text-zinc-500">{video.desc}</p>
+      </div>
+    </div>
+  );
+}
+
+function CharacterAssetPreview({ image }: { image: { src: string; alt: string } }) {
+  return (
+    <div className="relative z-10 flex w-full justify-center">
+      <div className="w-full overflow-hidden rounded-[32px] bg-white shadow-[0_24px_70px_rgba(120,75,45,0.16)]">
+        <img
+          src={image.src}
+          alt={image.alt}
+          className="block h-auto w-full object-contain"
+          draggable={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+function BrandRenamePreview({
+  brandRename,
+}: {
+  brandRename: NonNullable<OnboardingStepContent['brandRename']>;
+}) {
+  return (
+    <div className="app-onboarding-brand-rename relative z-10 flex w-full max-w-[900px] items-center justify-center gap-[clamp(18px,3vw,42px)]">
+      <div className="app-onboarding-brand-card app-onboarding-brand-card-previous" aria-label={brandRename.previousName}>
+        <div className="app-onboarding-brand-icon-shell">
+          <img src={brandRename.previousIconSrc} alt={brandRename.previousName} draggable={false} />
+        </div>
+        <div className="app-onboarding-brand-name">{brandRename.previousName}</div>
+      </div>
+      <div className="app-onboarding-brand-transfer" aria-hidden="true">
+        <span />
+      </div>
+      <div className="app-onboarding-brand-card app-onboarding-brand-card-current" aria-label={brandRename.currentName}>
+        <div className="app-onboarding-brand-icon-shell">
+          <img src={brandRename.currentIconSrc} alt={brandRename.currentName} draggable={false} />
+        </div>
+        <div className="app-onboarding-brand-name">{brandRename.currentName}</div>
+      </div>
+    </div>
+  );
+}
+
+function onboardingStepKind(content: OnboardingStepContent) {
+  if (content.acquisitionSurvey) return 'acquisition_survey';
+  if (content.brandRename) return 'brand_rename';
+  if (content.video) return 'video';
+  if (content.image) return 'image';
+  if (content.cards) return 'cards';
+  return 'content';
+}
+
+function AcquisitionSurvey({
+  sources,
+  selected,
+  onSelect,
+  invalid,
+}: {
+  sources: AcquisitionSourceOption[];
+  selected: string;
+  onSelect: (source: string) => void;
+  invalid: boolean;
+}) {
+  return (
+    <div className="w-full max-w-[980px]">
+      <div className={`app-onboarding-acquisition-options grid grid-cols-4 gap-3 ${invalid ? 'app-onboarding-acquisition-options-invalid' : ''}`}>
+        {sources.map((source) => {
+          const active = selected === source.value;
+          return (
+            <button
+              key={source.value}
+              type="button"
+              onClick={() => onSelect(source.value)}
+              className={`flex h-[clamp(66px,7vh,86px)] items-center justify-between rounded-2xl border px-5 text-left text-[clamp(16px,1.12vw,22px)] font-semibold shadow-[0_14px_40px_rgba(120,75,45,0.05)] transition-all active:scale-[0.99] ${
+                active
+                  ? 'border-accent-primary bg-white text-accent-primary shadow-[0_18px_45px_rgba(167,116,73,0.14)]'
+                  : 'border-zinc-200/80 bg-white/80 text-zinc-700 hover:border-accent-primary/35 hover:bg-white hover:shadow-[0_18px_45px_rgba(120,75,45,0.1)]'
+              }`}
+            >
+              <span>{source.label}</span>
+              {active ? <Check className="h-4 w-4" strokeWidth={2.2} /> : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OnboardingFooter({
+  step,
+  isLast,
+  showSkip,
+  onPrevious,
+  onNext,
+  onSkip,
+}: {
+  step: number;
+  isLast: boolean;
+  showSkip?: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+  onSkip?: () => void;
+}) {
+  return (
+    <div className="relative z-10 flex items-center justify-between gap-6">
+      <div className="flex items-center gap-5">
+        {step > 0 ? (
+          <button
+            type="button"
+            onClick={onPrevious}
+            className="inline-flex h-10 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+          >
+            <ChevronLeft className="h-4 w-4" strokeWidth={1.8} />
+            上一步
+          </button>
+        ) : null}
+        <div className="flex items-center gap-3" aria-label={`第 ${step + 1} 步，共 ${STEPS.length} 步`}>
+          {STEPS.map((_, index) => (
+            <StepDot key={index} index={index} current={step} />
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        {showSkip && onSkip ? (
+          <button
+            type="button"
+            onClick={onSkip}
+            className="inline-flex h-[clamp(48px,5vh,58px)] items-center justify-center rounded-xl px-5 text-[clamp(16px,1.05vw,20px)] font-semibold text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+          >
+            跳过
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onNext}
+          className="inline-flex h-[clamp(58px,6vh,76px)] min-w-[clamp(124px,8vw,160px)] items-center justify-center rounded-xl bg-zinc-100 px-7 text-[clamp(20px,1.5vw,30px)] font-semibold text-zinc-600 transition-colors hover:bg-zinc-200 hover:text-zinc-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40"
+        >
+          {isLast ? '开始' : 'Next'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function AppOnboarding({ open, onClose }: AppOnboardingProps) {
+  const [step, setStep] = useState(0);
+  const [acquisitionSources, setAcquisitionSources] = useState<AcquisitionSourceOption[]>(() => randomizeAcquisitionSources());
+  const [acquisitionSource, setAcquisitionSource] = useState('');
+  const [acquisitionInvalid, setAcquisitionInvalid] = useState(false);
+  const acquisitionShownRef = useRef(false);
+  const acquisitionInvalidTimerRef = useRef<number | null>(null);
+  const acquisitionInvalidFrameRef = useRef<number | null>(null);
+  const onboardingStartedAtRef = useRef<number>(0);
+  const stepStartedAtRef = useRef<number>(0);
+  const trackedStepRef = useRef<number | null>(null);
+  const content = useMemo(() => STEP_CONTENT[step] ?? STEP_CONTENT[0], [step]);
+
+  const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
+    event.preventDefault();
+    void window.ipcRenderer.windowControls.startDragging().catch((error) => {
+      console.warn(`[${APP_BRAND.displayName}] failed to start onboarding window drag:`, error);
+    });
+  };
+
+  useEffect(() => {
+    if (open) {
+      setStep(0);
+      setAcquisitionSources(randomizeAcquisitionSources());
+      setAcquisitionSource('');
+      setAcquisitionInvalid(false);
+      acquisitionShownRef.current = false;
+      onboardingStartedAtRef.current = Date.now();
+      stepStartedAtRef.current = Date.now();
+      trackedStepRef.current = null;
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || trackedStepRef.current === step) return;
+    trackedStepRef.current = step;
+    stepStartedAtRef.current = Date.now();
+    void window.ipcRenderer.analytics.track('onboarding_step_viewed', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+      properties: {
+        stepIndex: step,
+        step: STEPS[step] || `step_${step + 1}`,
+        stepKind: onboardingStepKind(content),
+      },
+    });
+  }, [content, open, step]);
+
+  useEffect(() => {
+    if (!open || !content.acquisitionSurvey || acquisitionShownRef.current) return;
+    acquisitionShownRef.current = true;
+    void window.ipcRenderer.analytics.track('acquisition_survey_shown', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+    });
+  }, [content.acquisitionSurvey, open]);
+
+  useEffect(() => {
+    return () => {
+      if (acquisitionInvalidTimerRef.current !== null) {
+        window.clearTimeout(acquisitionInvalidTimerRef.current);
+      }
+      if (acquisitionInvalidFrameRef.current !== null) {
+        window.cancelAnimationFrame(acquisitionInvalidFrameRef.current);
+      }
+    };
+  }, []);
+
+  if (!open) return null;
+
+  const isLast = step === STEPS.length - 1;
+  const isVideoStep = Boolean(content.video);
+  const isAcquisitionStep = Boolean(content.acquisitionSurvey);
+
+  const handleClose = () => {
+    markAppOnboardingSeen();
+    onClose();
+  };
+
+  const trackStepCompleted = (action: 'next' | 'skip' | 'finish') => {
+    const now = Date.now();
+    const durationMs = stepStartedAtRef.current > 0 ? now - stepStartedAtRef.current : 0;
+    void window.ipcRenderer.analytics.track('onboarding_step_completed', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+      properties: {
+        stepIndex: step,
+        step: STEPS[step] || `step_${step + 1}`,
+        stepKind: onboardingStepKind(content),
+        action,
+        durationMs,
+      },
+    });
+    if (action === 'finish') {
+      const totalDurationMs =
+        onboardingStartedAtRef.current > 0 ? now - onboardingStartedAtRef.current : durationMs;
+      void window.ipcRenderer.analytics.track('onboarding_completed', {
+        surface: 'app-onboarding',
+        origin: 'renderer',
+        properties: {
+          totalSteps: STEPS.length,
+          totalDurationMs,
+        },
+      });
+    }
+  };
+
+  const triggerAcquisitionRequiredPrompt = () => {
+    if (acquisitionInvalidTimerRef.current !== null) {
+      window.clearTimeout(acquisitionInvalidTimerRef.current);
+    }
+    if (acquisitionInvalidFrameRef.current !== null) {
+      window.cancelAnimationFrame(acquisitionInvalidFrameRef.current);
+    }
+    setAcquisitionInvalid(false);
+    acquisitionInvalidFrameRef.current = window.requestAnimationFrame(() => {
+      setAcquisitionInvalid(true);
+      acquisitionInvalidTimerRef.current = window.setTimeout(() => {
+        setAcquisitionInvalid(false);
+      }, 620);
+    });
+  };
+
+  const handleNext = (options?: { suppressAcquisitionSkip?: boolean }) => {
+    if (isAcquisitionStep && !acquisitionSource && !options?.suppressAcquisitionSkip) {
+      triggerAcquisitionRequiredPrompt();
+      return;
+    }
+    trackStepCompleted(isLast ? 'finish' : options?.suppressAcquisitionSkip ? 'skip' : 'next');
+    if (isLast) {
+      handleClose();
+      return;
+    }
+    setStep((value) => Math.min(value + 1, STEPS.length - 1));
+  };
+
+  const handlePrevious = () => {
+    setStep((value) => Math.max(value - 1, 0));
+  };
+
+  const handleAcquisitionSelect = (source: string) => {
+    setAcquisitionInvalid(false);
+    setAcquisitionSource(source);
+    setAppAcquisitionSource(source);
+    void window.ipcRenderer.analytics.track('acquisition_survey_answered', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+      properties: {
+        source,
+      },
+    });
+  };
+
+  const handleAcquisitionSkip = () => {
+    void window.ipcRenderer.analytics.track('acquisition_survey_skipped', {
+      surface: 'app-onboarding',
+      origin: 'renderer',
+      properties: {
+        action: 'skip_button',
+      },
+    });
+    handleNext({ suppressAcquisitionSkip: true });
+  };
+
+  return (
+    <div
+      className="app-onboarding fixed inset-0 z-[10030] h-screen w-screen overflow-hidden bg-white text-zinc-950"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${APP_BRAND.displayName} Onboarding`}
+    >
+      <div
+        data-tauri-drag-region
+        aria-hidden="true"
+        className="absolute left-0 right-0 top-0 z-50 h-[var(--app-titlebar-height)]"
+        style={ONBOARDING_DRAG_REGION_STYLE}
+        onMouseDown={startWindowDrag}
+      />
+      {isAcquisitionStep ? (
+        <section className="relative flex h-screen min-w-0 flex-col overflow-hidden bg-white px-[5vw] py-[7vh]">
+          <div className="relative z-10 flex flex-1 flex-col items-center justify-center text-center">
+            <div className="text-[clamp(18px,1.25vw,26px)] font-semibold text-accent-primary">{content.eyebrow}</div>
+            <h1 className="mt-5 max-w-[940px] text-[clamp(46px,5vw,88px)] font-bold leading-[1.08] tracking-normal text-zinc-950">
+              {content.title}
+            </h1>
+            <p className="mt-6 max-w-[760px] text-[clamp(18px,1.45vw,28px)] font-medium leading-[1.55] tracking-normal text-zinc-500">
+              {content.desc}
+            </p>
+            <div className="mt-[7vh] flex w-full justify-center">
+              <AcquisitionSurvey
+                sources={acquisitionSources}
+                selected={acquisitionSource}
+                onSelect={handleAcquisitionSelect}
+                invalid={acquisitionInvalid}
+              />
+            </div>
+          </div>
+          <OnboardingFooter
+            step={step}
+            isLast={isLast}
+            showSkip
+            onPrevious={handlePrevious}
+            onNext={() => handleNext()}
+            onSkip={handleAcquisitionSkip}
+          />
+        </section>
+      ) : isVideoStep && content.video ? (
+        <section className="relative flex h-screen min-w-0 flex-col overflow-hidden bg-white px-[5vw] py-[6vh]">
+          <div className="flex flex-1 items-center justify-center">
+            <VideoShortcutPreview video={content.video} />
+          </div>
+          <OnboardingFooter
+            step={step}
+            isLast={isLast}
+            onPrevious={handlePrevious}
+            onNext={() => handleNext()}
+          />
+        </section>
+      ) : (
+        <section className="relative flex h-screen min-w-0 flex-col overflow-hidden bg-white px-[5vw] py-[7vh]">
+          <div className="relative z-10 flex flex-1 flex-col items-center justify-center text-center">
+            <div className="text-[clamp(17px,1.2vw,24px)] font-semibold leading-none text-accent-primary">{content.eyebrow}</div>
+            <h1 className="mt-5 max-w-[1120px] text-[clamp(42px,4.3vw,82px)] font-bold leading-[1.1] tracking-normal text-zinc-950">
+              {content.title}
+            </h1>
+            <p className="mt-6 max-w-[850px] text-[clamp(17px,1.35vw,26px)] font-medium leading-[1.55] tracking-normal text-zinc-500">
+              {content.desc}
+            </p>
+            {content.image ? (
+              <div className="mt-[5vh] w-full max-w-[960px]">
+                <CharacterAssetPreview image={content.image} />
+              </div>
+            ) : content.brandRename ? (
+              <div className="mt-[6vh] flex w-full justify-center">
+                <BrandRenamePreview brandRename={content.brandRename} />
+              </div>
+            ) : (
+              <div className="mt-[6vh] grid w-full max-w-[1180px] grid-cols-3 gap-[clamp(12px,1.4vw,22px)]">
+                {(content.cards || []).map((card) => (
+                  <VisualCard key={card.title} card={card} />
+                ))}
+              </div>
+            )}
+          </div>
+          <OnboardingFooter
+            step={step}
+            isLast={isLast}
+            onPrevious={handlePrevious}
+            onNext={() => handleNext()}
+          />
+        </section>
+      )}
+    </div>
+  );
+}

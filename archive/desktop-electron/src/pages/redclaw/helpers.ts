@@ -1,5 +1,5 @@
 import type { RunnerResult, RunnerScheduledTask } from './types';
-import { REDCLAW_CONTEXT, REDCLAW_CONTEXT_ID, WEEKDAY_OPTIONS } from './config';
+import { REDCLAW_CONTEXT, REDCLAW_CONTEXT_ID, REDCLAW_DISPLAY_NAME, WEEKDAY_OPTIONS } from './config';
 
 export function normalizeClawHubSlug(input: string): string {
     const value = (input || '').trim();
@@ -30,7 +30,11 @@ export function normalizeClawHubSlug(input: string): string {
 
 export function formatDateTime(value?: string | null): string {
     if (!value) return '-';
-    const date = new Date(value);
+    const text = String(value).trim();
+    const numeric = /^\d+$/.test(text) ? Number(text) : NaN;
+    const date = Number.isFinite(numeric)
+        ? new Date(numeric > 1_000_000_000_000 ? numeric : numeric * 1000)
+        : new Date(text);
     if (Number.isNaN(date.getTime())) return '-';
     return date.toLocaleString();
 }
@@ -40,20 +44,60 @@ export function buildRedClawContextId(activeSpaceId: string): string {
 }
 
 export function buildRedClawSessionTitle(spaceName: string): string {
-    return `RedClaw · ${spaceName}`;
+    return `${REDCLAW_DISPLAY_NAME} · ${spaceName}`;
 }
 
 export function buildRedClawInitialContext(spaceName: string, activeSpaceId: string): string {
     return `${REDCLAW_CONTEXT}\n当前空间: ${spaceName} (${activeSpaceId})`;
 }
 
+export function buildRedClawRuntimeMetadata(activeSpaceId: string, spaceName?: string): Record<string, unknown> {
+    const spaceId = String(activeSpaceId || 'default').trim() || 'default';
+    const contextId = buildRedClawContextId(spaceId);
+    return {
+        surface: 'redclaw',
+        runtimeSurface: 'redclaw',
+        runtimeMode: 'redclaw',
+        contextType: 'redclaw',
+        contextId,
+        redclawContext: {
+            surface: 'redclaw',
+            spaceId,
+            contextId,
+            profileContext: {
+                kind: 'redclaw-profile',
+                spaceId,
+                spaceName: String(spaceName || spaceId).trim() || spaceId,
+            },
+        },
+    };
+}
+
+function contextSessionTimestampMs(value?: string | null): number {
+    const text = String(value || '').trim();
+    if (!text) return 0;
+    if (/^\d+$/.test(text)) {
+        const numeric = Number(text);
+        if (!Number.isFinite(numeric)) return 0;
+        return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+    }
+    const time = Date.parse(text);
+    return Number.isFinite(time) ? time : 0;
+}
+
 export function compareContextSessionItems(
     left: ContextChatSessionListItem,
     right: ContextChatSessionListItem,
 ): number {
-    const leftUpdatedAt = left.chatSession?.updatedAt || '';
-    const rightUpdatedAt = right.chatSession?.updatedAt || '';
-    return rightUpdatedAt.localeCompare(leftUpdatedAt);
+    const leftUpdatedAt = Math.max(
+        contextSessionTimestampMs(left.chatSession?.updatedAt),
+        contextSessionTimestampMs(left.chatSession?.createdAt),
+    );
+    const rightUpdatedAt = Math.max(
+        contextSessionTimestampMs(right.chatSession?.updatedAt),
+        contextSessionTimestampMs(right.chatSession?.createdAt),
+    );
+    return rightUpdatedAt - leftUpdatedAt;
 }
 
 export function sortContextSessionItems(items: ContextChatSessionListItem[]): ContextChatSessionListItem[] {
@@ -68,10 +112,16 @@ export function createContextSessionListItem(session: ChatSession): ContextChatS
         transcriptCount: 0,
         checkpointCount: 0,
         context: null,
+        starred: Boolean(session.starred),
+        archived: Boolean(session.archived),
+        unread: Boolean(session.metadata?.unread),
+        workingDirectory: String(session.metadata?.workingDirectory || '').trim(),
+        metadata: session.metadata || null,
         chatSession: {
             id: session.id,
             title: session.title,
             updatedAt: session.updatedAt,
+            createdAt: session.createdAt,
         },
     };
 }

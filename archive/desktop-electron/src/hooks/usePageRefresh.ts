@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
+import {
+    subscribeDataChanged,
+    subscribeSettingsUpdated,
+    type DataChangedPayload,
+} from '../bridge/appEvents';
 
-type DataChangedPayload = {
-    scope?: string;
-    action?: string;
-    entityId?: string;
-};
+const EMPTY_DATA_SCOPES: string[] = [];
+const FOREGROUND_REFRESH_DELAY_MS = 120;
 
 interface UsePageRefreshOptions {
     isActive?: boolean;
@@ -34,18 +36,26 @@ export function usePageRefresh({
     triggerOnVisibility = true,
     triggerOnSpaceChange = true,
     triggerOnSettingsChange = false,
-    dataScopes = [],
+    dataScopes = EMPTY_DATA_SCOPES,
 }: UsePageRefreshOptions) {
     const refreshRef = useRef(refresh);
+    const dataScopesRef = useRef(dataScopes);
     const lastRefreshAtRef = useRef(0);
     const mountedRef = useRef(false);
     const wasActiveRef = useRef(false);
     const inFlightRefreshRef = useRef<Promise<void> | null>(null);
     const queuedForceRefreshRef = useRef(false);
+    const scheduledRefreshTimerRef = useRef<number | null>(null);
+    const scheduledForceRefreshRef = useRef(false);
+    const dataScopesKey = dataScopes.join('\u0000');
 
     useEffect(() => {
         refreshRef.current = refresh;
     }, [refresh]);
+
+    useEffect(() => {
+        dataScopesRef.current = dataScopes;
+    }, [dataScopesKey]);
 
     const runRefresh = useCallback((force = false) => {
         if (!force && !isActive) return;
@@ -72,14 +82,36 @@ export function usePageRefresh({
         inFlightRefreshRef.current = refreshPromise;
     }, [debounceMs, isActive]);
 
+    const scheduleRefresh = useCallback((force = false, delayMs = 0) => {
+        if (!force && !isActive) return;
+        scheduledForceRefreshRef.current = scheduledForceRefreshRef.current || force;
+        if (scheduledRefreshTimerRef.current !== null) return;
+
+        scheduledRefreshTimerRef.current = window.setTimeout(() => {
+            scheduledRefreshTimerRef.current = null;
+            const shouldForce = scheduledForceRefreshRef.current;
+            scheduledForceRefreshRef.current = false;
+            runRefresh(shouldForce);
+        }, Math.max(0, delayMs));
+    }, [isActive, runRefresh]);
+
+    useEffect(() => {
+        return () => {
+            if (scheduledRefreshTimerRef.current !== null) {
+                window.clearTimeout(scheduledRefreshTimerRef.current);
+                scheduledRefreshTimerRef.current = null;
+            }
+        };
+    }, []);
+
     useEffect(() => {
         if (mountedRef.current) return;
         mountedRef.current = true;
         wasActiveRef.current = Boolean(isActive);
         if (triggerOnMount && isActive) {
-            runRefresh(true);
+            scheduleRefresh(true);
         }
-    }, [isActive, runRefresh, triggerOnMount]);
+    }, [isActive, scheduleRefresh, triggerOnMount]);
 
     useEffect(() => {
         if (!triggerOnActivate) {
@@ -87,43 +119,46 @@ export function usePageRefresh({
             return;
         }
         if (isActive && !wasActiveRef.current) {
-            runRefresh(true);
+            scheduleRefresh(true);
         }
         wasActiveRef.current = Boolean(isActive);
-    }, [isActive, runRefresh, triggerOnActivate]);
+    }, [isActive, scheduleRefresh, triggerOnActivate]);
 
     useEffect(() => {
         if (!isActive) return;
 
         const handleWindowFocus = () => {
             if (triggerOnWindowFocus) {
-                runRefresh();
+                scheduleRefresh(false, FOREGROUND_REFRESH_DELAY_MS);
             }
         };
 
         const handleVisibilityChange = () => {
             if (triggerOnVisibility && document.visibilityState === 'visible') {
-                runRefresh();
+                scheduleRefresh(false, FOREGROUND_REFRESH_DELAY_MS);
             }
         };
 
         const handleSpaceChanged = () => {
             if (triggerOnSpaceChange) {
-                runRefresh(true);
+                scheduleRefresh(true);
             }
         };
 
         const handleSettingsUpdated = () => {
             if (triggerOnSettingsChange) {
-                runRefresh();
+                scheduleRefresh(false, FOREGROUND_REFRESH_DELAY_MS);
             }
         };
 
         const handleDataChanged = (_event: unknown, payload?: DataChangedPayload) => {
-            if (dataScopes.length > 0 && matchesDataScope(payload, dataScopes)) {
-                runRefresh();
+            const scopes = dataScopesRef.current;
+            if (scopes.length > 0 && matchesDataScope(payload, scopes)) {
+                scheduleRefresh(false, FOREGROUND_REFRESH_DELAY_MS);
             }
         };
+        let unsubscribeSettingsUpdated: (() => void) | undefined;
+        let unsubscribeDataChanged: (() => void) | undefined;
 
         if (triggerOnWindowFocus) {
             window.addEventListener('focus', handleWindowFocus);
@@ -132,13 +167,13 @@ export function usePageRefresh({
             document.addEventListener('visibilitychange', handleVisibilityChange);
         }
         if (triggerOnSpaceChange) {
-            window.ipcRenderer.on('space:changed', handleSpaceChanged);
+            window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
         }
         if (triggerOnSettingsChange) {
-            window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+            unsubscribeSettingsUpdated = subscribeSettingsUpdated(handleSettingsUpdated);
         }
-        if (dataScopes.length > 0) {
-            window.ipcRenderer.on('data:changed', handleDataChanged);
+        if (dataScopesRef.current.length > 0) {
+            unsubscribeDataChanged = subscribeDataChanged(handleDataChanged);
         }
 
         return () => {
@@ -149,19 +184,15 @@ export function usePageRefresh({
                 document.removeEventListener('visibilitychange', handleVisibilityChange);
             }
             if (triggerOnSpaceChange) {
-                window.ipcRenderer.off('space:changed', handleSpaceChanged);
+                window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
             }
-            if (triggerOnSettingsChange) {
-                window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
-            }
-            if (dataScopes.length > 0) {
-                window.ipcRenderer.off('data:changed', handleDataChanged);
-            }
+            unsubscribeSettingsUpdated?.();
+            unsubscribeDataChanged?.();
         };
     }, [
-        dataScopes,
+        dataScopesKey,
         isActive,
-        runRefresh,
+        scheduleRefresh,
         triggerOnSettingsChange,
         triggerOnSpaceChange,
         triggerOnVisibility,

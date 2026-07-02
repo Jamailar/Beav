@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Database, Lightbulb, ExternalLink, ArrowLeft, Users, GripVertical, Server, Store, Brain } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
@@ -9,7 +9,8 @@ import {
   findAiPresetById,
   inferPresetIdByEndpoint
 } from '../config/aiSources';
-import { appAlert } from '../utils/appDialogs';
+import { subscribeSettingsUpdated, subscribeYoutubeInstallProgress } from '../bridge/appEvents';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 import {
   type AgentTaskSnapshot,
   type AgentTaskTrace,
@@ -23,12 +24,16 @@ import {
   type McpServerRuntimeItem,
   type McpServerConfig,
   type McpSessionState,
+  type MemoryHistoryEntry,
+  type MemoryMaintenanceStatus,
+  type MemorySearchResult,
   type RuntimePerfBenchmarkMode,
   type RuntimePerfPreset,
   type RuntimePerfRunResult,
   type RuntimePerfTimelineItem,
   type ToolDiagnosticDescriptor,
   type ToolDiagnosticRunResult,
+  type UserMemory,
   AiPresetLogo,
   AiPresetSelect,
   AiModelSelect,
@@ -80,17 +85,42 @@ import {
   type RedclawOnboardingState,
 } from './redclaw/onboardingState';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
+import type { AdvisorProfile } from './Advisors';
+import type { SettingsNavigationTarget } from '../features/app-shell/types';
+import {
+  DEFAULT_VISUAL_INDEX_PROMPT_VERSION,
+  FILE_INDEX_DASHBOARD_CACHE_TTL_MS,
+  RUNTIME_PERF_CHECKPOINT_WINDOW_MS,
+  RUNTIME_PERF_HISTORY_LIMIT,
+  RUNTIME_PERF_PRESETS,
+  RUNTIME_PERF_TIMELINE_LIMIT,
+  formatSettingsSkillSource as formatSettingsSkillSourceScope,
+  normalizeVisualIndexPromptVersion,
+} from '../features/settings/settingsModel';
 import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import {
   GeneralSettingsSection,
   ExperimentalSettingsSection,
+  RemoteConnectionSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
+  MemorySettingsSection,
   type FileIndexDashboard,
 } from './settings/SettingsSections';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { playTestNotificationSound } from '../notifications/audio';
 import { DEFAULT_NOTIFICATION_SETTINGS, parseNotificationSettings } from '../notifications/types';
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
+import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
+import {
+  ECOMMERCE_PLATFORM_GROUPS,
+  ECOMMERCE_PLATFORM_IDS,
+  createDefaultEcommercePlatformsSettings,
+  ecommercePlatformIconPath,
+  normalizeEcommercePlatformsSettings,
+  serializeEcommercePlatformsSettings,
+  type EcommercePlatformsSettings,
+} from '../features/ecommerce-platforms/catalog';
 
 const MIN_CHAT_MAX_TOKENS = 1024;
 const DEFAULT_CHAT_MAX_TOKENS = 262144;
@@ -99,43 +129,11 @@ const DEVELOPER_MODE_UNLOCK_TAP_COUNT = 7;
 const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
-const RUNTIME_PERF_HISTORY_LIMIT = 12;
-const RUNTIME_PERF_TIMELINE_LIMIT = 40;
-const RUNTIME_PERF_CHECKPOINT_WINDOW_MS = 1500;
-const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
-  {
-    id: 'latency-smoke',
-    label: '延迟冒烟',
-    description: '验证纯文本响应路径，观察 thinking 到首个 response 的延迟。',
-    message: '请直接回答：用三句话说明当前 runtime mode 的职责、主要风险和最先检查的观测点。不要调用工具。',
-  },
-  {
-    id: 'tooling-probe',
-    label: '工具探测',
-    description: '尽量触发一次真实工具调用，检查 tool-start/tool-end 延迟和成功率。',
-    message: '先调用一个最适合当前运行时的诊断类工具读取状态，再用两条结论总结发现。若当前上下文没有合适工具，再明确说明原因。',
-  },
-  {
-    id: 'long-response',
-    label: '长响应',
-    description: '拉长输出链路，观察持续流式输出和总耗时。',
-    message: '围绕当前 runtime mode 输出一个结构化调试清单，至少包含：入口、关键事件、常见瓶颈、建议日志位、回归检查项，每项 2 到 3 句。',
-  },
-];
-
-type SettingsTab = 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+type SettingsTab = 'general' | 'ai' | 'team' | 'platforms' | 'skills' | 'tools' | 'profile' | 'memory' | 'remote' | 'mcp' | 'experimental';
 
 const FILE_INDEX_DASHBOARD_CACHE_KEY = 'redbox:file-index-dashboard:v1';
-const FILE_INDEX_DASHBOARD_CACHE_TTL_MS = 60_000;
-const DEFAULT_VISUAL_INDEX_PROMPT_VERSION = 'visual-manifest-v2-zh';
-
-function normalizeVisualIndexPromptVersion(value: unknown): string {
-  const text = String(value || '').trim();
-  if (!text || text === 'visual-manifest-v1') {
-    return DEFAULT_VISUAL_INDEX_PROMPT_VERSION;
-  }
-  return text;
-}
+const TEAM_SECTION_STORAGE_KEY = 'redbox:team-section:v1';
+const TEAM_CREATE_STORAGE_KEY = 'redbox:team-create:v1';
 
 type FileIndexDashboardCacheRecord = {
   savedAt: number;
@@ -157,6 +155,266 @@ function readCachedFileIndexDashboard(): FileIndexDashboardCacheRecord | null {
     console.warn('Failed to read cached file index dashboard:', error);
     return null;
   }
+}
+
+function sortTeamAdvisors(advisors: AdvisorProfile[]): AdvisorProfile[] {
+  return [...advisors].sort((left, right) => {
+    const leftOrder = Number.isFinite(Number(left.redclawOrder)) ? Number(left.redclawOrder) : Number.MAX_SAFE_INTEGER;
+    const rightOrder = Number.isFinite(Number(right.redclawOrder)) ? Number(right.redclawOrder) : Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder || String(left.name || '').localeCompare(String(right.name || ''));
+  });
+}
+
+function advisorAvatarLabel(advisor: AdvisorProfile): string {
+  return String(advisor.avatar || advisor.name || '成').trim().slice(0, 2);
+}
+
+function TeamSettingsSection({
+  advisors,
+  loading,
+  busyAdvisorId,
+  draggingAdvisorId,
+  onCreateAdvisor,
+  onToggleVisible,
+  onOpenManager,
+  onRefresh,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+}: {
+  advisors: AdvisorProfile[];
+  loading: boolean;
+  busyAdvisorId: string | null;
+  draggingAdvisorId: string | null;
+  onCreateAdvisor: () => void;
+  onToggleVisible: (advisor: AdvisorProfile) => void;
+  onOpenManager: () => void;
+  onRefresh: () => void;
+  onDragStart: (advisorId: string) => void;
+  onDragOver: (advisorId: string) => void;
+  onDragEnd: () => void;
+}) {
+  return (
+    <section className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg font-medium text-text-primary">团队</h2>
+          <p className="mt-1 text-sm text-text-tertiary">管理 RedClaw 新对话里出现的成员和顺序。</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
+            刷新
+          </button>
+          <button
+            type="button"
+            onClick={onCreateAdvisor}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            新增成员
+          </button>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+        {loading && advisors.length === 0 ? (
+          <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-tertiary">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            正在读取成员
+          </div>
+        ) : advisors.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 px-4 py-8 text-center text-sm text-text-tertiary">
+            <span>暂无成员</span>
+            <button
+              type="button"
+              onClick={onCreateAdvisor}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              新增成员
+            </button>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/70">
+            {advisors.map((advisor) => {
+              const visible = advisor.redclawVisible !== false;
+              const busy = busyAdvisorId === advisor.id;
+              const isDragging = draggingAdvisorId === advisor.id;
+              return (
+                <div
+                  key={advisor.id}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', advisor.id);
+                    onDragStart(advisor.id);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    onDragOver(advisor.id);
+                  }}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    onDragOver(advisor.id);
+                  }}
+                  onDrop={(event) => event.preventDefault()}
+                  onDragEnd={onDragEnd}
+                  className={clsx(
+                    'flex items-center gap-3 px-3 py-3 transition-colors',
+                    isDragging ? 'bg-surface-secondary/80' : 'bg-surface-primary'
+                  )}
+                >
+                  <button
+                    type="button"
+                    className="flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary active:cursor-grabbing"
+                    title="拖动排序"
+                    aria-label="拖动排序"
+                  >
+                    <GripVertical className="h-4 w-4" />
+                  </button>
+
+                  <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-surface-secondary text-sm font-semibold text-text-secondary">
+                    {hasRenderableAssetUrl(advisor.avatar) ? (
+                      <img src={resolveAssetUrl(advisor.avatar)} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center">{advisorAvatarLabel(advisor)}</div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-text-primary">{advisor.name || '未命名成员'}</div>
+                    <div className="mt-0.5 truncate text-xs text-text-tertiary">{advisor.personality || '未设置描述'}</div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onToggleVisible(advisor)}
+                    disabled={busy}
+                    className={clsx(
+                      'relative h-7 w-[3.25rem] shrink-0 rounded-full transition-colors duration-200 disabled:opacity-50',
+                      visible ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
+                    )}
+                    title={visible ? '已展示' : '已隐藏'}
+                    aria-label={visible ? '已展示' : '已隐藏'}
+                  >
+                    <span
+                      className={clsx(
+                        'absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.22)] transition-transform duration-200',
+                        visible ? 'translate-x-6' : 'translate-x-0'
+                      )}
+                    />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onOpenManager}
+                    className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    管理
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function EcommercePlatformsSettingsSection({
+  settings,
+  onTogglePlatform,
+}: {
+  settings: EcommercePlatformsSettings;
+  onTogglePlatform: (platformId: string, enabled: boolean) => void;
+}) {
+  const enabledCount = ECOMMERCE_PLATFORM_IDS.filter((id) => settings.enabledById[id] !== false).length;
+  return (
+    <section className="space-y-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-lg font-medium text-text-primary">电商平台</h2>
+          <p className="mt-1 text-sm text-text-tertiary">启用的平台会作为后续目标平台生成的候选范围。</p>
+        </div>
+        <div className="shrink-0 rounded-full border border-border bg-surface-secondary px-3 py-1 text-xs font-medium text-text-secondary">
+          {enabledCount}/{ECOMMERCE_PLATFORM_IDS.length} 已开启
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {ECOMMERCE_PLATFORM_GROUPS.map((group) => {
+          const groupEnabledCount = group.platforms.filter((platform) => settings.enabledById[platform.id] !== false).length;
+          return (
+            <div key={group.region} className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+              <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-surface-secondary/40 px-4 py-3">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-text-primary">{group.region}</h3>
+                </div>
+                <span className="shrink-0 text-xs text-text-tertiary">{groupEnabledCount}/{group.platforms.length}</span>
+              </div>
+              <div className="divide-y divide-border/70">
+                {group.platforms.map((platform) => {
+                  const enabled = settings.enabledById[platform.id] !== false;
+                  const iconPath = ecommercePlatformIconPath(platform.id);
+                  return (
+                    <div key={platform.id} className="flex items-center gap-3 px-4 py-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-secondary">
+                        {iconPath ? (
+                          <img src={iconPath} alt="" className="h-6 w-6 object-contain" loading="lazy" />
+                        ) : (
+                          <Store className="h-4 w-4 text-text-tertiary" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-text-primary">{platform.name}</div>
+                        <div className="mt-0.5 truncate text-xs text-text-tertiary">
+                          {platform.market} · {platform.platformType}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onTogglePlatform(platform.id, !enabled)}
+                        className={clsx(
+                          'relative h-7 w-[3.25rem] shrink-0 rounded-full transition-colors duration-200',
+                          enabled ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
+                        )}
+                        title={enabled ? '已开启' : '已关闭'}
+                        aria-label={`${enabled ? '关闭' : '开启'} ${platform.name}`}
+                      >
+                        <span
+                          className={clsx(
+                            'absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.22)] transition-transform duration-200',
+                            enabled ? 'translate-x-6' : 'translate-x-0'
+                          )}
+                        />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function sortSettingsSkills(skills: SkillDefinition[]): SkillDefinition[] {
+  return [...skills].sort((left, right) => {
+    const leftBuiltin = left.isBuiltin || left.sourceScope === 'builtin' ? 0 : 1;
+    const rightBuiltin = right.isBuiltin || right.sourceScope === 'builtin' ? 0 : 1;
+    return leftBuiltin - rightBuiltin || String(left.name || '').localeCompare(String(right.name || ''));
+  });
 }
 
 function writeCachedFileIndexDashboard(dashboard: FileIndexDashboard): number {
@@ -520,12 +778,16 @@ export function Settings({
   isActive = true,
   onOpenRedClawOnboarding,
   redclawOnboardingVersion = 0,
+  navigationTarget,
+  onReturn,
 }: {
   isActive?: boolean;
   onOpenRedClawOnboarding?: () => void;
   redclawOnboardingVersion?: number;
+  navigationTarget?: SettingsNavigationTarget | null;
+  onReturn?: () => void;
 }) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('ai');
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
@@ -548,6 +810,7 @@ export function Settings({
     image_aspect_ratio: '3:4',
     image_size: '',
     image_quality: 'auto',
+    ecommerce_platforms_json: serializeEcommercePlatformsSettings(createDefaultEcommercePlatformsSettings()),
     model_name_wander: '',
     model_name_chatroom: '',
     model_name_knowledge: '',
@@ -652,6 +915,27 @@ export function Settings({
   const [runtimePerfResults, setRuntimePerfResults] = useState<RuntimePerfRunResult[]>([]);
   const [activeRuntimePerfRunId, setActiveRuntimePerfRunId] = useState('');
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [settingsSkillsSummary, setSettingsSkillsSummary] = useState({ total: 0, enabled: 0, disabled: 0 });
+  const [settingsSkills, setSettingsSkills] = useState<SkillDefinition[]>([]);
+  const [isSettingsSkillsLoading, setIsSettingsSkillsLoading] = useState(false);
+  const [settingsSkillsMessage, setSettingsSkillsMessage] = useState('');
+  const [settingsSkillBusyName, setSettingsSkillBusyName] = useState('');
+  const [areBuiltinSettingsSkillsExpanded, setAreBuiltinSettingsSkillsExpanded] = useState(false);
+  const [newMemoryType, setNewMemoryType] = useState<UserMemory['type']>('general');
+  const [newMemoryContent, setNewMemoryContent] = useState('');
+  const [memories, setMemories] = useState<UserMemory[]>([]);
+  const [archivedMemories, setArchivedMemories] = useState<UserMemory[]>([]);
+  const [memoryHistory, setMemoryHistory] = useState<MemoryHistoryEntry[]>([]);
+  const [maintenanceStatus, setMaintenanceStatus] = useState<MemoryMaintenanceStatus | null>(null);
+  const [isMemoryLoading, setIsMemoryLoading] = useState(false);
+  const [memorySearchQuery, setMemorySearchQuery] = useState('');
+  const [includeArchivedInSearch, setIncludeArchivedInSearch] = useState(false);
+  const [memorySearchResults, setMemorySearchResults] = useState<MemorySearchResult[]>([]);
+  const [isMemorySearching, setIsMemorySearching] = useState(false);
+  const [teamAdvisors, setTeamAdvisors] = useState<AdvisorProfile[]>([]);
+  const [isTeamAdvisorsLoading, setIsTeamAdvisorsLoading] = useState(false);
+  const [teamAdvisorBusyId, setTeamAdvisorBusyId] = useState<string | null>(null);
+  const [draggingTeamAdvisorId, setDraggingTeamAdvisorId] = useState<string | null>(null);
   const initialFileIndexDashboardCache = useMemo(() => readCachedFileIndexDashboard(), []);
   const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(null);
   const [isFileIndexDashboardLoading, setIsFileIndexDashboardLoading] = useState(false);
@@ -668,6 +952,7 @@ export function Settings({
   const [redclawProfileMessage, setRedclawProfileMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
   const [redclawOnboardingState, setRedclawOnboardingState] = useState<RedclawOnboardingState>(null);
   const [currentSpaceId, setCurrentSpaceId] = useState(DEFAULT_SPACE_ID);
+  const [currentSpaceName, setCurrentSpaceName] = useState('默认空间');
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
   const [assistantDaemonLogs, setAssistantDaemonLogs] = useState<string[]>([]);
@@ -680,6 +965,8 @@ export function Settings({
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsPayload>(DEFAULT_NOTIFICATION_SETTINGS);
   const [notificationPermissionState, setNotificationPermissionState] = useState<NotificationPermissionState['state']>('unknown');
   const [notificationStatusMessage, setNotificationStatusMessage] = useState('');
+  const teamAdvisorDragIdRef = useRef('');
+  const teamAdvisorOrderRef = useRef<AdvisorProfile[]>([]);
   const hasSelectedRuntimeSession = useMemo(
     () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
     [runtimeSessions, selectedRuntimeSessionId],
@@ -688,6 +975,271 @@ export function Settings({
     () => isRedClawOnboardingCompleted(redclawOnboardingState),
     [redclawOnboardingState],
   );
+
+  const loadSettingsSkillsSummary = useCallback(async () => {
+    setIsSettingsSkillsLoading(true);
+    setSettingsSkillsMessage('');
+    try {
+      const list = await window.ipcRenderer.listSkills() as SkillDefinition[];
+      const skills = sortSettingsSkills(Array.isArray(list) ? list : []);
+      const disabled = skills.filter((skill) => Boolean(skill.disabled)).length;
+      setSettingsSkills(skills);
+      setSettingsSkillsSummary({
+        total: skills.length,
+        enabled: skills.length - disabled,
+        disabled,
+      });
+    } catch (error) {
+      console.error('Failed to load settings skills summary:', error);
+      setSettingsSkillsMessage('技能统计读取失败');
+    } finally {
+      setIsSettingsSkillsLoading(false);
+    }
+  }, []);
+
+  const builtinSettingsSkills = useMemo(
+    () => settingsSkills.filter((skill) => skill.isBuiltin || skill.sourceScope === 'builtin'),
+    [settingsSkills],
+  );
+  const editableSettingsSkills = useMemo(
+    () => settingsSkills.filter((skill) => !(skill.isBuiltin || skill.sourceScope === 'builtin')),
+    [settingsSkills],
+  );
+
+  const handleToggleSettingsSkill = useCallback(async (skill: SkillDefinition) => {
+    if (skill.isBuiltin || skill.sourceScope === 'builtin') return;
+    const nextDisabled = !skill.disabled;
+    setSettingsSkillBusyName(skill.name);
+    setSettingsSkillsMessage('');
+    setSettingsSkills((prev) => prev.map((item) => (
+      item.name === skill.name ? { ...item, disabled: nextDisabled } : item
+    )));
+    setSettingsSkillsSummary((prev) => ({
+      total: prev.total,
+      enabled: prev.enabled + (nextDisabled ? -1 : 1),
+      disabled: prev.disabled + (nextDisabled ? 1 : -1),
+    }));
+    try {
+      const result = nextDisabled
+        ? await window.ipcRenderer.skills.disable<{ success?: boolean; error?: string }>({ name: skill.name })
+        : await window.ipcRenderer.skills.enable<{ success?: boolean; error?: string }>({ name: skill.name });
+      if (!result?.success) {
+        throw new Error(result?.error || '技能状态保存失败');
+      }
+      await loadSettingsSkillsSummary();
+    } catch (error) {
+      console.error('Failed to toggle settings skill:', error);
+      setSettingsSkills((prev) => prev.map((item) => (
+        item.name === skill.name ? { ...item, disabled: skill.disabled } : item
+      )));
+      setSettingsSkillsMessage(error instanceof Error ? error.message : '技能状态保存失败');
+      await loadSettingsSkillsSummary();
+    } finally {
+      setSettingsSkillBusyName('');
+    }
+  }, [loadSettingsSkillsSummary]);
+
+  const loadMemoryDashboard = useCallback(async () => {
+    const requestId = ++memoryLoadRequestRef.current;
+    setIsMemoryLoading(true);
+    try {
+      const [activeList, archivedList, historyList, statusSnapshot] = await Promise.all([
+        window.ipcRenderer.memory.list<UserMemory[]>(),
+        window.ipcRenderer.memory.archived<UserMemory[]>(),
+        window.ipcRenderer.memory.history<MemoryHistoryEntry[]>(),
+        window.ipcRenderer.memory.maintenanceStatus<MemoryMaintenanceStatus | null>(),
+      ]);
+      if (requestId !== memoryLoadRequestRef.current) return;
+      setMemories(Array.isArray(activeList) ? activeList as UserMemory[] : []);
+      setArchivedMemories(Array.isArray(archivedList) ? archivedList as UserMemory[] : []);
+      setMemoryHistory(Array.isArray(historyList) ? historyList as MemoryHistoryEntry[] : []);
+      setMaintenanceStatus(statusSnapshot && typeof statusSnapshot === 'object' ? statusSnapshot as MemoryMaintenanceStatus : null);
+    } catch (error) {
+      if (requestId !== memoryLoadRequestRef.current) return;
+      console.error('Failed to load memory dashboard:', error);
+      void appAlert(`加载记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
+    } finally {
+      if (requestId === memoryLoadRequestRef.current) {
+        setIsMemoryLoading(false);
+      }
+    }
+  }, []);
+
+  const handleSearchMemories = useCallback(async () => {
+    const query = memorySearchQuery.trim();
+    if (!query) {
+      setMemorySearchResults([]);
+      return;
+    }
+    const requestId = ++memorySearchRequestRef.current;
+    setIsMemorySearching(true);
+    try {
+      const results = await window.ipcRenderer.memory.search<MemorySearchResult[]>({
+        query,
+        includeArchived: includeArchivedInSearch,
+        limit: 50,
+      });
+      if (requestId !== memorySearchRequestRef.current) return;
+      setMemorySearchResults(Array.isArray(results) ? results as MemorySearchResult[] : []);
+    } catch (error) {
+      if (requestId !== memorySearchRequestRef.current) return;
+      console.error('Failed to search memories:', error);
+      setMemorySearchResults([]);
+      void appAlert(`搜索记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
+    } finally {
+      if (requestId === memorySearchRequestRef.current) {
+        setIsMemorySearching(false);
+      }
+    }
+  }, [includeArchivedInSearch, memorySearchQuery]);
+
+  const handleAddMemory = useCallback(async () => {
+    const content = newMemoryContent.trim();
+    if (!content) return;
+    try {
+      await window.ipcRenderer.memory.add({
+        content,
+        type: newMemoryType,
+        tags: [],
+      });
+      setNewMemoryContent('');
+      await loadMemoryDashboard();
+      if (memorySearchQuery.trim()) {
+        await handleSearchMemories();
+      }
+    } catch (error) {
+      console.error('Failed to add memory:', error);
+      void appAlert(`添加记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
+    }
+  }, [handleSearchMemories, loadMemoryDashboard, memorySearchQuery, newMemoryContent, newMemoryType]);
+
+  const handleRunMemoryMaintenance = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.memory.runMaintenance<MemoryMaintenanceStatus | null>();
+      if (result && typeof result === 'object') {
+        setMaintenanceStatus(result as MemoryMaintenanceStatus);
+      }
+      await loadMemoryDashboard();
+    } catch (error) {
+      console.error('Failed to run memory maintenance:', error);
+      void appAlert(`整理记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
+    }
+  }, [loadMemoryDashboard]);
+
+  const handleDeleteMemory = useCallback((id: string) => {
+    const memoryId = String(id || '').trim();
+    if (!memoryId) return;
+    void (async () => {
+      const confirmed = await appConfirm('删除后这条长期记忆会进入历史轨迹，当前生效记忆中不再使用它。', {
+        title: '删除记忆',
+        confirmLabel: '删除',
+        tone: 'danger',
+      });
+      if (!confirmed) return;
+      try {
+        await window.ipcRenderer.memory.delete(memoryId);
+        setMemorySearchResults((prev) => prev.filter((item) => item.id !== memoryId));
+        await loadMemoryDashboard();
+      } catch (error) {
+        console.error('Failed to delete memory:', error);
+        void appAlert(`删除记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
+      }
+    })();
+  }, [loadMemoryDashboard]);
+
+  const loadTeamAdvisors = useCallback(async () => {
+    setIsTeamAdvisorsLoading(true);
+    try {
+      const list = await window.ipcRenderer.advisors.list<AdvisorProfile>();
+      const sorted = sortTeamAdvisors(Array.isArray(list) ? list : []);
+      setTeamAdvisors(sorted);
+      teamAdvisorOrderRef.current = sorted;
+      return sorted;
+    } catch (error) {
+      console.error('Failed to load team advisors:', error);
+      setStatus('error');
+      return [];
+    } finally {
+      setIsTeamAdvisorsLoading(false);
+    }
+  }, []);
+
+  const openTeamMembersPage = useCallback(() => {
+    window.localStorage.setItem(TEAM_SECTION_STORAGE_KEY, 'members');
+    dispatchAppIntent({ type: 'settings.open', tab: 'team' });
+  }, []);
+
+  const openTeamCreatePage = useCallback(() => {
+    window.localStorage.setItem(TEAM_SECTION_STORAGE_KEY, 'members');
+    window.localStorage.setItem(TEAM_CREATE_STORAGE_KEY, 'manual');
+    dispatchAppIntent({ type: 'settings.open', tab: 'team' });
+  }, []);
+
+  const persistTeamAdvisorOrder = useCallback(async (items: AdvisorProfile[]) => {
+    await Promise.all(items.map((advisor, index) => (
+      window.ipcRenderer.advisors.update({
+        id: advisor.id,
+        redclawOrder: index,
+        redclawVisible: advisor.redclawVisible !== false,
+      })
+    )));
+    teamAdvisorOrderRef.current = items;
+    window.dispatchEvent(new Event('redclaw:team-settings-changed'));
+  }, []);
+
+  const handleToggleTeamAdvisorVisible = useCallback((advisor: AdvisorProfile) => {
+    const nextVisible = advisor.redclawVisible === false;
+    setTeamAdvisorBusyId(advisor.id);
+    setTeamAdvisors((prev) => prev.map((item) => (
+      item.id === advisor.id ? { ...item, redclawVisible: nextVisible } : item
+    )));
+    void window.ipcRenderer.advisors.update({
+      id: advisor.id,
+      redclawVisible: nextVisible,
+    }).then(() => {
+      window.dispatchEvent(new Event('redclaw:team-settings-changed'));
+    }).catch((error) => {
+      console.error('Failed to update advisor visibility:', error);
+      setTeamAdvisors((prev) => prev.map((item) => (
+        item.id === advisor.id ? { ...item, redclawVisible: advisor.redclawVisible } : item
+      )));
+      setStatus('error');
+    }).finally(() => {
+      setTeamAdvisorBusyId(null);
+    });
+  }, []);
+
+  const handleTeamAdvisorDragStart = useCallback((advisorId: string) => {
+    teamAdvisorDragIdRef.current = advisorId;
+    setDraggingTeamAdvisorId(advisorId);
+  }, []);
+
+  const handleTeamAdvisorDragOver = useCallback((targetAdvisorId: string) => {
+    setTeamAdvisors((prev) => {
+      const draggingId = teamAdvisorDragIdRef.current;
+      if (!draggingId || draggingId === targetAdvisorId) return prev;
+      const fromIndex = prev.findIndex((item) => item.id === draggingId);
+      const toIndex = prev.findIndex((item) => item.id === targetAdvisorId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      const ordered = next.map((item, index) => ({ ...item, redclawOrder: index }));
+      teamAdvisorOrderRef.current = ordered;
+      return ordered;
+    });
+  }, []);
+
+  const handleTeamAdvisorDragEnd = useCallback(() => {
+    if (!teamAdvisorDragIdRef.current) return;
+    teamAdvisorDragIdRef.current = '';
+    setDraggingTeamAdvisorId(null);
+    void persistTeamAdvisorOrder(teamAdvisorOrderRef.current).catch((error) => {
+      console.error('Failed to persist advisor order:', error);
+      setStatus('error');
+      void loadTeamAdvisors();
+    });
+  }, [loadTeamAdvisors, persistTeamAdvisorOrder]);
 
   const updateRuntimePerfRun = useCallback((runId: string, updater: (run: RuntimePerfRunResult) => RuntimePerfRunResult) => {
     setRuntimePerfResults((prev) =>
@@ -756,6 +1308,29 @@ export function Settings({
     setCurrentSpaceId(normalized);
     return normalized;
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadCurrentSpaceName = async () => {
+      const fallbackName = currentSpaceId === DEFAULT_SPACE_ID ? '默认空间' : currentSpaceId;
+      try {
+        const result = await window.ipcRenderer.spaces.list();
+        if (disposed) return;
+        const spaces = Array.isArray(result?.spaces) ? result.spaces : [];
+        const matchedSpace = spaces.find((space) => space.id === currentSpaceId);
+        const nextName = String(matchedSpace?.name || fallbackName).trim() || fallbackName;
+        setCurrentSpaceName(nextName);
+      } catch {
+        if (!disposed) {
+          setCurrentSpaceName(fallbackName);
+        }
+      }
+    };
+    void loadCurrentSpaceName();
+    return () => {
+      disposed = true;
+    };
+  }, [currentSpaceId]);
 
   const resetRedclawProfileState = useCallback(() => {
     redclawProfileLoadRequestRef.current += 1;
@@ -827,6 +1402,23 @@ export function Settings({
     setStatus('idle');
   }, [savedRedclawProfileDraft.creatorProfile, savedRedclawProfileDraft.user, setRedclawProfileDirtyState]);
 
+  const handleToggleEcommercePlatform = useCallback((platformId: string, enabled: boolean) => {
+    setFormData((prev: any) => {
+      const nextSettings = normalizeEcommercePlatformsSettings(prev.ecommerce_platforms_json);
+      return {
+        ...prev,
+        ecommerce_platforms_json: serializeEcommercePlatformsSettings({
+          ...nextSettings,
+          enabledById: {
+            ...nextSettings.enabledById,
+            [platformId]: enabled,
+          },
+        }),
+      };
+    });
+    setStatus('idle');
+  }, []);
+
   const fetchModelsRequestRef = useRef<Record<string, number>>({});
   const fetchImageModelsRequestRef = useRef(0);
   const settingsLoadRequestRef = useRef(0);
@@ -847,6 +1439,8 @@ export function Settings({
   const remoteTabWarmTimerRef = useRef<number | null>(null);
   const settingsActivationTimerRef = useRef<number | null>(null);
   const redclawProfileLoadRequestRef = useRef(0);
+  const memoryLoadRequestRef = useRef(0);
+  const memorySearchRequestRef = useRef(0);
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
   const aiSourceDraftDirtyRef = useRef(false);
@@ -855,22 +1449,39 @@ export function Settings({
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
+    team: false,
+    platforms: false,
+    skills: false,
     tools: false,
     profile: false,
+    memory: false,
     remote: false,
+    mcp: false,
+    experimental: false,
   });
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
+    team: false,
+    platforms: false,
+    skills: false,
     tools: false,
     profile: false,
+    memory: false,
     remote: false,
+    mcp: false,
+    experimental: false,
   });
 
   const defaultAiSource = useMemo(() => {
     if (!aiSources.length) return null;
     return aiSources.find((source) => source.id === defaultAiSourceId) || aiSources[0];
   }, [aiSources, defaultAiSourceId]);
+
+  const ecommercePlatformsSettings = useMemo(
+    () => normalizeEcommercePlatformsSettings(formData.ecommerce_platforms_json),
+    [formData.ecommerce_platforms_json],
+  );
 
   const activeAiSource = useMemo(() => {
     if (!aiSources.length) return null;
@@ -1112,7 +1723,7 @@ export function Settings({
     const codingPlan = AI_SOURCE_PRESETS.filter((preset) => preset.group === 'coding-plan');
     const general = AI_SOURCE_PRESETS.filter((preset) => preset.group !== 'coding-plan');
     return [
-      { id: 'general', label: '通用 AI 源', items: general },
+      { id: 'general', label: '通用供应商', items: general },
       { id: 'coding-plan', label: 'Coding Plan', items: codingPlan },
     ].filter((group) => group.items.length > 0);
   }, []);
@@ -1198,6 +1809,19 @@ export function Settings({
     }
     setOfficialAiPanelEnabled(true);
   }, []);
+
+  useEffect(() => {
+    if (!navigationTarget) return;
+    if (navigationTarget.tab) {
+      setActiveTab(navigationTarget.tab);
+    }
+    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'custom') {
+      setAiModelSubTab('custom');
+    }
+    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'login') {
+      setAiModelSubTab('login');
+    }
+  }, [navigationTarget]);
 
   useEffect(() => {
     if (!hasOfficialAiPanel || !officialAiPanelEnabled) return;
@@ -1380,11 +2004,11 @@ export function Settings({
         assistantDaemonLogFlushTimerRef.current = window.setTimeout(flushAssistantDaemonLogs, 300);
       }
     };
-    window.ipcRenderer.on('assistant:daemon-status', handleDaemonStatus);
-    window.ipcRenderer.on('assistant:daemon-log', handleDaemonLog);
+    window.ipcRenderer.assistantDaemon.onStatus(handleDaemonStatus as (...args: unknown[]) => void);
+    window.ipcRenderer.assistantDaemon.onLog(handleDaemonLog as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('assistant:daemon-status', handleDaemonStatus);
-      window.ipcRenderer.off('assistant:daemon-log', handleDaemonLog);
+      window.ipcRenderer.assistantDaemon.offStatus(handleDaemonStatus as (...args: unknown[]) => void);
+      window.ipcRenderer.assistantDaemon.offLog(handleDaemonLog as (...args: unknown[]) => void);
       if (assistantDaemonLogFlushTimerRef.current != null) {
         window.clearTimeout(assistantDaemonLogFlushTimerRef.current);
         assistantDaemonLogFlushTimerRef.current = null;
@@ -1411,9 +2035,9 @@ export function Settings({
       setSelectedBackgroundTaskId((prev) => prev || task.id);
       setSelectedBackgroundTaskDetail((prev) => (prev?.id === task.id ? { ...prev, ...task } : prev));
     };
-    window.ipcRenderer.on('background:task-updated', onBackgroundTaskUpdated);
+    window.ipcRenderer.backgroundTasks.onUpdated(onBackgroundTaskUpdated as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('background:task-updated', onBackgroundTaskUpdated);
+      window.ipcRenderer.backgroundTasks.offUpdated(onBackgroundTaskUpdated as (...args: unknown[]) => void);
     };
   }, [activeTab, formData.developer_mode_enabled, isActive]);
 
@@ -1465,7 +2089,7 @@ export function Settings({
   }, [cliRuntimeStatusMessage]);
 
   useEffect(() => {
-    if (activeTab !== 'tools') return;
+    if (activeTab !== 'tools' && activeTab !== 'mcp') return;
     void loadMcpRuntimeData();
     for (const server of mcpServers) {
       void handleRefreshMcpOAuth(server);
@@ -1575,7 +2199,7 @@ export function Settings({
         console.error('Failed to persist AI source snapshot:', error);
         setStatus('error');
         setTestStatus('error');
-        setTestMsg(error instanceof Error ? error.message : 'AI 源配置自动保存失败');
+        setTestMsg(error instanceof Error ? error.message : '供应商配置自动保存失败');
       });
     }, 350);
 
@@ -1600,7 +2224,7 @@ export function Settings({
     const preset = findAiPresetById(createAiSourceDraft.presetId) || findAiPresetById(DEFAULT_AI_PRESET_ID);
     const nextSource: AiSourceConfig = {
       id: generateAiSourceId(),
-      name: String(createAiSourceDraft.name || '').trim() || preset?.label || '未命名模型源',
+      name: String(createAiSourceDraft.name || '').trim() || preset?.label || '未命名供应商',
       presetId: createAiSourceDraft.presetId || preset?.id || 'custom',
       baseURL: String(createAiSourceDraft.baseURL || '').trim(),
       apiKey: String(createAiSourceDraft.apiKey || '').trim(),
@@ -2046,6 +2670,14 @@ export function Settings({
   };
 
   const handleDeleteMcpServer = async (serverId: string) => {
+    const server = mcpServers.find((item) => item.id === serverId);
+    if (server && !(await appConfirm(`确定删除 MCP Server "${server.name || server.id}" 吗？`, {
+      title: '删除 MCP Server',
+      confirmLabel: '删除',
+      tone: 'danger',
+    }))) {
+      return;
+    }
     const next = mcpServers.filter((item) => item.id !== serverId);
     await persistMcpServers(next, '已删除 MCP Server');
   };
@@ -2053,6 +2685,18 @@ export function Settings({
   const handleUpdateMcpServer = (serverId: string, updater: (server: McpServerConfig) => McpServerConfig) => {
     setMcpServers((prev) => prev.map((server) => (server.id === serverId ? updater(server) : server)));
   };
+
+  const handleToggleMcpServer = useCallback(async (server: McpServerConfig) => {
+    const nextEnabled = !(server.enabled !== false);
+    const next = mcpServers.map((item) => (
+      item.id === server.id ? { ...item, enabled: nextEnabled } : item
+    ));
+    setMcpServers(next);
+    const saved = await persistMcpServers(next, `${server.name || server.id} 已${nextEnabled ? '打开' : '关闭'}`);
+    if (!saved) {
+      setMcpServers(mcpServers);
+    }
+  }, [mcpServers, persistMcpServers]);
 
   const handleSaveMcpServers = async () => {
     await persistMcpServers(mcpServers, 'MCP 配置已保存');
@@ -2289,6 +2933,15 @@ export function Settings({
     }
   }, [formData.debug_log_enabled, formData.diagnostics_include_advanced_context, loadLoggingStatus, loadPendingDiagnosticReports]);
 
+  const handleOpenFeedbackReport = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+      detail: {
+        sourcePage: 'settings',
+        operation: 'manual_feedback',
+      },
+    }));
+  }, []);
+
   const handleUploadPendingReport = useCallback(async (reportId: string) => {
     setDiagnosticsActionBusy(reportId);
     try {
@@ -2465,11 +3118,11 @@ export function Settings({
     };
     const onRuntimeEvent = () => scheduleRefresh();
     const onWanderProgress = () => scheduleRefresh();
-    window.ipcRenderer.on('runtime:event', onRuntimeEvent as (...args: unknown[]) => void);
-    window.ipcRenderer.on('wander:progress', onWanderProgress as (...args: unknown[]) => void);
+    window.ipcRenderer.runtime.onEvent(onRuntimeEvent as (...args: unknown[]) => void);
+    window.ipcRenderer.wander.onProgress(onWanderProgress as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('runtime:event', onRuntimeEvent as (...args: unknown[]) => void);
-      window.ipcRenderer.off('wander:progress', onWanderProgress as (...args: unknown[]) => void);
+      window.ipcRenderer.runtime.offEvent(onRuntimeEvent as (...args: unknown[]) => void);
+      window.ipcRenderer.wander.offProgress(onWanderProgress as (...args: unknown[]) => void);
       if (runtimeObservabilityRefreshTimerRef.current != null) {
         window.clearTimeout(runtimeObservabilityRefreshTimerRef.current);
         runtimeObservabilityRefreshTimerRef.current = null;
@@ -2609,9 +3262,9 @@ export function Settings({
       }));
     };
 
-    window.ipcRenderer.on('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+    window.ipcRenderer.runtime.onEvent(onRuntimePerfEvent as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+      window.ipcRenderer.runtime.offEvent(onRuntimePerfEvent as (...args: unknown[]) => void);
     };
   }, [
     activeTab,
@@ -3134,7 +3787,7 @@ export function Settings({
           const inferredPresetId = inferPresetIdByEndpoint(settings.api_endpoint || '');
           sourceList = [{
             id: generateAiSourceId(),
-            name: findAiPresetById(inferredPresetId)?.label || '默认 AI 源',
+            name: findAiPresetById(inferredPresetId)?.label || '导入供应商',
             presetId: inferredPresetId,
             baseURL: settings.api_endpoint || '',
             apiKey: settings.api_key || '',
@@ -3265,6 +3918,9 @@ export function Settings({
           image_aspect_ratio: settings.image_aspect_ratio || '3:4',
           image_size: '',
           image_quality: settings.image_quality || 'auto',
+          ecommerce_platforms_json: serializeEcommercePlatformsSettings(
+            normalizeEcommercePlatformsSettings(settings.ecommerce_platforms_json),
+          ),
           model_name_wander: settings.model_name_wander || '',
           model_name_chatroom: settings.model_name_chatroom || '',
           model_name_knowledge: settings.model_name_knowledge || '',
@@ -3725,9 +4381,9 @@ export function Settings({
         scheduleRefresh();
       }
     };
-    window.ipcRenderer.on('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
+    window.ipcRenderer.runtime.onEvent(handleRuntimeEvent as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
+      window.ipcRenderer.runtime.offEvent(handleRuntimeEvent as (...args: unknown[]) => void);
       if (refreshTimer != null) {
         window.clearTimeout(refreshTimer);
       }
@@ -3971,16 +4627,21 @@ export function Settings({
           loadLoggingStatus(),
           loadPendingDiagnosticReports(),
         ]);
+      } else if (tab === 'skills') {
+        await loadSettingsSkillsSummary();
+      } else if (tab === 'team') {
+        await loadTeamAdvisors();
       } else if (tab === 'profile') {
         await loadRedclawProfileBundle({
           preserveDraft: true,
         });
+      } else if (tab === 'memory') {
+        await loadMemoryDashboard();
       } else if (tab === 'tools') {
         await Promise.all([
           checkTools(),
           loadCliRuntimeDashboard({ silent: true }),
           loadBrowserPluginStatus(),
-          loadMcpRuntimeData(),
         ]);
         if (formData.developer_mode_enabled) {
           await Promise.all([
@@ -3988,6 +4649,8 @@ export function Settings({
             loadRuntimeRoles(),
           ]);
         }
+      } else if (tab === 'mcp') {
+        await loadMcpRuntimeData();
       } else if (tab === 'ai' && aiModelSubTab === 'login' && officialAiPanelEnabled && !OfficialAiPanelComponent) {
         const module = await loadOfficialAiPanelModule();
         const nextComponent = module?.default || null;
@@ -4006,6 +4669,8 @@ export function Settings({
     OfficialAiPanelComponent,
     aiModelSubTab,
     checkTools,
+    loadSettingsSkillsSummary,
+    loadTeamAdvisors,
     formData.developer_mode_enabled,
     isActive,
     loadRedclawProfileBundle,
@@ -4015,6 +4680,7 @@ export function Settings({
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
     loadLoggingStatus,
+    loadMemoryDashboard,
     loadMcpRuntimeData,
     loadPendingDiagnosticReports,
     loadRecentDebugLogs,
@@ -4030,10 +4696,7 @@ export function Settings({
     const handleProgress = (_: unknown, progress: number) => {
       setInstallProgress(progress);
     };
-    window.ipcRenderer.on('youtube:install-progress', handleProgress);
-    return () => {
-      window.ipcRenderer.off('youtube:install-progress', handleProgress);
-    };
+    return subscribeYoutubeInstallProgress(handleProgress);
   }, []);
 
   useEffect(() => {
@@ -4059,7 +4722,7 @@ export function Settings({
     const handleSettingsUpdated = () => {
       // Preserve local edits on form-driven tabs; otherwise external auth sync can
       // reload persisted settings and wipe unsaved AI source/model changes.
-      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai' || activeTab === 'experimental';
+      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai' || activeTab === 'platforms' || activeTab === 'experimental';
       if (!preserveLocalFormState) {
         void ensureBaseSettingsLoaded(true);
       }
@@ -4070,15 +4733,12 @@ export function Settings({
       if (activeTab === 'profile' && !redclawProfileDirtyRef.current) {
         void ensureTabResourcesLoaded('profile', true);
       }
-      if (activeTab === 'general' || activeTab === 'tools') {
+      if (activeTab === 'general' || activeTab === 'tools' || activeTab === 'mcp') {
         tabWarmRef.current[activeTab] = false;
         void ensureTabResourcesLoaded(activeTab, true);
       }
     };
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
-    return () => {
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
-    };
+    return subscribeSettingsUpdated(handleSettingsUpdated);
   }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive, scheduleRemoteTabWarmup]);
 
   useEffect(() => {
@@ -4091,9 +4751,9 @@ export function Settings({
         void loadRedclawProfileBundle({ expectedSpaceId: nextSpaceId });
       }
     };
-    window.ipcRenderer.on('space:changed', handleSpaceChanged);
+    window.ipcRenderer.spaces.onChanged(handleSpaceChanged as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('space:changed', handleSpaceChanged);
+      window.ipcRenderer.spaces.offChanged(handleSpaceChanged as (...args: unknown[]) => void);
     };
   }, [activeTab, isActive, loadRedclawProfileBundle, resetRedclawProfileState, setCurrentSpaceState]);
 
@@ -4109,9 +4769,17 @@ export function Settings({
         loadPendingDiagnosticReports(),
       ]);
     };
-    window.ipcRenderer.on('diagnostics:report-pending', handleDiagnosticsReportPending);
+    const handleFeedbackReportSubmitted = () => {
+      void Promise.all([
+        loadLoggingStatus(),
+        loadPendingDiagnosticReports(),
+      ]);
+    };
+    window.ipcRenderer.logs.onReportPending(handleDiagnosticsReportPending);
+    window.addEventListener('redbox:feedback-report-submitted', handleFeedbackReportSubmitted);
     return () => {
-      window.ipcRenderer.off('diagnostics:report-pending', handleDiagnosticsReportPending);
+      window.ipcRenderer.logs.offReportPending(handleDiagnosticsReportPending);
+      window.removeEventListener('redbox:feedback-report-submitted', handleFeedbackReportSubmitted);
     };
   }, [loadLoggingStatus, loadPendingDiagnosticReports]);
 
@@ -4132,6 +4800,18 @@ export function Settings({
     }
     if (activeTab === 'profile') {
       void ensureTabResourcesLoaded('profile');
+    }
+    if (activeTab === 'memory') {
+      void ensureTabResourcesLoaded('memory');
+    }
+    if (activeTab === 'skills') {
+      void ensureTabResourcesLoaded('skills');
+    }
+    if (activeTab === 'team') {
+      void ensureTabResourcesLoaded('team');
+    }
+    if (activeTab === 'mcp') {
+      void ensureTabResourcesLoaded('mcp');
     }
     if (activeTab === 'tools') {
       void ensureTabResourcesLoaded('tools');
@@ -4206,12 +4886,12 @@ export function Settings({
         void loadFileIndexDashboard({ force: true, background: true });
       }, 750);
     };
-    window.ipcRenderer.on('knowledge:file-index-updated', scheduleFileIndexRefresh);
-    window.ipcRenderer.on('knowledge:catalog-updated', scheduleFileIndexRefresh);
+    window.ipcRenderer.knowledge.onFileIndexUpdated(scheduleFileIndexRefresh);
+    window.ipcRenderer.knowledge.onCatalogUpdated(scheduleFileIndexRefresh);
     void loadFileIndexDashboard({ force: false, background: true });
     return () => {
-      window.ipcRenderer.off('knowledge:file-index-updated', scheduleFileIndexRefresh);
-      window.ipcRenderer.off('knowledge:catalog-updated', scheduleFileIndexRefresh);
+      window.ipcRenderer.knowledge.offFileIndexUpdated(scheduleFileIndexRefresh);
+      window.ipcRenderer.knowledge.offCatalogUpdated(scheduleFileIndexRefresh);
     };
   }, [activeTab, isActive, loadFileIndexDashboard]);
 
@@ -4380,7 +5060,7 @@ export function Settings({
       if (defaultSource?.baseURL && (defaultSource?.apiKey || isLocalAiSource(defaultSource))) {
         const normalizedModel = (defaultSource.model || '').trim();
         if (!normalizedModel) {
-          throw new Error('请为默认 AI 源填写模型名称（可手动填写，或从模型列表选择）');
+          throw new Error('请为默认供应商填写模型名称（可手动填写，或从模型列表选择）');
         }
       }
       const resolvedTranscriptionSource = getAiSourceById(transcriptionSourceId) || defaultSource || null;
@@ -4443,6 +5123,7 @@ export function Settings({
         ai_sources_json: JSON.stringify(sanitizedSources),
         default_ai_source_id: resolvedDefaultSourceId || defaultSource?.id || '',
         mcp_servers_json: JSON.stringify(mcpServers),
+        ecommerce_platforms_json: serializeEcommercePlatformsSettings(ecommercePlatformsSettings),
         redclaw_compact_target_tokens: compactTargetTokens,
         debug_log_enabled: Boolean(formData.debug_log_enabled),
         diagnostics_upload_consent: formData.diagnostics_upload_consent,
@@ -4544,18 +5225,88 @@ export function Settings({
     }
   }, []);
 
-  const tabs = [
+  const tabs: Array<{ id: SettingsTab; label: string; icon: ComponentType<{ className?: string }> }> = [
     { id: 'ai', label: 'AI 模型', icon: Cpu },
     { id: 'general', label: '常规设置', icon: LayoutGrid },
-    { id: 'profile', label: '用户档案', icon: FileText },
+    { id: 'team', label: '团队', icon: Users },
+    { id: 'platforms', label: '电商平台', icon: Store },
+    { id: 'skills', label: '技能', icon: Lightbulb },
+    { id: 'mcp', label: 'MCP', icon: Server },
+    { id: 'remote', label: '远程 API', icon: Database },
+    { id: 'profile', label: '创作档案', icon: FileText },
+    { id: 'memory', label: '记忆', icon: Brain },
     { id: 'tools', label: '工具管理', icon: Wrench },
     { id: 'experimental', label: '实验功能', icon: FlaskConical },
   ] as const;
+
+  const renderSettingsSkillRow = (skill: SkillDefinition) => {
+    const builtin = skill.isBuiltin || skill.sourceScope === 'builtin';
+    const disabled = Boolean(skill.disabled);
+    const busy = settingsSkillBusyName === skill.name;
+    const sourceLabel = formatSettingsSkillSourceScope(skill.sourceScope);
+    return (
+      <div key={`${skill.location || skill.name}:${skill.name}`} className="flex items-center gap-3 px-4 py-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
+          <Lightbulb className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-medium text-text-primary">{skill.name}</span>
+            {sourceLabel && (
+              <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">
+                {sourceLabel}
+              </span>
+            )}
+            {disabled && (
+              <span className="shrink-0 rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-600">
+                已禁用
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 truncate text-xs text-text-tertiary">
+            {skill.description || skill.location || '无描述'}
+          </div>
+        </div>
+        {builtin ? (
+          <span className="shrink-0 text-xs text-text-tertiary">始终启用</span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void handleToggleSettingsSkill(skill)}
+            disabled={busy}
+            className={clsx(
+              'relative h-7 w-[3.25rem] shrink-0 rounded-full transition-colors duration-200 disabled:opacity-50',
+              !disabled ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
+            )}
+            title={disabled ? '已禁用' : '已启用'}
+            aria-label={disabled ? `启用 ${skill.name}` : `禁用 ${skill.name}`}
+          >
+            <span
+              className={clsx(
+                'absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.22)] transition-transform duration-200',
+                !disabled ? 'translate-x-6' : 'translate-x-0'
+              )}
+            />
+          </button>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="flex h-full bg-background text-text-primary">
       {/* Sidebar */}
       <div className="w-48 border-r border-border pt-6 pb-4 flex flex-col gap-1 px-3 bg-surface-secondary/20">
+        {onReturn && (
+          <button
+            type="button"
+            onClick={onReturn}
+            className="mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-surface-secondary/50 hover:text-text-primary"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            返回应用
+          </button>
+        )}
         <h1 className="px-3 mb-4 text-xs font-bold text-text-tertiary uppercase tracking-wider">设置</h1>
         {tabs.map(tab => (
           <button
@@ -4603,6 +5354,7 @@ export function Settings({
                 pendingReports={pendingDiagnosticReports}
                 diagnosticsActionBusy={diagnosticsActionBusy}
                 handleExportDiagnosticBundle={handleExportDiagnosticBundle}
+                handleOpenFeedbackReport={handleOpenFeedbackReport}
                 handleUploadPendingReport={handleUploadPendingReport}
                 handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
@@ -4647,7 +5399,7 @@ export function Settings({
                               : 'text-text-secondary hover:text-text-primary'
                           )}
                         >
-                          登录
+                          官方账号
                         </button>
                       )}
                     </div>
@@ -4659,9 +5411,9 @@ export function Settings({
                   <div className="space-y-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <h3 className="text-sm font-medium text-text-primary">聊天 AI 源</h3>
+                        <h3 className="text-sm font-medium text-text-primary">聊天供应商</h3>
                         <p className="text-[11px] text-text-tertiary mt-1">
-                          支持多模型源、多模型，并可指定默认聊天源与默认模型。
+                          支持多供应商、多模型，并可指定默认聊天供应商与默认模型。
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -4682,7 +5434,7 @@ export function Settings({
                           className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
                         >
                           <Plus className="w-3 h-3" />
-                          添加模型源
+                          添加供应商
                         </button>
                       </div>
                     </div>
@@ -4713,7 +5465,7 @@ export function Settings({
                               setActiveAiSourceId(defaultAiSource.id);
                             }}
                             className="w-full"
-                            placeholder="请先为默认源添加模型"
+                            placeholder="请先为默认供应商添加模型"
                             options={defaultSourceModels.map((model) => ({
                               id: model.id,
                               label: model.id,
@@ -4729,7 +5481,7 @@ export function Settings({
                         defaultOfficialSourceUnavailable ? 'text-amber-600' : 'text-text-tertiary'
                       )}>
                         {defaultOfficialSourceUnavailable
-                          ? '当前官方源未登录，请重新登录或切换到其他默认聊天源。'
+                          ? '当前官方供应商未登录，请重新登录或切换到其他默认聊天供应商。'
                           : `当前生效：${defaultAiSource?.name || '未设置'} / ${defaultAiSource?.model || '未设置'}`}
                       </p>
                     </div>
@@ -4750,7 +5502,7 @@ export function Settings({
                       {showScopedModelOverrides && (
                         <div className="px-3 pb-3 space-y-3 border-t border-border/70">
                           <p className="text-[11px] text-text-tertiary pt-3">
-                            留空表示跟随“默认聊天模型”。此配置面向高级用户，分别作用于漫步、群聊、知识库、RedClaw。
+                            留空表示跟随“默认聊天模型”。此配置面向高级用户，分别作用于漫步、团队、知识库、RedClaw。
                           </p>
                           <datalist id="scoped-model-candidates">
                             {allConfiguredModels.map((modelId) => (
@@ -4770,7 +5522,7 @@ export function Settings({
                               />
                             </div>
                             <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">群聊默认模型</label>
+                              <label className="text-[11px] text-text-secondary">团队默认模型</label>
                               <input
                                 type="text"
                                 list="scoped-model-candidates"
@@ -4839,20 +5591,20 @@ export function Settings({
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2 min-w-0">
                                   <AiSourceLogo source={source} />
-                                  <span className="text-sm font-medium text-text-primary truncate">{source.name || '未命名模型源'}</span>
+                                  <span className="text-sm font-medium text-text-primary truncate">{source.name || '未命名供应商'}</span>
                                   {isDefaultSource && !isOfficialPlaceholder && !isOfficialSourceUnavailable && (
                                     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-600">
                                       <Star className="w-2.5 h-2.5" />
-                                      默认源
+                                      默认
                                     </span>
                                   )}
                                 </div>
                                 <p className="text-[11px] text-text-tertiary mt-0.5 truncate">
                                   {isOfficialSource
                                     ? isOfficialSourcePending
-                                      ? '官方托管模型源 · 正在检查登录状态'
+                                      ? '官方托管供应商 · 正在检查登录状态'
                                       : isOfficialSourceUnavailable
-                                      ? '官方托管模型源 · 当前未登录，登录后自动同步官方模型与凭据'
+                                      ? '官方托管供应商 · 当前未登录，登录后自动同步官方模型与凭据'
                                       : `已托管登录态 · 默认模型：${source.model || '(未设置)'} · 已添加 ${sourceModelsForDisplay.length} 个模型`
                                     : `${preset?.label || 'Custom'} · 默认模型：${source.model || '(未设置)'} · 已添加 ${sourceModels.length} 个模型`}
                                 </p>
@@ -4889,7 +5641,7 @@ export function Settings({
                                       type="button"
                                       onClick={() => handleDeleteAiSource(source.id)}
                                       className="p-1.5 text-text-tertiary hover:text-red-500 hover:bg-red-500/10 rounded transition-colors"
-                                      title="删除模型源"
+                                      title="删除供应商"
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
                                     </button>
@@ -4920,7 +5672,7 @@ export function Settings({
                                     <p>
                                       {isOfficialSourcePending
                                         ? '正在和宿主同步官方账号状态，完成后会自动刷新这里的模型与凭据。'
-                                        : '官方源仍会固定显示在这里，但当前不会再使用旧模型和旧凭据。重新登录后会自动恢复同步。'}
+                                        : '官方供应商仍会固定显示在这里，但当前不会再使用旧模型和旧凭据。重新登录后会自动恢复同步。'}
                                     </p>
                                     {!isOfficialSourcePending && (
                                       <button
@@ -5150,12 +5902,12 @@ export function Settings({
                   <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="text-sm font-medium text-text-primary">转录模型设置</h3>
-                      <span className="text-[11px] text-text-tertiary">选择已保存的 AI 源与模型</span>
+                      <span className="text-[11px] text-text-tertiary">选择已保存的供应商与模型</span>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="group">
                         <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                          转录 AI 源
+                          转录供应商
                         </label>
                         <AiSourceSelect
                           value={transcriptionSourceId}
@@ -5171,15 +5923,12 @@ export function Settings({
                         <AiModelSelect
                           value={formData.transcription_model}
                           onChange={(modelId) => setFormData((d) => ({ ...d, transcription_model: modelId }))}
-                          options={transcriptionSourceModels.map((model) => {
-                            const isRecommended = String(model.id).trim().toLowerCase() === 'step-asr';
-                            return {
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities, { recommended: isRecommended }),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            };
-                          })}
+                          options={transcriptionSourceModels.map((model) => ({
+                            id: model.id,
+                            label: model.id,
+                            badges: buildModelCapabilityBadges(model.capabilities),
+                            inputIcons: buildModelInputIcons(model.inputCapabilities),
+                          }))}
                           disabled={!transcriptionSourceModels.length}
                           placeholder="请先在该源中添加模型"
                           className="w-full"
@@ -5187,7 +5936,7 @@ export function Settings({
                       </div>
                     </div>
                     <p className="text-[11px] text-text-tertiary">
-                      转录会自动复用所选 AI 源的 Endpoint 与 API Key。
+                      转录会自动复用所选供应商的 Endpoint 与 API Key。
                     </p>
                   </div>
 
@@ -5198,7 +5947,7 @@ export function Settings({
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <div className="group">
                           <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            Embedding AI 源
+                            Embedding 供应商
                           </label>
                           <AiSourceSelect
                             value={embeddingSourceId}
@@ -5227,7 +5976,7 @@ export function Settings({
                         </div>
                       </div>
                       <p className="text-[11px] text-text-tertiary">
-                        Embedding 会自动复用所选 AI 源的 Endpoint 与 API Key。
+                        Embedding 会自动复用所选供应商的 Endpoint 与 API Key。
                       </p>
                     </div>
                   </div>
@@ -5240,7 +5989,7 @@ export function Settings({
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="group">
                             <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                              生图 AI 源
+                              生图供应商
                             </label>
                             <AiSourceSelect
                               value={imageSourceId}
@@ -5271,7 +6020,7 @@ export function Settings({
                           </div>
                         </div>
                         <p className="text-[11px] text-text-tertiary">
-                          生图会自动复用所选 AI 源的 Endpoint 与 API Key；模型的增删请到上方对应源卡片中管理。
+                          生图会自动复用所选供应商的 Endpoint 与 API Key；模型的增删请到上方对应供应商卡片中管理。
                         </p>
                       </div>
 
@@ -5283,7 +6032,7 @@ export function Settings({
 
                     <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
                       <div className="rounded-lg border border-border bg-surface-primary/70 p-3 text-xs text-text-secondary">
-                        由于各家视频api差异巨大，AI智能选择效果不佳，暂时仅支持RedBox官方源，其他厂商模型适配陆续开发中。
+                        由于各家视频 API 差异巨大，AI 智能选择效果不佳，暂时仅支持 RedBox 官方供应商，其他厂商模型适配陆续开发中。
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <div className="rounded-lg border border-border bg-surface-primary/70 p-3">
@@ -5401,7 +6150,7 @@ export function Settings({
                         <OfficialAiPanelComponent onReloadSettings={reloadCustomAiSettings} />
                       ) : (
                         <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">
-                          正在加载登录面板...
+                          正在加载官方账号面板...
                         </div>
                       )}
                     </div>
@@ -5412,6 +6161,31 @@ export function Settings({
               </div>
             )}
 
+            {/* Team Tab */}
+            {activeTab === 'team' && (
+              <TeamSettingsSection
+                advisors={teamAdvisors}
+                loading={isTeamAdvisorsLoading}
+                busyAdvisorId={teamAdvisorBusyId}
+                draggingAdvisorId={draggingTeamAdvisorId}
+                onCreateAdvisor={openTeamCreatePage}
+                onToggleVisible={handleToggleTeamAdvisorVisible}
+                onOpenManager={openTeamMembersPage}
+                onRefresh={() => void loadTeamAdvisors()}
+                onDragStart={handleTeamAdvisorDragStart}
+                onDragOver={handleTeamAdvisorDragOver}
+                onDragEnd={handleTeamAdvisorDragEnd}
+              />
+            )}
+
+            {/* Ecommerce Platforms Tab */}
+            {activeTab === 'platforms' && (
+              <EcommercePlatformsSettingsSection
+                settings={ecommercePlatformsSettings}
+                onTogglePlatform={handleToggleEcommercePlatform}
+              />
+            )}
+
             {/* Profile Tab */}
             {activeTab === 'profile' && (
               <div className="space-y-6">
@@ -5419,7 +6193,7 @@ export function Settings({
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-3">
-                        <h2 className="text-lg font-medium text-text-primary">用户创作档案</h2>
+                        <h2 className="text-lg font-medium text-text-primary">创作档案</h2>
                         <button
                           type="button"
                           onClick={() => onOpenRedClawOnboarding?.()}
@@ -5430,10 +6204,10 @@ export function Settings({
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-xs text-text-tertiary">
                         <span
-                          className="rounded-full bg-surface-secondary px-2 py-1 font-mono"
-                          title={redclawProfileRoot || undefined}
+                          className="rounded-full bg-surface-secondary px-2 py-1"
+                          title={redclawProfileRoot || currentSpaceId || undefined}
                         >
-                          空间：{currentSpaceId}
+                          空间：{currentSpaceName}
                         </span>
                         <span className={clsx(
                           'rounded-full px-2 py-1',
@@ -5519,9 +6293,186 @@ export function Settings({
               </div>
             )}
 
-            {/* Tools Tab */}
-            {activeTab === 'tools' && (
+            {/* Memory Tab */}
+            {activeTab === 'memory' && (
+              <MemorySettingsSection
+                newMemoryType={newMemoryType}
+                setNewMemoryType={setNewMemoryType}
+                newMemoryContent={newMemoryContent}
+                setNewMemoryContent={setNewMemoryContent}
+                handleAddMemory={handleAddMemory}
+                isMemoryLoading={isMemoryLoading}
+                memories={memories}
+                archivedMemories={archivedMemories}
+                memoryHistory={memoryHistory}
+                maintenanceStatus={maintenanceStatus}
+                onRunMaintenance={handleRunMemoryMaintenance}
+                memorySearchQuery={memorySearchQuery}
+                setMemorySearchQuery={setMemorySearchQuery}
+                includeArchivedInSearch={includeArchivedInSearch}
+                setIncludeArchivedInSearch={setIncludeArchivedInSearch}
+                memorySearchResults={memorySearchResults}
+                isMemorySearching={isMemorySearching}
+                onSearchMemories={handleSearchMemories}
+                handleDeleteMemory={handleDeleteMemory}
+              />
+            )}
+
+            {/* Remote API Tab */}
+            {activeTab === 'remote' && (
+              <RemoteConnectionSettingsSection
+                assistantDaemonStatus={assistantDaemonStatus}
+                assistantDaemonDraft={assistantDaemonDraft}
+                setAssistantDaemonDraft={setAssistantDaemonDraft}
+                assistantDaemonLogs={assistantDaemonLogs}
+                assistantDaemonBusy={assistantDaemonBusy}
+                assistantDaemonWeixinLogin={assistantDaemonWeixinLogin}
+                assistantDaemonWeixinLoginBusy={assistantDaemonWeixinLoginBusy}
+                handleReloadAssistantDaemonStatus={loadAssistantDaemonStatus}
+                handleSaveAssistantDaemonConfig={handleSaveAssistantDaemonConfig}
+                handleStartAssistantDaemon={handleStartAssistantDaemon}
+                handleStopAssistantDaemon={handleStopAssistantDaemon}
+                handleStartAssistantDaemonWeixinLogin={handleStartAssistantDaemonWeixinLogin}
+                handleCheckAssistantDaemonWeixinLogin={handleCheckAssistantDaemonWeixinLogin}
+                handleClearAssistantDaemonWeixinLogin={handleClearAssistantDaemonWeixinLogin}
+              />
+            )}
+
+            {/* Skills Tab */}
+            {activeTab === 'skills' && (
+              <div className="space-y-6">
+                <section className="space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="text-lg font-medium text-text-primary">技能</h2>
+                      <p className="mt-1 text-xs text-text-tertiary">管理当前可用技能。内置技能由系统依赖，始终保持打开。</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills', skillsAction: 'open-market' })}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        技能市场
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void loadSettingsSkillsSummary()}
+                        disabled={isSettingsSkillsLoading}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                      >
+                        <RefreshCw className={clsx('h-3.5 w-3.5', isSettingsSkillsLoading && 'animate-spin')} />
+                        刷新
+                      </button>
+                    </div>
+                  </div>
+
+                  {settingsSkillsMessage && (
+                    <div className="rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs text-text-secondary">
+                      {settingsSkillsMessage}
+                    </div>
+                  )}
+                </section>
+
+                <section className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+                  {isSettingsSkillsLoading && settingsSkills.length === 0 ? (
+                    <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-tertiary">
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      正在读取技能
+                    </div>
+                  ) : settingsSkills.length === 0 ? (
+                    <div className="px-4 py-5 text-sm text-text-tertiary">暂无技能</div>
+                  ) : (
+                    <div className="divide-y divide-border">
+                      {builtinSettingsSkills.length > 0 && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => setAreBuiltinSettingsSkillsExpanded((value) => !value)}
+                            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-secondary/40"
+                            aria-expanded={areBuiltinSettingsSkillsExpanded}
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              <ChevronDown className={clsx(
+                                'h-4 w-4 shrink-0 text-text-tertiary transition-transform',
+                                !areBuiltinSettingsSkillsExpanded && '-rotate-90'
+                              )} />
+                              <span className="text-sm font-medium text-text-primary">内置技能</span>
+                              <span className="rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-medium text-accent-primary">
+                                {builtinSettingsSkills.length}
+                              </span>
+                            </div>
+                            <span className="shrink-0 text-xs text-text-tertiary">
+                              {areBuiltinSettingsSkillsExpanded ? '收起' : '展开'}
+                            </span>
+                          </button>
+                          {areBuiltinSettingsSkillsExpanded && (
+                            <div className="divide-y divide-border border-t border-border bg-surface-secondary/10">
+                              {builtinSettingsSkills.map(renderSettingsSkillRow)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {editableSettingsSkills.length > 0 ? (
+                        editableSettingsSkills.map(renderSettingsSkillRow)
+                      ) : (
+                        <div className="flex items-center justify-between gap-3 px-4 py-5 text-sm text-text-tertiary">
+                          <span>暂无可编辑技能</span>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills', skillsAction: 'open-market' })}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              技能市场
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills' })}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                            >
+                              管理
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
+
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-secondary/20 px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
+                    <span>总技能 {settingsSkillsSummary.total}</span>
+                    <span>已启用 {settingsSkillsSummary.enabled}</span>
+                    <span>已禁用 {settingsSkillsSummary.disabled}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills', skillsAction: 'open-market' })}
+                      className="inline-flex items-center gap-2 rounded-md bg-text-primary px-3 py-2 text-xs font-medium text-background transition-opacity hover:opacity-90"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      技能市场
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills' })}
+                      className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                    >
+                      管理
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tools / MCP Tabs */}
+            {(activeTab === 'tools' || activeTab === 'mcp') && (
               <ToolsSettingsSection
+                visibleSection={activeTab === 'mcp' ? 'mcp' : 'tools'}
                 cliRuntimeTools={cliRuntimeTools}
                 cliRuntimeEnvironments={cliRuntimeEnvironments}
                 cliRuntimeInstallDraft={cliRuntimeInstallDraft}
@@ -5554,6 +6505,7 @@ export function Settings({
                 mcpRuntimeItems={mcpRuntimeItems}
                 mcpLiveSessions={mcpLiveSessions}
                 handleUpdateMcpServer={handleUpdateMcpServer}
+                handleToggleMcpServer={handleToggleMcpServer}
                 handleDeleteMcpServer={handleDeleteMcpServer}
                 handleDisconnectMcpServer={handleDisconnectMcpServer}
                 handleDisconnectAllMcpSessions={handleDisconnectAllMcpSessions}
@@ -5661,9 +6613,9 @@ export function Settings({
               >
                 <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <h3 className="text-base font-semibold text-text-primary truncate">新建模型源</h3>
+                    <h3 className="text-base font-semibold text-text-primary truncate">新建供应商</h3>
                     <p className="text-xs text-text-tertiary mt-1 truncate">
-                      先创建模型源，再在该源下添加常用模型
+                      先创建供应商，再在该供应商下添加常用模型
                     </p>
                   </div>
                   <button
@@ -5771,7 +6723,7 @@ export function Settings({
                     onClick={handleCreateAiSource}
                     className="px-3 py-1.5 text-xs bg-text-primary text-background rounded hover:opacity-90 transition-opacity"
                   >
-                    创建模型源
+                    创建供应商
                   </button>
                 </div>
               </div>
@@ -5791,7 +6743,7 @@ export function Settings({
                   <div className="min-w-0">
                     <h3 className="text-base font-semibold text-text-primary truncate">添加模型</h3>
                     <p className="text-xs text-text-tertiary mt-1 truncate">
-                      {addModelModalSource.name || '未命名模型源'} · 候选模型 {addModelModalRemoteModels.length} 个，可手动输入模型 ID
+                      {addModelModalSource.name || '未命名供应商'} · 候选模型 {addModelModalRemoteModels.length} 个，可手动输入模型 ID
                     </p>
                   </div>
                   <button
@@ -5805,7 +6757,7 @@ export function Settings({
 
                 <div className="px-5 py-4 space-y-3">
                   <div className="text-[12px] text-text-tertiary">
-                    候选列表仅用于辅助选择；也可以直接手动输入模型 ID，点击确认后才会加入当前模型源。
+                    候选列表仅用于辅助选择；也可以直接手动输入模型 ID，点击确认后才会加入当前供应商。
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px,auto] gap-2">
                     <input

@@ -172,6 +172,52 @@ const normalizeBuiltinPack = (value: string): BuiltinToolPack => {
   return 'redclaw';
 };
 
+const parseRecordJson = (value: unknown): Record<string, unknown> | null => {
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const uploadedAttachmentRecordsFromMessage = (message: { attachment?: unknown; metadata?: unknown }): Record<string, unknown>[] => {
+  const metadata = parseRecordJson(message.metadata);
+  const metadataAttachments = Array.isArray(metadata?.uploadedAttachments)
+    ? metadata.uploadedAttachments.filter((item): item is Record<string, unknown> => (
+      Boolean(item && typeof item === 'object' && !Array.isArray(item))
+    ))
+    : [];
+  if (metadataAttachments.length > 0) return metadataAttachments;
+  const attachment = parseRecordJson(message.attachment);
+  return attachment?.type === 'uploaded-file' ? [attachment] : [];
+};
+
+const appendUploadedAttachmentContext = (sections: string[], attachments: Record<string, unknown>[]) => {
+  if (attachments.length === 0) return;
+  sections.push('');
+  sections.push(attachments.length === 1 ? '## Uploaded File' : '## Uploaded Files');
+  attachments.forEach((attachment, index) => {
+    if (attachments.length > 1) {
+      sections.push(`### File ${index + 1}`);
+    }
+    sections.push(`- name: ${String(attachment.name || '').trim() || '(unknown)'}`);
+    sections.push(`- absolutePath: ${String(attachment.absolutePath || '').trim() || '(missing)'}`);
+    const toolPath = String(attachment.toolPath || attachment.workspaceRelativePath || '').trim();
+    if (toolPath) {
+      sections.push(`- toolPath: ${toolPath}`);
+    }
+    sections.push(`- kind: ${String(attachment.kind || '').trim() || 'unknown'}`);
+    if (String(attachment.summary || '').trim()) {
+      sections.push(`- summary: ${String(attachment.summary || '').trim()}`);
+    }
+  });
+};
+
 const shouldUseCoordinator = (task: AgentTaskSnapshot): boolean => {
   return Boolean(task.route?.requiresLongRunningTask || task.route?.requiresMultiAgent);
 };
@@ -196,38 +242,27 @@ const buildCoordinatorSourceContext = (sessionId: string): CoordinatorSourceCont
     sections.push(userContent.slice(0, 6000));
   }
 
-  const attachmentRaw = String(latestUser.attachment || '').trim();
-  if (attachmentRaw) {
-    try {
-      const attachment = JSON.parse(attachmentRaw) as Record<string, unknown>;
-      attachmentType = String(attachment?.type || '').trim() || null;
-      if (attachment?.type === 'wander-references' && Array.isArray(attachment.items)) {
-        const items = attachment.items as Array<Record<string, unknown>>;
-        hasReferenceMaterials = items.length > 0;
-        sections.push('');
-        sections.push('## Attached Reference Materials');
-        sections.push(...items.map((item, index) => [
-          `${index + 1}. ${String(item.title || '(无标题)')}`,
-          `- type: ${String(item.itemType || 'unknown')}`,
-          `- tag: ${String(item.tag || '') || '未标记'}`,
-          `- folderPath: ${String(item.folderPath || '').trim() || '(missing)'}`,
-          `- summary: ${String(item.summary || '').trim() || '(none)'}`,
-        ].join('\n')));
-      }
-      if (attachment?.type === 'uploaded-file') {
-        sections.push('');
-        sections.push('## Uploaded File');
-        sections.push(`- name: ${String(attachment.name || '').trim() || '(unknown)'}`);
-        sections.push(`- absolutePath: ${String(attachment.absolutePath || '').trim() || '(missing)'}`);
-        sections.push(`- kind: ${String(attachment.kind || '').trim() || 'unknown'}`);
-        if (String(attachment.summary || '').trim()) {
-          sections.push(`- summary: ${String(attachment.summary || '').trim()}`);
-        }
-      }
-    } catch {
-      // ignore invalid attachment payload
-    }
+  const attachment = parseRecordJson(latestUser.attachment);
+  attachmentType = String(attachment?.type || '').trim() || null;
+  if (attachment?.type === 'wander-references' && Array.isArray(attachment.items)) {
+    const items = attachment.items as Array<Record<string, unknown>>;
+    hasReferenceMaterials = items.length > 0;
+    sections.push('');
+    sections.push('## Attached Reference Materials');
+    sections.push(...items.map((item, index) => [
+      `${index + 1}. ${String(item.title || '(无标题)')}`,
+      `- type: ${String(item.itemType || 'unknown')}`,
+      `- tag: ${String(item.tag || '') || '未标记'}`,
+      `- folderPath: ${String(item.folderPath || '').trim() || '(missing)'}`,
+      `- summary: ${String(item.summary || '').trim() || '(none)'}`,
+    ].join('\n')));
   }
+
+  const uploadedAttachments = uploadedAttachmentRecordsFromMessage(latestUser);
+  if (!attachmentType && uploadedAttachments.length > 0) {
+    attachmentType = 'uploaded-file';
+  }
+  appendUploadedAttachmentContext(sections, uploadedAttachments);
 
   return {
     sourceContext: sections.filter(Boolean).join('\n'),

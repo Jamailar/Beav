@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -9,26 +9,46 @@ import {
   type CliEscalationScope,
 } from '../components/CliEscalationDialog';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
+import { subscribeDataChanged, subscribeSettingsUpdated } from '../bridge/appEvents';
 import {
   buildChatModelOptions,
   ChatComposer,
+  type ChatAssetMentionOption,
   type ChatComposerHandle,
+  type ChatKnowledgeMentionOption,
+  type ChatMemberMentionOption,
   type ChatModelOption,
   type ChatSettingsSnapshot,
+  type ChatSkillMentionOption,
   type UploadedFileAttachment,
 } from '../components/ChatComposer';
-import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/MessageItem';
+import {
+  MessageItem,
+  Message,
+  type ChatMessageAssetReference,
+  type ChatMessageMemberActor,
+  type ChatMessageSkillReference,
+  ToolEvent,
+  SkillEvent,
+  type ChatMessageLinkRenderMode,
+  type ChatMessageLinkTarget,
+} from '../components/MessageItem';
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
-import type { PendingChatMessage } from '../App';
+import { ChatAttachmentActionOverlay } from './chat/ChatAttachmentActionOverlay';
+import { ChatDropOverlay } from './chat/ChatDropOverlay';
+import type { ChatAttachmentActionKind } from './chat/attachment-actions/types';
+import { REDCLAW_ATTACHMENT_ACTIONS_BY_SCENE } from './chat/attachment-actions/redclawAttachmentActions';
+import type { PendingChatMessage } from '../features/app-shell/types';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { type AudioRecordingClip } from '../features/audio-input/audioInput';
 import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
-import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
+import { resolveAssetUrl } from '../utils/pathManager';
+import { useChatAttachments } from './chat/useChatAttachments';
 
 interface Session {
   id: string;
@@ -44,10 +64,349 @@ interface ChatRoom {
   createdAt: string;
 }
 
-interface ChatShortcut {
+function parseMessageMetadataObject(metadata: unknown): Record<string, unknown> | null {
+  if (!metadata) return null;
+  if (typeof metadata === 'string') {
+    try {
+      const parsed = JSON.parse(metadata);
+      if (!parsed || typeof parsed !== 'object') return null;
+      return parsed as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof metadata === 'object') return metadata as Record<string, unknown>;
+  return null;
+}
+
+function memberActorFromMessageMetadata(metadata: unknown): ChatMessageMemberActor | undefined {
+  const object = parseMessageMetadataObject(metadata);
+  if (!object) return undefined;
+  const actor = object.replyActor && typeof object.replyActor === 'object'
+    ? object.replyActor as Record<string, unknown>
+    : object.activeSpeaker && typeof object.activeSpeaker === 'object'
+      ? object.activeSpeaker as Record<string, unknown>
+      : null;
+  if (!actor) return undefined;
+  if (String(actor.type || '').trim() && String(actor.type || '').trim() !== 'member') return undefined;
+  const memberId = String(actor.memberId || actor.speakerId || '').trim();
+  const displayName = String(actor.displayName || '').trim();
+  if (!memberId || !displayName) return undefined;
+  return {
+    type: 'member',
+    memberId,
+    displayName,
+    avatar: String(actor.avatar || '').trim() || undefined,
+    memberSkillRef: String(actor.memberSkillRef || '').trim() || undefined,
+  };
+}
+
+function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledgeMentionOption[] {
+  const object = parseMessageMetadataObject(metadata);
+  if (!object) return [];
+  const rawReferences = Array.isArray(object.explicitKnowledgeRefs)
+    ? object.explicitKnowledgeRefs
+    : Array.isArray(object.references)
+      ? object.references.filter((item) => (
+        item
+        && typeof item === 'object'
+        && String((item as Record<string, unknown>).type || '').trim() === 'knowledge'
+      ))
+      : [];
+  return rawReferences
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const item = raw as Record<string, unknown>;
+      const id = String(item.knowledgeId || item.id || '').trim();
+      if (!id) return null;
+      return {
+        id,
+        title: String(item.title || '未命名内容').trim(),
+        sourceKind: String(item.sourceKind || '').trim() || undefined,
+        summary: String(item.summary || '').trim() || undefined,
+        cover: String(item.cover || '').trim() || undefined,
+        sourceUrl: String(item.sourceUrl || '').trim() || undefined,
+        folderPath: String(item.folderPath || '').trim() || undefined,
+        rootPath: String(item.rootPath || '').trim() || undefined,
+        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : undefined,
+        updatedAt: String(item.updatedAt || '').trim() || undefined,
+        fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
+        hasTranscript: typeof item.hasTranscript === 'boolean' ? item.hasTranscript : undefined,
+      };
+    })
+    .filter((item): item is ChatKnowledgeMentionOption => Boolean(item));
+}
+
+function assetReferencesFromMessageMetadata(metadata: unknown): ChatMessageAssetReference[] {
+  const object = parseMessageMetadataObject(metadata);
+  if (!object) return [];
+  const rawReferences = Array.isArray(object.explicitAssetRefs)
+    ? object.explicitAssetRefs
+    : Array.isArray(object.references)
+      ? object.references.filter((item) => (
+        item
+        && typeof item === 'object'
+        && String((item as Record<string, unknown>).type || '').trim() === 'asset'
+      ))
+      : [];
+  return rawReferences
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const item = raw as Record<string, unknown>;
+      const id = String(item.assetId || item.id || '').trim();
+      const name = String(item.name || '').trim();
+      if (!id || !name) return null;
+      return {
+        id,
+        name,
+        description: String(item.description || '').trim() || undefined,
+        primaryPreviewUrl: String(item.primaryPreviewUrl || '').trim() || undefined,
+        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : undefined,
+      };
+    })
+    .filter((item): item is ChatMessageAssetReference => Boolean(item));
+}
+
+function skillReferencesFromMessageMetadata(metadata: unknown): ChatMessageSkillReference[] {
+  const object = parseMessageMetadataObject(metadata);
+  if (!object || !Array.isArray(object.activeSkills)) return [];
+  return Array.from(new Set(
+    object.activeSkills
+      .map((item) => String(item || '').trim())
+      .filter(Boolean),
+  ))
+    .slice(0, 12)
+    .map((name) => ({ name }));
+}
+
+function uploadedAttachmentsFromMessageMetadata(metadata: unknown): UploadedFileAttachment[] {
+  const object = parseMessageMetadataObject(metadata);
+  if (!object || !Array.isArray(object.uploadedAttachments)) return [];
+  return object.uploadedAttachments
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const item = raw as Record<string, unknown>;
+      if (String(item.type || '').trim() !== 'uploaded-file') return null;
+      const name = String(item.name || '').trim();
+      if (!name) return null;
+      return {
+        type: 'uploaded-file',
+        name,
+        attachmentId: String(item.attachmentId || '').trim() || undefined,
+        workspaceRelativePath: String(item.workspaceRelativePath || '').trim() || undefined,
+        toolPath: String(item.toolPath || '').trim() || undefined,
+        absolutePath: String(item.absolutePath || '').trim() || undefined,
+        originalAbsolutePath: String(item.originalAbsolutePath || '').trim() || undefined,
+        localUrl: String(item.localUrl || '').trim() || undefined,
+        inlineDataUrl: String(item.inlineDataUrl || '').trim() || undefined,
+        thumbnailDataUrl: String(item.thumbnailDataUrl || '').trim() || undefined,
+        thumbnailUrl: String(item.thumbnailUrl || '').trim() || undefined,
+        kind: String(item.kind || '').trim() || undefined,
+        mimeType: String(item.mimeType || '').trim() || undefined,
+        size: typeof item.size === 'number' ? item.size : undefined,
+        ext: String(item.ext || '').trim() || undefined,
+        storageMode: String(item.storageMode || '').trim() || undefined,
+        directUploadEligible: typeof item.directUploadEligible === 'boolean' ? item.directUploadEligible : undefined,
+        processingStrategy: String(item.processingStrategy || '').trim() || undefined,
+        deliveryMode: String(item.deliveryMode || '').trim() || undefined,
+        intakeStatus: String(item.intakeStatus || '').trim() || undefined,
+        capabilities: item.capabilities && typeof item.capabilities === 'object' ? item.capabilities as Record<string, boolean | undefined> : undefined,
+        deliveryPlan: item.deliveryPlan && typeof item.deliveryPlan === 'object' ? item.deliveryPlan as Record<string, unknown> : undefined,
+        summary: String(item.summary || '').trim() || undefined,
+        requiresMultimodal: typeof item.requiresMultimodal === 'boolean' ? item.requiresMultimodal : undefined,
+        attachmentLifecycle: String(item.attachmentLifecycle || '').trim() || undefined,
+      };
+    })
+    .filter((item): item is UploadedFileAttachment => Boolean(item));
+}
+
+function normalizePendingKnowledgeReferences(items: PendingChatMessage['knowledgeReferences'] | undefined): ChatKnowledgeMentionOption[] {
+  return (items || [])
+    .filter((item) => item && item.id)
+    .map((item) => ({
+      id: item.id,
+      title: item.title || '未命名内容',
+      sourceKind: item.sourceKind,
+      summary: item.summary,
+      cover: item.cover,
+      sourceUrl: item.sourceUrl,
+      folderPath: item.folderPath,
+      rootPath: item.rootPath,
+      tags: item.tags,
+      updatedAt: item.updatedAt,
+      fileCount: item.fileCount,
+      hasTranscript: item.hasTranscript,
+    }));
+}
+
+function knowledgeReferencePrimaryPath(item: ChatKnowledgeMentionOption): string {
+  return String(item.rootPath || item.folderPath || '').trim();
+}
+
+function buildKnowledgeReferenceRuntimeContext(items: ChatKnowledgeMentionOption[]): string {
+  const references = items.filter((item) => item.id);
+  if (references.length === 0) return '';
+  const lines = [
+    '本轮用户明确附带了以下知识库内容。回答时必须优先基于这些附件，不要沿用上一轮引用的知识库内容。',
+    '如果需要核对事实，先读取 primaryPath 指向的目录；笔记/视频类内容优先列目录、读取 meta.json，再读取 transcript/content/description 等文本文件。',
+  ];
+  references.slice(0, 12).forEach((item, index) => {
+    const primaryPath = knowledgeReferencePrimaryPath(item);
+    lines.push(`${index + 1}. title: ${item.title || '未命名内容'}; id: ${item.id}; kind: ${item.sourceKind || 'knowledge'}`);
+    if (primaryPath) {
+      lines.push(`   primaryPath: ${primaryPath}`);
+    }
+    if (item.sourceUrl) {
+      lines.push(`   sourceUrl: ${item.sourceUrl}`);
+    }
+    if (item.summary) {
+      lines.push(`   summary: ${item.summary.slice(0, 240)}`);
+    }
+  });
+  return lines.join('\n');
+}
+
+export interface ChatShortcut {
   label: string;
   text: string;
+  displayContent?: string;
   action?: 'send' | 'inject';
+  attachment?: UploadedFileAttachment;
+  attachments?: UploadedFileAttachment[];
+}
+
+export interface ChatShortcutContext {
+  input: string;
+  hasInput: boolean;
+  attachment: UploadedFileAttachment | null;
+  attachments?: UploadedFileAttachment[];
+  selectedMemberMention: ChatMemberMentionOption | null;
+  selectedKnowledgeMentions: ChatKnowledgeMentionOption[];
+}
+
+export type ChatShortcutProvider = ChatShortcut[] | ((context: ChatShortcutContext) => ChatShortcut[]);
+
+function resolveChatShortcutProvider(
+  provider: ChatShortcutProvider | undefined,
+  fallback: ChatShortcut[],
+  context: ChatShortcutContext,
+): ChatShortcut[] {
+  return provider
+    ? (typeof provider === 'function' ? provider(context) : provider)
+    : fallback;
+}
+
+interface AdvisorMentionRecord {
+  id: string;
+  name?: string;
+  avatar?: string;
+  personality?: string;
+}
+
+interface KnowledgeMentionCatalogRecord {
+  id?: string;
+  itemId?: string;
+  title?: string;
+  kind?: string;
+  sourceKind?: string;
+  previewText?: string;
+  summary?: string;
+  cover?: string;
+  coverUrl?: string;
+  thumbnailUrl?: string;
+  sourceUrl?: string;
+  folderPath?: string;
+  rootPath?: string;
+  tags?: string[];
+  updatedAt?: string;
+  fileCount?: number;
+  hasTranscript?: boolean;
+}
+
+interface KnowledgeMentionListPageResponse {
+  items?: KnowledgeMentionCatalogRecord[];
+  nextCursor?: string | null;
+  total?: number;
+}
+
+interface SkillMentionCatalogRecord {
+  name?: string;
+  description?: string;
+  location?: string;
+  sourceScope?: string;
+  isBuiltin?: boolean;
+  aliases?: string[];
+}
+
+interface AssetMentionCatalogRecord {
+  id?: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
+  categoryId?: string;
+  category_id?: string;
+  primaryPreviewUrl?: string;
+  previewUrls?: string[];
+  imagePaths?: string[];
+  image_paths?: string[];
+  absoluteImagePaths?: string[];
+  absolute_image_paths?: string[];
+  voicePath?: string;
+  voice_path?: string;
+  absoluteVoicePath?: string;
+  absolute_voice_path?: string;
+}
+
+function normalizeKnowledgeMentionRecord(item: KnowledgeMentionCatalogRecord): ChatKnowledgeMentionOption | null {
+  const id = String(item.id || item.itemId || '').trim();
+  if (!id) return null;
+  const title = String(item.title || item.sourceUrl || id).trim() || '未命名内容';
+  return {
+    id,
+    title,
+    sourceKind: String(item.sourceKind || item.kind || '').trim() || undefined,
+    summary: String(item.summary || item.previewText || '').trim() || undefined,
+    cover: String(item.cover || item.coverUrl || item.thumbnailUrl || '').trim() || undefined,
+    sourceUrl: String(item.sourceUrl || '').trim() || undefined,
+    folderPath: String(item.folderPath || '').trim() || undefined,
+    rootPath: String(item.rootPath || '').trim() || undefined,
+    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : undefined,
+    updatedAt: String(item.updatedAt || '').trim() || undefined,
+    fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
+    hasTranscript: typeof item.hasTranscript === 'boolean' ? item.hasTranscript : undefined,
+  };
+}
+
+function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkillMentionOption | null {
+  const name = String(item.name || '').trim();
+  if (!name) return null;
+  return {
+    name,
+    description: String(item.description || '').trim() || undefined,
+    location: String(item.location || '').trim() || undefined,
+    sourceScope: String(item.sourceScope || '').trim() || undefined,
+    isBuiltin: Boolean(item.isBuiltin),
+    aliases: Array.isArray(item.aliases) ? item.aliases.map((value) => String(value || '').trim()).filter(Boolean) : undefined,
+  };
+}
+
+function normalizeAssetMentionRecord(item: AssetMentionCatalogRecord): ChatAssetMentionOption | null {
+  const id = String(item.id || '').trim();
+  const name = String(item.name || '').trim();
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    description: String(item.description || '').trim() || undefined,
+    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : undefined,
+    categoryId: String(item.categoryId || item.category_id || '').trim() || undefined,
+    primaryPreviewUrl: String(item.primaryPreviewUrl || '').trim() || undefined,
+    previewUrls: Array.isArray(item.previewUrls) ? item.previewUrls.map((url) => String(url || '').trim()).filter(Boolean) : undefined,
+    imagePaths: Array.isArray(item.imagePaths || item.image_paths) ? (item.imagePaths || item.image_paths || []).map((path) => String(path || '').trim()).filter(Boolean) : undefined,
+    absoluteImagePaths: Array.isArray(item.absoluteImagePaths || item.absolute_image_paths) ? (item.absoluteImagePaths || item.absolute_image_paths || []).map((path) => String(path || '').trim()).filter(Boolean) : undefined,
+    voicePath: String(item.voicePath || item.voice_path || '').trim() || undefined,
+    absoluteVoicePath: String(item.absoluteVoicePath || item.absolute_voice_path || '').trim() || undefined,
+  };
 }
 
 // 选中文字菜单状态
@@ -65,10 +424,12 @@ interface ChatProps {
   pendingMessage?: PendingChatMessage | null;
   onMessageConsumed?: () => void;
   fixedSessionId?: string | null;
+  initialChatModelKey?: string;
+  onChatModelKeyChange?: (key: string) => void;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
-  shortcuts?: ChatShortcut[];
-  welcomeShortcuts?: ChatShortcut[];
+  shortcuts?: ChatShortcutProvider;
+  welcomeShortcuts?: ChatShortcutProvider;
   showWelcomeShortcuts?: boolean;
   showComposerShortcuts?: boolean;
   fixedSessionContextIndicatorMode?: 'top' | 'corner-ring' | 'none';
@@ -77,14 +438,18 @@ interface ChatProps {
   welcomeIconSrc?: string;
   welcomeAvatarText?: string;
   welcomeIconVariant?: 'default' | 'avatar';
+  welcomeIconAccessory?: React.ReactNode;
   welcomeActions?: Array<{ label: string; text?: string; url?: string; onClick?: () => void; icon?: React.ReactNode; color?: string }>;
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
   allowFileUpload?: boolean;
+  attachmentPreviewMode?: 'default' | 'compact-status';
   messageWorkflowPlacement?: 'top' | 'bottom';
   messageWorkflowVariant?: 'default' | 'compact';
   messageWorkflowEmphasis?: 'default' | 'thoughts-first';
   messageWorkflowDisplayMode?: 'all' | 'thoughts-only';
+  messageWorkflowAutoHideWhenComplete?: boolean;
+  messageWorkflowFailureTone?: 'danger' | 'neutral';
   embeddedTheme?: 'default' | 'dark' | 'auto';
   showWelcomeHeader?: boolean;
   emptyStateComposerPlacement?: 'inline' | 'bottom';
@@ -92,6 +457,13 @@ interface ChatProps {
   showComposer?: boolean;
   showMessageAttachments?: boolean;
   collapseEmptyFixedSession?: boolean;
+  placeholder?: string;
+  messageLinkRenderMode?: ChatMessageLinkRenderMode;
+  onMessageLinkPreview?: (target: ChatMessageLinkTarget) => void;
+  activePreviewHref?: string | null;
+  keepComposerInputActive?: boolean;
+  messageListHeader?: React.ReactNode;
+  fixedMemberMention?: ChatMemberMentionOption | null;
 }
 
 interface ChatContextUsage {
@@ -145,19 +517,196 @@ function stripTransientAttachmentPreview(
   return persisted;
 }
 
+function stripTransientMessageAttachmentPreview(
+  attachment?: Message['attachment'],
+): Message['attachment'] | undefined {
+  if (!attachment) return undefined;
+  if (attachment.type !== 'uploaded-file') return attachment;
+  return stripTransientAttachmentPreview(attachment as UploadedFileAttachment) as Message['attachment'];
+}
+
+function attachmentKind(attachment: UploadedFileAttachment | undefined): string {
+  return String(attachment?.kind || '').trim().toLowerCase() || 'binary';
+}
+
+function hasStableToolPath(attachment: UploadedFileAttachment | undefined): boolean {
+  return Boolean(String(attachment?.toolPath || attachment?.workspaceRelativePath || '').trim());
+}
+
+function attachmentCapability(
+  attachment: UploadedFileAttachment | undefined,
+  key: keyof NonNullable<UploadedFileAttachment['capabilities']>,
+): boolean {
+  const value = attachment?.capabilities?.[key];
+  if (typeof value === 'boolean') return value;
+  const kind = attachmentKind(attachment);
+  const hasToolPath = hasStableToolPath(attachment);
+  if (key === 'workspaceRead') return hasToolPath;
+  if (key === 'textExtract') return hasToolPath && kind === 'text';
+  if (key === 'documentExtract') return hasToolPath && kind === 'document';
+  if (key === 'imageVision') return kind === 'image';
+  if (key === 'audioTranscribe') return hasToolPath && kind === 'audio';
+  if (key === 'videoAnalyze' || key === 'videoEdit') return hasToolPath && kind === 'video';
+  if (key === 'directInput') return Boolean(attachment?.directUploadEligible) || ['image', 'audio', 'video', 'text', 'document'].includes(kind);
+  return false;
+}
+
+function toolDeliveryModeForAttachment(attachment: UploadedFileAttachment): string {
+  const explicit = String(attachment.deliveryPlan?.mode || '').trim();
+  if (explicit && explicit !== 'direct-input') return explicit;
+  const kind = attachmentKind(attachment);
+  if (!hasStableToolPath(attachment)) return 'unsupported';
+  if (kind === 'document') return 'document-tool';
+  if (kind === 'image' || kind === 'audio' || kind === 'video') return 'media-tool';
+  return 'workspace-tool';
+}
+
+function withAttachmentDeliveryPlan(
+  attachment: UploadedFileAttachment,
+  mode: 'direct-input' | 'tool-read',
+): UploadedFileAttachment {
+  if (mode === 'direct-input') {
+    return {
+      ...attachment,
+      deliveryMode: 'direct-input',
+      deliveryPlan: {
+        ...(attachment.deliveryPlan || {}),
+        mode: 'direct-input',
+        requiresTool: false,
+        toolPath: attachment.toolPath || attachment.workspaceRelativePath || attachment.deliveryPlan?.toolPath,
+      },
+    };
+  }
+  const toolMode = toolDeliveryModeForAttachment(attachment);
+  return {
+    ...attachment,
+    deliveryMode: 'tool-read',
+    deliveryPlan: {
+      ...(attachment.deliveryPlan || {}),
+      mode: toolMode,
+      requiresTool: toolMode !== 'unsupported',
+      toolPath: attachment.toolPath || attachment.workspaceRelativePath || attachment.deliveryPlan?.toolPath,
+      reason: toolMode === 'unsupported'
+        ? (attachment.deliveryPlan?.reason || '文件未进入工作区暂存区，当前工具无法稳定读取。')
+        : attachment.deliveryPlan?.reason,
+    },
+  };
+}
+
 function applyAttachmentDeliveryMode(
   attachment: UploadedFileAttachment | undefined,
   modelName?: string,
 ): UploadedFileAttachment | undefined {
   if (!attachment) return undefined;
+  if (attachment.intakeStatus && attachment.intakeStatus !== 'ready') {
+    return withAttachmentDeliveryPlan(attachment, 'tool-read');
+  }
   const directInput = Boolean(
     modelName
-    && supportsAttachmentKindDirectInput(modelName, String(attachment.kind || '').trim().toLowerCase()),
+    && attachmentCapability(attachment, 'directInput')
+    && supportsAttachmentKindDirectInput(modelName, attachmentKind(attachment)),
   );
-  return {
+  return withAttachmentDeliveryPlan(attachment, directInput ? 'direct-input' : 'tool-read');
+}
+
+function applyAttachmentsDeliveryMode(
+  attachments: UploadedFileAttachment[],
+  modelName?: string,
+): UploadedFileAttachment[] {
+  return attachments
+    .map((attachment) => applyAttachmentDeliveryMode(attachment, modelName))
+    .filter((attachment): attachment is UploadedFileAttachment => Boolean(attachment));
+}
+
+function commitAttachmentsForSend(attachments: UploadedFileAttachment[]): UploadedFileAttachment[] {
+  return attachments.map((attachment) => ({
     ...attachment,
-    deliveryMode: directInput ? 'direct-input' : 'tool-read',
-  };
+    attachmentLifecycle: 'committed',
+  }));
+}
+
+function attachmentSendBlockReason(attachment: UploadedFileAttachment | undefined): string {
+  if (!attachment) return '';
+  if (attachment.intakeStatus && attachment.intakeStatus !== 'ready') {
+    return attachment.deliveryPlan?.reason || '这个文件还没有进入可处理状态，暂时不能发送给 AI。';
+  }
+  if (!hasStableToolPath(attachment) && !attachment.inlineDataUrl && !attachment.directUploadEligible) {
+    return '这个文件没有可控的暂存路径，AI 工具无法稳定读取。请重新拖入或选择文件。';
+  }
+  return '';
+}
+
+function attachmentsSendBlockReason(attachments: UploadedFileAttachment[]): string {
+  for (const attachment of attachments) {
+    const reason = attachmentSendBlockReason(attachment);
+    if (reason) return reason;
+  }
+  return '';
+}
+
+function createAttachmentPayload(attachments: UploadedFileAttachment[]): Message['attachment'] | undefined {
+  if (attachments.length === 0) return undefined;
+  return attachments[0] as Message['attachment'];
+}
+
+function inferAttachmentActionKind(attachment: UploadedFileAttachment | null | undefined): ChatAttachmentActionKind {
+  const kind = attachmentKind(attachment || undefined);
+  const mimeType = String(attachment?.mimeType || '').trim().toLowerCase();
+  const ext = String(attachment?.ext || '').trim().replace(/^\./, '').toLowerCase();
+  if (kind === 'image' || mimeType.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic'].includes(ext)) return 'image';
+  if (kind === 'video' || mimeType.startsWith('video/') || ['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv'].includes(ext)) return 'video';
+  return 'file';
+}
+
+function attachmentActionKey(attachment: UploadedFileAttachment | UploadedFileAttachment[] | null | undefined): string {
+  const items = Array.isArray(attachment)
+    ? attachment
+    : attachment
+      ? [attachment]
+      : [];
+  if (items.length === 0) return '';
+  return items.map((item) => [
+    item.attachmentId,
+    item.name,
+    item.workspaceRelativePath,
+    item.toolPath,
+    item.absolutePath,
+    item.originalAbsolutePath,
+    item.size,
+    item.kind,
+    item.mimeType,
+  ].map((value) => String(value || '')).join('|')).join('\n');
+}
+
+function uploadedAttachmentsFromMessage(message: Message): UploadedFileAttachment[] {
+  const items = message.attachments && message.attachments.length > 0
+    ? message.attachments
+    : message.attachment
+      ? [message.attachment]
+      : [];
+  return items.filter((attachment): attachment is UploadedFileAttachment => (
+    Boolean(attachment) && attachment.type === 'uploaded-file'
+  ));
+}
+
+function latestReusableVideoAttachment(messages: Message[]): UploadedFileAttachment | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const attachment = uploadedAttachmentsFromMessage(messages[index])
+      .find((item) => inferAttachmentActionKind(item) === 'video');
+    if (attachment) {
+      return attachment;
+    }
+  }
+  return null;
+}
+
+function attachmentActionsFor(kind: ChatAttachmentActionKind): ChatShortcut[] {
+  const scene = kind === 'video'
+    ? 'uploaded_video'
+    : kind === 'image'
+      ? 'uploaded_image'
+      : 'uploaded_file';
+  return REDCLAW_ATTACHMENT_ACTIONS_BY_SCENE[scene];
 }
 
 type FixedSessionWarmSnapshot = {
@@ -310,6 +859,13 @@ function findLastRunningThinkingIndex(messages: Message[]): number {
   return -1;
 }
 
+function findLastRunningTimelineCommentaryIndex(timeline: ProcessItem[]): number {
+  return findLatestTimelineItemIndex(
+    timeline,
+    (item) => item.type === 'commentary' && item.status === 'running',
+  );
+}
+
 function hasCommittedAssistantReply(messages: Message[]): boolean {
   const lastReplyIndex = findLastAssistantReplyIndex(messages);
   if (lastReplyIndex === -1) return false;
@@ -394,6 +950,8 @@ export function Chat({
   onMessageConsumed,
   defaultCollapsed = true,
   fixedSessionId,
+  initialChatModelKey = '',
+  onChatModelKeyChange,
   showClearButton = true,
   fixedSessionBannerText = '当前对话已关联到文档',
   shortcuts: shortcutsProp,
@@ -406,14 +964,18 @@ export function Chat({
   welcomeIconSrc,
   welcomeAvatarText,
   welcomeIconVariant = 'default',
+  welcomeIconAccessory,
   welcomeActions = [],
   contentLayout = 'default',
   contentWidthPreset = 'default',
   allowFileUpload = true,
+  attachmentPreviewMode = 'default',
   messageWorkflowPlacement = 'bottom',
   messageWorkflowVariant = 'compact',
   messageWorkflowEmphasis = 'default',
   messageWorkflowDisplayMode = 'all',
+  messageWorkflowAutoHideWhenComplete = false,
+  messageWorkflowFailureTone = 'danger',
   embeddedTheme = 'default',
   showWelcomeHeader = true,
   emptyStateComposerPlacement = 'inline',
@@ -421,6 +983,13 @@ export function Chat({
   showComposer = true,
   showMessageAttachments = true,
   collapseEmptyFixedSession = false,
+  placeholder,
+  messageLinkRenderMode = 'default',
+  onMessageLinkPreview,
+  activePreviewHref = null,
+  keepComposerInputActive = false,
+  messageListHeader,
+  fixedMemberMention = null,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -449,8 +1018,15 @@ export function Chat({
     readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
   ));
   const [errorNotice, setErrorNotice] = useState<string | StructuredChatErrorNotice | null>(null);
-  const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
+  const [memberMentionOptions, setMemberMentionOptions] = useState<ChatMemberMentionOption[]>([]);
+  const [selectedMemberMention, setSelectedMemberMention] = useState<ChatMemberMentionOption | null>(null);
+  const [knowledgeMentionOptions, setKnowledgeMentionOptions] = useState<ChatKnowledgeMentionOption[]>([]);
+  const [selectedKnowledgeMentions, setSelectedKnowledgeMentions] = useState<ChatKnowledgeMentionOption[]>([]);
+  const [skillMentionOptions, setSkillMentionOptions] = useState<ChatSkillMentionOption[]>([]);
+  const [selectedSkillMentions, setSelectedSkillMentions] = useState<ChatSkillMentionOption[]>([]);
+  const [assetMentionOptions, setAssetMentionOptions] = useState<ChatAssetMentionOption[]>([]);
+  const [selectedAssetMentions, setSelectedAssetMentions] = useState<ChatAssetMentionOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
   const attachmentDraftScopeId = fixedSessionId || currentSessionId || '__new__';
 
@@ -471,18 +1047,44 @@ export function Chat({
       onExecutionStateChange?.(false);
     };
   }, [onExecutionStateChange]);
-  const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
+  const [selectedChatModelKey, setSelectedChatModelKeyState] = useState(() => String(initialChatModelKey || '').trim());
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
+  const [dismissedAttachmentActionKey, setDismissedAttachmentActionKey] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const currentSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
+  const chatModelOptionsRef = useRef<ChatModelOption[]>([]);
+  const selectedChatModelKeyRef = useRef(String(initialChatModelKey || '').trim());
+  const hasManualChatModelSelectionRef = useRef(Boolean(String(initialChatModelKey || '').trim()));
   const chatInstanceIdRef = useRef(
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
   const composerRef = useRef<ChatComposerHandle>(null);
+  const {
+    attachFiles,
+    clearPendingAttachment,
+    dragHandlers,
+    isFileDragActive,
+    isAttachmentUploading,
+    pendingAttachment,
+    pendingAttachments,
+    pickAttachment,
+    removePendingAttachment,
+    resetPendingAttachment,
+    setPendingAttachment,
+    setPendingAttachments,
+  } = useChatAttachments({
+    allowFileUpload,
+    attachmentDraftScopeId,
+    composerRef,
+    currentSessionId,
+    isActive,
+    isProcessing,
+    setErrorNotice,
+  });
   
   // Throttle buffer for streaming updates
-  const pendingUpdateRef = useRef<{ content: string } | null>(null);
+  const pendingUpdateRef = useRef<{ content: string; messagePhase: string } | null>(null);
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStreamChunkRef = useRef<{ content: string; at: number }>({ content: '', at: 0 });
   const localMessageMutationRef = useRef(0);
@@ -577,10 +1179,15 @@ export function Chat({
     }
   }, [debugUi]);
   const suppressComposerFocus = useCallback((reason: string, ms: number) => {
+    if (keepComposerInputActive) {
+      suppressComposerFocusUntilRef.current = 0;
+      debugUi('skip_suppress_composer_focus', { reason, ms });
+      return;
+    }
     suppressComposerFocusUntilRef.current = performance.now() + ms;
     debugUi('suppress_composer_focus', { reason, ms });
     setComposerSuppressed(true);
-  }, [debugUi]);
+  }, [debugUi, keepComposerInputActive]);
   const resumeComposerFocus = useCallback((source: 'empty' | 'composer') => {
     suppressComposerFocusUntilRef.current = 0;
     setComposerSuppressed(false);
@@ -677,6 +1284,11 @@ export function Chat({
 
   const selectedChatModel = chatModelOptions.find((item) => item.key === selectedChatModelKey) || null;
 
+  const applyChatModelOptions = useCallback((options: ChatModelOption[]) => {
+    chatModelOptionsRef.current = options;
+    setChatModelOptions(options);
+  }, []);
+
   const buildPendingAssistantTimeline = useCallback((label: string): ProcessItem[] => ([
     {
       id: `phase_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -688,21 +1300,44 @@ export function Chat({
     },
   ]), []);
 
-  const clearPendingAttachment = useCallback(() => {
-    setPendingAttachment(null);
-    requestAnimationFrame(() => {
-      composerRef.current?.syncHeight();
-      composerRef.current?.focus();
-    });
-  }, []);
+  useEffect(() => {
+    setSelectedMemberMention(null);
+    setSelectedKnowledgeMentions([]);
+    setSelectedSkillMentions([]);
+    setSelectedAssetMentions([]);
+  }, [currentSessionId]);
 
   useEffect(() => {
-    setPendingAttachment(loadAttachmentDraft('chat', attachmentDraftScopeId));
-  }, [attachmentDraftScopeId]);
+    setDismissedAttachmentActionKey('');
+  }, [pendingAttachment]);
 
   useEffect(() => {
-    saveAttachmentDraft('chat', attachmentDraftScopeId, pendingAttachment);
-  }, [attachmentDraftScopeId, pendingAttachment]);
+    const next = String(initialChatModelKey || '').trim();
+    hasManualChatModelSelectionRef.current = Boolean(next);
+    if (!next) {
+      if (!selectedChatModelKeyRef.current) return;
+      selectedChatModelKeyRef.current = '';
+      setSelectedChatModelKeyState('');
+      return;
+    }
+    if (next === selectedChatModelKeyRef.current) return;
+    selectedChatModelKeyRef.current = next;
+    setSelectedChatModelKeyState(next);
+  }, [initialChatModelKey]);
+
+  const handleSelectedChatModelKeyChange = useCallback((key: string) => {
+    const next = String(key || '').trim();
+    hasManualChatModelSelectionRef.current = Boolean(next);
+    selectedChatModelKeyRef.current = next;
+    setSelectedChatModelKeyState(next);
+    onChatModelKeyChange?.(next);
+  }, [onChatModelKeyChange]);
+
+  const resolveSelectedChatModelFromRefs = useCallback(() => {
+    const options = chatModelOptionsRef.current.length > 0 ? chatModelOptionsRef.current : chatModelOptions;
+    const key = selectedChatModelKeyRef.current || selectedChatModelKey;
+    return options.find((item) => item.key === key) || null;
+  }, [chatModelOptions, selectedChatModelKey]);
 
   const loadChatModelOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
@@ -711,22 +1346,106 @@ export function Chat({
         window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
       ));
       const options = buildChatModelOptions(settings);
-      setChatModelOptions(options);
-      setSelectedChatModelKey((current) => {
-        if (current && options.some((item) => item.key === current)) return current;
-        return options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+      applyChatModelOptions(options);
+      setSelectedChatModelKeyState((current) => {
+        const preferred = hasManualChatModelSelectionRef.current
+          ? selectedChatModelKeyRef.current || current
+          : '';
+        if (preferred && options.some((item) => item.key === preferred)) {
+          selectedChatModelKeyRef.current = preferred;
+          return preferred;
+        }
+        const next = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+        selectedChatModelKeyRef.current = next;
+        return next;
       });
     } catch (error) {
       console.error('Failed to load chat model options:', error);
     }
+  }, [applyChatModelOptions]);
+
+  const normalizeMemberMentionOptions = useCallback((records: AdvisorMentionRecord[] | null | undefined): ChatMemberMentionOption[] => (
+    (records || [])
+      .filter((record): record is AdvisorMentionRecord => Boolean(record && typeof record.id === 'string' && record.id.trim()))
+      .map((record) => ({
+        id: record.id.trim(),
+        name: String(record.name || '未命名成员').trim() || '未命名成员',
+        avatar: String(record.avatar || '').trim(),
+        personality: String(record.personality || '').trim(),
+      }))
+  ), []);
+
+  const loadMemberMentionOptions = useCallback(async () => {
+    if (!isActiveRef.current) return;
+    try {
+      const advisors = await window.ipcRenderer.advisors.list<AdvisorMentionRecord>();
+      setMemberMentionOptions(normalizeMemberMentionOptions(advisors));
+    } catch (error) {
+      console.error('Failed to load chat member mention options:', error);
+    }
+  }, [normalizeMemberMentionOptions]);
+
+  const loadKnowledgeMentionOptions = useCallback(async () => {
+    if (!isActiveRef.current) return;
+    try {
+      const response = await window.ipcRenderer.knowledge.listPage<KnowledgeMentionListPageResponse>({
+        limit: 300,
+        sort: 'updated-desc',
+      });
+      const records = Array.isArray(response?.items) ? response.items : [];
+      setKnowledgeMentionOptions(
+        records
+          .map(normalizeKnowledgeMentionRecord)
+          .filter((item): item is ChatKnowledgeMentionOption => Boolean(item)),
+      );
+    } catch (error) {
+      console.error('Failed to load chat knowledge mention options:', error);
+      setKnowledgeMentionOptions([]);
+    }
+  }, []);
+
+  const loadSkillMentionOptions = useCallback(async () => {
+    if (!isActiveRef.current) return;
+    try {
+      const skills = await window.ipcRenderer.listSkills();
+      setSkillMentionOptions(
+        (skills || [])
+          .map((item) => normalizeSkillMentionRecord(item as SkillMentionCatalogRecord))
+          .filter((item): item is ChatSkillMentionOption => Boolean(item)),
+      );
+    } catch (error) {
+      console.error('Failed to load chat skill mention options:', error);
+      setSkillMentionOptions([]);
+    }
+  }, []);
+
+  const loadAssetMentionOptions = useCallback(async () => {
+    if (!isActiveRef.current) return;
+    try {
+      const result = await window.ipcRenderer.subjects.list({ limit: 500 }) as { subjects?: AssetMentionCatalogRecord[]; assets?: AssetMentionCatalogRecord[] };
+      const records = Array.isArray(result?.subjects)
+        ? result.subjects
+        : Array.isArray(result?.assets)
+          ? result.assets
+          : [];
+      setAssetMentionOptions(
+        records
+          .map((item) => normalizeAssetMentionRecord(item))
+          .filter((item): item is ChatAssetMentionOption => Boolean(item)),
+      );
+    } catch (error) {
+      console.error('Failed to load chat asset mention options:', error);
+      setAssetMentionOptions([]);
+    }
   }, []);
 
   const ensureChatModelConfig = useCallback(async () => {
-    if (selectedChatModel) {
+    const currentModel = resolveSelectedChatModelFromRefs() || selectedChatModel;
+    if (currentModel) {
       return {
-        apiKey: selectedChatModel.apiKey,
-        baseURL: selectedChatModel.baseURL,
-        modelName: selectedChatModel.modelName,
+        apiKey: currentModel.apiKey,
+        baseURL: currentModel.baseURL,
+        modelName: currentModel.modelName,
       };
     }
     const settings = await uiMeasure('chat', 'ensure_chat_model_config', async () => (
@@ -736,11 +1455,16 @@ export function Chat({
     if (options.length === 0) {
       return undefined;
     }
-    setChatModelOptions(options);
+    applyChatModelOptions(options);
     const resolvedKey = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
     if (resolvedKey) {
-      setSelectedChatModelKey((current) => {
-        if (current && options.some((item) => item.key === current)) return current;
+      setSelectedChatModelKeyState((current) => {
+        const preferred = selectedChatModelKeyRef.current || current;
+        if (preferred && options.some((item) => item.key === preferred)) {
+          selectedChatModelKeyRef.current = preferred;
+          return preferred;
+        }
+        selectedChatModelKeyRef.current = resolvedKey;
         return resolvedKey;
       });
     }
@@ -753,7 +1477,7 @@ export function Chat({
       baseURL: resolved.baseURL,
       modelName: resolved.modelName,
     };
-  }, [selectedChatModel]);
+  }, [applyChatModelOptions, resolveSelectedChatModelFromRefs, selectedChatModel]);
 
   const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
     if (fixedSessionId) return;
@@ -764,7 +1488,7 @@ export function Chat({
     }
     try {
       const rooms = await uiMeasure('chat', 'load_chat_rooms', async () => (
-        window.ipcRenderer.invoke('chatrooms:list') as Promise<ChatRoom[]>
+        window.ipcRenderer.chatrooms.list<ChatRoom[]>()
       ), { silent });
       if (requestId !== chatRoomsRequestIdRef.current) {
         return;
@@ -797,7 +1521,11 @@ export function Chat({
   useEffect(() => {
     if (!isActive) return;
     void loadChatModelOptions();
-  }, [isActive, loadChatModelOptions]);
+    void loadMemberMentionOptions();
+    void loadKnowledgeMentionOptions();
+    void loadSkillMentionOptions();
+    void loadAssetMentionOptions();
+  }, [isActive, loadAssetMentionOptions, loadChatModelOptions, loadKnowledgeMentionOptions, loadMemberMentionOptions, loadSkillMentionOptions]);
 
   useEffect(() => {
     if (!isActive || messages.length === 0) return;
@@ -852,6 +1580,15 @@ export function Chat({
     message: string;
     displayContent: string;
     attachment?: Message['attachment'];
+    attachments?: UploadedFileAttachment[];
+    knowledgeReferences?: ChatKnowledgeMentionOption[];
+    assetReferences?: Array<{ id: string; name: string }>;
+    memberMention?: {
+      type: 'advisor';
+      advisorId: string;
+      name: string;
+      avatar?: string;
+    };
     modelConfig?: {
       apiKey?: string;
       baseURL?: string;
@@ -863,6 +1600,10 @@ export function Chat({
       sessionId: payload.sessionId || null,
       chars: payload.message.length,
       hasAttachment: Boolean(payload.attachment),
+      attachmentCount: payload.attachments?.length || (payload.attachment ? 1 : 0),
+      targetAdvisorId: payload.memberMention?.advisorId || null,
+      knowledgeReferenceCount: payload.knowledgeReferences?.length || 0,
+      assetReferenceCount: payload.assetReferences?.length || 0,
     });
     const schedule = typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame.bind(window)
@@ -890,6 +1631,29 @@ export function Chat({
 
     // 标记为已处理
     pendingMessageHandledRef.current = true;
+
+    const pendingKnowledgeReferences = normalizePendingKnowledgeReferences(pendingMessage.knowledgeReferences);
+    const pendingMessageAttachments = (
+      pendingMessage.attachments && pendingMessage.attachments.length > 0
+        ? pendingMessage.attachments
+        : pendingMessage.attachment?.type === 'uploaded-file'
+          ? [pendingMessage.attachment as UploadedFileAttachment]
+          : []
+    ).filter((attachment): attachment is UploadedFileAttachment => Boolean(attachment));
+
+    if (pendingMessage.deliveryMode === 'draft') {
+      setInput(String(pendingMessage.content || ''));
+      setSelectedKnowledgeMentions(pendingKnowledgeReferences);
+      if (pendingMessageAttachments.length > 0) {
+        setPendingAttachments(pendingMessageAttachments);
+      }
+      requestAnimationFrame(() => {
+        composerRef.current?.focus();
+        composerRef.current?.syncHeight();
+      });
+      onMessageConsumed?.();
+      return;
+    }
 
     const sendPendingMessage = async () => {
       let sessionId: string;
@@ -932,19 +1696,37 @@ export function Chat({
         console.error('Failed to resolve pending chat model config:', error);
         resolvedModelConfig = undefined;
       }
-      const resolvedAttachment = applyAttachmentDeliveryMode(
-        pendingMessage.attachment as UploadedFileAttachment | undefined,
+      const resolvedAttachments = applyAttachmentsDeliveryMode(
+        pendingMessageAttachments,
         resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
       );
+      const committedAttachments = commitAttachmentsForSend(resolvedAttachments);
+      const resolvedAttachment = createAttachmentPayload(committedAttachments)
+        || (pendingMessage.attachment?.type !== 'uploaded-file' ? pendingMessage.attachment : undefined);
+      const pendingAttachmentBlockReason = attachmentsSendBlockReason(resolvedAttachments);
+      if (pendingAttachmentBlockReason) {
+        setErrorNotice(pendingAttachmentBlockReason);
+        pendingMessageHandledRef.current = false;
+        onMessageConsumed?.();
+        return;
+      }
+
+      const pendingKnowledgeRuntimeContext = buildKnowledgeReferenceRuntimeContext(pendingKnowledgeReferences);
+      const pendingRuntimeMessage = [
+        pendingMessage.content,
+        pendingKnowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${pendingKnowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
+      ].filter(Boolean).join('');
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
       const userMsg: Message = {
         id: processingStartedAt.toString(),
         role: 'user',
-        content: pendingMessage.content,
+        content: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
         attachment: resolvedAttachment as Message['attachment'],
+        attachments: committedAttachments,
+        knowledgeReferences: pendingKnowledgeReferences,
         tools: [],
         timeline: []
       };
@@ -976,9 +1758,11 @@ export function Chat({
       // 发送给后端 - 传递 displayContent 和 attachment 用于持久化
       dispatchChatSend({
         sessionId: sessionId,
-        message: pendingMessage.content,
+        message: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
-        attachment: stripTransientAttachmentPreview(resolvedAttachment),
+        attachment: stripTransientMessageAttachmentPreview(resolvedAttachment as Message['attachment']),
+        attachments: committedAttachments.map((attachment) => stripTransientAttachmentPreview(attachment) as UploadedFileAttachment),
+        knowledgeReferences: pendingKnowledgeReferences,
         modelConfig: resolvedModelConfig,
         taskHints: pendingMessage.taskHints,
       });
@@ -1005,7 +1789,7 @@ export function Chat({
       if (
         normalizedList.length > 0
         && !currentSessionIdRef.current
-        && !loadAttachmentDraft('chat', '__new__')
+        && !pendingAttachment
       ) {
         void selectSession(normalizedList[0].id);
       }
@@ -1073,6 +1857,7 @@ export function Chat({
 
       // Convert DB messages to UI messages
       let lastUserCreatedAt: number | undefined;
+      let lastUserMemberActor: ChatMessageMemberActor | undefined;
       const uiMessages: Message[] = history.map((msg: any) => {
         // 解析 attachment（数据库中存储为 JSON 字符串）
         let attachment = undefined;
@@ -1088,9 +1873,21 @@ export function Chat({
         const createdAt = parseMessageTimestampMs(msg.createdAt ?? msg.created_at ?? msg.timestamp);
         const processingStartedAt = role === 'ai' ? (lastUserCreatedAt ?? createdAt) : undefined;
         const processingFinishedAt = role === 'ai' ? createdAt : undefined;
+        const memberActor = memberActorFromMessageMetadata(msg.metadata);
+        const knowledgeReferences = knowledgeReferencesFromMessageMetadata(msg.metadata);
+        const assetReferences = assetReferencesFromMessageMetadata(msg.metadata);
+        const skillReferences = skillReferencesFromMessageMetadata(msg.metadata);
+        const uploadedAttachments = uploadedAttachmentsFromMessageMetadata(msg.metadata);
+        const restoredAttachments = uploadedAttachments.length > 0
+          ? uploadedAttachments
+          : attachment?.type === 'uploaded-file'
+            ? [attachment as UploadedFileAttachment]
+            : [];
+        const assistantMemberActor = role === 'ai' ? (memberActor || lastUserMemberActor) : undefined;
 
         if (role === 'user') {
           lastUserCreatedAt = createdAt;
+          lastUserMemberActor = memberActor;
         }
 
         return {
@@ -1100,6 +1897,12 @@ export function Chat({
           content: msg.content,
           displayContent: msg.display_content || undefined,
           attachment: attachment,
+          attachments: restoredAttachments,
+          knowledgeReferences: role === 'user' ? knowledgeReferences : [],
+          assetReferences: role === 'user' ? assetReferences : [],
+          skillReferences: role === 'user' ? skillReferences : [],
+          memberMention: role === 'user' ? memberActor : undefined,
+          memberActor: assistantMemberActor,
           tools: [], // History tools not fully reconstructed in this simple view yet
           timeline: [], // History timeline not fully reconstructed
           isStreaming: false,
@@ -1257,7 +2060,7 @@ export function Chat({
     });
   }, []);
 
-  const appendAssistantChunk = useCallback((chunk: string) => {
+  const appendAssistantChunk = useCallback((chunk: string, messagePhase = 'final_answer') => {
     if (!chunk) return;
     setMessages(prev => {
       if (prev.length === 0) {
@@ -1272,11 +2075,36 @@ export function Chat({
 
       missedChunksRef.current = consumeBufferedChunk(missedChunksRef.current, chunk);
       const next = [...prev];
+      let timeline = lastMsg.timeline;
+      let suppressPendingIndicator = lastMsg.suppressPendingIndicator;
+      if (messagePhase === 'commentary') {
+        const now = Date.now();
+        timeline = [...lastMsg.timeline];
+        const commentaryIndex = findLastRunningTimelineCommentaryIndex(timeline);
+        if (commentaryIndex === -1) {
+          timeline.push({
+            id: `commentary_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            type: 'commentary',
+            content: chunk,
+            status: 'running',
+            timestamp: now,
+          });
+        } else {
+          const commentaryItem = timeline[commentaryIndex];
+          timeline[commentaryIndex] = {
+            ...commentaryItem,
+            content: mergeAssistantContent(commentaryItem.content || '', chunk),
+          };
+        }
+        suppressPendingIndicator = true;
+      }
       next[lastReplyIndex] = {
         ...lastMsg,
         content: lastMsg.content + chunk,
         isStreaming: true,
         messageType: 'reply',
+        suppressPendingIndicator,
+        timeline,
       };
       return next;
     });
@@ -1288,10 +2116,12 @@ export function Chat({
       updateTimerRef.current = null;
     }
 
-    const chunk = pendingUpdateRef.current?.content || '';
+    const pending = pendingUpdateRef.current;
+    const chunk = pending?.content || '';
+    const messagePhase = pending?.messagePhase || 'final_answer';
     pendingUpdateRef.current = null;
     if (chunk) {
-      appendAssistantChunk(chunk);
+      appendAssistantChunk(chunk, messagePhase);
     }
   }, [appendAssistantChunk]);
 
@@ -1302,9 +2132,9 @@ export function Chat({
       setSelectionMenu(prev => ({ ...prev, visible: false }));
       void loadChatRooms({ silent: true });
     };
-    window.ipcRenderer.on('space:changed', handleSpaceChanged);
+    window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
     return () => {
-      window.ipcRenderer.off('space:changed', handleSpaceChanged);
+      window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
     };
   }, [fixedSessionId, isActive, loadChatRooms]);
 
@@ -1313,13 +2143,46 @@ export function Chat({
     const refreshChatModels = () => {
       void loadChatModelOptions();
     };
-    window.ipcRenderer.on('settings:updated', refreshChatModels);
-    window.ipcRenderer.on('auth:data-changed', refreshChatModels);
+    const unsubscribeSettingsUpdated = subscribeSettingsUpdated(refreshChatModels);
+    window.ipcRenderer.auth.onDataChanged(refreshChatModels);
     return () => {
-      window.ipcRenderer.off('settings:updated', refreshChatModels);
-      window.ipcRenderer.off('auth:data-changed', refreshChatModels);
+      unsubscribeSettingsUpdated();
+      window.ipcRenderer.auth.offDataChanged(refreshChatModels);
     };
   }, [isActive, loadChatModelOptions]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const refreshMemberMentions = () => {
+      void loadMemberMentionOptions();
+    };
+    window.ipcRenderer.advisors.onChanged(refreshMemberMentions);
+    return () => {
+      window.ipcRenderer.advisors.offChanged(refreshMemberMentions);
+    };
+  }, [isActive, loadMemberMentionOptions]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const refreshKnowledgeMentions = () => {
+      void loadKnowledgeMentionOptions();
+    };
+    window.ipcRenderer.knowledge.onChanged(refreshKnowledgeMentions);
+    window.ipcRenderer.knowledge.onCatalogUpdated(refreshKnowledgeMentions);
+    return () => {
+      window.ipcRenderer.knowledge.offChanged(refreshKnowledgeMentions);
+      window.ipcRenderer.knowledge.offCatalogUpdated(refreshKnowledgeMentions);
+    };
+  }, [isActive, loadKnowledgeMentionOptions]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const refreshAssetMentions = (_event?: unknown, payload?: { scope?: string }) => {
+      if (payload?.scope && payload.scope !== 'subjects') return;
+      void loadAssetMentionOptions();
+    };
+    return subscribeDataChanged(refreshAssetMentions);
+  }, [isActive, loadAssetMentionOptions]);
 
   const handleCancel = useCallback(() => {
     if (currentSessionId) {
@@ -1476,7 +2339,7 @@ export function Chat({
       });
     };
 
-  const handleResponseChunk = (_: unknown, { content }: { content: string }) => {
+  const handleResponseChunk = (_: unknown, { content, messagePhase }: { content: string; messagePhase?: string }) => {
       if (!isActiveRef.current) {
         if (import.meta.env.DEV) {
           console.warn('[ui][chat] inactive page received response chunk');
@@ -1533,9 +2396,14 @@ export function Chat({
       // 直接更新 Ref 缓冲，防止闭包过时
       missedChunksRef.current += content;
 
+      const normalizedMessagePhase = String(messagePhase || 'final_answer').trim() || 'final_answer';
+      if (pendingUpdateRef.current && pendingUpdateRef.current.messagePhase !== normalizedMessagePhase) {
+        flushPendingAssistantChunk();
+      }
+
       // 1. Accumulate content
       if (!pendingUpdateRef.current) {
-        pendingUpdateRef.current = { content: '' };
+        pendingUpdateRef.current = { content: '', messagePhase: normalizedMessagePhase };
       }
       pendingUpdateRef.current.content += content;
 
@@ -1566,6 +2434,16 @@ export function Chat({
         const lastMsg = next[lastReplyIndex];
 
         const newTimeline = [...lastMsg.timeline];
+        const now = Date.now();
+        const runningCommentaryIndex = findLastRunningTimelineCommentaryIndex(newTimeline);
+        if (runningCommentaryIndex !== -1) {
+          const commentaryItem = newTimeline[runningCommentaryIndex];
+          newTimeline[runningCommentaryIndex] = {
+            ...commentaryItem,
+            status: 'done',
+            duration: now - commentaryItem.timestamp,
+          };
+        }
 
         // Add Tool Item to Timeline
         newTimeline.push({
@@ -1573,7 +2451,7 @@ export function Chat({
             type: 'tool-call',
             content: toolData.description || '',
             status: 'running',
-            timestamp: Date.now(),
+            timestamp: now,
             toolData: {
                 callId: toolData.callId,
                 name: toolData.name,
@@ -2376,8 +3254,8 @@ export function Chat({
       onThoughtDelta: ({ content }) => {
         handleThoughtDelta(null, { content });
       },
-      onResponseDelta: ({ content }) => {
-        handleResponseChunk(null, { content });
+      onResponseDelta: ({ content, messagePhase }) => {
+        handleResponseChunk(null, { content, messagePhase });
       },
       onChatDone: ({ status, content, reason }) => {
         debugUi('runtime_done:received', {
@@ -2532,38 +3410,15 @@ export function Chat({
     };
   }, [debugUi, flushPendingAssistantChunk, isActive]);
 
-  const pickAttachment = useCallback(async () => {
-    if (isProcessing) return;
-    try {
-      const result = await window.ipcRenderer.chat.pickAttachment({
-        sessionId: currentSessionId || undefined,
-      }) as { success?: boolean; canceled?: boolean; error?: string; attachment?: UploadedFileAttachment };
-      if (!result?.success) {
-        setErrorNotice(result?.error || '上传文件失败');
-        return;
-      }
-      if (result.canceled) return;
-      if (result.attachment) {
-        setErrorNotice(null);
-        setPendingAttachment(result.attachment);
-        requestAnimationFrame(() => {
-          composerRef.current?.syncHeight();
-          composerRef.current?.focus();
-        });
-      }
-    } catch (error) {
-      setErrorNotice(String(error || '上传文件失败'));
-    }
-  }, [currentSessionId, isProcessing]);
-
   const getChatModelConfig = useCallback(() => {
-    if (!selectedChatModel) return undefined;
+    const currentModel = resolveSelectedChatModelFromRefs() || selectedChatModel;
+    if (!currentModel) return undefined;
     return {
-      apiKey: selectedChatModel.apiKey,
-      baseURL: selectedChatModel.baseURL,
-      modelName: selectedChatModel.modelName,
+      apiKey: currentModel.apiKey,
+      baseURL: currentModel.baseURL,
+      modelName: currentModel.modelName,
     };
-  }, [selectedChatModel]);
+  }, [resolveSelectedChatModelFromRefs, selectedChatModel]);
 
   const transcribeAudioClip = useCallback(async (clip: AudioRecordingClip) => {
     setIsTranscribingAudio(true);
@@ -2625,26 +3480,88 @@ export function Chat({
     void startAudioRecording();
   }, [audioRecording.isRecording, startAudioRecording, stopAudioRecording]);
 
-  const sendMessage = async (content: string, attachment?: UploadedFileAttachment) => {
+  const sendMessage = async (
+    content: string,
+    attachmentsInput: UploadedFileAttachment | UploadedFileAttachment[] = [],
+    memberMention: ChatMemberMentionOption | null = selectedMemberMention || fixedMemberMention,
+    knowledgeMentions: ChatKnowledgeMentionOption[] = selectedKnowledgeMentions,
+    skillMentions: ChatSkillMentionOption[] = selectedSkillMentions,
+    assetMentions: ChatAssetMentionOption[] = selectedAssetMentions,
+    displayOverride?: string,
+  ) => {
+    const attachments = Array.isArray(attachmentsInput)
+      ? attachmentsInput.filter(Boolean)
+      : attachmentsInput
+        ? [attachmentsInput]
+        : [];
+    const primaryAttachment = attachments[0];
+    const safeKnowledgeMentions = knowledgeMentions.filter((item) => item.id);
+    const safeSkillMentions = skillMentions.filter((item) => item.name);
+    const safeAssetMentions = assetMentions.filter((item) => item.id);
     uiTraceInteraction('chat', 'send_message', {
       sessionId: currentSessionId || null,
       chars: String(content || '').trim().length,
-      hasAttachment: Boolean(attachment),
+      hasAttachment: attachments.length > 0,
+      attachmentCount: attachments.length,
+      targetAdvisorId: memberMention?.id || null,
+      knowledgeReferenceCount: safeKnowledgeMentions.length,
+      skillReferenceCount: safeSkillMentions.length,
+      assetReferenceCount: safeAssetMentions.length,
     });
     suppressComposerFocus('send_message', 5000);
     blurComposer('send_message');
     shouldAutoScrollRef.current = true;
     setErrorNotice(null);
     const normalizedContent = String(content || '').trim();
-    const displayText = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : '');
-    if (!displayText) return;
+    const knowledgeLabels = safeKnowledgeMentions.map((item) => `#${item.title || '知识库内容'}`);
+    const inlineLabels = [
+      ...safeSkillMentions.map((item) => `@${item.name}`),
+      ...safeAssetMentions.map((item) => `@${item.name}`),
+    ];
+    const missingInlineLabels = inlineLabels.filter((label) => !normalizedContent.includes(label));
+    const normalizedDisplayOverride = String(displayOverride || '').trim();
+    const hasAttachments = attachments.length > 0;
+    const attachmentOnlyTitle = hasAttachments
+      ? `附件：${attachments.map((item) => item.name).filter(Boolean).join('、') || '未命名附件'}`
+      : '';
+    const displayBody = normalizedDisplayOverride || normalizedContent || (safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
+    const displayText = [...missingInlineLabels, ...knowledgeLabels, displayBody || attachmentOnlyTitle].filter(Boolean).join(' ').trim();
+    if (!displayText && !hasAttachments) return;
+    const attachmentBlockReason = attachmentsSendBlockReason(attachments);
+    if (attachmentBlockReason) {
+      setErrorNotice(attachmentBlockReason);
+      return;
+    }
+    const runtimeMessage = normalizedContent || displayBody || displayText || (hasAttachments ? '请分析这些附件。' : '');
     const processingStartedAt = Date.now();
+    const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
+      type: 'member',
+      memberId: memberMention.id,
+      displayName: memberMention.name,
+      avatar: memberMention.avatar,
+    } : undefined;
+    const assetReferencesForMessage: ChatMessageAssetReference[] = safeAssetMentions.map((item) => ({
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      primaryPreviewUrl: item.primaryPreviewUrl,
+      tags: item.tags,
+    }));
+    const skillReferencesForMessage: ChatMessageSkillReference[] = safeSkillMentions.map((item) => ({
+      name: item.name,
+      description: item.description,
+    }));
     const userMsg: Message = {
       id: processingStartedAt.toString(),
       role: 'user',
-      content: normalizedContent || displayText,
+      content: runtimeMessage,
       displayContent: displayText,
-      attachment: attachment as unknown as Message['attachment'],
+      attachment: primaryAttachment as unknown as Message['attachment'],
+      attachments,
+      knowledgeReferences: safeKnowledgeMentions,
+      assetReferences: assetReferencesForMessage,
+      skillReferences: skillReferencesForMessage,
+      memberMention: memberActor,
       tools: [],
       timeline: []
     };
@@ -2658,12 +3575,16 @@ export function Chat({
       timeline: [],
       isStreaming: true,
       processingStartedAt,
+      memberActor,
     };
 
     localMessageMutationRef.current += 1;
     setMessages(prev => [...prev, userMsg, aiPlaceholder]);
     setInput('');
-    setPendingAttachment(null);
+    setSelectedKnowledgeMentions([]);
+    setSelectedSkillMentions([]);
+    setSelectedAssetMentions([]);
+    resetPendingAttachment();
     setIsProcessing(true);
 
     let resolvedModelConfig;
@@ -2673,34 +3594,73 @@ export function Chat({
       console.error('Failed to resolve chat model config:', error);
       resolvedModelConfig = undefined;
     }
-    const resolvedAttachment = applyAttachmentDeliveryMode(
-      attachment,
+    const resolvedAttachments = applyAttachmentsDeliveryMode(
+      attachments,
       resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
     );
+    const committedAttachments = commitAttachmentsForSend(resolvedAttachments);
+    const resolvedAttachment = createAttachmentPayload(committedAttachments);
 
     dispatchChatSend({
       sessionId: currentSessionId || undefined,
-      message: normalizedContent || displayText,
+      message: runtimeMessage,
       displayContent: displayText,
       attachment: stripTransientAttachmentPreview(resolvedAttachment),
+      attachments: committedAttachments.map((item) => stripTransientAttachmentPreview(item) as UploadedFileAttachment),
+      knowledgeReferences: safeKnowledgeMentions,
+      assetReferences: assetReferencesForMessage,
+      memberMention: memberMention ? {
+        type: 'advisor',
+        advisorId: memberMention.id,
+        name: memberMention.name,
+        avatar: memberMention.avatar,
+      } : undefined,
       modelConfig: resolvedModelConfig || getChatModelConfig(),
-      taskHints: undefined,
+      taskHints: safeSkillMentions.length > 0 ? {
+        activeSkills: safeSkillMentions.map((item) => item.name),
+      } : undefined,
     });
   };
 
-  const shortcuts = shortcutsProp || [
-    { label: '📝 总结内容', text: '请总结以上内容，提炼核心要点。' },
-    { label: '💡 提炼观点', text: '请提炼其中的关键观点和洞察。' },
-    { label: '✂️ 润色优化', text: '请润色这段内容，使其更具吸引力。' },
-    { label: '❓ 延伸提问', text: '基于以上内容，提出3个值得思考的延伸问题。' },
-  ];
+  const reusableVideoAttachment = useMemo(
+    () => pendingAttachments.length > 0 ? null : latestReusableVideoAttachment(messages),
+    [messages, pendingAttachments.length],
+  );
+  const shortcutAttachment = pendingAttachment || reusableVideoAttachment || null;
+  const shortcutAttachments = pendingAttachments.length > 0
+    ? pendingAttachments
+    : shortcutAttachment
+      ? [shortcutAttachment]
+      : [];
+  const shortcutContext: ChatShortcutContext = {
+    input,
+    hasInput: Boolean(input.trim()),
+    attachment: shortcutAttachment,
+    attachments: shortcutAttachments,
+    selectedMemberMention: selectedMemberMention || fixedMemberMention,
+    selectedKnowledgeMentions,
+  };
+  const fallbackShortcuts = (
+    reusableVideoAttachment
+      ? attachmentActionsFor('video').map((shortcut) => ({
+        ...shortcut,
+        attachment: reusableVideoAttachment,
+      }))
+      : [
+        { label: '📝 总结内容', text: '请总结以上内容，提炼核心要点。' },
+        { label: '💡 提炼观点', text: '请提炼其中的关键观点和洞察。' },
+        { label: '✂️ 润色优化', text: '请润色这段内容，使其更具吸引力。' },
+        { label: '❓ 延伸提问', text: '基于以上内容，提出3个值得思考的延伸问题。' },
+      ]
+  );
+  const shortcuts = resolveChatShortcutProvider(shortcutsProp, fallbackShortcuts, shortcutContext);
 
-  const welcomeShortcuts = welcomeShortcutsProp || [
+  const welcomeShortcuts = resolveChatShortcutProvider(welcomeShortcutsProp, [
     { label: '📄 阅读稿件', text: '请帮我阅读并理解当前的稿件内容。' },
     { label: '✏️ 编辑稿件', text: '我想对当前稿件进行编辑优化，请提供建议。' },
     { label: '🔍 内容分析', text: '请深度分析当前内容，提炼核心观点。' },
     { label: '💡 创作建议', text: '请基于当前内容提供一些创作方向的建议。' }
-  ];
+  ], shortcutContext);
 
   const applyShortcut = useCallback((shortcut: ChatShortcut) => {
     const action = shortcut.action || 'send';
@@ -2713,8 +3673,21 @@ export function Chat({
       });
       return;
     }
-    void sendMessage(shortcut.text);
-  }, [sendMessage]);
+    const shortcutAttachmentsForSend = shortcut.attachments && shortcut.attachments.length > 0
+      ? shortcut.attachments
+      : shortcut.attachment
+        ? [shortcut.attachment]
+        : pendingAttachments;
+    void sendMessage(
+      shortcut.text,
+      shortcutAttachmentsForSend,
+      selectedMemberMention || fixedMemberMention,
+      selectedKnowledgeMentions,
+      selectedSkillMentions,
+      selectedAssetMentions,
+      shortcut.displayContent || shortcut.label,
+    );
+  }, [fixedMemberMention, pendingAttachments, selectedAssetMentions, selectedKnowledgeMentions, selectedMemberMention, selectedSkillMentions, sendMessage]);
 
   const formatTokenLabel = (value?: number) => {
     const safe = Math.max(0, Math.round(Number(value || 0)));
@@ -2747,6 +3720,44 @@ export function Chat({
     ? (documentThemeMode === 'dark' ? 'dark' : 'default')
     : embeddedTheme;
   const darkEmbedded = resolvedEmbeddedTheme === 'dark';
+  const showChatDropOverlay = Boolean(showComposer && allowFileUpload && isFileDragActive && !isProcessing);
+  const attachmentActionKind = inferAttachmentActionKind(pendingAttachment);
+  const currentAttachmentActionKey = attachmentActionKey(pendingAttachments);
+  const attachmentActionOverlayVisible = Boolean(
+    showComposer
+    && allowFileUpload
+    && pendingAttachment
+    && isEmptySession
+    && !isProcessing
+    && !isAttachmentUploading
+    && !input.trim()
+    && currentAttachmentActionKey
+    && dismissedAttachmentActionKey !== currentAttachmentActionKey
+  );
+  const attachmentActionOverlayActions = attachmentActionsFor(attachmentActionKind);
+  const dismissAttachmentActionOverlay = useCallback(() => {
+    if (currentAttachmentActionKey) {
+      setDismissedAttachmentActionKey(currentAttachmentActionKey);
+    }
+    requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.syncHeight();
+    });
+  }, [currentAttachmentActionKey]);
+  const applyAttachmentAction = useCallback((shortcut: ChatShortcut) => {
+    if (currentAttachmentActionKey) {
+      setDismissedAttachmentActionKey(currentAttachmentActionKey);
+    }
+    void sendMessage(
+      shortcut.text,
+      pendingAttachments,
+      selectedMemberMention || fixedMemberMention,
+      selectedKnowledgeMentions,
+      selectedSkillMentions,
+      selectedAssetMentions,
+      shortcut.displayContent || shortcut.label,
+    );
+  }, [currentAttachmentActionKey, fixedMemberMention, pendingAttachments, selectedAssetMentions, selectedKnowledgeMentions, selectedMemberMention, selectedSkillMentions, sendMessage]);
   const composerTheme = darkEmbedded ? 'dark' : 'default';
   const inputAreaShellClass = darkEmbedded
     ? 'bg-transparent pb-4 pt-2 md:pb-5'
@@ -2828,6 +3839,27 @@ export function Chat({
       </div>
     </div>
   ) : null;
+  const fixedMemberAvatar = String(fixedMemberMention?.avatar || '').trim();
+  const fixedMemberAvatarRenderable = /^(https?:|file:|data:|local-file:|redbox-asset:)/i.test(fixedMemberAvatar) || fixedMemberAvatar.startsWith('/');
+  const fixedMemberMentionChip = fixedMemberMention ? (
+    <div className="mb-2 flex justify-start">
+      <div className={clsx(
+        'inline-flex max-w-full items-center gap-2 rounded-full border px-2.5 py-1.5 text-[12px] font-medium shadow-sm',
+        darkEmbedded
+          ? 'border-white/10 bg-white/[0.04] text-white/72'
+          : 'border-border bg-surface-primary/86 text-text-secondary'
+      )}>
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border/70 bg-surface-secondary text-[11px] font-semibold">
+          {fixedMemberAvatarRenderable ? (
+            <img src={resolveAssetUrl(fixedMemberAvatar)} alt="" className="h-full w-full object-cover" />
+          ) : (
+            (fixedMemberAvatar || fixedMemberMention.name || '成').slice(0, 2)
+          )}
+        </span>
+        <span className="truncate">当前成员：{fixedMemberMention.name}</span>
+      </div>
+    </div>
+  ) : null;
 
   const renderComposer = (
     source: 'empty' | 'composer',
@@ -2846,6 +3878,7 @@ export function Chat({
         onDeny={handleDenyCliEscalation}
       />
       <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
+      {fixedMemberMentionChip}
       <ChatComposer
         ref={composerRef}
         theme={composerTheme}
@@ -2853,15 +3886,40 @@ export function Chat({
         className={options?.className}
         value={input}
         onValueChange={setInput}
-        onSubmit={() => sendMessage(input, pendingAttachment || undefined)}
+        onSubmit={() => sendMessage(
+          input,
+          pendingAttachments,
+          selectedMemberMention || fixedMemberMention,
+          selectedKnowledgeMentions,
+          selectedSkillMentions,
+          selectedAssetMentions,
+        )}
         placeholder={placeholder}
         attachment={pendingAttachment}
+        attachments={pendingAttachments}
+        attachmentStatus={isAttachmentUploading ? 'uploading' : pendingAttachment ? 'uploaded' : null}
+        attachmentPreviewMode={attachmentPreviewMode}
         onPickAttachment={allowFileUpload ? pickAttachment : undefined}
+        onPasteImageFiles={allowFileUpload ? attachFiles : undefined}
         onClearAttachment={clearPendingAttachment}
+        onRemoveAttachment={removePendingAttachment}
         modelOptions={chatModelOptions}
         selectedModelKey={selectedChatModelKey}
-        onSelectedModelKeyChange={setSelectedChatModelKey}
+        onSelectedModelKeyChange={handleSelectedChatModelKeyChange}
+        memberMentionOptions={fixedMemberMention ? [] : memberMentionOptions}
+        selectedMemberMention={fixedMemberMention ? null : selectedMemberMention}
+        onSelectedMemberMentionChange={fixedMemberMention ? undefined : setSelectedMemberMention}
+        knowledgeMentionOptions={knowledgeMentionOptions}
+        selectedKnowledgeMentions={selectedKnowledgeMentions}
+        onSelectedKnowledgeMentionsChange={setSelectedKnowledgeMentions}
+        skillMentionOptions={skillMentionOptions}
+        selectedSkillMentions={selectedSkillMentions}
+        onSelectedSkillMentionsChange={setSelectedSkillMentions}
+        assetMentionOptions={assetMentionOptions}
+        selectedAssetMentions={selectedAssetMentions}
+        onSelectedAssetMentionsChange={setSelectedAssetMentions}
         isBusy={isProcessing}
+        allowInputWhileBusy={keepComposerInputActive}
         audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}
         onAudioAction={handleAudioInput}
         onCancel={handleCancel}
@@ -2910,6 +3968,11 @@ export function Chat({
           </div>
         )}
       </div>
+      {welcomeIconAccessory ? (
+        <div className="flex justify-center">
+          {welcomeIconAccessory}
+        </div>
+      ) : null}
 
       <div className="space-y-2">
         <h1 className={clsx('text-2xl font-semibold', darkEmbedded ? 'text-white' : 'text-text-primary')}>{welcomeTitle}</h1>
@@ -2943,16 +4006,23 @@ export function Chat({
     }
     if (action.url) {
       try {
-        await window.ipcRenderer.invoke('app:open-path', { path: action.url });
+        await window.ipcRenderer.openPath(action.url);
       } catch (error) {
         console.error('Failed to open welcome action url:', error);
       }
       return;
     }
     if (action.text) {
-      sendMessage(action.text);
+      sendMessage(
+        action.text,
+        undefined,
+        selectedMemberMention || fixedMemberMention,
+        selectedKnowledgeMentions,
+        selectedSkillMentions,
+        selectedAssetMentions,
+      );
     }
-  }, [sendMessage]);
+  }, [fixedMemberMention, selectedAssetMentions, selectedKnowledgeMentions, selectedMemberMention, selectedSkillMentions, sendMessage]);
 
   const welcomeActionsBlock = welcomeActions && welcomeActions.length > 0 ? (
     <div className="flex items-center justify-center gap-6">
@@ -2987,7 +4057,7 @@ export function Chat({
   const emptyComposerForm = renderComposer(
     'empty',
     'empty',
-    '问我任何问题，使用 @ 引用文件，/ 执行指令...',
+    placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...',
     { showContextUsage: true, showCancelWhenBusy: false },
   );
 
@@ -2996,7 +4066,13 @@ export function Chat({
   }
 
   return (
-    <div className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}>
+    <div
+      className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}
+      onDragEnter={dragHandlers.onDragEnter}
+      onDragLeave={dragHandlers.onDragLeave}
+      onDragOver={dragHandlers.onDragOver}
+      onDrop={dragHandlers.onDrop}
+    >
       {/* Sidebar - Session List (可折叠) - Only show if not fixed session */}
       {!fixedSessionId && (
         <div className={clsx(
@@ -3048,6 +4124,10 @@ export function Chat({
 
       {/* Main Chat Area */}
       <div className="flex-1 min-w-0 flex flex-col h-full relative overflow-hidden">
+        {showChatDropOverlay && (
+          <ChatDropOverlay darkEmbedded={darkEmbedded} />
+        )}
+
         {/* Header - Sidebar Controls - Hide if fixed session */}
         {!fixedSessionId && (
           <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
@@ -3098,6 +4178,19 @@ export function Chat({
           </div>
         )}
 
+        {attachmentActionOverlayVisible && pendingAttachment && (
+          <ChatAttachmentActionOverlay
+            attachment={pendingAttachment}
+            attachmentCount={Math.max(1, pendingAttachments.length)}
+            actions={attachmentActionOverlayActions}
+            darkEmbedded={darkEmbedded}
+            kind={attachmentActionKind}
+            disabled={isProcessing}
+            onAction={applyAttachmentAction}
+            onDismiss={dismissAttachmentActionOverlay}
+          />
+        )}
+
         {/* Content Area */}
         {isEmptySession && !dockedEmptyState ? (
           <div className={clsx(
@@ -3128,7 +4221,7 @@ export function Chat({
               )}
 
               {/* 居中的输入框 (Codex Style) */}
-              {showComposer ? renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+              {showComposer ? renderComposer('empty', 'empty', placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
                 className: 'mt-10',
                 showCancelWhenBusy: false,
               }) : null}
@@ -3163,10 +4256,16 @@ export function Chat({
                           workflowVariant={messageWorkflowVariant}
                           workflowEmphasis={messageWorkflowEmphasis}
                           workflowDisplayMode={messageWorkflowDisplayMode}
+                          workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
+                          workflowFailureTone={messageWorkflowFailureTone}
                           showAttachments={showMessageAttachments}
+                          linkRenderMode={messageLinkRenderMode}
+                          onPreviewLink={onMessageLinkPreview}
+                          activePreviewHref={activePreviewHref}
                         />
                       </ErrorBoundary>
                     ))}
+                    {messageListHeader}
                     <div ref={messagesEndRef} />
                   </>
                 )}
@@ -3181,33 +4280,52 @@ export function Chat({
                   emptyComposerForm
                 ) : (
                   <>
-                {errorNotice && (
-                  <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
-                    {typeof errorNotice === 'string' ? (
-                      <>
-                        <div className="font-medium">请求失败</div>
-                        <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
-                      </>
-                    ) : (
-                      <>
-                        <div className="font-medium">{errorNotice.title}</div>
-                        {errorNotice.hint && (
-                          <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice.hint}</div>
-                        )}
-                        {errorNotice.metaParts && errorNotice.metaParts.length > 0 && (
-                          <div className="mt-2 text-[11px] leading-5 text-red-700/70 dark:text-red-300/75">
-                            {errorNotice.metaParts.join(' · ')}
-                          </div>
-                        )}
-                        {errorNotice.detail && (
-                          <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
-                            {errorNotice.detail}
-                          </pre>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
+                {errorNotice && (() => {
+                  const structuredNotice = typeof errorNotice === 'string' ? null : errorNotice;
+                  const noticeTitle = structuredNotice?.title || '请求失败';
+                  const noticeBody = structuredNotice
+                    ? structuredNotice.hint || structuredNotice.metaParts?.join(' · ') || ''
+                    : errorNotice;
+                  const reportContent = structuredNotice
+                    ? [structuredNotice.hint, structuredNotice.detail, structuredNotice.metaParts?.join(' · ')]
+                      .filter(Boolean)
+                      .join('\n\n') || noticeTitle
+                    : errorNotice;
+                  return (
+                    <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium">{noticeTitle}</div>
+                          {noticeBody && (
+                            <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">
+                              {noticeBody}
+                            </div>
+                          )}
+                          {structuredNotice?.detail && (
+                            <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
+                              {structuredNotice.detail}
+                            </pre>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+                            detail: {
+                              title: noticeTitle,
+                              content: reportContent,
+                              sourcePage: 'chat',
+                              sessionId: currentSessionIdRef.current || currentSessionId || undefined,
+                              operation: 'chat_request',
+                            },
+                          }))}
+                          className="inline-flex h-7 shrink-0 items-center rounded-md border border-red-500/25 bg-red-500/10 px-2 text-[11px] font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
+                        >
+                          反馈
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
                 {showComposerShortcuts && shortcuts.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
                     {shortcuts.map((shortcut) => (
@@ -3218,7 +4336,7 @@ export function Chat({
                   </div>
                 )}
 
-                {renderComposer('composer', 'main', '发送消息...', {
+                {renderComposer('composer', 'main', placeholder || '发送消息...', {
                   showContextUsage: true,
                   showCancelWhenBusy: true,
                 })}

@@ -17,6 +17,7 @@ export interface AudioRecordingClip {
   mimeType: string;
   fileName: string;
   durationMs?: number;
+  capturedDurationMs?: number;
   byteLength?: number;
   sampleRate?: number;
   channels?: number;
@@ -94,7 +95,7 @@ export function describeAudioCaptureFailure(
     return '未检测到可用麦克风设备';
   }
   if (reason === 'permission_denied') {
-    return '系统未授予麦克风权限，请在系统设置中允许 RedBox 使用麦克风';
+    return `系统未授予麦克风权限，请在系统设置中允许 ${APP_BRAND.displayName} 使用麦克风`;
   }
   return '麦克风录音不可用，请检查设备和系统权限';
 }
@@ -109,10 +110,11 @@ function normalizeAudioCaptureMessage(message: string): string {
     return '当前没有进行中的录音';
   }
   if (normalized.includes('permission')) {
-    return '系统未授予麦克风权限，请在系统设置中允许 RedBox 使用麦克风';
+    return `系统未授予麦克风权限，请在系统设置中允许 ${APP_BRAND.displayName} 使用麦克风`;
   }
   if (normalized.includes('no_input_device') || normalized.includes('未检测到可用麦克风设备')) {
     return '未检测到可用麦克风设备';
   }
   return message;
 }
+import { APP_BRAND } from '../../config/brand';

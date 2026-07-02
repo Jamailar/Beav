@@ -1,14 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Play, MessageSquarePlus, Heart, ChevronLeft, ChevronRight } from 'lucide-react';
+import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Play, MessageSquarePlus, Heart, ChevronLeft, ChevronRight, Shuffle, Eye, EyeOff, Search, CheckSquare, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
-import type { PendingChatMessage } from '../App';
+import type { PendingChatMessage } from '../features/app-shell/types';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 import {
   AUTHORING_ALLOWED_APP_CLI_ACTIONS,
+  AUTHORING_ALLOWED_OPERATE_ACTIONS,
   AUTHORING_ALLOWED_TOOLS,
+  buildTaskBriefPromptSection,
 } from '../utils/redclawAuthoring';
-import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
+import type { AuthoringTaskHints, TaskBriefArticleStrategy, TaskBriefSeed } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { uiDebug } from '../utils/uiDebug';
 
@@ -55,6 +58,9 @@ interface WanderResult {
     topic: { title: string; connections: number[] };
   }>;
   selected_index?: number;
+  method?: string;
+  created_by?: string;
+  createdBy?: string;
 }
 
 interface WanderValidationIssue {
@@ -69,6 +75,9 @@ interface WanderHistoryRecord {
   result: string | WanderResult | Record<string, unknown> | unknown;
   created_at?: number;
   createdAt?: number;
+  status?: string;
+  abandoned_at?: number | null;
+  abandonedAt?: number | null;
 }
 
 interface WanderProgressCard {
@@ -78,6 +87,22 @@ interface WanderProgressCard {
   status: 'pending' | 'running' | 'completed' | 'error';
   stepIndex?: number;
   totalSteps?: number;
+}
+
+type WanderSelectionMode = 'random' | 'manual';
+type WanderGuidedSourceMode = 'topic' | 'anchor';
+
+interface WanderKnowledgeCatalogItem {
+  itemId?: string;
+  kind?: string;
+  title?: string;
+  previewText?: string;
+  author?: string;
+  siteName?: string;
+  coverUrl?: string;
+  thumbnailUrl?: string;
+  sourceUrl?: string;
+  folderPath?: string;
 }
 
 interface WanderProps {
@@ -92,6 +117,13 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
+  const [selectionMode, setSelectionMode] = useState<WanderSelectionMode>('random');
+  const [guidedSourceMode, setGuidedSourceMode] = useState<WanderGuidedSourceMode>('topic');
+  const [guidedTopic, setGuidedTopic] = useState('');
+  const [anchorQuery, setAnchorQuery] = useState('');
+  const [anchorResults, setAnchorResults] = useState<WanderItem[]>([]);
+  const [selectedAnchor, setSelectedAnchor] = useState<WanderItem | null>(null);
+  const [anchorLoading, setAnchorLoading] = useState(false);
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -99,6 +131,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
   const [showFinal, setShowFinal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showAbandonedTopics, setShowAbandonedTopics] = useState(false);
   const [historyList, setHistoryList] = useState<WanderHistoryRecord[]>([]);
   const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState('');
@@ -108,6 +141,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const activeItemsRef = useRef<WanderItem[]>([]);
   const activeOption = parsedResult?.options?.[selectedOptionIndex];
   const activeDirectionFrame = activeOption?.direction_frame || parsedResult?.direction_frame;
+  const hasGuidedInput = guidedSourceMode === 'topic'
+    ? guidedTopic.trim().length > 0
+    : Boolean(selectedAnchor);
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -140,6 +176,57 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       onExecutionStateChange?.(false);
     };
   }, [loading, onExecutionStateChange, phase]);
+
+  useEffect(() => {
+    if (!isActive || selectionMode !== 'manual' || guidedSourceMode !== 'anchor') return;
+    let cancelled = false;
+    setAnchorLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await window.ipcRenderer.knowledge.listPage<{ items?: WanderKnowledgeCatalogItem[] }>({
+          query: anchorQuery.trim(),
+          limit: 20,
+          sort: 'updated-desc',
+        });
+        if (cancelled) return;
+        const normalizedItems = (Array.isArray(response?.items) ? response.items : [])
+          .map((item) => {
+            const title = String(item.title || '').trim();
+            if (!title) return null;
+            const kind = String(item.kind || '').trim();
+            return {
+              id: String(item.itemId || `${kind}:${title}`),
+              type: kind === 'youtube-video' ? 'video' as const : 'note' as const,
+              title,
+              content: String(item.previewText || item.author || item.siteName || '').trim(),
+              cover: String(item.coverUrl || item.thumbnailUrl || ''),
+              meta: {
+                kind,
+                author: item.author,
+                siteName: item.siteName,
+                sourceUrl: item.sourceUrl,
+                folderPath: item.folderPath,
+              },
+            };
+          })
+          .filter((item): item is WanderItem => Boolean(item));
+        setAnchorResults(normalizedItems);
+      } catch (error) {
+        console.error('Failed to load wander anchor items:', error);
+        if (!cancelled) {
+          setAnchorResults([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setAnchorLoading(false);
+        }
+      }
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [anchorQuery, guidedSourceMode, isActive, selectionMode]);
 
   const upsertProgressCard = useCallback((next: WanderProgressCard) => {
     setProgressCards((prev) => {
@@ -262,6 +349,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       selected_index: Number.isFinite(Number(result.selected_index))
         ? Math.max(0, Number(result.selected_index))
         : (Number.isFinite(Number(embedded.selected_index)) ? Math.max(0, Number(embedded.selected_index)) : 0),
+      method: result.method || embedded.method,
+      created_by: result.created_by || embedded.created_by,
+      createdBy: result.createdBy || embedded.createdBy,
     };
   }
 
@@ -375,7 +465,40 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       selected_index: Number.isFinite(Number(payload.selected_index ?? payload.selectedIndex))
         ? Math.max(0, Number(payload.selected_index ?? payload.selectedIndex))
         : 0,
+      method: String(payload.method || payload.sourceMethod || payload.source_mode || payload.sourceMode || '').trim() || undefined,
+      created_by: String(payload.created_by || payload.createdBy || '').trim() || undefined,
+      createdBy: String(payload.createdBy || payload.created_by || '').trim() || undefined,
     });
+  }
+
+  function normalizedTopicMethod(value: unknown): string {
+    return String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  }
+
+  function topicSourceLabel(result: WanderResult | null, recordItems: WanderItem[]): string {
+    const createdBy = String(result?.created_by || result?.createdBy || '').trim().toLowerCase();
+    const method = normalizedTopicMethod(result?.method);
+    if (['agent', 'ai', 'ai_agent', 'redclaw', 'content_topic_miner'].includes(createdBy)) {
+      return 'AI创作';
+    }
+    if ([
+      'ai_creation',
+      'content_topic_miner',
+      'knowledge_mining',
+      'knowledge_similar_mining',
+      'history_mining',
+      'trend_mining',
+    ].includes(method)) {
+      return 'AI创作';
+    }
+    if (method === 'comment_insight' || method === 'comment_demand_insight' || method.includes('comment')) {
+      return '评论洞察';
+    }
+    const isCommentInsight = recordItems.some((item) => {
+      const meta = item.meta || {};
+      return String(meta.sourceType || meta.source_type || '').trim() === 'xhs-comments';
+    });
+    return isCommentInsight ? '评论洞察' : '灵感漫步';
   }
 
   function normalizeWanderValidationIssues(raw: unknown): WanderValidationIssue[] {
@@ -409,6 +532,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   function getHistoryCreatedAt(record: WanderHistoryRecord): number {
     const timestamp = Number(record.createdAt ?? record.created_at);
     return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  function isAbandonedHistoryRecord(record: WanderHistoryRecord): boolean {
+    return String(record.status || '').trim() === 'abandoned' || Boolean(record.abandoned_at || record.abandonedAt);
   }
 
   function getHistoryTitle(record: WanderHistoryRecord): string {
@@ -485,12 +612,23 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     };
   };
 
+  const canStartCreate = Boolean(parsedResult && onNavigateToRedClaw && validationIssues.length === 0 && !parseError);
+
   const startCreateInRedClaw = () => {
-    if (!parsedResult || !onNavigateToRedClaw) return;
+    if (!parsedResult || !onNavigateToRedClaw || validationIssues.length > 0 || parseError) return;
     const selectedOption = parsedResult.options?.[selectedOptionIndex];
     const activeTopic = selectedOption?.topic || parsedResult.topic;
     const activeDirection = selectedOption?.content_direction || parsedResult.content_direction;
     const connectedSet = new Set(activeTopic.connections || []);
+    const initialArticleStrategy: TaskBriefArticleStrategy = {
+      articleStyle: '待根据选题和素材判断',
+      readerQuestion: activeTopic.title || '读者看到这个选题后最直接的问题是什么',
+      corePromise: activeDirection || '帮读者获得一个可发布、可理解、可转发的清晰判断',
+      titleDirection: '先判断读者问题，再生成直接疑问、反常识、悬念表达等候选',
+      openingDirection: '开头直接回应读者问题，不复盘素材来源',
+      structureDirection: '围绕一个明确观点推进，素材只作为事实、场景或表达参考',
+      avoidDirection: ['不要提到原文', '不要提到原笔记', '不要提到评论区', '不要把素材复盘写进正文'],
+    };
     const referenceCards = items.map((item, index) => {
       const folderRef = buildKnowledgeFolderReference(item);
       return {
@@ -512,6 +650,47 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         `素材路径：${folderRef.folderPath}`,
       ].join('\n');
     }).join('\n\n');
+    const knowledgeReferences = items.map((item) => {
+      const folderRef = buildKnowledgeFolderReference(item);
+      const meta = (item.meta || {}) as Record<string, unknown>;
+      return {
+        id: item.id,
+        title: item.title || '未命名内容',
+        sourceKind: typeof meta.sourceKind === 'string' ? meta.sourceKind : (item.type === 'video' ? 'youtube-video' : 'redbook-note'),
+        summary: String(item.content || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+        cover: resolveAssetUrl(item.cover),
+        sourceUrl: typeof meta.sourceUrl === 'string' ? meta.sourceUrl : undefined,
+        folderPath: folderRef.folderPath,
+        rootPath: folderRef.folderPath,
+        updatedAt: typeof meta.updatedAt === 'string' ? meta.updatedAt : undefined,
+      };
+    });
+    const taskBrief: TaskBriefSeed = {
+      taskType: 'wander_xhs_creation',
+      goal: `基于漫步选题《${activeTopic.title}》创作一篇独立小红书文案，并保存到稿件工程。`,
+      currentStage: 'research',
+      todo: [
+        { id: 'research', text: '判断是否需要外部调研，并读取必要素材', status: 'todo' },
+        { id: 'strategy', text: '确定文章打法、读者问题和结构方向', status: 'todo' },
+        { id: 'title', text: '调用 xhs-title 产出候选并选择最终标题', status: 'todo' },
+        { id: 'draft', text: '调用 writing-style 写正文并自检', status: 'todo' },
+        { id: 'save', text: '创建 wander 稿件工程并保存最终稿', status: 'todo' },
+      ],
+      importantContext: [
+        { kind: 'constraint', text: '正文必须是一篇独立小红书内容，不得提到原文、原笔记、评论区或素材来源痕迹。' },
+        { kind: 'source', text: `参考素材数量：${items.length}。素材目录只作为后台参考，写作前按需读取。` },
+        { kind: 'decision', text: 'Electron 开源版保存路径使用 app_cli manuscripts.createProject / manuscripts.writeCurrent。' },
+      ],
+      articleStrategy: initialArticleStrategy,
+      titleCandidates: [],
+      domain: {
+        platform: 'xiaohongshu',
+        topicTitle: activeTopic.title,
+        contentDirection: activeDirection || '',
+        referenceSourceMode: 'wander',
+        forbiddenFinalPhrases: ['原文', '原笔记', '评论区', '评论里', '有用户评论', '大家在评论区问'],
+      },
+    };
 
     const content = [
       '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
@@ -534,6 +713,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       `标题：${activeTopic.title}`,
       `内容方向：${activeDirection || ''}`,
       '',
+      buildTaskBriefPromptSection(taskBrief),
+      '',
       '## 参考素材（来自漫步）',
       materialText,
       '',
@@ -553,11 +734,24 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       sessionRouting: 'new',
       taskHints: {
         intent: 'manuscript_creation',
+        executionProfile: 'artifact-authoring',
+        artifactType: 'manuscript',
+        writeTarget: 'manuscripts://current',
+        requiredSkill: ['writing-style', 'xhs-title'],
+        activeSkills: ['writing-style', 'xhs-title'],
         allowedTools: AUTHORING_ALLOWED_TOOLS,
         allowedAppCliActions: AUTHORING_ALLOWED_APP_CLI_ACTIONS,
+        allowedOperateActions: [...AUTHORING_ALLOWED_OPERATE_ACTIONS, 'web.search'],
+        allowedWriteTargets: ['manuscripts://current'],
         requireSourceRead: true,
         requireProfileRead: true,
         requireSave: true,
+        requireTaskBrief: true,
+        requireSkillInvocations: ['xhs-title', 'writing-style'],
+        taskBrief,
+        forbiddenFinalPhrases: ['原文', '原笔记', '评论区', '评论里', '有用户评论', '大家在评论区问'],
+        deferredDiscovery: false,
+        teamEscalation: 'disabled',
         saveArtifact: 'redpost',
         saveSubdir: 'wander',
         platform: 'xiaohongshu',
@@ -570,6 +764,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         title: '漫步参考素材',
         items: referenceCards,
       },
+      knowledgeReferences,
     });
   };
 
@@ -635,9 +830,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   };
 
   // 加载历史记录列表
-  const loadHistoryList = useCallback(async () => {
+  const loadHistoryList = useCallback(async (options?: { includeAbandoned?: boolean }) => {
     try {
-      const list = await window.ipcRenderer.invoke('wander:list-history') as WanderHistoryRecord[];
+      const list = await window.ipcRenderer.wander.listHistory<WanderHistoryRecord[]>({
+        includeAbandoned: Boolean(options?.includeAbandoned),
+      });
       const normalized = Array.isArray(list) ? list : [];
       setHistoryList(normalized);
       return normalized;
@@ -674,22 +871,44 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     }
   };
 
+  const resetToIdleTopicState = () => {
+    setPhase('idle');
+    setShowFinal(false);
+    setParsedResult(null);
+    setItems([]);
+    setCurrentHistoryId(null);
+  };
+
   // 删除历史记录
   const deleteHistory = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await window.ipcRenderer.invoke('wander:delete-history', id);
+    await window.ipcRenderer.wander.deleteHistory(id);
     const newList = historyList.filter(h => h.id !== id);
     setHistoryList(newList);
     if (currentHistoryId === id) {
-      if (newList.length > 0) {
-        loadHistory(newList[0]);
+      const activeList = newList.filter(record => !isAbandonedHistoryRecord(record));
+      if (activeList.length > 0) {
+        loadHistory(activeList[0]);
       } else {
-        setPhase('idle');
-        setShowFinal(false);
-        setParsedResult(null);
-        setItems([]);
-        setCurrentHistoryId(null);
+        resetToIdleTopicState();
       }
+    }
+  };
+
+  const abandonCurrentTopic = async () => {
+    if (!currentHistoryId || loading) return;
+    try {
+      await window.ipcRenderer.wander.abandonHistory(currentHistoryId);
+      const nextList = await loadHistoryList({ includeAbandoned: showAbandonedTopics });
+      const activeList = nextList.filter(record => !isAbandonedHistoryRecord(record));
+      if (activeList.length > 0) {
+        loadHistory(activeList[0]);
+      } else {
+        resetToIdleTopicState();
+      }
+    } catch (error) {
+      console.error('Failed to abandon wander topic:', error);
+      setParseError('放弃失败，请稍后重试');
     }
   };
 
@@ -699,7 +918,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     }
     const [, list] = await Promise.all([
       syncWanderSettings(),
-      loadHistoryList(),
+      loadHistoryList({ includeAbandoned: showAbandonedTopics }),
     ]);
     if (list.length > 0 && currentHistoryId) {
       const currentRecord = list.find((item) => item.id === currentHistoryId);
@@ -724,7 +943,35 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       setItems([]);
       setCurrentHistoryId(null);
     }
-  }, [currentHistoryId, items.length, loadHistoryList, loading, parsedResult, phase, showFinal, syncWanderSettings]);
+  }, [currentHistoryId, items.length, loadHistoryList, loading, parsedResult, phase, showAbandonedTopics, showFinal, syncWanderSettings]);
+
+  const visibleHistoryList = showAbandonedTopics
+    ? historyList
+    : historyList.filter(record => !isAbandonedHistoryRecord(record));
+  const currentTopicSourceLabel = topicSourceLabel(parsedResult, items);
+
+  const handleGuidedSourceModeChange = (mode: WanderGuidedSourceMode) => {
+    setGuidedSourceMode(mode);
+    if (mode === 'topic') {
+      setSelectedAnchor(null);
+      return;
+    }
+    setGuidedTopic('');
+  };
+
+  const buildGuidedTopicConstraint = () => {
+    if (guidedSourceMode === 'topic') {
+      return guidedTopic.trim();
+    }
+    if (!selectedAnchor) {
+      return '';
+    }
+    const summary = selectedAnchor.content.trim();
+    return [
+      `围绕锚点素材「${selectedAnchor.title}」延展选题。`,
+      summary ? `素材摘要：${summary}` : '',
+    ].filter(Boolean).join('\n');
+  };
 
   usePageRefresh({
     isActive,
@@ -736,10 +983,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     const handleSettingsUpdated = () => {
       void syncWanderSettings();
     };
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
-    return () => {
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
-    };
+    return subscribeSettingsUpdated(handleSettingsUpdated);
   }, [isActive, syncWanderSettings]);
 
   useEffect(() => {
@@ -771,9 +1015,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         totalSteps: Number.isFinite(Number(data.totalSteps)) ? Number(data.totalSteps) : undefined,
       });
     };
-    window.ipcRenderer.on('wander:progress', handleWanderProgress as (...args: unknown[]) => void);
+    window.ipcRenderer.wander.onProgress(handleWanderProgress as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('wander:progress', handleWanderProgress as (...args: unknown[]) => void);
+      window.ipcRenderer.wander.offProgress(handleWanderProgress as (...args: unknown[]) => void);
     };
   }, [upsertProgressCard]);
 
@@ -809,7 +1053,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
           setLiveStatus(toStableTwoLineText('漫步完成'));
           if (historyId) {
             setCurrentHistoryId(historyId);
-            void loadHistoryList();
+            void loadHistoryList({ includeAbandoned: showAbandonedTopics });
           }
         } else {
           setParsedResult(null);
@@ -823,18 +1067,26 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       activeRequestIdRef.current = '';
     };
 
-    window.ipcRenderer.on('wander:result', handleWanderResult as (...args: unknown[]) => void);
+    window.ipcRenderer.wander.onResult(handleWanderResult as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('wander:result', handleWanderResult as (...args: unknown[]) => void);
+      window.ipcRenderer.wander.offResult(handleWanderResult as (...args: unknown[]) => void);
     };
-  }, [loadHistoryList]);
+  }, [loadHistoryList, showAbandonedTopics]);
 
   const startWander = async () => {
+    const effectiveSelectionMode = selectionMode;
+    const normalizedGuidedTopic = buildGuidedTopicConstraint();
+    if (effectiveSelectionMode === 'manual' && !normalizedGuidedTopic) {
+      setParseError(guidedSourceMode === 'topic' ? '请先输入选题方向。' : '请先选择一篇锚点笔记。');
+      setPhase('done');
+      setShowFinal(true);
+      return;
+    }
     const requestId = `wander-ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     activeRequestIdRef.current = requestId;
     setPhase('running');
     setLoading(true);
-    setLiveStatus(toStableTwoLineText('正在初始化漫步...'));
+    setLiveStatus(toStableTwoLineText(effectiveSelectionMode === 'manual' ? '正在按方向选择素材...' : '正在初始化漫步...'));
     setProgressCards([]);
     setParsedResult(null);
     setSelectedOptionIndex(0);
@@ -847,7 +1099,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => resolve());
       });
-      const randomItems = await window.ipcRenderer.invoke('wander:get-random') as WanderItem[];
+      const randomItems = await window.ipcRenderer.wander.getRandom<WanderItem[]>();
       setItems(randomItems);
       activeItemsRef.current = randomItems;
       if (randomItems.length === 0) {
@@ -859,11 +1111,13 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         return;
       }
 
-      window.ipcRenderer.send('wander:brainstorm', {
+      window.ipcRenderer.wander.brainstorm({
         items: randomItems,
         options: {
           multiChoice: multiChoiceEnabled,
           requestId,
+          sourceMode: effectiveSelectionMode === 'manual' ? 'guided' : 'random',
+          guidedTopic: effectiveSelectionMode === 'manual' ? normalizedGuidedTopic : '',
         },
       });
     } catch (error) {
@@ -910,7 +1164,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
           {phase !== 'idle' && (
             <>
               <button
-                onClick={() => { void loadHistoryList(); setShowHistory(true); }}
+                onClick={() => { void loadHistoryList({ includeAbandoned: showAbandonedTopics }); setShowHistory(true); }}
                 className="flex items-center gap-2 px-3.5 py-1.5 text-[12px] font-bold text-text-tertiary hover:text-text-primary hover:bg-black/[0.04] rounded-xl transition-all active:scale-95"
               >
                 <History className="w-3.5 h-3.5" />
@@ -957,22 +1211,167 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                 <div className="relative mb-10">
                     <div className="absolute inset-0 bg-accent-primary/10 rounded-[32px] blur-2xl animate-pulse" />
                     <div className="relative flex h-24 w-24 items-center justify-center rounded-[32px] bg-white shadow-[0_24px_48px_-12px_rgba(0,0,0,0.12)] border border-white/60">
-                        <Dices className="w-10 h-10 text-accent-primary" />
+                        {selectionMode === 'manual'
+                            ? <Shuffle className="w-10 h-10 text-accent-primary" />
+                            : <Dices className="w-10 h-10 text-accent-primary" />}
                     </div>
                 </div>
-                
-                <h2 className="text-2xl font-extrabold tracking-tight text-text-primary mb-4">开启一次随机漫步</h2>
-                <p className="text-[15px] leading-relaxed text-text-tertiary font-medium mb-10 px-8">
-                    系统将从您的知识库中随机抽取内容，
-                    寻找它们之间的隐秘关联，激发前所未有的创作灵感。
-                </p>
+
+                <div className="mb-6 inline-flex rounded-xl bg-black/[0.04] p-0.5">
+                  {[
+                    ['random', '随机选题'] as const,
+                    ['manual', '按方向选题'] as const,
+                  ].map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setSelectionMode(mode)}
+                      className={clsx(
+                        'h-8 rounded-lg px-4 text-[12px] font-black transition-all',
+                        selectionMode === mode
+                          ? 'bg-white text-text-primary shadow-sm'
+                          : 'text-text-tertiary hover:text-text-primary'
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <h2 className="text-2xl font-extrabold tracking-tight text-text-primary mb-4">
+                    {selectionMode === 'manual' ? '按方向选题' : '开启一次随机选题'}
+                </h2>
+                {selectionMode === 'manual' ? (
+                  <div className="mb-8 w-full max-w-2xl space-y-4 text-left">
+                    <div className="mx-auto flex w-fit rounded-xl bg-black/[0.04] p-0.5">
+                      {[
+                        ['topic', '输入主题'] as const,
+                        ['anchor', '选择锚点'] as const,
+                      ].map(([mode, label]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => handleGuidedSourceModeChange(mode)}
+                          className={clsx(
+                            'h-8 rounded-lg px-4 text-[12px] font-black transition-all',
+                            guidedSourceMode === mode
+                              ? 'bg-white text-text-primary shadow-sm'
+                              : 'text-text-tertiary hover:text-text-primary'
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {guidedSourceMode === 'topic' ? (
+                      <label className="block">
+                        <span className="mb-1.5 block text-[11px] font-black uppercase tracking-widest text-text-tertiary">主题</span>
+                        <input
+                          value={guidedTopic}
+                          onFocus={() => {
+                            if (guidedSourceMode !== 'topic') handleGuidedSourceModeChange('topic');
+                          }}
+                          onChange={(event) => {
+                            setGuidedSourceMode('topic');
+                            setSelectedAnchor(null);
+                            setAnchorQuery('');
+                            setAnchorResults([]);
+                            setGuidedTopic(event.target.value);
+                          }}
+                          placeholder="比如：轻断食反弹"
+                          className="h-11 w-full rounded-xl border border-black/[0.06] bg-white px-3 text-[14px] font-bold text-text-primary outline-none transition focus:border-accent-primary/40 focus:ring-2 focus:ring-accent-primary/10"
+                        />
+                      </label>
+                    ) : (
+                      <div className="space-y-3">
+                        <label className="block">
+                          <span className="mb-1.5 block text-[11px] font-black uppercase tracking-widest text-text-tertiary">锚点笔记</span>
+                          <div className="relative">
+                            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary/60" />
+                            <input
+                              value={anchorQuery}
+                              onFocus={() => {
+                                if (guidedSourceMode !== 'anchor') handleGuidedSourceModeChange('anchor');
+                              }}
+                              onChange={(event) => {
+                                setGuidedSourceMode('anchor');
+                                setGuidedTopic('');
+                                setAnchorQuery(event.target.value);
+                              }}
+                              placeholder="搜索知识库"
+                              className="h-11 w-full rounded-xl border border-black/[0.06] bg-white pl-9 pr-3 text-[14px] font-bold text-text-primary outline-none transition focus:border-accent-primary/40 focus:ring-2 focus:ring-accent-primary/10"
+                            />
+                          </div>
+                        </label>
+
+                        <div className="rounded-2xl border border-black/[0.05] bg-white/80 p-2 shadow-sm">
+                          {selectedAnchor && (
+                            <div className="mb-2 flex items-center justify-between gap-3 rounded-xl bg-accent-primary/5 px-3 py-2">
+                              <div className="min-w-0">
+                                <div className="text-[11px] font-black uppercase tracking-widest text-accent-primary">已选锚点</div>
+                                <div className="truncate text-[13px] font-extrabold text-text-primary">{selectedAnchor.title}</div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedAnchor(null)}
+                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-tertiary hover:bg-black/[0.05] hover:text-text-primary"
+                                aria-label="移除锚点"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          )}
+                          <div className="max-h-72 overflow-y-auto custom-scrollbar">
+                            {anchorLoading ? (
+                              <div className="px-3 py-8 text-center text-[12px] font-bold text-text-tertiary">加载知识库...</div>
+                            ) : anchorResults.length > 0 ? (
+                              anchorResults.map((item) => {
+                                const selected = selectedAnchor?.id === item.id;
+                                return (
+                                  <button
+                                    key={item.id}
+                                    type="button"
+                                    onClick={() => setSelectedAnchor(selected ? null : item)}
+                                    className={clsx(
+                                      'flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition',
+                                      selected ? 'bg-accent-primary/5' : 'hover:bg-black/[0.03]'
+                                    )}
+                                  >
+                                    <div className="mt-0.5 shrink-0 text-accent-primary">
+                                      {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-text-tertiary/60" />}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="truncate text-[13px] font-extrabold text-text-primary">{item.title}</div>
+                                      <div className="mt-0.5 line-clamp-2 text-[11px] font-bold leading-relaxed text-text-tertiary">{item.content || '暂无摘要'}</div>
+                                    </div>
+                                  </button>
+                                );
+                              })
+                            ) : (
+                              <div className="px-3 py-8 text-center text-[12px] font-bold text-text-tertiary">
+                                {anchorQuery.trim() ? '没有匹配的笔记' : '暂无可选知识库内容'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[15px] leading-relaxed text-text-tertiary font-medium mb-10 px-8">
+                      系统将从您的知识库中随机抽取内容，
+                      寻找它们之间的隐秘关联，激发前所未有的创作灵感。
+                  </p>
+                )}
 
                 <button
                     onClick={startWander}
-                    className="group px-8 py-3 bg-text-primary hover:bg-text-primary/90 text-white rounded-[20px] text-[15px] font-extrabold transition-all flex items-center gap-3 shadow-[0_20px_40px_-10px_rgba(0,0,0,0.2)] active:scale-95"
+                    disabled={selectionMode === 'manual' && !hasGuidedInput}
+                    className="group px-8 py-3 bg-text-primary hover:bg-text-primary/90 text-white rounded-[20px] text-[15px] font-extrabold transition-all flex items-center gap-3 shadow-[0_20px_40px_-10px_rgba(0,0,0,0.2)] active:scale-95 disabled:opacity-40"
                 >
                     <Sparkles className="w-5 h-5 text-accent-primary group-hover:animate-pulse" />
-                    <span>开始灵感碰撞</span>
+                    <span>{selectionMode === 'manual' ? '按方向选题' : '开始灵感碰撞'}</span>
                 </button>
             </div>
         </div>
@@ -983,7 +1382,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
               {loading && (
                 <div className="flex flex-col items-center justify-center min-h-[60vh] py-10 animate-in fade-in zoom-in-[0.98] duration-1000">
                   <WanderLoadingDice className="mb-10" size={76} />
-                  
+
                   <div className="w-full max-w-xl space-y-6">
                     <div className="text-center space-y-2">
                         <h3 className="text-lg font-extrabold tracking-tight text-text-primary uppercase tracking-[0.2em]">Deep Thinking</h3>
@@ -1097,11 +1496,23 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                                     <div className="text-[15px] font-black text-text-primary tracking-tight">灵感选题</div>
                                     <div className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest">Selected Inspiration Result</div>
                                 </div>
+                                <span className="rounded-lg border border-border bg-surface-secondary px-2 py-1 text-[10px] font-black text-text-tertiary">
+                                    {currentTopicSourceLabel}
+                                </span>
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
+                                    type="button"
+                                    onClick={() => void abandonCurrentTopic()}
+                                    disabled={!currentHistoryId || loading}
+                                    className="flex h-10 items-center gap-2 px-4 border border-border text-text-secondary text-[13px] font-extrabold rounded-xl hover:bg-red-50 hover:border-red-100 hover:text-red-600 transition-all active:scale-95 disabled:opacity-40"
+                                >
+                                    <X className="w-4 h-4" />
+                                    放弃
+                                </button>
+                                <button
                                     onClick={startCreateInRedClaw}
-                                    disabled={!onNavigateToRedClaw}
+                                    disabled={!canStartCreate}
                                     className="flex h-10 items-center gap-2 px-5 bg-accent-primary text-white text-[13px] font-extrabold rounded-xl shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95 disabled:opacity-40"
                                 >
                                     <MessageSquarePlus className="w-4 h-4" />
@@ -1168,14 +1579,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                         <div className="text-[12px] font-black text-text-tertiary uppercase tracking-widest">灵感来源素材 (Wander Sources)</div>
                         <div className="h-[1px] flex-1 bg-black/[0.04] ml-6" />
                     </div>
-                    
+
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                       {items.map((item, index) => {
                         const activeConnections = parsedResult.options?.[selectedOptionIndex]?.topic.connections || parsedResult.topic.connections || [];
                         const isConnected = activeConnections.includes(index + 1);
                         const isDocItem = (item.meta as Record<string, unknown> | undefined)?.sourceType === 'document';
                         const itemBadge = item.type === 'video' ? 'VIDEO' : (isDocItem ? 'DOCUMENT' : 'NOTE');
-                        
+
                         return (
                           <div
                             key={item.id}
@@ -1214,7 +1625,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                                   CORE REF
                                 </div>
                               )}
-                              
+
                               <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                             </div>
 
@@ -1267,22 +1678,42 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                     <h3 className="text-[17px] font-black text-text-primary tracking-tight">灵感历史</h3>
                     <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest mt-0.5">Wander Inspiration Vault</p>
                 </div>
-                <button onClick={() => setShowHistory(false)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextValue = !showAbandonedTopics;
+                      setShowAbandonedTopics(nextValue);
+                      void loadHistoryList({ includeAbandoned: nextValue });
+                    }}
+                    className="flex h-9 items-center gap-1.5 rounded-xl bg-black/[0.04] px-3 text-[11px] font-bold text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-95"
+                  >
+                    {showAbandonedTopics ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    {showAbandonedTopics ? '隐藏已放弃' : '展示已放弃'}
+                  </button>
+                  <button onClick={() => setShowHistory(false)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90">
                     <X className="w-4.5 h-4.5" />
-                </button>
+                  </button>
+                </div>
             </div>
             <div className="overflow-y-auto flex-1 p-3 space-y-1.5 custom-scrollbar">
-              {historyList.length === 0 ? (
+              {visibleHistoryList.length === 0 ? (
                 <div className="p-12 text-center">
                     <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-black/[0.02] text-text-tertiary/20 mx-auto mb-4">
                         <History className="w-8 h-8" />
                     </div>
-                    <p className="text-[13px] font-bold text-text-tertiary/60">暂无漫步历史记录</p>
+                    <p className="text-[13px] font-bold text-text-tertiary/60">{showAbandonedTopics ? '暂无漫步历史记录' : '暂无待处理选题'}</p>
                 </div>
               ) : (
-                historyList.map(record => {
-                  const title = getHistoryTitle(record);
+                visibleHistoryList.map(record => {
+                  const parsedHistoryResult = normalizeWanderResultPayload(record.result);
+                  const recordItems = normalizeWanderItemsPayload(record.items);
+                  const title = parsedHistoryResult?.options?.[resolveSelectedOptionIndex(parsedHistoryResult)]?.topic.title
+                    || parsedHistoryResult?.topic.title
+                    || getHistoryTitle(record);
+                  const sourceLabel = topicSourceLabel(parsedHistoryResult, recordItems);
                   const isActive = currentHistoryId === record.id;
+                  const abandoned = isAbandonedHistoryRecord(record);
                   return (
                     <div
                       key={record.id}
@@ -1291,19 +1722,23 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                       onClick={() => loadHistory(record)}
                       className={clsx(
                         "px-5 py-4 cursor-pointer rounded-2xl transition-all flex items-center justify-between group relative overflow-hidden",
-                        isActive 
-                            ? "bg-accent-primary/5 ring-1 ring-accent-primary/10" 
-                            : "hover:bg-black/[0.02] border border-transparent"
+                        isActive
+                            ? "bg-accent-primary/5 ring-1 ring-accent-primary/10"
+                            : abandoned
+                              ? "opacity-60 hover:bg-black/[0.02] border border-transparent"
+                              : "hover:bg-black/[0.02] border border-transparent"
                       )}
                     >
                       <div className="flex-1 min-w-0">
-                        <div className={clsx("text-[14px] font-extrabold truncate mb-1 tracking-tight", isActive ? "text-accent-primary" : "text-text-primary")}>
+                        <div className={clsx("text-[14px] font-extrabold truncate mb-1 tracking-tight", isActive ? "text-accent-primary" : abandoned ? "text-text-secondary" : "text-text-primary")}>
                           {title}
                         </div>
                         <div className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-tighter flex items-center gap-2">
                           <span>{formatDate(getHistoryCreatedAt(record))}</span>
+                          <span className="text-text-tertiary font-black">{sourceLabel}</span>
                           {isActive && <span className="w-1 h-1 rounded-full bg-accent-primary" />}
                           {isActive && <span className="text-accent-primary font-black">CURRENT</span>}
+                          {abandoned && <span className="text-text-tertiary font-black">已放弃</span>}
                         </div>
                       </div>
                       <button

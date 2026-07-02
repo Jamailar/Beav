@@ -1,4 +1,6 @@
-export type NotificationSource = 'runtime' | 'generation' | 'redclaw' | 'system';
+import type { SettingsNavigationTarget } from '../features/app-shell/types';
+
+export type NotificationSource = 'runtime' | 'generation' | 'redclaw' | 'system' | 'server';
 export type NotificationLevel = 'success' | 'error' | 'attention' | 'info';
 export type NotificationSound = 'success' | 'failure' | 'attention' | 'none';
 
@@ -7,7 +9,14 @@ export type NotificationAction =
       id: string;
       label: string;
       action: 'navigate';
-      payload: { view: NotificationView };
+      payload: {
+        view: NotificationView;
+        docketId?: string;
+        escalationId?: string;
+        settingsTab?: SettingsNavigationTarget['tab'];
+        aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
+        requestId?: string;
+      };
     }
   | {
       id: string;
@@ -20,13 +29,18 @@ export type NotificationAction =
       label: string;
       action: 'retry-generation';
       payload: { jobId: string };
+    }
+  | {
+      id: string;
+      label: string;
+      action: 'open-feedback-report';
+      payload: { feedbackId?: string };
     };
 
 export type NotificationView =
-  | 'chat'
   | 'redclaw'
+  | 'approval'
   | 'generation-studio'
-  | 'workboard'
   | 'manuscripts'
   | 'settings';
 
@@ -48,6 +62,26 @@ export interface NotificationEnvelope {
 
 export interface NotificationRecord extends NotificationEnvelope {
   read: boolean;
+}
+
+export interface ServerNotificationItem {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  payload: Record<string, unknown>;
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface ServerNotificationState {
+  appSlug: string;
+  userId: string;
+  cursor: string | null;
+  unreadCount: number;
+  items: ServerNotificationItem[];
+  lastSyncAt: string | null;
 }
 
 export type NotificationRuleMap = {

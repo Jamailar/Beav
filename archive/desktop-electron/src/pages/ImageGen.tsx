@@ -56,7 +56,7 @@ export function ImageGen() {
     const [model, setModel] = useState('');
     const [aspectRatio, setAspectRatio] = useState('3:4');
     const [size, setSize] = useState('');
-    const [quality, setQuality] = useState('auto');
+    const [quality, setQuality] = useState('medium');
     const [generationMode, setGenerationMode] = useState<'text-to-image' | 'reference-guided' | 'image-to-image'>('text-to-image');
     const [referenceImages, setReferenceImages] = useState<Array<{ name: string; dataUrl: string }>>([]);
     const [isReadingRefImages, setIsReadingRefImages] = useState(false);
@@ -72,7 +72,7 @@ export function ImageGen() {
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' || next.image_quality === 'medium' || next.image_quality === 'high' ? next.image_quality : 'medium');
         } catch (e) {
             console.error('Failed to load image settings:', e);
             setSettings({});
@@ -99,7 +99,7 @@ export function ImageGen() {
             const effectiveMode = referenceImages.length > 0
                 ? generationMode
                 : 'text-to-image';
-            const result = await window.ipcRenderer.invoke('image-gen:generate', {
+            const result = await window.ipcRenderer.imageGeneration.generate({
                 prompt,
                 bypassPromptOptimizer: true,
                 projectId: projectId.trim() || undefined,
@@ -112,7 +112,7 @@ export function ImageGen() {
                 providerTemplate: settings.image_provider_template || undefined,
                 aspectRatio: aspectRatio.trim() || undefined,
                 size: size.trim() || undefined,
-                quality: quality.trim() || undefined,
+                quality: quality.trim() || 'medium',
             }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
 
             if (!result?.success) {
@@ -160,7 +160,7 @@ export function ImageGen() {
     const hasConfig = Boolean(resolvedEndpoint) && Boolean(resolvedApiKey);
 
     return (
-        <div className="h-full flex flex-col bg-background">
+        <div className="h-full flex flex-col">
             <div className="border-b border-border px-6 py-4 flex items-center gap-3">
                 <h1 className="text-lg font-semibold text-text-primary">生图</h1>
                 <div className="text-xs text-text-tertiary">根据提示词生成配图并自动写入媒体库</div>
@@ -175,7 +175,7 @@ export function ImageGen() {
                         </span>
                     </button>
                     <button
-                        onClick={() => void window.ipcRenderer.invoke('media:open-root')}
+                        onClick={() => void window.ipcRenderer.media.openRoot()}
                         className="px-3 py-1.5 text-xs rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
                     >
                         <span className="inline-flex items-center gap-1.5">
@@ -292,6 +292,10 @@ export function ImageGen() {
                             <option value="1024x1024">1024x1024</option>
                             <option value="1024x1536">1024x1536</option>
                             <option value="1536x1024">1536x1024</option>
+                            <option value="1536x2048">1536x2048</option>
+                            <option value="2048x1536">2048x1536</option>
+                            <option value="1152x2048">1152x2048</option>
+                            <option value="2048x1152">2048x1152</option>
                             <option value="auto">auto</option>
                         </select>
                         <select
@@ -299,9 +303,9 @@ export function ImageGen() {
                             onChange={(event) => setQuality(event.target.value)}
                             className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
                         >
-                            <option value="standard">standard</option>
+                            <option value="low">low</option>
+                            <option value="medium">medium</option>
                             <option value="high">high</option>
-                            <option value="auto">auto</option>
                         </select>
                         <select
                             value={count}
@@ -352,7 +356,7 @@ export function ImageGen() {
                                         <div className="text-[11px] text-text-tertiary truncate">{asset.projectId || '(无项目ID)'}</div>
                                         <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || asset.size || ''} · {asset.quality || ''}</div>
                                         <button
-                                            onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                            onClick={() => void window.ipcRenderer.media.open({ assetId: asset.id })}
                                             className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
                                         >
                                             <span className="inline-flex items-center gap-1">

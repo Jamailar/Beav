@@ -9,6 +9,7 @@ import {
 type Options = {
     enabled?: boolean;
     bootstrapFilter?: MediaJobListFilter | null;
+    bootstrapIncludesTrackedJobs?: boolean;
 };
 
 export function useMediaJobSubscription(
@@ -22,6 +23,7 @@ export function useMediaJobSubscription(
     );
     const jobIdsKey = normalizedJobIds.join('|');
     const bootstrapFilterKey = JSON.stringify(options?.bootstrapFilter || null);
+    const bootstrapIncludesTrackedJobs = Boolean(options?.bootstrapIncludesTrackedJobs);
 
     useEffect(() => {
         if (!enabled) return undefined;
@@ -30,6 +32,10 @@ export function useMediaJobSubscription(
         const handleJobUpdated = (_event: unknown, payload: unknown) => {
             const projection = normalizeMediaJobProjection(payload);
             if (!projection) return;
+            if (projection.archivedAt && !options?.bootstrapFilter?.includeArchived) {
+                mediaJobsStore.removeJob(projection.jobId);
+                return;
+            }
             mediaJobsStore.upsertJob(projection);
         };
         const handleJobLog = (_event: unknown, payload: unknown) => {
@@ -37,37 +43,60 @@ export function useMediaJobSubscription(
             if (!log) return;
             mediaJobsStore.appendLog(log);
         };
+        const refreshSnapshot = async () => {
+            try {
+                const bootstrappedJobIds = new Set<string>();
+                if (options?.bootstrapFilter) {
+                    const result = await window.ipcRenderer.generation.listJobs(options.bootstrapFilter) as {
+                        items?: unknown[];
+                    };
+                    if (!cancelled && Array.isArray(result?.items)) {
+                        const jobs = result.items
+                            .map(normalizeMediaJobProjection)
+                            .filter((item): item is NonNullable<typeof item> => Boolean(item));
+                        for (const job of jobs) {
+                            bootstrappedJobIds.add(job.jobId);
+                        }
+                        mediaJobsStore.upsertJobs(jobs);
+                    }
+                }
+
+                for (const jobId of normalizedJobIds) {
+                    if (bootstrapIncludesTrackedJobs && bootstrappedJobIds.has(jobId)) continue;
+                    const projection = normalizeMediaJobProjection(
+                        await window.ipcRenderer.generation.getJob(jobId),
+                    );
+                    if (cancelled || !projection) continue;
+                    mediaJobsStore.upsertJob(projection);
+                }
+            } catch (error) {
+                console.warn('Failed to refresh media jobs snapshot:', error);
+            }
+        };
+        const handleVisibilityRefresh = () => {
+            if (document.visibilityState === 'visible') {
+                void refreshSnapshot();
+            }
+        };
 
         window.ipcRenderer.generation.onJobUpdated(handleJobUpdated);
         window.ipcRenderer.generation.onJobLog(handleJobLog);
-
-        void (async () => {
-            if (options?.bootstrapFilter) {
-                const result = await window.ipcRenderer.generation.listJobs(options.bootstrapFilter) as {
-                    items?: unknown[];
-                };
-                if (!cancelled && Array.isArray(result?.items)) {
-                    mediaJobsStore.upsertJobs(
-                        result.items
-                            .map(normalizeMediaJobProjection)
-                            .filter((item): item is NonNullable<typeof item> => Boolean(item)),
-                    );
-                }
+        window.addEventListener('focus', handleVisibilityRefresh);
+        document.addEventListener('visibilitychange', handleVisibilityRefresh);
+        const reconcileTimer = window.setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                void refreshSnapshot();
             }
-
-            for (const jobId of normalizedJobIds) {
-                const projection = normalizeMediaJobProjection(
-                    await window.ipcRenderer.generation.getJob(jobId),
-                );
-                if (cancelled || !projection) continue;
-                mediaJobsStore.upsertJob(projection);
-            }
-        })();
+        }, 15_000);
+        void refreshSnapshot();
 
         return () => {
             cancelled = true;
+            window.clearInterval(reconcileTimer);
+            window.removeEventListener('focus', handleVisibilityRefresh);
+            document.removeEventListener('visibilitychange', handleVisibilityRefresh);
             window.ipcRenderer.generation.offJobUpdated(handleJobUpdated);
             window.ipcRenderer.generation.offJobLog(handleJobLog);
         };
-    }, [bootstrapFilterKey, enabled, jobIdsKey, normalizedJobIds, options?.bootstrapFilter]);
+    }, [bootstrapFilterKey, bootstrapIncludesTrackedJobs, enabled, jobIdsKey, normalizedJobIds, options?.bootstrapFilter]);
 }

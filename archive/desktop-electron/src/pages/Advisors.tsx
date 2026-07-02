@@ -2,10 +2,11 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { Users, Plus, Pencil, Trash2, Upload, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Download, MoreHorizontal, History, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
+import { APP_BRAND } from '../config/brand';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 
-interface Advisor {
+export interface Advisor {
     id: string;
     name: string;
     avatar: string;
@@ -13,6 +14,20 @@ interface Advisor {
     systemPrompt: string;
     knowledgeLanguage?: string;
     knowledgeFiles: string[];
+    memberSkillRef?: string;
+    memberSkillStatus?: string;
+    memberSkillVersion?: string;
+    memberSkillLastDistilledAt?: string;
+    memberSkillLastError?: string;
+    memberSkillCandidateVersion?: string;
+    memberSkillCandidatePath?: string;
+    memberSkillCandidateCreatedAt?: string;
+    memberSkillCandidateSourceEvent?: string;
+    detectedKnowledgeLanguage?: string;
+    languageDetectionStatus?: string;
+    languageConfidence?: number;
+    redclawVisible?: boolean;
+    redclawOrder?: number;
     createdAt: string;
 }
 
@@ -53,10 +68,22 @@ const buildAdvisorInitialContext = (advisor: Advisor): string => {
         advisor.personality ? `成员定位：${advisor.personality}` : null,
         `知识库语言：${advisor.knowledgeLanguage || '中文'}`,
         advisor.knowledgeFiles.length > 0 ? `已接入知识文件：${advisor.knowledgeFiles.length} 个` : '当前暂无知识文件',
+        advisor.memberSkillRef ? `成员技能：${advisor.memberSkillRef}（${advisor.memberSkillStatus || 'ready'}）` : null,
         '请始终以该成员身份回答，保持表达风格、专业倾向和角色设定一致。',
         advisor.systemPrompt ? `系统设定：\n${advisor.systemPrompt}` : null,
     ];
     return sections.filter(Boolean).join('\n\n');
+};
+
+const buildAdvisorSessionMetadata = (advisor: Advisor): Record<string, unknown> => {
+    const metadata: Record<string, unknown> = {
+        advisorId: advisor.id,
+    };
+    if (advisor.memberSkillRef) {
+        metadata.memberSkillRef = advisor.memberSkillRef;
+        metadata.activeSkills = [advisor.memberSkillRef];
+    }
+    return metadata;
 };
 
 const getAdvisorWelcomeAvatarText = (advisor: Advisor): string => {
@@ -73,6 +100,14 @@ const sortAdvisorSessionItems = (items: ContextChatSessionListItem[]): ContextCh
         const rightUpdatedAt = String(right.chatSession?.updatedAt || '').trim();
         return rightUpdatedAt.localeCompare(leftUpdatedAt);
     });
+};
+
+const advisorSessionAcpLabel = (session: ContextChatSessionListItem): string => {
+    const metadata = session.metadata && typeof session.metadata === 'object'
+        ? session.metadata as Record<string, unknown>
+        : null;
+    if (String(metadata?.source || '').trim() !== 'acp') return '';
+    return String(metadata?.sourceLabel || 'ACP: External Agent').trim();
 };
 
 const formatAdvisorSessionTime = (value?: string): string => {
@@ -96,6 +131,7 @@ export function Advisors({
     onAdvisorsChange,
     createRequestKey,
     createRequestMode = 'manual',
+    modalOnly = false,
 }: {
     isActive?: boolean;
     hideAdvisorList?: boolean;
@@ -104,6 +140,7 @@ export function Advisors({
     onAdvisorsChange?: (advisors: Advisor[]) => void;
     createRequestKey?: number;
     createRequestMode?: AdvisorCreateMode;
+    modalOnly?: boolean;
 }) {
     const [advisors, setAdvisors] = useState<Advisor[]>([]);
     const [selectedAdvisor, setSelectedAdvisor] = useState<Advisor | null>(null);
@@ -177,9 +214,9 @@ export function Advisors({
             }
         };
 
-        window.ipcRenderer.on('advisors:download-progress', handleDownloadProgress);
+        window.ipcRenderer.advisors.onDownloadProgress(handleDownloadProgress);
         return () => {
-            window.ipcRenderer.off('advisors:download-progress', handleDownloadProgress);
+            window.ipcRenderer.advisors.offDownloadProgress(handleDownloadProgress);
         };
     }, [isActive, loadAdvisors]);
 
@@ -256,13 +293,9 @@ export function Advisors({
         }
 
         try {
-            const list = await window.ipcRenderer.invokeGuarded<ContextChatSessionListItem[] | null>('chat:list-context-sessions', {
+            const list = await window.ipcRenderer.chat.listContextSessionsGuarded<ContextChatSessionListItem>({
                 contextId: advisor.id,
                 contextType: ADVISOR_CHAT_CONTEXT_TYPE,
-            }, {
-                timeoutMs: 3200,
-                fallback: null,
-                normalize: (value) => Array.isArray(value) ? value as ContextChatSessionListItem[] : [],
             });
             if (requestId !== advisorSessionRequestRef.current) return;
             if (list == null) {
@@ -283,14 +316,12 @@ export function Advisors({
                         : items[0]?.id || null;
 
             if (items.length === 0 && shouldCreateIfEmpty) {
-                const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                const created = await window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                     contextId: advisor.id,
                     contextType: ADVISOR_CHAT_CONTEXT_TYPE,
                     title: `与 ${advisor.name} 聊聊`,
                     initialContext: buildAdvisorInitialContext(advisor),
-                }, {
-                    timeoutMs: 3200,
-                    fallback: null,
+                    metadata: buildAdvisorSessionMetadata(advisor),
                 });
                 if (!created) {
                     if (!hasAdvisorSessionSnapshotRef.current) {
@@ -403,14 +434,12 @@ export function Advisors({
         if (!selectedAdvisor) return;
         setIsHistoryLoading(true);
         try {
-            const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+            const created = await window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                 contextId: selectedAdvisor.id,
                 contextType: ADVISOR_CHAT_CONTEXT_TYPE,
                 title: `与 ${selectedAdvisor.name} 聊聊`,
                 initialContext: buildAdvisorInitialContext(selectedAdvisor),
-            }, {
-                timeoutMs: 3200,
-                fallback: null,
+                metadata: buildAdvisorSessionMetadata(selectedAdvisor),
             });
             if (!created) {
                 throw new Error('create advisor session timed out');
@@ -487,21 +516,35 @@ export function Advisors({
             }
 
             if (newId && !editingAdvisor && !youtubeParams && Array.isArray(knowledgeFilePaths) && knowledgeFilePaths.length > 0) {
-                const personaResult = await window.ipcRenderer.advisors.generatePersona({
-                    advisorId: newId,
-                    channelName: data.name,
-                    channelDescription: data.personality || '',
-                    videoTitles: [],
-                    knowledgeLanguage: data.knowledgeLanguage || '中文',
-                }) as { success: boolean; systemPrompt?: string; personality?: string; error?: string };
-                if (!personaResult.success || !personaResult.systemPrompt) {
-                    throw new Error(personaResult.error || '角色创建失败');
-                }
-                await window.ipcRenderer.advisors.update({
-                    id: newId,
-                    systemPrompt: personaResult.systemPrompt,
-                    personality: personaResult.personality || data.personality,
-                });
+                const advisorId = newId;
+                void (async () => {
+                    try {
+                        const personaResult = await window.ipcRenderer.advisors.generatePersona({
+                            advisorId,
+                            channelName: data.name,
+                            channelDescription: data.personality || '',
+                            videoTitles: [],
+                            knowledgeLanguage: data.knowledgeLanguage || '中文',
+                        }) as { success: boolean; systemPrompt?: string; personality?: string; error?: string };
+                        if (!personaResult.success || !personaResult.systemPrompt) {
+                            throw new Error(personaResult.error || '角色设定生成失败');
+                        }
+                        await window.ipcRenderer.advisors.update({
+                            id: advisorId,
+                            systemPrompt: personaResult.systemPrompt,
+                            personality: personaResult.personality || data.personality,
+                        });
+                        const refreshed = await loadAdvisors();
+                        const updated = refreshed.find((item) => item.id === advisorId) || null;
+                        if (updated) {
+                            setSelectedAdvisor(updated);
+                            onSelectedAdvisorIdChange?.(updated.id);
+                        }
+                    } catch (error) {
+                        console.warn('Advisor persona generation skipped after create:', error);
+                        void appAlert('成员已创建，自动生成角色设定超时。你可以稍后在成员详情里手动优化设定。');
+                    }
+                })();
             }
 
             if (newId && youtubeParams && youtubeParams.count > 0) {
@@ -551,6 +594,17 @@ export function Advisors({
             console.error('Failed to delete knowledge file:', e);
         }
     };
+
+    if (modalOnly) {
+        return isModalOpen ? (
+            <AdvisorModal
+                advisor={editingAdvisor}
+                defaultMode={pendingCreateMode}
+                onSave={handleSaveAdvisor}
+                onClose={() => setIsModalOpen(false)}
+            />
+        ) : null;
+    }
 
     return (
         <div className="flex h-full min-h-0">
@@ -693,7 +747,6 @@ export function Advisors({
                                     key={advisorSessionId}
                                     isActive={isActive}
                                     fixedSessionId={advisorSessionId}
-                                    defaultCollapsed={true}
                                     fixedSessionBannerText=""
                                     fixedSessionContextIndicatorMode="none"
                                     welcomeTitle={`和 ${selectedAdvisor.name} 聊聊`}
@@ -848,6 +901,7 @@ function AdvisorHistoryPanel({
                                     const title = session.chatSession?.title?.trim() || '未命名会话';
                                     const time = formatAdvisorSessionTime(session.chatSession?.updatedAt);
                                     const summary = session.summary?.trim();
+                                    const acpLabel = advisorSessionAcpLabel(session);
 
                                     return (
                                         <div
@@ -869,12 +923,19 @@ function AdvisorHistoryPanel({
 
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0 flex-1">
-                                                    <h4 className={clsx(
-                                                        'truncate text-[13px] font-bold leading-tight transition-colors',
-                                                        isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
-                                                    )}>
-                                                        {title}
-                                                    </h4>
+                                                    <div className="flex min-w-0 items-center gap-1.5">
+                                                        <h4 className={clsx(
+                                                            'truncate text-[13px] font-bold leading-tight transition-colors',
+                                                            isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
+                                                        )}>
+                                                            {title}
+                                                        </h4>
+                                                        {acpLabel && (
+                                                            <span className="shrink-0 rounded border border-border bg-white/50 px-1.5 py-0.5 text-[9px] font-semibold text-text-tertiary">
+                                                                {acpLabel}
+                                                            </span>
+                                                        )}
+                                                    </div>
 
                                                     <div className="mt-0.5 flex items-center gap-1.5 text-[9px] font-bold text-text-tertiary/60 uppercase tracking-tighter">
                                                         <span>{time}</span>
@@ -911,7 +972,7 @@ function AdvisorHistoryPanel({
 
                     <div className="px-5 py-3 border-t border-black/[0.02]">
                         <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
-                            RedBox Engine
+                            {APP_BRAND.displayName} Engine
                         </p>
                     </div>
                 </div>
@@ -920,7 +981,7 @@ function AdvisorHistoryPanel({
     );
 }
 
-function AdvisorSettingsPanel({
+export function AdvisorSettingsPanel({
     advisor,
     isActive,
     downloadStatus,
@@ -1096,7 +1157,7 @@ function AdvisorSettingsPanel({
 
             <div className="border-t border-black/[0.02] px-5 py-3">
                 <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
-                    RedBox Engine
+                    {APP_BRAND.displayName} Engine
                 </p>
             </div>
         </div>
@@ -1540,7 +1601,7 @@ function VideoManagement({ advisorId, isActive = true }: { advisorId: string; is
 }
 
 // Modal Component
-function AdvisorModal({
+export function AdvisorModal({
     advisor,
     defaultMode,
     onSave,
@@ -1650,8 +1711,8 @@ function AdvisorModal({
 
     useEffect(() => {
         const handleProgress = (_: unknown, msg: string) => setFetchMsg(msg);
-        window.ipcRenderer.on('youtube:fetch-info-progress', handleProgress);
-        return () => window.ipcRenderer.off('youtube:fetch-info-progress', handleProgress);
+        window.ipcRenderer.onFetchYoutubeInfoProgress(handleProgress);
+        return () => window.ipcRenderer.offFetchYoutubeInfoProgress(handleProgress);
     }, []);
 
     const handleFetchYoutube = async () => {

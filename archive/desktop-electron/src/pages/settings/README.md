@@ -6,17 +6,20 @@
 
 - `SettingsSections.tsx`
 - `shared.tsx`
+- `../../features/settings/settingsModel.ts`：设置页纯 model/helper，包含价格表、AI route、MCP draft 和 runtime perf preset。
 
 ## Characteristics
 
 - 数据域很多，依赖多个 host channel
 - 必须允许局部刷新，不能因为单个设置区失败而把整个设置页打空
-- 常见区域包括代理、插件、守护进程、MCP、工具诊断、记忆维护等
+- 常见区域包括代理、插件、守护进程、MCP、runtime 诊断、记忆维护等
+- ToolRouter / tool plan 属于底层日志和 checkpoint 审计信息，不新增用户可见设置项或诊断面板
 
 ## Rules
 
 - 设置页说明文字只描述用户可配置项和后果，不写开发实现说明。
 - 与宿主状态强绑定的设置项，必须提供默认值和降级显示。
+- 纯解析/格式化/默认值逻辑优先放到 `features/settings/settingsModel.ts`，页面只做加载、保存和 section composition。
 
 ## Verification
 

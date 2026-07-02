@@ -523,7 +523,7 @@ export async function loadRichpostPreviewHtml(
     errorLabel?: string;
   }
 ): Promise<string> {
-  const result = await window.ipcRenderer.invoke('manuscripts:read', readPath) as { content?: string };
+  const result = await window.ipcRenderer.manuscripts.read(readPath) as { content?: string };
   const html = String(result?.content || '');
   if (!html.trim()) {
     throw new Error(options?.errorLabel || '图文页面 HTML 为空');

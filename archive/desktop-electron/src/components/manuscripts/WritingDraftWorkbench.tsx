@@ -1818,7 +1818,7 @@ export function WritingDraftWorkbench({
     }
     setIsUpdatingRichpostTheme(true);
     try {
-      const result = await window.ipcRenderer.invoke('manuscripts:save-richpost-custom-theme', {
+      const result = await window.ipcRenderer.manuscripts.saveRichpostCustomTheme({
         filePath,
         baseThemeId: richpostThemeEditorBaseThemeId,
         existingThemeId: richpostThemeEditorThemeId,
@@ -1912,7 +1912,7 @@ export function WritingDraftWorkbench({
       return;
     }
     setIsCreatingRichpostThemeEditor(true);
-    void window.ipcRenderer.invoke('manuscripts:create-richpost-custom-theme', {
+    void window.ipcRenderer.manuscripts.createRichpostCustomTheme({
       filePath,
       baseThemeId,
       createFromBlank: creatingBlankTheme,
@@ -2002,7 +2002,7 @@ export function WritingDraftWorkbench({
     const requestId = ++richpostThemeEditorPreviewRequestIdRef.current;
     setIsLoadingRichpostThemeEditorPreview(true);
     const timeoutId = window.setTimeout(() => {
-      void window.ipcRenderer.invoke('manuscripts:preview-richpost-theme-draft', {
+      void window.ipcRenderer.manuscripts.previewRichpostThemeDraft({
         filePath,
         baseThemeId: richpostThemeEditorBaseThemeId,
         existingThemeId: richpostThemeEditorThemeId,
@@ -2076,7 +2076,7 @@ export function WritingDraftWorkbench({
     }
     const requestId = ++richpostThemePreviewRequestIdRef.current;
     setIsLoadingRichpostThemePreviews(true);
-    void window.ipcRenderer.invoke('manuscripts:get-richpost-theme-previews', {
+    void window.ipcRenderer.manuscripts.getRichpostThemePreviews({
       filePath,
       themeIds: normalizedThemePresets.map((theme) => String(theme.id || '')).filter(Boolean),
     }).then((result) => {
@@ -2164,7 +2164,7 @@ export function WritingDraftWorkbench({
     if (!nextLabel) return;
     setIsUpdatingRichpostTheme(true);
     try {
-      const result = await window.ipcRenderer.invoke('manuscripts:save-richpost-custom-theme', {
+      const result = await window.ipcRenderer.manuscripts.saveRichpostCustomTheme({
         filePath,
         baseThemeId: themeId,
         existingThemeId: themeId,
@@ -2213,7 +2213,7 @@ export function WritingDraftWorkbench({
     setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
     setIsUpdatingRichpostTheme(true);
     try {
-      const result = await window.ipcRenderer.invoke('manuscripts:delete-richpost-custom-theme', {
+      const result = await window.ipcRenderer.manuscripts.deleteRichpostCustomTheme({
         filePath,
         themeId,
       }) as {
@@ -2245,7 +2245,7 @@ export function WritingDraftWorkbench({
     if (!filePath || !richpostThemeEditorThemeId || uploadingThemeBackgroundRole) return;
     setUploadingThemeBackgroundRole(role);
     try {
-      const result = await window.ipcRenderer.invoke('manuscripts:upload-richpost-theme-background', {
+      const result = await window.ipcRenderer.manuscripts.uploadRichpostThemeBackground({
         filePath,
         themeId: richpostThemeEditorThemeId,
         role,
@@ -2589,7 +2589,7 @@ export function WritingDraftWorkbench({
     }
     setIsExportingRichpostImages(true);
     try {
-      const picked = await window.ipcRenderer.invoke('manuscripts:pick-richpost-export-path', {
+      const picked = await window.ipcRenderer.manuscripts.pickRichpostExportPath({
         filePath,
       }) as { success?: boolean; canceled?: boolean; path?: string; error?: string };
       if (!picked?.success) {
@@ -2612,7 +2612,7 @@ export function WritingDraftWorkbench({
         const dataBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
         archiveEntries.push({ name: entryName, dataBase64 });
       }
-      const saved = await window.ipcRenderer.invoke('manuscripts:save-richpost-export-archive', {
+      const saved = await window.ipcRenderer.manuscripts.saveRichpostExportArchive({
         outputPath: picked.path,
         entries: archiveEntries,
       }) as { success?: boolean; error?: string; path?: string; entryCount?: number };
