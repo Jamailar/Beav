@@ -16,10 +16,12 @@ import {
     X,
 } from 'lucide-react';
 import { clsx } from 'clsx';
+import ReactMarkdown from 'react-markdown';
 import type { PendingChatMessage, SkillsNavigationTarget } from '../features/app-shell/types';
 import { type SettingsSkill, formatSettingsSkillSource } from '../features/settings/settingsModel';
 import type { SkillMarketCollection, SkillMarketIntroNote, SkillMarketSource, SkillMarketplaceInstallResponse, ThriveSkillMarketplaceItem } from '../types';
 import { appConfirm } from '../utils/appDialogs';
+import { SAFE_REMARK_PLUGINS } from '../utils/markdownRemarkPlugins';
 
 const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -41,6 +43,7 @@ type MarketplaceCacheSnapshot = {
 type MarketplacePackageDetail = {
     item?: ThriveSkillMarketplaceItem;
     manifest?: unknown;
+    skillMarkdown?: string;
 };
 
 type MarketplacePackageResponse = MarketplacePackageDetail & {
@@ -1632,6 +1635,7 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
             const normalized: MarketplacePackageDetail = {
                 item: detail.item,
                 manifest: detail.manifest,
+                skillMarkdown: typeof detail.skillMarkdown === 'string' ? detail.skillMarkdown : '',
             };
             skillDetailCache.set(key, normalized);
             setSelectedSkillDetail(normalized);
@@ -2187,6 +2191,7 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
         const homepageHref = manifestText(manifest, ['homepageUrl', 'homepage', 'website', 'url']);
         const href = /^https?:\/\//i.test(homepageHref) ? homepageHref : repoHref(detailItem.repo);
         const detailText = manifestText(manifest, ['summary', 'details', 'readme', 'contextNote', 'promptPrefix']);
+        const skillMarkdown = String(selectedSkillDetail?.skillMarkdown || '').trim();
         const manifestModes = manifestList(manifest, ['allowedRuntimeModes', 'runtimeModes', 'modes']);
         const skillPaths = Array.isArray(detailItem.paths) ? detailItem.paths : [];
         const detailKey = marketItemKey(detailItem);
@@ -2324,6 +2329,17 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
                                 </div>
                             ) : null}
                         </section>
+
+                        {skillMarkdown ? (
+                            <section className="space-y-3">
+                                <h2 className="text-sm font-semibold text-text-primary">SKILL.md</h2>
+                                <article className="prose prose-sm max-w-3xl text-text-secondary prose-headings:text-text-primary prose-p:leading-7 prose-p:text-text-secondary prose-li:text-text-secondary prose-strong:text-text-primary prose-code:text-text-primary prose-pre:border prose-pre:border-border prose-pre:bg-surface-primary/70 prose-pre:text-text-secondary">
+                                    <ReactMarkdown remarkPlugins={SAFE_REMARK_PLUGINS}>
+                                        {skillMarkdown}
+                                    </ReactMarkdown>
+                                </article>
+                            </section>
+                        ) : null}
                     </div>
                 )}
             </div>

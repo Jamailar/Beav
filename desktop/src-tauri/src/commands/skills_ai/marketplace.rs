@@ -5,7 +5,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
+    fs,
+    io::{self, Read},
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
@@ -23,6 +24,7 @@ const REDSKILL_INSTALL_SCRIPT_URL: &str =
 const THRIVE_SKILL_HTTP_USER_AGENT: &str =
     "RedBox/SkillMarketplace (+https://github.com/ThrivingOS/Thrive-release)";
 const MARKETPLACE_AVATAR_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const MARKETPLACE_SKILL_MARKDOWN_MAX_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -691,10 +693,12 @@ fn read_skill_marketplace_package(
                 }
             }
             let manifest = read_market_item_manifest_value(&source, &item).unwrap_or(Value::Null);
+            let skill_markdown = read_market_item_skill_markdown(state, &source, &item, &manifest);
             return Ok(json!({
                 "success": true,
                 "item": item,
                 "manifest": manifest,
+                "skillMarkdown": skill_markdown,
             }));
         }
     }
@@ -1939,6 +1943,328 @@ fn read_market_item_manifest_value(
     }
 }
 
+fn read_market_item_skill_markdown(
+    state: &State<'_, AppState>,
+    source: &SkillMarketSource,
+    item: &SkillMarketItem,
+    manifest: &Value,
+) -> Option<String> {
+    read_market_item_source_skill_markdown(source, item, manifest)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            read_installed_market_skill_markdown(state, item)
+                .ok()
+                .flatten()
+        })
+}
+
+fn read_market_item_source_skill_markdown(
+    source: &SkillMarketSource,
+    item: &SkillMarketItem,
+    manifest: &Value,
+) -> Result<Option<String>, String> {
+    match source.kind.as_str() {
+        "local" => {
+            let root = resolve_local_market_root(
+                source
+                    .source
+                    .as_deref()
+                    .ok_or_else(|| "本地市场源缺少 source".to_string())?,
+            )?;
+            for relative in skill_markdown_path_candidates(item, manifest) {
+                let path = safe_join(&root, &relative)?;
+                if path.is_file() {
+                    let markdown = fs::read_to_string(&path).map_err(|error| {
+                        format!(
+                            "failed to read skill markdown `{}`: {error}",
+                            path.display()
+                        )
+                    })?;
+                    if !markdown.trim().is_empty() {
+                        return Ok(Some(markdown));
+                    }
+                }
+            }
+            Ok(None)
+        }
+        "github" | "git" => {
+            let base = github_raw_base(source)?;
+            for relative in skill_markdown_path_candidates(item, manifest) {
+                let Ok(markdown) = http_get_skill_marketplace_text(
+                    &format!("{}/{}", base, relative.trim_start_matches('/')),
+                    MARKETPLACE_SKILL_MARKDOWN_MAX_BYTES,
+                ) else {
+                    continue;
+                };
+                if !markdown.trim().is_empty() {
+                    return Ok(Some(markdown));
+                }
+            }
+            Ok(None)
+        }
+        "redbox-server" => read_redbox_server_market_skill_markdown(source, &item.package_id)
+            .map(Some)
+            .or(Ok(None)),
+        _ => Ok(None),
+    }
+}
+
+fn skill_markdown_path_candidates(item: &SkillMarketItem, manifest: &Value) -> Vec<String> {
+    let mut candidates = Vec::<String>::new();
+    let mut seen = HashSet::<String>::new();
+    let mut push = |raw: Option<String>| {
+        let Some(raw) = raw else {
+            return;
+        };
+        let Some(path) = normalize_registry_path(&raw) else {
+            return;
+        };
+        let normalized = if path.to_ascii_lowercase().ends_with(".md") {
+            path
+        } else {
+            format!("{}/SKILL.md", path.trim_end_matches('/'))
+        };
+        if seen.insert(normalized.clone()) {
+            candidates.push(normalized);
+        }
+    };
+
+    for path in &item.paths {
+        push(Some(path.clone()));
+    }
+    if let Some(skills) = manifest.get("skills").and_then(Value::as_array) {
+        for skill in skills {
+            if let Some(path) = skill.as_str() {
+                push(Some(path.to_string()));
+            } else {
+                for key in ["path", "skillPath", "skill_path", "root", "entry"] {
+                    push(value_first_string(skill, &[key]));
+                }
+            }
+        }
+    }
+    for key in [
+        "skillPath",
+        "skill_path",
+        "root",
+        "path",
+        "packagePath",
+        "package_path",
+    ] {
+        push(value_first_string(manifest, &[key]));
+    }
+
+    let entry = value_first_string(manifest, &["entry", "skillEntry", "skill_entry"]);
+    if let Some(entry) = entry.as_deref() {
+        push(Some(entry.to_string()));
+        for base in [
+            value_first_string(manifest, &["skillPath", "skill_path", "root", "path"]),
+            item.package_path.clone(),
+        ] {
+            if let Some(base) = base {
+                push(Some(format!(
+                    "{}/{}",
+                    base.trim_end_matches('/'),
+                    entry.trim_start_matches('/')
+                )));
+            }
+        }
+    }
+
+    push(item.package_path.clone());
+    if let Some(manifest_path) = item.manifest_path.as_deref() {
+        if let Some((dir, _)) = manifest_path.rsplit_once('/') {
+            push(Some(dir.to_string()));
+        }
+    }
+    candidates
+}
+
+fn read_redbox_server_market_skill_markdown(
+    source: &SkillMarketSource,
+    package_id: &str,
+) -> Result<String, String> {
+    let base = redbox_server_skill_market_base_url(source)?;
+    let plan_url = format!(
+        "{base}/skills/{}/install-plan",
+        url_path_segment(package_id)
+    );
+    let plan = http_post_redbox_server_json::<Value>(&plan_url, &json!({}))?;
+    let artifact = plan.get("artifact").cloned().unwrap_or_else(|| json!({}));
+    let download_url = value_first_string(&artifact, &["download_url", "downloadUrl"])
+        .ok_or_else(|| "install plan missing artifact download_url".to_string())?;
+    validate_redbox_artifact_url(&download_url)?;
+    let bytes = download_redbox_server_artifact(&download_url)?;
+    if let Some(expected) =
+        value_first_string(&artifact, &["sha256", "artifact_sha256", "artifactSha256"])
+            .as_deref()
+            .filter(|value| !value.is_empty())
+    {
+        let actual = sha256_hex(&bytes);
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err("技能包 SHA256 校验失败".to_string());
+        }
+    }
+    skill_markdown_from_redbox_artifact(&download_url, &artifact, &bytes)
+}
+
+fn skill_markdown_from_redbox_artifact(
+    download_url: &str,
+    artifact: &Value,
+    bytes: &[u8],
+) -> Result<String, String> {
+    let content_type =
+        value_first_string(artifact, &["content_type", "contentType"]).unwrap_or_default();
+    let filename = value_first_string(artifact, &["filename", "file_name", "fileName"])
+        .or_else(|| download_url.rsplit('/').next().map(ToString::to_string))
+        .unwrap_or_else(|| "skill.zip".to_string());
+    let lower = filename.to_ascii_lowercase();
+    if lower.ends_with(".md") || content_type.contains("markdown") {
+        return skill_markdown_from_bytes(bytes);
+    }
+    if lower.ends_with(".zip") || content_type.contains("zip") || bytes.starts_with(b"PK") {
+        return read_skill_markdown_from_zip(bytes)?
+            .ok_or_else(|| "技能包内没有 SKILL.md".to_string());
+    }
+    if lower.ends_with(".tar.gz")
+        || lower.ends_with(".tgz")
+        || content_type.contains("gzip")
+        || bytes.starts_with(&[0x1f, 0x8b])
+    {
+        return read_skill_markdown_from_tar_gz(bytes)?
+            .ok_or_else(|| "技能包内没有 SKILL.md".to_string());
+    }
+    Err("不支持的技能包格式".to_string())
+}
+
+fn read_skill_markdown_from_zip(bytes: &[u8]) -> Result<Option<String>, String> {
+    let reader = io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).map_err(|error| error.to_string())?;
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).map_err(|error| error.to_string())?;
+        let Some(enclosed) = file.enclosed_name().map(PathBuf::from) else {
+            continue;
+        };
+        if !is_skill_markdown_path(&enclosed) {
+            continue;
+        }
+        if file.size() as usize > MARKETPLACE_SKILL_MARKDOWN_MAX_BYTES {
+            return Err("SKILL.md 超过 1MB".to_string());
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        return skill_markdown_from_owned_bytes(bytes).map(Some);
+    }
+    Ok(None)
+}
+
+fn read_skill_markdown_from_tar_gz(bytes: &[u8]) -> Result<Option<String>, String> {
+    let decoder = flate2::read::GzDecoder::new(io::Cursor::new(bytes));
+    let mut archive = tar::Archive::new(decoder);
+    for entry in archive.entries().map_err(|error| error.to_string())? {
+        let mut entry = entry.map_err(|error| error.to_string())?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let path = entry
+            .path()
+            .map_err(|error| error.to_string())?
+            .into_owned();
+        if !is_skill_markdown_path(&path) {
+            continue;
+        }
+        let size = entry.header().size().map_err(|error| error.to_string())?;
+        if size as usize > MARKETPLACE_SKILL_MARKDOWN_MAX_BYTES {
+            return Err("SKILL.md 超过 1MB".to_string());
+        }
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        return skill_markdown_from_owned_bytes(bytes).map(Some);
+    }
+    Ok(None)
+}
+
+fn is_skill_markdown_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md"))
+}
+
+fn skill_markdown_from_bytes(bytes: &[u8]) -> Result<String, String> {
+    if bytes.len() > MARKETPLACE_SKILL_MARKDOWN_MAX_BYTES {
+        return Err("SKILL.md 超过 1MB".to_string());
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|error| format!("SKILL.md 不是 UTF-8: {error}"))
+}
+
+fn skill_markdown_from_owned_bytes(bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.len() > MARKETPLACE_SKILL_MARKDOWN_MAX_BYTES {
+        return Err("SKILL.md 超过 1MB".to_string());
+    }
+    String::from_utf8(bytes).map_err(|error| format!("SKILL.md 不是 UTF-8: {error}"))
+}
+
+fn read_installed_market_skill_markdown(
+    state: &State<'_, AppState>,
+    item: &SkillMarketItem,
+) -> Result<Option<String>, String> {
+    let skills = with_store(state, |store| Ok(store.skills.clone()))?;
+    let workspace = workspace_root(state).ok();
+    let item_aliases = installed_item_aliases(item);
+    for skill in skills {
+        let provenance = skill_market_provenance_path(&skill, workspace.as_deref())
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|raw| serde_json::from_str::<InstalledMarketProvenance>(&raw).ok())
+            .unwrap_or_default();
+        if !installed_skill_aliases(&skill.name, &provenance)
+            .iter()
+            .any(|alias| item_aliases.contains(alias))
+        {
+            continue;
+        }
+        if let Some(markdown) = read_skill_record_markdown(&skill, workspace.as_deref()) {
+            return Ok(Some(markdown));
+        }
+    }
+    Ok(None)
+}
+
+fn installed_item_aliases(item: &SkillMarketItem) -> HashSet<String> {
+    let mut aliases = HashSet::new();
+    let mut push = |value: Option<&str>| {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return;
+        };
+        aliases.insert(value.to_ascii_lowercase());
+    };
+    push(Some(&item.name));
+    push(Some(&item.package_id));
+    let scoped = scoped_market_item_id(&item.market_id, &item.package_id);
+    push(Some(&scoped));
+    for name in &item.installed_skill_names {
+        push(Some(name));
+    }
+    aliases
+}
+
+fn read_skill_record_markdown(
+    skill: &crate::runtime::SkillRecord,
+    workspace_root: Option<&Path>,
+) -> Option<String> {
+    let path = skill
+        .location
+        .strip_prefix("file:")
+        .map(PathBuf::from)
+        .or_else(|| resolve_skill_file_path(skill, workspace_root))?;
+    fs::read_to_string(path)
+        .ok()
+        .filter(|markdown| !markdown.trim().is_empty())
+}
+
 fn skill_paths_for_redbox_package(
     entry: &RedboxSkillRegistryEntry,
     manifest: &RedboxSkillManifest,
@@ -2568,6 +2894,31 @@ fn http_get_skill_marketplace_json<T: for<'de> Deserialize<'de>>(url: &str) -> R
     response
         .json::<T>()
         .map_err(|error| format!("failed to parse `{url}`: {error}"))
+}
+
+fn http_get_skill_marketplace_text(url: &str, max_bytes: usize) -> Result<String, String> {
+    validate_safe_market_url(url)?;
+    let response = skill_marketplace_http_client()?
+        .get(url)
+        .send()
+        .map_err(|error| format!("failed to request `{url}`: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("request `{url}` failed with HTTP {status}"));
+    }
+    if let Some(length) = response.content_length() {
+        if length as usize > max_bytes {
+            return Err(format!("response `{url}` exceeds {max_bytes} bytes"));
+        }
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|error| format!("failed to read `{url}`: {error}"))?;
+    if bytes.len() > max_bytes {
+        return Err(format!("response `{url}` exceeds {max_bytes} bytes"));
+    }
+    String::from_utf8(bytes.to_vec())
+        .map_err(|error| format!("response `{url}` is not UTF-8: {error}"))
 }
 
 fn http_get_redbox_server_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
