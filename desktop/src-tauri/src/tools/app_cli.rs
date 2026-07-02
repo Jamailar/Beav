@@ -1177,6 +1177,14 @@ impl<'a> AppCliExecutor<'a> {
             "webfetch" => self.handle_web(&["fetch".to_string()], payload),
             "websearch" => self.handle_web(&["search".to_string()], payload),
             "browsercontrol" => app_cli_browser::handle(self, payload),
+            "capturecollect" => {
+                let tokens = vec!["collect".to_string()];
+                self.handle_capture(&tokens, payload)
+            }
+            "capturestatus" => {
+                let tokens = vec!["status".to_string()];
+                self.handle_capture(&tokens, payload)
+            }
             "taskbriefget" => self.handle_task_brief_get(payload),
             "taskbriefupdate" => self.handle_task_brief_update(payload),
             "taskbriefgoal" => self.handle_task_brief_goal(payload),
@@ -1790,6 +1798,7 @@ impl<'a> AppCliExecutor<'a> {
             "image" => self.handle_image(args, payload),
             "video" => self.handle_video(args, payload),
             "knowledge" => self.handle_knowledge(args, payload),
+            "capture" => self.handle_capture(args, payload),
             "work" => self.handle_work(args, payload),
             "memory" => self.handle_memory(args, payload),
             "web" => self.handle_web(args, payload),
@@ -1839,6 +1848,11 @@ impl<'a> AppCliExecutor<'a> {
         }
         if let Some(result) =
             commands::advisor_ops::handle_advisor_channel(self.app, self.state, channel, &payload)
+        {
+            return result;
+        }
+        if let Some(result) =
+            commands::official::handle_official_channel(self.app, self.state, channel, &payload)
         {
             return result;
         }
@@ -3463,6 +3477,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "image generate|history list|get|providers|models",
             "video generate",
             "knowledge list|search",
+            "capture collect|status",
             "work list|ready|get|update",
             "memory list|search|recall|add|update|archive|delete|rebuild-index|diagnostics",
             "web fetch|search",
@@ -3547,6 +3562,11 @@ fn help_response(namespace: Option<&str>) -> Value {
             "video generate --mode reference-guided --duration 6 --aspect-ratio 9:16  # put approved storyboardMarkdown/storyboardShots in payload so the host can compile the final execution prompt",
         ],
         "knowledge" => vec!["knowledge list", "knowledge search --query \"keyword\""],
+        "capture" => vec![
+            "capture collect --url <url> [--platform auto|xhs|douyin|youtube] [--target auto|content|profile|comments]",
+            "capture status --job-id <jobId>",
+            "capture status --limit 20",
+        ],
         "work" => vec![
             "work list",
             "work ready",

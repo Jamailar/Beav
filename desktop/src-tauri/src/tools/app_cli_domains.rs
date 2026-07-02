@@ -6,9 +6,249 @@ const TASK_BRIEF_MAX_STRING_CHARS: usize = 4_000;
 const TASK_BRIEF_MAX_ARRAY_ITEMS: usize = 40;
 const TASK_BRIEF_MAX_OBJECT_FIELDS: usize = 80;
 const TASK_BRIEF_MAX_DEPTH: usize = 5;
+const CAPTURE_DEFAULT_POLL_INTERVAL_MS: u64 = 1_500;
+const CAPTURE_DEFAULT_MAX_WAIT_MS: u64 = 120_000;
+const CAPTURE_MIN_POLL_INTERVAL_MS: u64 = 500;
+const CAPTURE_MAX_POLL_INTERVAL_MS: u64 = 10_000;
+const CAPTURE_MIN_WAIT_MS: u64 = 1_000;
+const CAPTURE_MAX_WAIT_MS: u64 = 300_000;
 
 fn value_success_is_false(value: &Value) -> bool {
     value.get("success").and_then(Value::as_bool) == Some(false)
+}
+
+fn capture_payload_field<'a>(payload: &'a Value, key: &str) -> Option<&'a Value> {
+    payload_field(payload, key).or_else(|| {
+        payload_field(payload, "options").and_then(|options| payload_field(options, key))
+    })
+}
+
+fn capture_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| capture_payload_field(payload, key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn capture_payload_bool(payload: &Value, keys: &[&str]) -> Option<bool> {
+    keys.iter()
+        .find_map(|key| capture_payload_field(payload, key).and_then(payload_bool_value))
+}
+
+fn capture_payload_i64(payload: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| capture_payload_field(payload, key).and_then(Value::as_i64))
+}
+
+fn sanitize_capture_url(raw: &str) -> String {
+    raw.trim()
+        .trim_matches(['<', '>'])
+        .trim_end_matches(|ch| {
+            matches!(
+                ch,
+                ')' | ']'
+                    | '}'
+                    | '>'
+                    | ','
+                    | '.'
+                    | '!'
+                    | '?'
+                    | '，'
+                    | '。'
+                    | '！'
+                    | '？'
+                    | '、'
+                    | '；'
+                    | ';'
+                    | '：'
+                    | ':'
+            )
+        })
+        .to_string()
+}
+
+fn parse_capture_url(raw: &str) -> Result<url::Url, String> {
+    let sanitized = sanitize_capture_url(raw);
+    if sanitized.is_empty() {
+        return Err("capture.collect requires url".to_string());
+    }
+    let candidate = if sanitized.starts_with("http://") || sanitized.starts_with("https://") {
+        sanitized
+    } else {
+        format!("https://{sanitized}")
+    };
+    let parsed =
+        url::Url::parse(&candidate).map_err(|error| format!("invalid capture url: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("capture url must be http or https".to_string());
+    }
+    Ok(parsed)
+}
+
+fn capture_host_matches(parsed: &url::Url, domains: &[&str]) -> bool {
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    domains
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
+fn infer_capture_platform(payload: &Value, parsed: &url::Url) -> Result<String, String> {
+    let requested = capture_payload_string(payload, &["platform"])
+        .unwrap_or_else(|| "auto".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    let normalized = match requested.as_str() {
+        "" | "auto" => {
+            if capture_host_matches(parsed, &["xiaohongshu.com", "rednote.com", "xhslink.com"]) {
+                "xiaohongshu"
+            } else if capture_host_matches(parsed, &["douyin.com", "iesdouyin.com"]) {
+                "douyin"
+            } else if capture_host_matches(parsed, &["youtube.com", "youtu.be"]) {
+                "youtube"
+            } else {
+                return Err(format!(
+                    "unsupported capture platform for host: {}",
+                    parsed.host_str().unwrap_or_default()
+                ));
+            }
+        }
+        "xhs" | "xiaohongshu" | "rednote" => "xiaohongshu",
+        "douyin" => "douyin",
+        "youtube" | "yt" => "youtube",
+        other => return Err(format!("unsupported capture platform: {other}")),
+    };
+    Ok(normalized.to_string())
+}
+
+fn infer_capture_target(
+    payload: &Value,
+    platform: &str,
+    parsed: &url::Url,
+) -> Result<String, String> {
+    let requested = capture_payload_string(payload, &["target", "kind"])
+        .unwrap_or_else(|| "auto".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    let normalized = match requested.as_str() {
+        "" | "auto" => {
+            if platform == "xiaohongshu" {
+                let parts = parsed
+                    .path_segments()
+                    .map(|parts| parts.collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if parts.first().copied() == Some("user")
+                    && parts.get(1).copied() == Some("profile")
+                {
+                    "profile"
+                } else if capture_host_matches(parsed, &["xhslink.com"])
+                    && parts.first().copied() == Some("m")
+                {
+                    "profile"
+                } else {
+                    "content"
+                }
+            } else {
+                "content"
+            }
+        }
+        "content" | "item" | "note" | "video" | "post" => "content",
+        "profile" | "home" | "homepage" | "account" | "user" => "profile",
+        "comments" | "comment" => "comments",
+        other => return Err(format!("unsupported capture target: {other}")),
+    };
+    if normalized == "profile" && platform != "xiaohongshu" {
+        return Err(format!(
+            "capture target profile is not supported for {platform}"
+        ));
+    }
+    if normalized == "comments" && platform != "xiaohongshu" {
+        return Err(
+            "capture target comments is currently supported only for Xiaohongshu notes".to_string(),
+        );
+    }
+    Ok(normalized.to_string())
+}
+
+fn capture_kind_for(platform: &str, target: &str) -> Result<&'static str, String> {
+    match (platform, target) {
+        ("xiaohongshu", "profile") => Ok("xhs-profile"),
+        ("xiaohongshu", "content" | "comments") => Ok("xhs-note"),
+        ("douyin", "content") => Ok("douyin-video"),
+        ("youtube", "content") => Ok("youtube-video"),
+        _ => Err(format!(
+            "unsupported capture combination: platform={platform}, target={target}"
+        )),
+    }
+}
+
+fn clean_capture_external_id(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .collect()
+}
+
+fn infer_capture_external_id(kind: &str, parsed: &url::Url) -> Option<String> {
+    let parts = parsed
+        .path_segments()
+        .map(|items| items.collect::<Vec<_>>())
+        .unwrap_or_default();
+    let raw = match kind {
+        "youtube-video" => {
+            let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+            if host == "youtu.be" || host.ends_with(".youtu.be") {
+                parts.first().copied().unwrap_or_default().to_string()
+            } else if parts.first().copied() == Some("watch") {
+                parsed
+                    .query_pairs()
+                    .find_map(|(key, value)| (key == "v").then(|| value.to_string()))
+                    .unwrap_or_default()
+            } else if matches!(parts.first().copied(), Some("shorts" | "embed" | "live")) {
+                parts.get(1).copied().unwrap_or_default().to_string()
+            } else if parts.first().copied() == Some("clip") {
+                parsed
+                    .query_pairs()
+                    .find_map(|(key, value)| (key == "v").then(|| value.to_string()))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        }
+        "xhs-note" => {
+            if parts.first().copied() == Some("explore") {
+                parts.get(1).copied().unwrap_or_default().to_string()
+            } else if parts.first().copied() == Some("discovery")
+                && parts.get(1).copied() == Some("item")
+            {
+                parts.get(2).copied().unwrap_or_default().to_string()
+            } else {
+                String::new()
+            }
+        }
+        "xhs-profile" => {
+            if parts.first().copied() == Some("user") && parts.get(1).copied() == Some("profile") {
+                parts.get(2).copied().unwrap_or_default().to_string()
+            } else {
+                String::new()
+            }
+        }
+        "douyin-video" => {
+            if parts.first().copied() == Some("video") {
+                parts.get(1).copied().unwrap_or_default().to_string()
+            } else if parts.first().copied() == Some("share")
+                && parts.get(1).copied() == Some("video")
+            {
+                parts.get(2).copied().unwrap_or_default().to_string()
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    };
+    let cleaned = clean_capture_external_id(&raw);
+    (!cleaned.is_empty()).then_some(cleaned)
 }
 
 fn find_space_in_list(list: &Value, id: Option<&str>, name: Option<&str>) -> Option<Value> {
@@ -1751,6 +1991,252 @@ impl<'a> AppCliExecutor<'a> {
             }),
             _ => Err(format!("unsupported knowledge action: {action}")),
         }
+    }
+
+    pub(super) fn handle_capture(
+        &self,
+        tokens: &[String],
+        payload: &Value,
+    ) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("capture")));
+        };
+        match action {
+            "collect" | "create" | "submit" => self.handle_capture_collect(payload),
+            "status" | "get" | "list" => self.handle_capture_status(payload),
+            other => Err(format!("unsupported capture action: {other}")),
+        }
+    }
+
+    fn handle_capture_collect(&self, payload: &Value) -> Result<Value, String> {
+        let raw_url = capture_payload_string(payload, &["url", "sourceUrl", "sourceLink"])
+            .ok_or_else(|| "capture.collect requires url".to_string())?;
+        let parsed_url = parse_capture_url(&raw_url)?;
+        let platform = infer_capture_platform(payload, &parsed_url)?;
+        let target = infer_capture_target(payload, &platform, &parsed_url)?;
+        let kind = capture_kind_for(&platform, &target)?;
+        let canonical_url = if kind == "youtube-video" {
+            let video_id = capture_payload_string(payload, &["externalId", "videoId"])
+                .or_else(|| infer_capture_external_id(kind, &parsed_url))
+                .ok_or_else(|| "capture.collect could not resolve YouTube video id".to_string())?;
+            format!("https://www.youtube.com/watch?v={video_id}")
+        } else {
+            parsed_url.to_string()
+        };
+        let external_id = capture_payload_string(payload, &["externalId", "external_id", "id"])
+            .or_else(|| infer_capture_external_id(kind, &parsed_url));
+
+        if kind == "youtube-video" {
+            return self.handle_capture_youtube(payload, &canonical_url, external_id);
+        }
+
+        let include_comments = target == "comments"
+            || capture_payload_bool(payload, &["includeComments", "comments"]).unwrap_or(false);
+        let download_media = capture_payload_bool(payload, &["downloadMedia"]).unwrap_or(true);
+        let ingest_to_knowledge =
+            capture_payload_bool(payload, &["ingestToKnowledge", "ingest"]).unwrap_or(true);
+        let wait_for_completion =
+            capture_payload_bool(payload, &["waitForCompletion", "wait"]).unwrap_or(true);
+        let limit = capture_payload_i64(payload, &["limit"]).map(|value| value.clamp(1, 100));
+        let source = capture_payload_string(payload, &["source"])
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| matches!(value.as_str(), "manual" | "clipboard"))
+            .unwrap_or_else(|| "manual".to_string());
+        let client_request_key = external_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(canonical_url.as_str());
+
+        let request = json!({
+            "source": source,
+            "kind": kind,
+            "platform": platform,
+            "target": target,
+            "url": parsed_url.to_string(),
+            "canonicalUrl": canonical_url,
+            "externalId": external_id,
+            "includeComments": include_comments,
+            "clientRequestId": format!("{kind}:{client_request_key}"),
+            "options": {
+                "downloadMedia": download_media,
+                "includeComments": include_comments,
+                "limit": limit,
+                "target": target,
+            },
+        });
+
+        let created = self.call_channel("capture:create-server-job", request)?;
+        if value_success_is_false(&created) {
+            return Ok(json!({
+                "success": false,
+                "status": "create_failed",
+                "platform": platform,
+                "target": target,
+                "kind": kind,
+                "response": created,
+            }));
+        }
+        let job_id = value_string_alias(&created, &["jobId"])
+            .or_else(|| {
+                created
+                    .get("job")
+                    .and_then(|job| value_string_alias(job, &["id", "jobId"]))
+            })
+            .ok_or_else(|| format!("capture server response missing job id: {created}"))?;
+
+        if !wait_for_completion {
+            return Ok(json!({
+                "success": true,
+                "status": "submitted",
+                "platform": platform,
+                "target": target,
+                "kind": kind,
+                "jobId": job_id,
+                "job": created.get("job").cloned().unwrap_or(Value::Null),
+                "response": created,
+            }));
+        }
+
+        let job = self.poll_capture_job(payload, &job_id)?;
+        let job_status =
+            value_string_alias(&job, &["status"]).unwrap_or_else(|| "unknown".to_string());
+        if job_status == "failed" {
+            return Ok(json!({
+                "success": false,
+                "status": "failed",
+                "platform": platform,
+                "target": target,
+                "kind": kind,
+                "jobId": job_id,
+                "job": job,
+            }));
+        }
+        if job_status != "completed" {
+            return Ok(json!({
+                "success": false,
+                "status": job_status,
+                "platform": platform,
+                "target": target,
+                "kind": kind,
+                "jobId": job_id,
+                "job": job,
+                "message": "capture job did not complete before maxWaitMs",
+            }));
+        }
+
+        let ingest = if ingest_to_knowledge {
+            self.ingest_capture_job_entries(&job)?
+        } else {
+            json!({ "success": true, "skipped": true, "count": 0 })
+        };
+        Ok(json!({
+            "success": true,
+            "status": "completed",
+            "platform": platform,
+            "target": target,
+            "kind": kind,
+            "jobId": job_id,
+            "job": job,
+            "ingest": ingest,
+        }))
+    }
+
+    fn handle_capture_youtube(
+        &self,
+        payload: &Value,
+        canonical_url: &str,
+        external_id: Option<String>,
+    ) -> Result<Value, String> {
+        let video_id = external_id
+            .ok_or_else(|| "capture.collect could not resolve YouTube video id".to_string())?;
+        let title = capture_payload_string(payload, &["title"])
+            .unwrap_or_else(|| format!("YouTube_{video_id}"));
+        let description = capture_payload_string(payload, &["description"]).unwrap_or_default();
+        let thumbnail_url = capture_payload_string(payload, &["thumbnailUrl", "thumbnail"]);
+        let saved = self.call_channel(
+            "youtube:save-note",
+            json!({
+                "videoId": video_id,
+                "videoUrl": canonical_url,
+                "title": title,
+                "description": description,
+                "thumbnailUrl": thumbnail_url.unwrap_or_default(),
+            }),
+        )?;
+        Ok(json!({
+            "success": saved.get("success").and_then(Value::as_bool).unwrap_or(true),
+            "status": "completed",
+            "platform": "youtube",
+            "target": "content",
+            "kind": "youtube-video",
+            "jobId": Value::Null,
+            "noteId": saved.get("noteId").cloned().unwrap_or(Value::Null),
+            "ingest": saved,
+        }))
+    }
+
+    fn handle_capture_status(&self, payload: &Value) -> Result<Value, String> {
+        let job_id = capture_payload_string(payload, &["jobId", "id"]);
+        if let Some(job_id) = job_id {
+            return self.call_channel("capture:get-server-job", json!({ "jobId": job_id }));
+        }
+        let limit = capture_payload_i64(payload, &["limit"])
+            .unwrap_or(20)
+            .clamp(1, 50);
+        self.call_channel("capture:list-server-jobs", json!({ "limit": limit }))
+    }
+
+    fn poll_capture_job(&self, payload: &Value, job_id: &str) -> Result<Value, String> {
+        let max_wait_ms = capture_payload_i64(payload, &["maxWaitMs"])
+            .unwrap_or(CAPTURE_DEFAULT_MAX_WAIT_MS as i64)
+            .clamp(CAPTURE_MIN_WAIT_MS as i64, CAPTURE_MAX_WAIT_MS as i64)
+            as u64;
+        let poll_interval_ms = capture_payload_i64(payload, &["pollIntervalMs"])
+            .unwrap_or(CAPTURE_DEFAULT_POLL_INTERVAL_MS as i64)
+            .clamp(
+                CAPTURE_MIN_POLL_INTERVAL_MS as i64,
+                CAPTURE_MAX_POLL_INTERVAL_MS as i64,
+            ) as u64;
+        let started = std::time::Instant::now();
+        let mut latest = Value::Null;
+        while started.elapsed() <= Duration::from_millis(max_wait_ms) {
+            let response =
+                self.call_channel("capture:get-server-job", json!({ "jobId": job_id }))?;
+            if value_success_is_false(&response) {
+                return Err(format!("capture job status failed: {response}"));
+            }
+            let job = response
+                .get("job")
+                .cloned()
+                .unwrap_or_else(|| response.clone());
+            let status = value_string_alias(&job, &["status"]).unwrap_or_default();
+            latest = job;
+            if matches!(status.as_str(), "completed" | "failed") {
+                return Ok(latest);
+            }
+            std::thread::sleep(Duration::from_millis(poll_interval_ms));
+        }
+        Ok(latest)
+    }
+
+    fn ingest_capture_job_entries(&self, job: &Value) -> Result<Value, String> {
+        let entries = job
+            .get("result")
+            .and_then(|result| result.get("entries"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if entries.is_empty() {
+            return Ok(json!({ "success": true, "count": 0 }));
+        }
+        self.call_channel(
+            "knowledge:batch-ingest",
+            json!({
+                "entries": entries,
+                "documentSources": [],
+                "mediaAssets": [],
+            }),
+        )
     }
 
     pub(super) fn handle_work(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
@@ -3822,5 +4308,64 @@ mod tests {
             Some("user")
         );
         assert_eq!(redclaw_profile_doc_type(&args, &payload, None), None);
+    }
+
+    #[test]
+    fn capture_infers_xhs_profile_from_profile_url() {
+        let payload = json!({ "url": "https://www.xiaohongshu.com/user/profile/abc_123" });
+        let parsed = parse_capture_url(payload.get("url").and_then(Value::as_str).unwrap())
+            .expect("valid xhs url");
+        let platform = infer_capture_platform(&payload, &parsed).expect("platform");
+        let target = infer_capture_target(&payload, &platform, &parsed).expect("target");
+
+        assert_eq!(platform, "xiaohongshu");
+        assert_eq!(target, "profile");
+        assert_eq!(capture_kind_for(&platform, &target).unwrap(), "xhs-profile");
+        assert_eq!(
+            infer_capture_external_id("xhs-profile", &parsed).as_deref(),
+            Some("abc_123")
+        );
+    }
+
+    #[test]
+    fn capture_accepts_nested_options_for_target() {
+        let payload = json!({
+            "url": "https://www.xiaohongshu.com/explore/note-1",
+            "options": { "target": "comments", "includeComments": true }
+        });
+        let parsed = parse_capture_url(payload.get("url").and_then(Value::as_str).unwrap())
+            .expect("valid xhs url");
+        let platform = infer_capture_platform(&payload, &parsed).expect("platform");
+        let target = infer_capture_target(&payload, &platform, &parsed).expect("target");
+
+        assert_eq!(target, "comments");
+        assert_eq!(capture_kind_for(&platform, &target).unwrap(), "xhs-note");
+        assert_eq!(
+            capture_payload_bool(&payload, &["includeComments"]),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn capture_rejects_comments_for_douyin() {
+        let payload = json!({
+            "url": "https://www.douyin.com/video/1234567890",
+            "target": "comments"
+        });
+        let parsed = parse_capture_url(payload.get("url").and_then(Value::as_str).unwrap())
+            .expect("valid douyin url");
+        let platform = infer_capture_platform(&payload, &parsed).expect("platform");
+
+        assert!(infer_capture_target(&payload, &platform, &parsed).is_err());
+    }
+
+    #[test]
+    fn capture_extracts_youtube_video_id() {
+        let parsed = parse_capture_url("https://youtu.be/abc_DEF-123?t=10").expect("valid url");
+
+        assert_eq!(
+            infer_capture_external_id("youtube-video", &parsed).as_deref(),
+            Some("abc_DEF-123")
+        );
     }
 }
