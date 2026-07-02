@@ -1583,6 +1583,94 @@ fn generic_state_output_schema() -> Value {
     }))
 }
 
+fn capture_collect_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "url",
+                string_schema("HTTP/HTTPS content or profile URL to capture."),
+            ),
+            (
+                "platform",
+                json!({
+                    "type": "string",
+                    "enum": ["auto", "xhs", "xiaohongshu", "douyin", "youtube"],
+                    "description": "Source platform. Use auto only when the URL host is enough to infer the platform."
+                }),
+            ),
+            (
+                "target",
+                json!({
+                    "type": "string",
+                    "enum": ["auto", "content", "profile", "comments"],
+                    "description": "Capture target: one content item, a profile/home page, or comments for one content item."
+                }),
+            ),
+            (
+                "includeComments",
+                bool_schema("Whether to include comments for supported content captures."),
+            ),
+            (
+                "limit",
+                integer_schema("Maximum profile items or comment/page items to request.", 1, 100),
+            ),
+            (
+                "downloadMedia",
+                bool_schema("Whether server capture should download media assets when supported. Defaults to true."),
+            ),
+            (
+                "ingestToKnowledge",
+                bool_schema("Whether to write completed capture entries into the local knowledge base. Defaults to true."),
+            ),
+            (
+                "waitForCompletion",
+                bool_schema("Whether to poll the capture job until completed or failed. Defaults to true."),
+            ),
+            (
+                "maxWaitMs",
+                integer_schema("Maximum time to wait for a server capture job.", 1_000, 300_000),
+            ),
+            (
+                "pollIntervalMs",
+                integer_schema("Polling interval for server capture jobs.", 500, 10_000),
+            ),
+            (
+                "externalId",
+                string_schema("Optional platform id when already known."),
+            ),
+            (
+                "title",
+                string_schema("Optional title for YouTube legacy local ingest."),
+            ),
+            (
+                "description",
+                string_schema("Optional description for YouTube legacy local ingest."),
+            ),
+            (
+                "thumbnailUrl",
+                string_schema("Optional thumbnail URL for YouTube legacy local ingest."),
+            ),
+        ],
+        &["url"],
+        Some("Capture one platform URL through the existing server capture contract or YouTube local ingest, then optionally save results to Knowledge."),
+    )
+}
+
+fn capture_status_input_schema() -> Value {
+    object_schema(
+        &[
+            ("jobId", string_schema("Capture job id returned by capture.collect.")),
+            ("id", string_schema("Alias for jobId.")),
+            (
+                "limit",
+                integer_schema("When no job id is provided, maximum recent jobs to list.", 1, 50),
+            ),
+        ],
+        &[],
+        Some("Read one capture job status by id, or list recent capture jobs when no id is provided."),
+    )
+}
+
 fn manuscripts_list_input_schema() -> Value {
     no_payload_schema()
 }
@@ -4416,6 +4504,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "voice",
             "generation",
             "media",
+            "capture",
             "session",
             "web",
             "task",
@@ -4493,6 +4582,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "voice" => Some("voice"),
         "generation" => Some("generation"),
         "media" => Some("media"),
+        "capture" => Some("capture"),
         "spaces" => Some("space"),
         "workspace" => Some("workspace"),
         "session" => Some("session"),
@@ -4529,6 +4619,7 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
         "cancel" => Some("cancel"),
         "resume" => Some("resume"),
         "confirm" | "approve" => Some("confirm"),
+        "collect" => Some("run"),
         "invoke" | "call" | "execute" => Some("run"),
         "generate" => Some("generate"),
         "speech" => Some("speech"),
@@ -4693,6 +4784,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "capture.collect",
+        namespace: "capture",
+        description: "Capture a platform content URL, profile/homepage URL, or comments target through the existing RedBox capture pipeline. Use platform and target instead of separate tools; defaults to downloading supported media and ingesting completed results into Knowledge.",
+        input_schema: capture_collect_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "capture.status",
+        namespace: "capture",
+        description: "Read one capture job status by jobId, or list recent capture jobs when jobId is omitted.",
+        input_schema: capture_status_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
