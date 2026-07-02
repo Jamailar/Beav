@@ -42,6 +42,8 @@ export interface ClipboardCaptureTask {
   progressMessage?: string;
   pointsCost?: number;
   error?: string;
+  logs?: ClipboardCaptureTaskLog[];
+  debugDetails?: string;
 }
 
 export interface ClipboardCaptureExecutionResult {
@@ -51,6 +53,13 @@ export interface ClipboardCaptureExecutionResult {
   jobId?: string;
   noteId?: string;
   error?: string;
+  debugDetails?: string;
+}
+
+export interface ClipboardCaptureTaskLog {
+  timestamp: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
 }
 
 export interface ServerCaptureJobRequest {
@@ -92,7 +101,9 @@ export interface ServerCaptureJob {
   error?: {
     code?: string | null;
     message?: string | null;
+    details?: unknown;
   } | null;
+  logs?: Array<string | { message?: string | null; level?: string | null; timestamp?: string | null }>;
   pointsCost?: number;
   createdAt?: string;
   startedAt?: string | null;
@@ -107,6 +118,9 @@ export interface ServerCaptureJobResponse {
   jobId?: string;
   status?: 'queued' | 'running' | 'completed' | 'failed' | 'unavailable';
   error?: string;
+  httpStatus?: number;
+  raw?: unknown;
+  details?: unknown;
 }
 
 export interface ServerCaptureJobListResponse {

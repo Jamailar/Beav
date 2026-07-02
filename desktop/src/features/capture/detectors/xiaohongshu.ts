@@ -9,6 +9,11 @@ function cleanId(value: string): string {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
+function xhsShortlinkKind(parsed: URL): 'xhs-note' | 'xhs-profile' {
+  const firstPathPart = parsed.pathname.split('/').filter(Boolean)[0]?.toLowerCase() || '';
+  return firstPathPart === 'm' ? 'xhs-profile' : 'xhs-note';
+}
+
 export function detectXiaohongshuClipboardCandidate(
   rawUrl: string,
   rawText: string,
@@ -19,9 +24,10 @@ export function detectXiaohongshuClipboardCandidate(
   if (!parsed) return null;
 
   if (hostnameMatches(parsed, ['xhslink.com'])) {
+    const kind = xhsShortlinkKind(parsed);
     return {
-      id: candidateId('xhs-note', sanitized),
-      kind: 'xhs-note',
+      id: candidateId(kind, sanitized),
+      kind,
       platform: 'xiaohongshu',
       rawText,
       rawUrl: sanitized,

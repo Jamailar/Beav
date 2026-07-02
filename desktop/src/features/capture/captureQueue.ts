@@ -2,13 +2,17 @@ import type {
   ClipboardCaptureCandidate,
   ClipboardCaptureExecutionResult,
   ClipboardCaptureTask,
+  ClipboardCaptureTaskLog,
 } from './captureTypes';
 
 type QueueEntry = {
   task: ClipboardCaptureTask;
   execute: (
     candidate: ClipboardCaptureCandidate,
-    context: { updateTask: (patch: Partial<ClipboardCaptureTask>) => void },
+    context: {
+      updateTask: (patch: Partial<ClipboardCaptureTask>) => void;
+      appendLog: (message: string, level?: ClipboardCaptureTaskLog['level']) => void;
+    },
   ) => Promise<ClipboardCaptureExecutionResult>;
   resolve: (result: ClipboardCaptureExecutionResult) => void;
 };
@@ -77,18 +81,48 @@ class ClipboardCaptureQueue {
         Object.assign(entry.task, patch, { updatedAt: new Date().toISOString() });
         this.publish();
       };
-      const result = await entry.execute(entry.task.candidate, { updateTask });
+      const appendLog = (message: string, level: ClipboardCaptureTaskLog['level'] = 'info') => {
+        const normalizedMessage = String(message || '').trim();
+        if (!normalizedMessage) return;
+        const lastLog = entry.task.logs?.[entry.task.logs.length - 1];
+        if (lastLog?.message === normalizedMessage && lastLog.level === level) return;
+        entry.task.logs = [
+          ...(entry.task.logs || []),
+          {
+            timestamp: new Date().toISOString(),
+            level,
+            message: normalizedMessage,
+          },
+        ].slice(-12);
+        entry.task.updatedAt = new Date().toISOString();
+        this.publish();
+      };
+      appendLog('开始执行采集任务');
+      const result = await entry.execute(entry.task.candidate, { updateTask, appendLog });
       entry.task.status = result.skipped ? 'skipped' : result.success ? 'success' : 'failed';
       entry.task.error = result.error;
+      entry.task.debugDetails = result.debugDetails;
       entry.task.serverJobId = result.jobId || entry.task.serverJobId;
       entry.task.updatedAt = new Date().toISOString();
       entry.resolve(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const debugDetails = typeof error === 'object' && error !== null && 'debugDetails' in error
+        ? String((error as { debugDetails?: unknown }).debugDetails || '')
+        : undefined;
       entry.task.status = 'failed';
       entry.task.error = message;
+      entry.task.debugDetails = debugDetails;
+      entry.task.logs = [
+        ...(entry.task.logs || []),
+        {
+          timestamp: new Date().toISOString(),
+          level: 'error' as const,
+          message,
+        },
+      ].slice(-12);
       entry.task.updatedAt = new Date().toISOString();
-      entry.resolve({ success: false, error: message });
+      entry.resolve({ success: false, error: message, debugDetails });
     } finally {
       this.pushRecent(entry.task);
       this.active = null;

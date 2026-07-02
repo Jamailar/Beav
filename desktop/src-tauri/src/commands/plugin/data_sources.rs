@@ -171,7 +171,7 @@ fn plugin_data_source_value(
     match source {
         "knowledge.count" => {
             let page = crate::knowledge_index::catalog::list_page(
-                state, None, 1, kind, query, None, false,
+                state, None, 1, kind, None, query, None, false,
             )?;
             Ok(
                 json!({ "success": true, "source": source, "total": page.total, "kindCounts": page.kind_counts }),
@@ -183,6 +183,7 @@ fn plugin_data_source_value(
                 None,
                 limit,
                 kind,
+                None,
                 query,
                 Some("updated"),
                 false,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BadgeCheck, Box, Check, ChevronDown, Crown, Gem, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
+import { BadgeCheck, Box, Check, ChevronDown, Copy, Crown, Gem, Gift, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
@@ -45,6 +45,41 @@ interface RedboxCallRecordItem {
   createdAt: string;
   status: string;
   purpose?: string | null;
+}
+
+const CALL_RECORD_API_LABELS: Record<string, string> = {
+  'douyin.video.detail': '抖音视频详情',
+  'douyin.video.comments': '抖音视频评论',
+  'douyin.user.posts': '抖音用户作品列表',
+  'xiaohongshu.note.image_detail': '小红书图文笔记详情',
+  'xiaohongshu.note.video_detail': '小红书视频笔记详情',
+  'xiaohongshu.note.comments': '小红书笔记评论',
+  'xiaohongshu.note.comment_replies': '小红书评论回复',
+  'xiaohongshu.user.notes': '小红书主页笔记列表',
+  'twitter.tweet.detail': 'X / Twitter 推文详情',
+  'youtube.video.detail': 'YouTube 视频详情',
+  'youtube.search.videos': 'YouTube 视频搜索',
+  'tikhub.user.info': 'TikHub 账户信息',
+};
+
+function normalizeCallRecordApiKey(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/^api\/v\d+\/forward\/[^/]+\//i, '')
+    .replace(/^forward\/[^/]+\//i, '')
+    .replace(/^tikhub[/:]/i, '');
+}
+
+function callRecordDisplayName(record: RedboxCallRecordItem): string {
+  const candidates = [
+    normalizeCallRecordApiKey(record.model),
+    normalizeCallRecordApiKey(record.endpoint),
+  ];
+  for (const candidate of candidates) {
+    if (CALL_RECORD_API_LABELS[candidate]) return CALL_RECORD_API_LABELS[candidate];
+  }
+  return String(record.model || record.endpoint || '-').trim() || '-';
 }
 
 interface OfficialRealmConfig {
@@ -684,7 +719,10 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     }
     setAuthBusy(true);
     try {
-      const smsPayload = { phone, code, inviteCode: smsForm.inviteCode.trim() || undefined };
+      const inviteCode = String(smsForm.inviteCode || '').trim();
+      const smsPayload = mode === 'register'
+        ? { phone, code, inviteCode: inviteCode || undefined }
+        : { phone, code };
       const result = await timedRequest<{ success: boolean; session?: RedboxAuthSession; error?: string }>(
         mode === 'login' ? 'officialAuth.loginSms' : 'officialAuth.registerSms',
         mode === 'login'
@@ -913,6 +951,45 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
     const name = userName || 'RedBox';
     return name.trim().slice(0, 1).toUpperCase();
   }, [userName]);
+  const inviteCode = useMemo(() => {
+    const currentUser = user || session?.user;
+    if (!currentUser || typeof currentUser !== 'object') return '';
+    const record = currentUser as Record<string, unknown>;
+    const candidates = [
+      record.inviteCode,
+      record.invite_code,
+      record.invitationCode,
+      record.invitation_code,
+      record.referralCode,
+      record.referral_code,
+    ];
+    for (const candidate of candidates) {
+      const value = String(candidate || '').trim();
+      if (value) return value;
+    }
+    return '';
+  }, [session?.user, user]);
+
+  const copyInviteCode = useCallback(async () => {
+    if (!inviteCode) {
+      setPanelNotice('error', '邀请码还未同步，请刷新后重试');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(inviteCode);
+      setPanelNotice('success', '邀请码已复制');
+    } catch {
+      try {
+        const result = await window.ipcRenderer.clipboardWriteText(inviteCode);
+        if (!result?.success) {
+          throw new Error(result?.error || '复制失败');
+        }
+        setPanelNotice('success', '邀请码已复制');
+      } catch {
+        setPanelNotice('error', '复制失败，请手动选择邀请码');
+      }
+    }
+  }, [inviteCode, setPanelNotice]);
 
   const pointsValue = useMemo(() => {
     if (!points || typeof points !== 'object') return 0;
@@ -1131,9 +1208,12 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                   type="text"
                   value={smsForm.inviteCode}
                   onChange={(e) => setSmsForm((prev) => ({ ...prev, inviteCode: e.target.value }))}
-                  placeholder="邀请码（可选）"
+                  placeholder="注册邀请码（可选）"
                   className="w-full bg-black/[0.01] dark:bg-white/[0.01] rounded-xl border border-black/[0.05] dark:border-white/[0.05] px-3.5 py-2 text-sm focus:outline-none focus:border-accent-primary focus:bg-white dark:focus:bg-surface-primary transition-all font-medium"
                 />
+                <div className="text-[11px] font-medium leading-5 text-text-tertiary">
+                  邀请码只在注册新账号时使用。
+                </div>
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     type="button"
@@ -1258,6 +1338,36 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                   )}
                   {isFounderSponsorMember ? '创始赞助会员' : '免费用户'}
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-black/[0.06] bg-white p-4 shadow-sm dark:border-white/[0.06] dark:bg-surface-primary">
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
+                  <Gift className="h-5 w-5" strokeWidth={1.9} />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-black text-text-primary">邀请好友</div>
+                  <div className="mt-1 text-xs font-medium leading-5 text-text-secondary">
+                    好友注册时填写邀请码后，积分会自动到账。
+                  </div>
+                </div>
+              </div>
+              <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(160px,1fr)_auto] sm:items-center">
+                <div className="min-w-0 rounded-lg border border-black/[0.06] bg-black/[0.015] px-3 py-2 font-mono text-sm font-black tracking-normal text-text-primary dark:border-white/[0.08] dark:bg-white/[0.025]">
+                  <span className="block truncate">{inviteCode || '待同步'}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void copyInviteCode()}
+                  disabled={!inviteCode}
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-black/[0.08] bg-white px-3 text-xs font-bold text-text-secondary transition-all hover:border-accent-primary/[0.24] hover:bg-accent-primary/5 hover:text-text-primary disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.02]"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  复制
+                </button>
               </div>
             </div>
           </section>
@@ -1519,7 +1629,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                             <td className="px-5 py-3 text-sm font-medium text-text-secondary">{new Date(record.createdAt).toLocaleString()}</td>
                             <td className="px-5 py-3 text-sm font-medium text-text-secondary">
                               <span className="inline-flex flex-wrap items-center gap-1.5">
-                                <span>{record.model || '-'}</span>
+                                <span>{callRecordDisplayName(record)}</span>
                                 {record.purpose === 'knowledge_visual_index' && (
                                   <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
                                     知识库图像索引
