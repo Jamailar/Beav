@@ -47,6 +47,7 @@ type SkillAuthorProfile = {
     name: string;
     avatarUrl: string;
     homepageUrl: string;
+    homepageLabel: string;
     bio: string;
     skills: ThriveSkillMarketplaceItem[];
 };
@@ -248,6 +249,13 @@ function isRedSkillText(value: unknown) {
     return redSkillKey(value).includes('redskill');
 }
 
+function isRedSkillMarketplaceItem(skill: ThriveSkillMarketplaceItem) {
+    return (skill.tags || []).some(isRedSkillTag)
+        || isRedSkillText(skill.marketName)
+        || isRedSkillText(skill.marketId)
+        || isRedSkillText(skill.sourceKind);
+}
+
 function skillCategoryLabel(value: unknown) {
     const normalized = normalizeKey(value);
     return SKILL_CATEGORY_LABELS.find((category) => normalizeKey(category) === normalized) || '';
@@ -276,20 +284,14 @@ function prioritizeSkillCategoryTags(tags: string[]) {
 
 function skillDisplayTags(skill: ThriveSkillMarketplaceItem) {
     const tags: string[] = [];
-    let hasRedSkillTag = false;
     (skill.tags || []).forEach((tag) => {
         if (isRedSkillTag(tag)) {
-            hasRedSkillTag = true;
             return;
         }
         pushUniqueTag(tags, tag);
     });
     const orderedTags = prioritizeSkillCategoryTags(tags);
-    const isRedSkill = hasRedSkillTag
-        || isRedSkillText(skill.marketName)
-        || isRedSkillText(skill.marketId)
-        || isRedSkillText(skill.sourceKind);
-    if (isRedSkill) {
+    if (isRedSkillMarketplaceItem(skill)) {
         return [RED_SKILL_TAG_LABEL, ...orderedTags.filter((tag) => !isRedSkillTag(tag))];
     }
     return orderedTags;
@@ -437,11 +439,13 @@ function authorProfileForKey(authorKey: string, items: ThriveSkillMarketplaceIte
     if (!authorKey) return null;
     const skills = items.filter((item) => skillAuthorKey(item) === authorKey);
     if (skills.length === 0) return null;
+    const homepageSkill = skills.find((skill) => skillAuthorHref(skill));
     return {
         key: authorKey,
         name: firstText(skills.map((skill) => skill.author)),
         avatarUrl: firstText(skills.map((skill) => skill.authorAvatarUrl)),
-        homepageUrl: firstText(skills.map((skill) => skillAuthorHref(skill))),
+        homepageUrl: homepageSkill ? skillAuthorHref(homepageSkill) : '',
+        homepageLabel: homepageSkill && isRedSkillMarketplaceItem(homepageSkill) ? '小红书主页' : '作者主页',
         bio: firstText(skills.map((skill) => skill.authorBio)),
         skills,
     };
@@ -1121,7 +1125,7 @@ function SkillAuthorHomeHeader({ profile }: { profile: SkillAuthorProfile }) {
                                 onClick={() => void openExternalHttpUrl(profile.homepageUrl)}
                                 className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-full border border-border bg-surface-primary/70 px-2.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
                             >
-                                <span className="truncate">小红书主页</span>
+                                <span className="truncate">{profile.homepageLabel}</span>
                                 <ExternalLink className="h-3 w-3 shrink-0" strokeWidth={1.7} />
                             </button>
                         ) : null}
