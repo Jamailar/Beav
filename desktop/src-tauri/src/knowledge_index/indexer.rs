@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs;
 use std::hash::{DefaultHasher, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -243,6 +244,57 @@ fn note_visual_paths(note: &KnowledgeNoteRecord) -> Vec<PathBuf> {
     paths
 }
 
+fn push_existing_file_path(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: PathBuf) {
+    if !path.is_file() {
+        return;
+    }
+    let dedupe_path = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    if seen.insert(dedupe_path) {
+        paths.push(path);
+    }
+}
+
+fn meta_relative_file_path(folder: &Path, keys: &[&str]) -> Option<PathBuf> {
+    let meta = crate::workspace_loaders::read_json_file(&folder.join("meta.json"))?;
+    keys.iter()
+        .find_map(|key| meta.get(*key).and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|relative| folder.join(relative))
+        .filter(|path| path.is_file())
+}
+
+fn note_text_paths(note: &KnowledgeNoteRecord) -> Vec<PathBuf> {
+    let Some(folder_path) = note.folder_path.as_ref() else {
+        return Vec::new();
+    };
+    let folder = PathBuf::from(folder_path);
+    let mut seen = HashSet::<PathBuf>::new();
+    let mut paths = Vec::new();
+    for name in [
+        "content.md",
+        "content.html",
+        "transcript.md",
+        "transcript.txt",
+        "subtitle.txt",
+        "subtitle.srt",
+        "subtitle.vtt",
+    ] {
+        push_existing_file_path(&mut paths, &mut seen, folder.join(name));
+    }
+    if let Some(path) = note
+        .html_file
+        .as_deref()
+        .map(|relative| folder.join(relative))
+    {
+        push_existing_file_path(&mut paths, &mut seen, path);
+    }
+    if let Some(path) = meta_relative_file_path(&folder, &["transcriptFile", "transcript_file"]) {
+        push_existing_file_path(&mut paths, &mut seen, path);
+    }
+    paths
+}
+
 fn video_visual_paths(video: &YoutubeVideoRecord) -> Vec<PathBuf> {
     if let Some(path) = local_visual_path(&video.thumbnail_url) {
         return vec![path];
@@ -255,6 +307,22 @@ fn video_visual_paths(video: &YoutubeVideoRecord) -> Vec<PathBuf> {
         .filter(|path| path.is_file())
         .into_iter()
         .collect()
+}
+
+fn video_text_paths(video: &YoutubeVideoRecord) -> Vec<PathBuf> {
+    let Some(folder_path) = video.folder_path.as_ref() else {
+        return Vec::new();
+    };
+    let folder = PathBuf::from(folder_path);
+    let mut seen = HashSet::<PathBuf>::new();
+    let mut paths = Vec::new();
+    for name in ["subtitle.txt", "subtitle.srt", "subtitle.vtt"] {
+        push_existing_file_path(&mut paths, &mut seen, folder.join(name));
+    }
+    if let Some(path) = meta_relative_file_path(&folder, &["subtitleFile", "subtitle_file"]) {
+        push_existing_file_path(&mut paths, &mut seen, path);
+    }
+    paths
 }
 
 fn file_row_for_path(
@@ -295,8 +363,11 @@ fn build_rows_for_note(item: &KnowledgeCatalogSummary) -> Result<Vec<IndexedFile
         ("meta.json", "meta"),
         ("content.md", "content"),
         ("content.html", "html"),
+        ("transcript.md", "transcript"),
         ("transcript.txt", "transcript"),
         ("subtitle.txt", "subtitle"),
+        ("subtitle.srt", "subtitle"),
+        ("subtitle.vtt", "subtitle"),
     ] {
         if let Some(row) = file_row_for_path(&item.item_id, &base.join(name), role)? {
             rows.push(row);
@@ -627,6 +698,109 @@ fn update_rebuild_progress(
 mod tests {
     use super::*;
 
+    fn test_note(folder: &Path) -> KnowledgeNoteRecord {
+        KnowledgeNoteRecord {
+            id: "note_test".to_string(),
+            r#type: Some("video".to_string()),
+            source_domain: None,
+            source_link: None,
+            source_url: None,
+            title: "Test Note".to_string(),
+            author: String::new(),
+            author_id: None,
+            author_url: None,
+            author_avatar_url: None,
+            author_description: None,
+            content: String::new(),
+            excerpt: None,
+            site_name: None,
+            capture_kind: Some("xhs-video".to_string()),
+            metadata: None,
+            html_file: None,
+            html_file_url: None,
+            images: Vec::new(),
+            tags: None,
+            cover: None,
+            video: None,
+            video_url: None,
+            transcript: Some("transcript body".to_string()),
+            transcription_status: Some("completed".to_string()),
+            stats: crate::KnowledgeNoteStatsRecord {
+                likes: 0,
+                collects: None,
+                comments: None,
+            },
+            created_at: "2026-05-03T00:00:00Z".to_string(),
+            folder_path: Some(folder.display().to_string()),
+        }
+    }
+
+    fn path_names(paths: &[PathBuf]) -> Vec<String> {
+        paths
+            .iter()
+            .filter_map(|path| path.file_name().and_then(|value| value.to_str()))
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn note_text_paths_include_transcript_markdown() {
+        let root = std::env::temp_dir().join(format!("redbox-note-text-{}", now_i64()));
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        std::fs::write(root.join("content.md"), b"content").expect("content fixture");
+        std::fs::write(root.join("transcript.md"), b"transcript").expect("transcript fixture");
+        std::fs::write(
+            root.join("meta.json"),
+            br#"{"transcriptFile":"transcript.md"}"#,
+        )
+        .expect("meta fixture");
+
+        let paths = note_text_paths(&test_note(&root));
+        let names = path_names(&paths);
+        assert!(names.contains(&"content.md".to_string()));
+        assert!(names.contains(&"transcript.md".to_string()));
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.as_str() == "transcript.md")
+                .count(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn video_text_paths_include_meta_subtitle_file() {
+        let root = std::env::temp_dir().join(format!("redbox-video-text-{}", now_i64()));
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        std::fs::write(root.join("subtitle.vtt"), b"WEBVTT\n\nhello").expect("subtitle fixture");
+        std::fs::write(
+            root.join("meta.json"),
+            br#"{"subtitleFile":"subtitle.vtt"}"#,
+        )
+        .expect("meta fixture");
+        let video = YoutubeVideoRecord {
+            id: "youtube_text_test".to_string(),
+            video_id: "text_test".to_string(),
+            video_url: "https://youtube.com/watch?v=text_test".to_string(),
+            title: "Text Test".to_string(),
+            original_title: None,
+            description: String::new(),
+            summary: None,
+            thumbnail_url: String::new(),
+            has_subtitle: true,
+            subtitle_content: Some("hello".to_string()),
+            subtitle_error: None,
+            status: Some("completed".to_string()),
+            created_at: "2026-05-03T00:00:00Z".to_string(),
+            folder_path: Some(root.display().to_string()),
+        };
+
+        let names = path_names(&video_text_paths(&video));
+        assert_eq!(names, vec!["subtitle.vtt".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn youtube_visual_paths_falls_back_to_local_thumbnail() {
         let root = std::env::temp_dir().join(format!("redbox-youtube-thumbnail-{}", now_i64()));
@@ -934,9 +1108,10 @@ fn rebuild_catalog_with_cache_policy(
     let mut visual_seen_paths = HashSet::<String>::new();
 
     for note in crate::load_knowledge_notes_from_fs(&knowledge_root) {
-        let note_visual_paths = note_visual_paths(&note);
+        let mut note_index_paths = note_text_paths(&note);
+        note_index_paths.extend(note_visual_paths(&note));
         let summary = summarize_note(note);
-        for path in note_visual_paths {
+        for path in note_index_paths {
             let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
                 state,
                 &summary.item_id,
@@ -955,9 +1130,10 @@ fn rebuild_catalog_with_cache_policy(
         items.push(summary);
     }
     for video in crate::load_youtube_videos_from_fs(&knowledge_root) {
-        let video_visual_paths = video_visual_paths(&video);
+        let mut video_index_paths = video_text_paths(&video);
+        video_index_paths.extend(video_visual_paths(&video));
         let summary = summarize_video(video);
-        for path in video_visual_paths {
+        for path in video_index_paths {
             let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
                 state,
                 &summary.item_id,
