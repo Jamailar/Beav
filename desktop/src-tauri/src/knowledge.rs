@@ -1865,6 +1865,7 @@ fn ingest_youtube_entry(
         "dedupeKey": normalize_string(request.options.dedupe_key.clone()),
     });
     write_json_value(&entry_dir.join("meta.json"), &meta)?;
+    persist_generic_xhs_comments_snapshot(&entry_dir, &entry_id, &request.content.metadata)?;
     refresh_knowledge_projection_and_emit(
         app,
         state,
@@ -2127,6 +2128,45 @@ fn ingest_note_entry(
             "autoTranscribe": should_process_transcription,
         },
     }))
+}
+
+fn persist_generic_xhs_comments_snapshot(
+    entry_dir: &Path,
+    entry_id: &str,
+    metadata: &Option<Value>,
+) -> Result<(), String> {
+    let Some(snapshot) = metadata
+        .as_ref()
+        .and_then(|value| value.get("xhsComments"))
+        .filter(|value| value.is_object())
+    else {
+        return Ok(());
+    };
+    let mut comments_doc = snapshot.clone();
+    if let Some(object) = comments_doc.as_object_mut() {
+        object
+            .entry("schemaVersion".to_string())
+            .or_insert_with(|| json!(1));
+        object
+            .entry("platform".to_string())
+            .or_insert_with(|| json!("xiaohongshu"));
+        object
+            .entry("entryId".to_string())
+            .or_insert_with(|| json!(entry_id));
+        object
+            .entry("capturedAt".to_string())
+            .or_insert_with(|| json!(now_iso()));
+    }
+    let has_comments = comments_doc
+        .get("comments")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false);
+    if !has_comments {
+        return Ok(());
+    }
+    write_json_value(&entry_dir.join("comments.json"), &comments_doc)?;
+    Ok(())
 }
 
 pub(crate) fn ingest_zhihu_answer(
@@ -2450,7 +2490,8 @@ pub(crate) fn knowledge_http_health(
 ) -> Result<Value, String> {
     let _ = ensure_store_hydrated_for_knowledge(state);
     let _ = ensure_store_hydrated_for_media(state);
-    let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None, false)?;
+    let page =
+        crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None, None, false)?;
     let snapshot = with_store(state, |store| {
         let catalog_entries = page
             .kind_counts

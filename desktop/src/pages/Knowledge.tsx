@@ -640,6 +640,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 cursor: reset ? null : nextCursorRef.current,
                 limit: 200,
                 kind: resolveKnowledgeBackendKind(selectedTypeFilter),
+                typeFilter: selectedTypeFilter === 'all' ? undefined : selectedTypeFilter,
                 query: debouncedSearchQuery || undefined,
                 sort: sortOrder,
             });
@@ -921,32 +922,27 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
 
     const typeFilters = useMemo(() => {
         const counts: Record<Exclude<KnowledgeTypeFilter, 'all'>, number> = {
-            'xhs-image': 0,
-            'xhs-video': 0,
-            'xhs-blogger': 0,
-            'xhs-comments': 0,
-            'douyin-video': 0,
-            'bilibili': 0,
-            'kuaishou': 0,
-            'tiktok': 0,
-            'reddit': 0,
-            'x': 0,
-            'instagram': 0,
-            'link-article': 0,
-            'wechat-article': 0,
-            'zhihu-answer': 0,
-            'zhihu-article': 0,
-            'youtube': Number(kindCounts['youtube-video'] || 0),
-            'docs': Number(kindCounts['document-source'] || 0),
+            'xhs-image': Number(kindCounts['xhs-image'] || 0),
+            'xhs-video': Number(kindCounts['xhs-video'] || 0),
+            'xhs-blogger': Number(kindCounts['xhs-blogger'] || 0),
+            'xhs-comments': Number(kindCounts['xhs-comments'] || 0),
+            'douyin-video': Number(kindCounts['douyin-video'] || 0),
+            'bilibili': Number(kindCounts.bilibili || 0),
+            'kuaishou': Number(kindCounts.kuaishou || 0),
+            'tiktok': Number(kindCounts.tiktok || 0),
+            'reddit': Number(kindCounts.reddit || 0),
+            'x': Number(kindCounts.x || 0),
+            'instagram': Number(kindCounts.instagram || 0),
+            'link-article': Number(kindCounts['link-article'] || 0),
+            'wechat-article': Number(kindCounts['wechat-article'] || 0),
+            'zhihu-answer': Number(kindCounts['zhihu-answer'] || 0),
+            'zhihu-article': Number(kindCounts['zhihu-article'] || 0),
+            'youtube': Number(kindCounts.youtube || kindCounts['youtube-video'] || 0),
+            'docs': Number(kindCounts.docs || kindCounts['document-source'] || 0),
         };
-        knowledgeItems.forEach((item) => {
-            if (item.kind === 'youtube' || item.kind === 'docs') {
-                return;
-            }
-            counts[item.kind] += 1;
-        });
+        const totalCount = Number(kindCounts.all || knowledgeItems.length);
         return [
-            { key: 'all' as const, label: '全部', count: knowledgeItems.length },
+            { key: 'all' as const, label: '全部', count: totalCount },
             { key: 'xhs-image' as const, label: '小红书图文', count: counts['xhs-image'] },
             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
             { key: 'xhs-blogger' as const, label: '小红书博主', count: counts['xhs-blogger'] },
@@ -965,7 +961,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             { key: 'youtube' as const, label: 'YouTube', count: counts.youtube },
             { key: 'docs' as const, label: '文档', count: counts.docs },
         ].filter((item) => item.key === 'all' || item.count > 0);
-    }, [kindCounts, knowledgeItems]);
+    }, [kindCounts, knowledgeItems.length]);
 
     const youtubeSummaryPendingCount = useMemo(() => {
         return youtubeVideos.filter((video) => video.hasSubtitle && !String(video.summary || '').trim()).length;
