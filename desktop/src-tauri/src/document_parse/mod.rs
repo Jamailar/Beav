@@ -196,7 +196,7 @@ fn parse_native_path(
     visual_config: &VisualIndexConfig,
 ) -> Result<(Option<Vec<ParsedSection>>, Option<Value>), String> {
     let parsed = match extension {
-        "txt" | "md" | "markdown" | "json" | "yaml" | "yml" | "xml" => {
+        "txt" | "md" | "markdown" | "srt" | "vtt" | "json" | "yaml" | "yml" | "xml" => {
             read_utf8_sections(path, "plain-text", vec!["body".to_string()])?
         }
         "html" | "htm" => {

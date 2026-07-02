@@ -2102,6 +2102,10 @@ fn ingest_note_entry(
                 );
             }
         }
+    } else if transcript.is_some() {
+        if let Some(app) = app {
+            crate::knowledge_index::jobs::schedule_rebuild(app, "note-transcript-ingest");
+        }
     }
     if existing_match.is_none() {
         crate::analytics::observe_knowledge_item_added(
@@ -3085,6 +3089,7 @@ pub(crate) fn persist_note_transcript(
         let _ = crate::accounts::sync_completed_transcript_from_knowledge(
             state, note_id, &meta, transcript,
         );
+        crate::knowledge_index::jobs::schedule_rebuild(app, "note-transcript-completed");
         return Ok(json!({ "success": true, "transcript": transcript }));
     }
 
@@ -3115,6 +3120,7 @@ pub(crate) fn persist_note_transcript(
         &json!({ "id": note_id }),
         transcript,
     );
+    crate::knowledge_index::jobs::schedule_rebuild(app, "note-transcript-completed");
     Ok(json!({ "success": true, "transcript": transcript, "legacyFallback": true }))
 }
 
