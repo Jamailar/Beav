@@ -7,11 +7,13 @@ import {
     FileText,
     Loader2,
     MessageCircle,
+    PackagePlus,
     PlayCircle,
     RefreshCw,
     Search,
     Settings as SettingsIcon,
     Trash2,
+    X,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { PendingChatMessage, SkillsNavigationTarget } from '../features/app-shell/types';
@@ -56,6 +58,13 @@ type SkillAuthorProfile = {
     skills: ThriveSkillMarketplaceItem[];
 };
 
+type SkillSubmissionForm = {
+    name: string;
+    url: string;
+    description: string;
+    contact: string;
+};
+
 const ALL_MARKET_CACHE_KEY = '__all__';
 const MARKETPLACE_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-cache:v2';
 const MAX_AVATAR_CACHE_CONCURRENCY = 4;
@@ -78,6 +87,15 @@ const skillAvatarRequestCache = new Map<string, Promise<string>>();
 let skillMarketCacheHydrated = false;
 let activeAvatarCacheRequests = 0;
 const queuedAvatarCacheRequests: Array<() => void> = [];
+
+function emptySkillSubmissionForm(): SkillSubmissionForm {
+    return {
+        name: '',
+        url: '',
+        description: '',
+        contact: '',
+    };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -1198,6 +1216,131 @@ function EmptyPanel({ title, action }: { title: string; action?: ReactNode }) {
     );
 }
 
+function buildSkillSubmissionContent(form: SkillSubmissionForm) {
+    return [
+        `技能名称：${form.name || '未填写'}`,
+        `链接：${form.url || '未填写'}`,
+        form.description ? `说明：${form.description}` : '',
+        form.contact ? `联系方式：${form.contact}` : '',
+    ].filter(Boolean).join('\n');
+}
+
+type SkillSubmissionDialogProps = {
+    form: SkillSubmissionForm;
+    isSubmitting: boolean;
+    error: string;
+    message: string;
+    onChange: (form: SkillSubmissionForm) => void;
+    onClose: () => void;
+    onSubmit: () => void;
+};
+
+function SkillSubmissionDialog({
+    form,
+    isSubmitting,
+    error,
+    message,
+    onChange,
+    onClose,
+    onSubmit,
+}: SkillSubmissionDialogProps) {
+    const updateField = (field: keyof SkillSubmissionForm, value: string) => {
+        onChange({
+            ...form,
+            [field]: value,
+        });
+    };
+
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-[520px] overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl">
+                <div className="flex items-center justify-between border-b border-border px-5 py-4">
+                    <div className="flex min-w-0 items-center gap-2">
+                        <PackagePlus className="h-4 w-4 shrink-0 text-accent-primary" strokeWidth={1.9} />
+                        <div className="truncate text-sm font-semibold text-text-primary">申请收录</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={isSubmitting}
+                        className="rounded-md p-1 text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-60"
+                        aria-label="关闭"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+
+                <div className="space-y-4 px-5 py-4">
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">技能名称</label>
+                        <input
+                            value={form.name}
+                            onChange={(event) => updateField('name', event.target.value)}
+                            placeholder="可选"
+                            className="w-full rounded-md border border-border bg-surface-secondary/30 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">链接</label>
+                        <input
+                            value={form.url}
+                            onChange={(event) => updateField('url', event.target.value)}
+                            placeholder="GitHub、RedSkill 或说明页面"
+                            className="w-full rounded-md border border-border bg-surface-secondary/30 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">说明</label>
+                        <textarea
+                            value={form.description}
+                            onChange={(event) => updateField('description', event.target.value)}
+                            placeholder="这个 Skill 适合做什么"
+                            rows={4}
+                            className="w-full resize-none rounded-md border border-border bg-surface-secondary/30 px-3 py-2 text-sm leading-5 text-text-primary outline-none transition-colors focus:border-accent-primary"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">联系方式</label>
+                        <input
+                            value={form.contact}
+                            onChange={(event) => updateField('contact', event.target.value)}
+                            placeholder="可选"
+                            className="w-full rounded-md border border-border bg-surface-secondary/30 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                        />
+                    </div>
+
+                    {error ? (
+                        <div className="rounded-md border border-status-error/20 bg-status-error/10 px-3 py-2 text-xs text-status-error">{error}</div>
+                    ) : null}
+                    {message ? (
+                        <div className="rounded-md border border-status-success/20 bg-status-success/10 px-3 py-2 text-xs text-status-success">{message}</div>
+                    ) : null}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={isSubmitting}
+                        className="rounded-md border border-border px-3 py-2 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-60"
+                    >
+                        取消
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onSubmit}
+                        disabled={isSubmitting}
+                        className="inline-flex items-center gap-2 rounded-md bg-accent-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-primary/90 disabled:opacity-60"
+                    >
+                        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        提交
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 type SkillsProps = {
     isActive?: boolean;
     onTrySkillInChat?: (message: PendingChatMessage) => void;
@@ -1225,6 +1368,11 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
     const [installedSkillBusyName, setInstalledSkillBusyName] = useState('');
     const [installedSkillStatusMessage, setInstalledSkillStatusMessage] = useState('');
     const [areBuiltinSkillsExpanded, setAreBuiltinSkillsExpanded] = useState(false);
+    const [skillSubmissionOpen, setSkillSubmissionOpen] = useState(false);
+    const [skillSubmissionForm, setSkillSubmissionForm] = useState<SkillSubmissionForm>(() => emptySkillSubmissionForm());
+    const [isSkillSubmissionSubmitting, setIsSkillSubmissionSubmitting] = useState(false);
+    const [skillSubmissionError, setSkillSubmissionError] = useState('');
+    const [skillSubmissionMessage, setSkillSubmissionMessage] = useState('');
     const marketRequestRef = useRef(0);
     const detailRequestRef = useRef(0);
     const installedSkillsLoadedRef = useRef(false);
@@ -1649,6 +1797,71 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
             } as PendingChatMessage['taskHints'],
         });
     }, [onTrySkillInChat]);
+
+    const openSkillSubmissionDialog = useCallback(() => {
+        setSkillSubmissionError('');
+        setSkillSubmissionMessage('');
+        setSkillSubmissionOpen(true);
+    }, []);
+
+    const closeSkillSubmissionDialog = useCallback(() => {
+        if (isSkillSubmissionSubmitting) return;
+        setSkillSubmissionOpen(false);
+        setSkillSubmissionError('');
+        setSkillSubmissionMessage('');
+    }, [isSkillSubmissionSubmitting]);
+
+    const submitSkillSubmission = useCallback(async () => {
+        if (isSkillSubmissionSubmitting) return;
+        const form: SkillSubmissionForm = {
+            name: skillSubmissionForm.name.trim(),
+            url: skillSubmissionForm.url.trim(),
+            description: skillSubmissionForm.description.trim(),
+            contact: skillSubmissionForm.contact.trim(),
+        };
+        if (!form.name && !form.url && !form.description) {
+            setSkillSubmissionError('请填写技能名称、链接或说明');
+            setSkillSubmissionMessage('');
+            return;
+        }
+
+        setIsSkillSubmissionSubmitting(true);
+        setSkillSubmissionError('');
+        setSkillSubmissionMessage('');
+        try {
+            const content = buildSkillSubmissionContent(form);
+            const result = await window.ipcRenderer.logs.createFeedbackReport({
+                title: `申请收录 Skill：${form.name || form.url || '未命名 Skill'}`,
+                content,
+                contact: form.contact,
+                category: 'skill_submission',
+                priority: 'medium',
+                source: 'desktop_skill_market',
+                includeAdvancedContext: false,
+                uploadNow: true,
+                context: {
+                    requestKind: 'skill_submission',
+                    window: 'skills',
+                    skillName: form.name,
+                    skillUrl: form.url,
+                    description: form.description,
+                },
+            }) as { success?: boolean; uploaded?: boolean; error?: string };
+            if (!result?.success) {
+                throw new Error(result?.error || '提交失败');
+            }
+            setSkillSubmissionForm(emptySkillSubmissionForm());
+            if (result.uploaded) {
+                setSkillSubmissionMessage('已提交');
+            } else {
+                setSkillSubmissionMessage(result.error ? `已保存待发送：${result.error}` : '已保存待发送');
+            }
+        } catch (error) {
+            setSkillSubmissionError(error instanceof Error ? error.message : '提交失败');
+        } finally {
+            setIsSkillSubmissionSubmitting(false);
+        }
+    }, [isSkillSubmissionSubmitting, skillSubmissionForm]);
 
     const openCategoryPage = (category: string) => {
         setSelectedCategory(category);
@@ -2186,6 +2399,14 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
                             >
                                 <RefreshCw className={clsx('h-4 w-4', isMarketLoading && 'animate-spin')} />
                             </button>
+                            <button
+                                type="button"
+                                onClick={openSkillSubmissionDialog}
+                                className="inline-flex h-11 shrink-0 items-center gap-2 rounded-full border border-border bg-surface-primary/70 px-4 text-sm font-medium text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
+                            >
+                                <PackagePlus className="h-4 w-4" strokeWidth={1.8} />
+                                申请收录
+                            </button>
                         </div>
 
                         {visibleStatusMessage && (
@@ -2278,6 +2499,21 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
                     </div>
                 </div>
             </div>
+            {skillSubmissionOpen ? (
+                <SkillSubmissionDialog
+                    form={skillSubmissionForm}
+                    isSubmitting={isSkillSubmissionSubmitting}
+                    error={skillSubmissionError}
+                    message={skillSubmissionMessage}
+                    onChange={(nextForm) => {
+                        setSkillSubmissionForm(nextForm);
+                        setSkillSubmissionError('');
+                        setSkillSubmissionMessage('');
+                    }}
+                    onClose={closeSkillSubmissionDialog}
+                    onSubmit={() => void submitSkillSubmission()}
+                />
+            ) : null}
         </main>
     );
 }
