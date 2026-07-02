@@ -10,10 +10,14 @@ import {
     PlayCircle,
     RefreshCw,
     Search,
+    Settings as SettingsIcon,
+    Trash2,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { PendingChatMessage, SkillsNavigationTarget } from '../features/app-shell/types';
+import { type SettingsSkill, formatSettingsSkillSource } from '../features/settings/settingsModel';
 import type { SkillMarketCollection, SkillMarketIntroNote, SkillMarketSource, SkillMarketplaceInstallResponse, ThriveSkillMarketplaceItem } from '../types';
+import { appConfirm } from '../utils/appDialogs';
 
 const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -328,6 +332,31 @@ function skillAuthorHref(skill: ThriveSkillMarketplaceItem) {
 
 function skillIntroNote(skill: ThriveSkillMarketplaceItem) {
     return skill.introNote || skill.intro_note || null;
+}
+
+function normalizeInstalledSkills(value: unknown): SettingsSkill[] {
+    const normalized = (Array.isArray(value) ? value : [])
+        .map((skill): SettingsSkill | null => {
+            if (!isRecord(skill)) return null;
+            const name = String(skill.name || '').trim();
+            if (!name) return null;
+            const sourceScope = String(skill.sourceScope || '').trim() || undefined;
+            return {
+                name,
+                description: String(skill.description || '').trim(),
+                location: String(skill.location || '').trim(),
+                sourceScope,
+                isBuiltin: Boolean(skill.isBuiltin || sourceScope === 'builtin'),
+                disabled: Boolean(skill.disabled),
+            };
+        })
+        .filter((skill): skill is SettingsSkill => Boolean(skill));
+    normalized.sort((left, right) => {
+        const leftBuiltIn = left.isBuiltin ? 0 : 1;
+        const rightBuiltIn = right.isBuiltin ? 0 : 1;
+        return leftBuiltIn - rightBuiltIn || left.name.localeCompare(right.name);
+    });
+    return normalized;
 }
 
 function collectionKey(collection: SkillMarketCollection) {
@@ -1190,8 +1219,15 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
     const [selectedSkillDetail, setSelectedSkillDetail] = useState<MarketplacePackageDetail | null>(null);
     const [selectedAuthorKey, setSelectedAuthorKey] = useState('');
     const [isSkillDetailLoading, setIsSkillDetailLoading] = useState(false);
+    const [isManagingSkills, setIsManagingSkills] = useState(false);
+    const [installedSkills, setInstalledSkills] = useState<SettingsSkill[]>([]);
+    const [isInstalledSkillsLoading, setIsInstalledSkillsLoading] = useState(false);
+    const [installedSkillBusyName, setInstalledSkillBusyName] = useState('');
+    const [installedSkillStatusMessage, setInstalledSkillStatusMessage] = useState('');
+    const [areBuiltinSkillsExpanded, setAreBuiltinSkillsExpanded] = useState(false);
     const marketRequestRef = useRef(0);
     const detailRequestRef = useRef(0);
+    const installedSkillsLoadedRef = useRef(false);
     const lastNavigationTargetNonceRef = useRef<number | null>(null);
 
     const categoryCounts = useMemo(() => {
@@ -1264,6 +1300,16 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
         [selectedAuthorKey, allKnownMarketItems],
     );
 
+    const builtinInstalledSkills = useMemo(
+        () => installedSkills.filter((skill) => skill.isBuiltin),
+        [installedSkills],
+    );
+
+    const editableInstalledSkills = useMemo(
+        () => installedSkills.filter((skill) => !skill.isBuiltin),
+        [installedSkills],
+    );
+
     const hasFocusedFilters = Boolean(query.trim() || selectedCategory || selectedCollectionKey);
     const primaryMarketItems = hasFocusedFilters ? filteredMarketItems : filteredMarketItems.slice(0, 6);
     const secondaryMarketItems = hasFocusedFilters ? [] : filteredMarketItems.slice(6);
@@ -1318,6 +1364,94 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
         await loadMarketplace('', { force });
     }, [loadMarketplace]);
 
+    const loadInstalledSkills = useCallback(async () => {
+        setIsInstalledSkillsLoading(true);
+        try {
+            const list = await window.ipcRenderer.listSkills();
+            const normalized = normalizeInstalledSkills(list);
+            setInstalledSkills(normalized);
+            installedSkillsLoadedRef.current = true;
+            return normalized;
+        } catch (error) {
+            console.error('Failed to load installed skills:', error);
+            setInstalledSkillStatusMessage(error instanceof Error ? error.message : '技能列表读取失败');
+            return [];
+        } finally {
+            setIsInstalledSkillsLoading(false);
+        }
+    }, []);
+
+    const openManageSkills = useCallback(() => {
+        setIsManagingSkills(true);
+        setSelectedSkill(null);
+        setSelectedSkillDetail(null);
+        setSelectedAuthorKey('');
+        setIsSkillDetailLoading(false);
+        setStatusMessage('');
+        void loadInstalledSkills();
+    }, [loadInstalledSkills]);
+
+    const closeManageSkills = useCallback(() => {
+        setIsManagingSkills(false);
+        setInstalledSkillStatusMessage('');
+    }, []);
+
+    const handleToggleInstalledSkill = useCallback(async (skill: SettingsSkill) => {
+        if (skill.isBuiltin) return;
+        const nextDisabled = !skill.disabled;
+        setInstalledSkillBusyName(skill.name);
+        setInstalledSkillStatusMessage('');
+        setInstalledSkills((items) => items.map((item) => (
+            item.name === skill.name ? { ...item, disabled: nextDisabled } : item
+        )));
+        try {
+            const action = nextDisabled ? window.ipcRenderer.skills.disable : window.ipcRenderer.skills.enable;
+            const result = await action({ name: skill.name }) as { success?: boolean; error?: string };
+            if (result && result.success === false) {
+                throw new Error(result.error || '技能状态保存失败');
+            }
+            setInstalledSkillStatusMessage(nextDisabled ? `已关闭 ${skill.name}` : `已打开 ${skill.name}`);
+            await loadInstalledSkills();
+        } catch (error) {
+            console.error('Failed to update installed skill state:', error);
+            setInstalledSkills((items) => items.map((item) => (
+                item.name === skill.name ? { ...item, disabled: skill.disabled } : item
+            )));
+            setInstalledSkillStatusMessage(error instanceof Error ? error.message : '技能状态保存失败');
+        } finally {
+            setInstalledSkillBusyName('');
+        }
+    }, [loadInstalledSkills]);
+
+    const handleUninstallInstalledSkill = useCallback(async (skill: SettingsSkill) => {
+        if (skill.isBuiltin) return;
+        const confirmed = await appConfirm(`删除技能“${skill.name}”？`, {
+            title: '删除技能',
+            confirmLabel: '删除',
+            tone: 'danger',
+        });
+        if (!confirmed) return;
+        setInstalledSkillBusyName(skill.name);
+        setInstalledSkillStatusMessage('');
+        try {
+            const result = await window.ipcRenderer.skills.uninstall({ name: skill.name }) as { success?: boolean; error?: string };
+            if (result && result.success === false) {
+                throw new Error(result.error || '技能删除失败');
+            }
+            setInstalledSkills((items) => items.filter((item) => item.name !== skill.name));
+            setInstalledSkillStatusMessage(`已删除 ${skill.name}`);
+            await Promise.all([
+                loadInstalledSkills(),
+                refreshAll(false),
+            ]);
+        } catch (error) {
+            console.error('Failed to uninstall installed skill:', error);
+            setInstalledSkillStatusMessage(error instanceof Error ? error.message : '技能删除失败');
+        } finally {
+            setInstalledSkillBusyName('');
+        }
+    }, [loadInstalledSkills, refreshAll]);
+
     useEffect(() => {
         if (!isActive) return;
         void loadMarketplace('');
@@ -1325,6 +1459,7 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
 
     const handleOpenSkillHome = useCallback(async (skill: ThriveSkillMarketplaceItem) => {
         const key = marketItemKey(skill);
+        setIsManagingSkills(false);
         setSelectedAuthorKey('');
         setSelectedSkill(skill);
         setSelectedSkillDetail(skillDetailCache.get(key) || null);
@@ -1393,6 +1528,7 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
         if (!hasSkillNavigationLocator(navigationTarget)) {
             lastNavigationTargetNonceRef.current = navigationTarget.nonce;
             detailRequestRef.current += 1;
+            setIsManagingSkills(false);
             setSelectedAuthorKey('');
             setSelectedSkill(null);
             setSelectedSkillDetail(null);
@@ -1417,6 +1553,7 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
         if (isMarketLoading) return;
 
         detailRequestRef.current += 1;
+        setIsManagingSkills(false);
         setSelectedAuthorKey('');
         setSelectedSkill(null);
         setSelectedSkillDetail(null);
@@ -1471,14 +1608,17 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
                 item: installedSkill,
             } : current);
             setStatusMessage(`已安装 ${installedName}`);
-            await refreshAll(false);
+            await Promise.all([
+                refreshAll(false),
+                installedSkillsLoadedRef.current ? loadInstalledSkills() : Promise.resolve([]),
+            ]);
         } catch (error) {
             console.error('Failed to install marketplace skill:', error);
             setStatusMessage(error instanceof Error ? error.message : '技能安装失败');
         } finally {
             setBusyMarketItemId('');
         }
-    }, [refreshAll]);
+    }, [loadInstalledSkills, refreshAll]);
 
     const handleTryMarketplaceSkill = useCallback((skill: ThriveSkillMarketplaceItem) => {
         if (!onTrySkillInChat) return;
@@ -1515,6 +1655,164 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
         setSelectedCollectionKey('');
         setQuery('');
     };
+
+    const renderInstalledSkillRow = (skill: SettingsSkill) => {
+        const isBusy = installedSkillBusyName === skill.name;
+        const enabled = skill.isBuiltin || !skill.disabled;
+        return (
+            <div key={skill.location || skill.name} className="flex items-center justify-between gap-4 px-4 py-3">
+                <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium text-text-primary">{skill.name}</span>
+                        <span className={clsx(
+                            'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                            skill.isBuiltin
+                                ? 'bg-accent-primary/10 text-accent-primary'
+                                : 'bg-surface-secondary text-text-tertiary'
+                        )}>
+                            {formatSettingsSkillSource(skill.sourceScope)}
+                        </span>
+                        {!enabled ? (
+                            <span className="shrink-0 rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] font-medium text-text-tertiary">已关闭</span>
+                        ) : null}
+                    </div>
+                    {skill.description ? (
+                        <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
+                            {skill.description}
+                        </div>
+                    ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => void handleToggleInstalledSkill(skill)}
+                        disabled={skill.isBuiltin || isBusy}
+                        role="switch"
+                        aria-checked={enabled}
+                        aria-label={`${enabled ? '关闭' : '打开'}技能 ${skill.name}`}
+                        title={skill.isBuiltin ? '内置技能不可关闭' : (enabled ? '关闭技能' : '打开技能')}
+                        className={clsx(
+                            'ui-switch-track disabled:cursor-not-allowed',
+                            skill.isBuiltin && 'opacity-70',
+                            isBusy && 'opacity-60'
+                        )}
+                        data-size="sm"
+                        data-state={enabled ? 'on' : 'off'}
+                    >
+                        <span className="ui-switch-thumb" />
+                    </button>
+                    {!skill.isBuiltin ? (
+                        <button
+                            type="button"
+                            onClick={() => void handleUninstallInstalledSkill(skill)}
+                            disabled={isBusy}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-text-tertiary transition-colors hover:border-brand-red/30 hover:bg-brand-red/10 hover:text-brand-red disabled:opacity-50"
+                            aria-label={`删除技能 ${skill.name}`}
+                            title="删除技能"
+                        >
+                            {isBusy ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                        </button>
+                    ) : null}
+                </div>
+            </div>
+        );
+    };
+
+    const renderManageSkills = () => (
+        <div className="space-y-7 pb-10">
+            <button
+                type="button"
+                onClick={closeManageSkills}
+                className="inline-flex h-8 items-center gap-2 rounded-full px-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
+            >
+                <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.8} />
+                返回市场
+            </button>
+
+            <section className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                        <h1 className="truncate text-[26px] font-semibold leading-tight text-text-primary">已安装技能</h1>
+                        <span className="shrink-0 rounded-full bg-surface-primary px-2.5 py-1 text-xs font-medium text-text-tertiary">
+                            {editableInstalledSkills.length}
+                        </span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setInstalledSkillStatusMessage('');
+                            void loadInstalledSkills();
+                        }}
+                        disabled={isInstalledSkillsLoading}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-surface-primary/70 px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary disabled:opacity-50"
+                    >
+                        <RefreshCw className={clsx('h-3.5 w-3.5', isInstalledSkillsLoading && 'animate-spin')} strokeWidth={1.7} />
+                        刷新
+                    </button>
+                </div>
+
+                {installedSkillStatusMessage ? (
+                    <div className="rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs text-text-secondary">
+                        {installedSkillStatusMessage}
+                    </div>
+                ) : null}
+            </section>
+
+            <section className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+                {isInstalledSkillsLoading && installedSkills.length === 0 ? (
+                    <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-tertiary">
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        正在读取技能
+                    </div>
+                ) : installedSkills.length === 0 ? (
+                    <div className="px-4 py-5 text-sm text-text-tertiary">暂无技能</div>
+                ) : (
+                    <div className="divide-y divide-border">
+                        {editableInstalledSkills.length > 0 ? (
+                            <div className="divide-y divide-border">
+                                {editableInstalledSkills.map(renderInstalledSkillRow)}
+                            </div>
+                        ) : (
+                            <div className="px-4 py-5 text-sm text-text-tertiary">暂无已安装技能</div>
+                        )}
+                        {builtinInstalledSkills.length > 0 ? (
+                            <div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAreBuiltinSkillsExpanded((value) => !value)}
+                                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-secondary/40"
+                                    aria-expanded={areBuiltinSkillsExpanded}
+                                >
+                                    <div className="flex min-w-0 items-center gap-2">
+                                        <ArrowRight className={clsx(
+                                            'h-4 w-4 shrink-0 text-text-tertiary transition-transform',
+                                            areBuiltinSkillsExpanded && 'rotate-90'
+                                        )} />
+                                        <span className="text-sm font-medium text-text-primary">内置技能</span>
+                                        <span className="rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-medium text-accent-primary">
+                                            {builtinInstalledSkills.length}
+                                        </span>
+                                    </div>
+                                    <span className="shrink-0 text-xs text-text-tertiary">
+                                        {areBuiltinSkillsExpanded ? '收起' : '展开'}
+                                    </span>
+                                </button>
+                                {areBuiltinSkillsExpanded ? (
+                                    <div className="divide-y divide-border border-t border-border bg-surface-secondary/10">
+                                        {builtinInstalledSkills.map(renderInstalledSkillRow)}
+                                    </div>
+                                ) : null}
+                            </div>
+                        ) : null}
+                    </div>
+                )}
+            </section>
+        </div>
+    );
 
     const renderMarketItem = (skill: ThriveSkillMarketplaceItem, hiddenCategory = '') => {
         const key = marketItemKey(skill);
@@ -1819,6 +2117,18 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
         );
     };
 
+    if (isManagingSkills) {
+        return (
+            <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-text-primary">
+                <div className="min-h-0 flex-1 overflow-y-auto px-10 py-10 sm:px-16 lg:px-24 xl:px-32 custom-scrollbar">
+                    <div className="mx-auto w-full max-w-[880px]">
+                        {renderManageSkills()}
+                    </div>
+                </div>
+            </main>
+        );
+    }
+
     if (selectedAuthorKey) {
         return (
             <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-text-primary">
@@ -1849,6 +2159,14 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
                 <div className="mx-auto w-full max-w-[880px] space-y-9">
                     <header className="space-y-4">
                         <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={openManageSkills}
+                                className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface-primary/70 px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
+                            >
+                                <SettingsIcon className="h-3.5 w-3.5" strokeWidth={1.8} />
+                                管理
+                            </button>
                             <div className="relative min-w-0 flex-1">
                                 <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" strokeWidth={1.7} />
                                 <input
