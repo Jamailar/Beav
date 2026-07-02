@@ -1,4 +1,5 @@
 const TRAILING_URL_PUNCTUATION_RE = /[)\]}>,.!?，。！？、；;：:]+$/g;
+const SUPPORTED_BARE_URL_RE = /(?:^|[\s"'([{<])((?:www\.)?(?:xiaohongshu\.com|rednote\.com|douyin\.com|iesdouyin\.com|youtube\.com)\/[^\s"'<>]+|(?:xhslink\.com|v\.douyin\.com|youtu\.be)\/[^\s"'<>]+)/gi;
 
 export function sanitizeClipboardUrl(rawInput: string): string {
   return String(rawInput || '')
@@ -27,7 +28,10 @@ export function extractClipboardUrls(text: string, limit = 10): string[] {
   if (direct) return [sanitizeClipboardUrl(raw)];
 
   const seen = new Set<string>();
-  const matches = raw.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+  const matches = [
+    ...(raw.match(/https?:\/\/[^\s"'<>]+/gi) || []),
+    ...Array.from(raw.matchAll(SUPPORTED_BARE_URL_RE)).map((match) => `https://${match[1]}`),
+  ];
   const urls: string[] = [];
   for (const match of matches) {
     const sanitized = sanitizeClipboardUrl(match);

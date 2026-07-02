@@ -7,16 +7,22 @@ import {
 } from './clipboardDetector';
 import { clipboardCaptureDedupeStore } from './captureDedupeStore';
 import {
+  captureResponseError,
+  ClipboardCaptureError,
   createServerCaptureJob,
+  formatServerJobDebugDetails,
   ingestServerCaptureJobResult,
   pollServerCaptureJob,
 } from './serverCaptureClient';
 
-const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
-const CLIPBOARD_POLL_FOCUS_DELAY_MS = 1500;
-const CLIPBOARD_POLL_MIN_INTERVAL_MS = 12_000;
-const CLIPBOARD_POLL_IDLE_INTERVAL_MS = 45_000;
-const CLIPBOARD_POLL_MAX_INTERVAL_MS = 120_000;
+const CLIPBOARD_POLL_BOOT_DELAY_MS = 350;
+const CLIPBOARD_POLL_FOCUS_DELAY_MS = 300;
+const CLIPBOARD_POLL_MIN_INTERVAL_MS = 2500;
+const CLIPBOARD_POLL_IDLE_INTERVAL_MS = 15_000;
+const CLIPBOARD_POLL_MAX_INTERVAL_MS = 45_000;
+const DEFAULT_XHS_PROFILE_LIMIT = 20;
+const MIN_XHS_PROFILE_LIMIT = 1;
+const MAX_XHS_PROFILE_LIMIT = 100;
 
 export type ClipboardCaptureStatus = 'idle' | 'saving' | 'success' | 'error';
 
@@ -26,17 +32,26 @@ function isEditableElement(target: EventTarget | null): boolean {
   return target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select';
 }
 
+function clampProfileLimit(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_XHS_PROFILE_LIMIT;
+  return Math.max(MIN_XHS_PROFILE_LIMIT, Math.min(MAX_XHS_PROFILE_LIMIT, Math.floor(parsed)));
+}
+
 export function useClipboardCapturePrompt() {
   const [candidate, setCandidate] = useState<ClipboardCaptureCandidate | null>(null);
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<ClipboardCaptureStatus>('idle');
   const [message, setMessage] = useState('');
   const [includeComments, setIncludeComments] = useState(false);
+  const [profileLimit, setProfileLimitState] = useState(DEFAULT_XHS_PROFILE_LIMIT);
+  const [activeTask, setActiveTask] = useState<ClipboardCaptureTask | null>(null);
 
   const lastClipboardTextRef = useRef('');
   const pollingRef = useRef(false);
   const promptOpenRef = useRef(false);
   const statusRef = useRef<ClipboardCaptureStatus>('idle');
+  const candidateRef = useRef<ClipboardCaptureCandidate | null>(null);
 
   useEffect(() => {
     promptOpenRef.current = open;
@@ -46,30 +61,61 @@ export function useClipboardCapturePrompt() {
     statusRef.current = status;
   }, [status]);
 
+  useEffect(() => {
+    candidateRef.current = candidate;
+  }, [candidate]);
+
+  useEffect(() => clipboardCaptureQueue.subscribe((snapshot) => {
+    const currentCandidate = candidateRef.current;
+    if (!currentCandidate) {
+      setActiveTask(null);
+      return;
+    }
+    const nextTask = [
+      ...(snapshot.active ? [snapshot.active] : []),
+      ...snapshot.queued,
+      ...snapshot.recent,
+    ].find((task) => task.candidate.id === currentCandidate.id) || null;
+    setActiveTask(nextTask);
+  }), []);
+
   const executeCaptureCandidate = useCallback(async (
     nextCandidate: ClipboardCaptureCandidate,
-    context: { updateTask: (patch: Partial<ClipboardCaptureTask>) => void },
+    context: {
+      updateTask: (patch: Partial<ClipboardCaptureTask>) => void;
+      appendLog: (message: string, level?: 'info' | 'warn' | 'error') => void;
+    },
   ): Promise<ClipboardCaptureExecutionResult> => {
     if (nextCandidate.kind !== 'youtube-video') {
+      context.updateTask({ progressMessage: '创建服务端采集任务' });
+      context.appendLog(`创建服务端采集任务：${nextCandidate.canonicalUrl}`);
       const response = await createServerCaptureJob(nextCandidate, {
         includeComments: includeComments && nextCandidate.kind === 'xhs-note',
+        limit: nextCandidate.kind === 'xhs-profile' ? profileLimit : undefined,
       });
       const jobId = response.job?.id || response.jobId;
       if (!response.success || !jobId) {
-        throw new Error(response.error || '服务端采集任务创建失败');
+        throw captureResponseError(response, '服务端采集任务创建失败');
       }
+      context.appendLog(`服务端任务已创建：${jobId}`);
       context.updateTask({
         serverJobId: jobId,
         progressMessage: response.job?.progress?.message || '等待处理',
       });
       const job = await pollServerCaptureJob(jobId, (nextJob) => {
+        if (nextJob.progress?.message) {
+          context.appendLog(nextJob.progress.message);
+        }
         context.updateTask({
           serverJobId: nextJob.id,
           progressMessage: nextJob.progress?.message || nextJob.status,
           pointsCost: nextJob.pointsCost,
+          debugDetails: formatServerJobDebugDetails(nextJob),
         });
       });
+      context.appendLog('服务端处理完成，写入知识库');
       await ingestServerCaptureJobResult(job);
+      context.appendLog('知识库写入完成');
       return {
         success: true,
         duplicate: response.duplicate,
@@ -81,6 +127,8 @@ export function useClipboardCapturePrompt() {
     if (!videoId) {
       throw new Error('YouTube 链接缺少 videoId');
     }
+    context.updateTask({ progressMessage: '保存 YouTube 视频到知识库' });
+    context.appendLog(`保存 YouTube 视频：${videoId}`);
     const payload = {
       videoId,
       videoUrl: nextCandidate.canonicalUrl,
@@ -99,21 +147,28 @@ export function useClipboardCapturePrompt() {
     if (!result?.success) {
       throw new Error(result?.error || '保存 YouTube 任务失败');
     }
+    context.appendLog('YouTube 视频保存完成');
 
     return {
       success: true,
       duplicate: result.duplicate,
       noteId: result.noteId,
     };
-  }, [includeComments]);
+  }, [includeComments, profileLimit]);
+
+  const setProfileLimit = useCallback((value: number | string) => {
+    setProfileLimitState(clampProfileLimit(value));
+  }, []);
 
   const close = useCallback(() => {
     if (status === 'saving') return;
     setOpen(false);
     setCandidate(null);
+    setActiveTask(null);
     setStatus('idle');
     setMessage('');
     setIncludeComments(false);
+    setProfileLimitState(DEFAULT_XHS_PROFILE_LIMIT);
   }, [status]);
 
   const confirm = useCallback(async () => {
@@ -125,7 +180,7 @@ export function useClipboardCapturePrompt() {
     try {
       const result = await clipboardCaptureQueue.enqueue(candidate, executeCaptureCandidate);
       if (!result.success) {
-        throw new Error(result.error || '采集任务失败');
+        throw new ClipboardCaptureError(result.error || '采集任务失败', result.debugDetails);
       }
       setStatus('success');
       setMessage(
@@ -138,14 +193,20 @@ export function useClipboardCapturePrompt() {
       window.setTimeout(() => {
         setOpen(false);
         setCandidate(null);
+        setActiveTask(null);
         setStatus('idle');
         setMessage('');
         setIncludeComments(false);
+        setProfileLimitState(DEFAULT_XHS_PROFILE_LIMIT);
       }, 1000);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const debugDetails = error instanceof ClipboardCaptureError ? error.debugDetails : undefined;
       setStatus('error');
       setMessage(`采集失败：${errorMessage}`);
+      if (debugDetails) {
+        setActiveTask((current) => current ? { ...current, debugDetails } : current);
+      }
     }
   }, [candidate, executeCaptureCandidate, status]);
 
@@ -185,7 +246,9 @@ export function useClipboardCapturePrompt() {
 
       clipboardCaptureDedupeStore.mark(nextCandidate);
       setCandidate(nextCandidate);
+      setActiveTask(null);
       setIncludeComments(false);
+      setProfileLimitState(DEFAULT_XHS_PROFILE_LIMIT);
       setStatus('idle');
       setMessage(`检测到剪贴板里的${clipboardCapturePlatformLabel(nextCandidate)}链接，是否开始后台采集？`);
       setOpen(true);
@@ -262,8 +325,13 @@ export function useClipboardCapturePrompt() {
     open,
     status,
     message,
+    activeTask,
     includeComments,
     setIncludeComments,
+    profileLimit,
+    setProfileLimit,
+    minProfileLimit: MIN_XHS_PROFILE_LIMIT,
+    maxProfileLimit: MAX_XHS_PROFILE_LIMIT,
     close,
     confirm,
   };

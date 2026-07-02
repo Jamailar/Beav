@@ -1,6 +1,20 @@
 use super::*;
 use crate::store::settings as settings_store;
 
+fn capture_response_payload(response: &crate::HttpJsonResponse, context: &str) -> Value {
+    if (200..300).contains(&response.status) {
+        return official_unwrap_response_payload(&response.body);
+    }
+    let details = crate::http_error_details_from_value(response.status, &response.body);
+    json!({
+        "success": false,
+        "status": "unavailable",
+        "httpStatus": response.status,
+        "error": crate::format_http_error_message(context, &details),
+        "raw": response.body,
+    })
+}
+
 pub(super) fn handle_capture_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -13,12 +27,12 @@ pub(super) fn handle_capture_channel(
             let settings_snapshot =
                 with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
-            let response = run_authenticated_official_request(
+            let response = run_authenticated_official_request_response(
                 app,
                 state,
                 &mut settings,
                 "POST",
-                "/api/v1/capture/jobs",
+                "/capture/jobs",
                 Some(payload.clone()),
                 request_generation,
             )?;
@@ -30,7 +44,7 @@ pub(super) fn handle_capture_channel(
                 None,
                 request_generation,
             )?;
-            Ok(official_unwrap_response_payload(&response))
+            Ok(capture_response_payload(&response, "Capture job create"))
         })()),
         "capture:get-server-job" => Some((|| -> Result<Value, String> {
             let job_id = payload_string(payload, "jobId")
@@ -39,12 +53,12 @@ pub(super) fn handle_capture_channel(
             let settings_snapshot =
                 with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
-            let response = run_authenticated_official_request(
+            let response = run_authenticated_official_request_response(
                 app,
                 state,
                 &mut settings,
                 "GET",
-                &format!("/api/v1/capture/jobs/{job_id}"),
+                &format!("/capture/jobs/{job_id}"),
                 None,
                 request_generation,
             )?;
@@ -56,7 +70,7 @@ pub(super) fn handle_capture_channel(
                 None,
                 request_generation,
             )?;
-            Ok(official_unwrap_response_payload(&response))
+            Ok(capture_response_payload(&response, "Capture job status"))
         })()),
         "capture:list-server-jobs" => Some((|| -> Result<Value, String> {
             let limit = payload
@@ -67,12 +81,12 @@ pub(super) fn handle_capture_channel(
             let settings_snapshot =
                 with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
             let mut settings = settings_snapshot.clone();
-            let response = run_authenticated_official_request(
+            let response = run_authenticated_official_request_response(
                 app,
                 state,
                 &mut settings,
                 "GET",
-                &format!("/api/v1/capture/jobs?limit={limit}"),
+                &format!("/capture/jobs?limit={limit}"),
                 None,
                 request_generation,
             )?;
@@ -84,7 +98,7 @@ pub(super) fn handle_capture_channel(
                 None,
                 request_generation,
             )?;
-            Ok(official_unwrap_response_payload(&response))
+            Ok(capture_response_payload(&response, "Capture jobs list"))
         })()),
         _ => None,
     }
