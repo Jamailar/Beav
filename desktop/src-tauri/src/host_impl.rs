@@ -97,6 +97,8 @@ pub(crate) struct FileNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) draft_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) content_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) updated_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) summary: Option<String>,

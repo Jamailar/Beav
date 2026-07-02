@@ -197,6 +197,7 @@ pub(crate) fn list_page(
     cursor: Option<&str>,
     limit: usize,
     kind: Option<&str>,
+    type_filter: Option<&str>,
     query: Option<&str>,
     sort: Option<&str>,
     _ready_for_wander_only: bool,
@@ -209,10 +210,41 @@ pub(crate) fn list_page(
         cursor,
         limit,
         kind,
+        type_filter,
         query,
         sort,
         _ready_for_wander_only,
     )
+}
+
+fn ui_type_sql() -> &'static str {
+    r#"
+    CASE
+        WHEN kind = 'youtube-video' THEN 'youtube'
+        WHEN kind = 'document-source' THEN 'docs'
+        WHEN kind IN ('link-article', 'wechat-article', 'zhihu-answer', 'zhihu-article') THEN kind
+        WHEN lower(COALESCE(capture_kind, note_type, '')) = 'link-article' THEN 'link-article'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) = 'wechat-article' THEN 'wechat-article'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'bilibili-%' THEN 'bilibili'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'kuaishou-%' THEN 'kuaishou'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'tiktok-%' THEN 'tiktok'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'reddit-%' THEN 'reddit'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'x-%' THEN 'x'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'instagram-%' THEN 'instagram'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) = 'xhs-blogger' THEN 'xhs-blogger'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) = 'xhs-comments' THEN 'xhs-comments'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) = 'zhihu-answer' THEN 'zhihu-answer'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) = 'zhihu-article' THEN 'zhihu-article'
+        WHEN lower(COALESCE(note_type, '')) IN ('link-article', 'text') THEN
+            CASE
+                WHEN lower(COALESCE(capture_kind, '')) = 'wechat-article' THEN 'wechat-article'
+                ELSE 'link-article'
+            END
+        WHEN lower(COALESCE(capture_kind, '')) = 'douyin-video' THEN 'douyin-video'
+        WHEN lower(COALESCE(capture_kind, '')) = 'xhs-video' OR has_video != 0 THEN 'xhs-video'
+        ELSE 'xhs-image'
+    END
+    "#
 }
 
 fn list_page_from_connection(
@@ -221,6 +253,7 @@ fn list_page_from_connection(
     cursor: Option<&str>,
     limit: usize,
     kind: Option<&str>,
+    type_filter: Option<&str>,
     query: Option<&str>,
     sort: Option<&str>,
     _ready_for_wander_only: bool,
@@ -237,15 +270,21 @@ fn list_page_from_connection(
     let normalized_kind = kind
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != "all");
+    let normalized_type_filter = type_filter
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all");
     let order_by = match sort.unwrap_or("updated-desc") {
         "created-desc" => "created_at DESC, item_id DESC",
         "title-asc" => "title COLLATE NOCASE ASC, item_id ASC",
         _ => "updated_at DESC, item_id DESC",
     };
+    let ui_type_sql = ui_type_sql();
 
-    let where_sql = r#"
+    let where_sql = format!(
+        r#"
         workspace_id = ?1
         AND (?2 IS NULL OR kind = ?2)
+        AND (?4 IS NULL OR ({ui_type_sql}) = ?4)
         AND (
             ?3 IS NULL OR
             lower(title) LIKE ?3 OR
@@ -276,22 +315,28 @@ fn list_page_from_connection(
                   AND (
                     lower(u.relative_path) LIKE ?3 OR
                     lower(u.manifest_json) LIKE ?3
-                  )
+                )
             )
         )
-    "#;
+    "#
+    );
 
     let total = conn
         .query_row(
             &format!("SELECT COUNT(*) FROM knowledge_items WHERE {where_sql}"),
-            params![workspace_id, normalized_kind, normalized_query],
+            params![
+                workspace_id,
+                normalized_kind,
+                normalized_query,
+                normalized_type_filter
+            ],
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
 
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT * FROM knowledge_items WHERE {where_sql} ORDER BY {order_by} LIMIT ?4 OFFSET ?5"
+            "SELECT * FROM knowledge_items WHERE {where_sql} ORDER BY {order_by} LIMIT ?5 OFFSET ?6"
         ))
         .map_err(|error| error.to_string())?;
     let mut items = stmt
@@ -300,6 +345,7 @@ fn list_page_from_connection(
                 workspace_id,
                 normalized_kind,
                 normalized_query,
+                normalized_type_filter,
                 limit,
                 offset
             ],
@@ -311,7 +357,27 @@ fn list_page_from_connection(
     attach_wander_readiness(&conn, &mut items)?;
     attach_visual_search_matches(&conn, &mut items, normalized_query.as_deref())?;
 
-    let mut kind_stmt = conn
+    let mut ui_kind_stmt = conn
+        .prepare(&format!(
+            r#"
+            SELECT ui_type, COUNT(*) AS count
+            FROM (
+                SELECT ({ui_type_sql}) AS ui_type
+                FROM knowledge_items
+                WHERE workspace_id = ?1
+            )
+            GROUP BY ui_type
+            "#
+        ))
+        .map_err(|error| error.to_string())?;
+    let ui_kind_rows = ui_kind_stmt
+        .query_map(params![workspace_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let mut backend_kind_stmt = conn
         .prepare(
             r#"
             SELECT kind, COUNT(*) AS count
@@ -321,15 +387,30 @@ fn list_page_from_connection(
             "#,
         )
         .map_err(|error| error.to_string())?;
-    let kind_rows = kind_stmt
+    let backend_kind_rows = backend_kind_stmt
         .query_map(params![workspace_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    let all_count = conn
+        .query_row(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM knowledge_items
+            WHERE workspace_id = ?1
+            "#,
+            params![workspace_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
     let mut kind_counts = serde_json::Map::new();
-    for (kind_name, count) in kind_rows {
+    kind_counts.insert("all".to_string(), json!(all_count));
+    for (kind_name, count) in backend_kind_rows {
+        kind_counts.insert(kind_name, json!(count));
+    }
+    for (kind_name, count) in ui_kind_rows {
         kind_counts.insert(kind_name, json!(count));
     }
 
@@ -791,7 +872,7 @@ mod tests {
         let conn = setup_list_page_conn();
 
         let first_page =
-            list_page_from_connection(&conn, "default", None, 1, None, None, None, false)
+            list_page_from_connection(&conn, "default", None, 1, None, None, None, None, false)
                 .expect("list first page");
 
         assert_eq!(first_page.total, 2);
@@ -799,13 +880,65 @@ mod tests {
         assert_eq!(first_page.items[0].item_id, "note-a");
         assert_eq!(first_page.next_cursor.as_deref(), Some("1"));
 
-        let second_page =
-            list_page_from_connection(&conn, "default", Some("1"), 1, None, None, None, false)
-                .expect("list second page");
+        let second_page = list_page_from_connection(
+            &conn,
+            "default",
+            Some("1"),
+            1,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .expect("list second page");
 
         assert_eq!(second_page.items.len(), 1);
         assert_eq!(second_page.items[0].item_id, "note-b");
         assert_eq!(second_page.next_cursor, None);
+    }
+
+    #[test]
+    fn list_page_kind_counts_use_full_catalog_not_loaded_page() {
+        let conn = setup_list_page_conn();
+
+        let page =
+            list_page_from_connection(&conn, "default", None, 1, None, None, None, None, false)
+                .expect("list first page");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.kind_counts.get("all"), Some(&json!(2)));
+        assert_eq!(page.kind_counts.get("xhs-image"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn list_page_can_filter_by_ui_type() {
+        let conn = setup_list_page_conn();
+        conn.execute(
+            "UPDATE knowledge_items SET capture_kind = 'xhs-video', has_video = 1 WHERE item_id = 'note-b'",
+            [],
+        )
+        .expect("mark video");
+
+        let page = list_page_from_connection(
+            &conn,
+            "default",
+            None,
+            10,
+            Some("redbook-note"),
+            Some("xhs-video"),
+            None,
+            None,
+            false,
+        )
+        .expect("list video page");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].item_id, "note-b");
+        assert_eq!(page.kind_counts.get("all"), Some(&json!(2)));
+        assert_eq!(page.kind_counts.get("xhs-image"), Some(&json!(1)));
+        assert_eq!(page.kind_counts.get("xhs-video"), Some(&json!(1)));
     }
 
     #[test]
