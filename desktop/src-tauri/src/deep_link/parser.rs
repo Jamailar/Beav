@@ -7,6 +7,7 @@ const MAX_RAW_URL_LEN: usize = 4096;
 const MAX_TEXT_LEN: usize = 4000;
 const MAX_TITLE_LEN: usize = 200;
 const MAX_EXTERNAL_URL_LEN: usize = 2048;
+const MAX_IDENTIFIER_LEN: usize = 200;
 
 pub(crate) fn parse_deep_link(raw_url: &str) -> Result<DeepLinkIntent, DeepLinkParseError> {
     let trimmed = raw_url.trim();
@@ -40,24 +41,58 @@ pub(crate) fn parse_deep_link(raw_url: &str) -> Result<DeepLinkIntent, DeepLinkP
             text: None,
             url: None,
             title: query_text(&parsed, "title", MAX_TITLE_LEN)?,
+            package_id: None,
+            id: None,
+            market_id: None,
+            query: None,
         }),
         ["chat", "new"] => Ok(DeepLinkIntent {
             kind: DeepLinkIntentKind::ChatNew,
             text: query_text(&parsed, "text", MAX_TEXT_LEN)?,
             url: None,
             title: query_text(&parsed, "title", MAX_TITLE_LEN)?,
+            package_id: None,
+            id: None,
+            market_id: None,
+            query: None,
         }),
         ["import", "url"] => Ok(DeepLinkIntent {
             kind: DeepLinkIntentKind::ImportUrl,
             text: query_text(&parsed, "text", MAX_TEXT_LEN)?,
             url: Some(required_external_url(&parsed, "url")?),
             title: query_text(&parsed, "title", MAX_TITLE_LEN)?,
+            package_id: None,
+            id: None,
+            market_id: None,
+            query: None,
         }),
         ["knowledge", "save"] => Ok(DeepLinkIntent {
             kind: DeepLinkIntentKind::KnowledgeSave,
             text: query_text(&parsed, "text", MAX_TEXT_LEN)?,
             url: Some(required_external_url(&parsed, "url")?),
             title: query_text(&parsed, "title", MAX_TITLE_LEN)?,
+            package_id: None,
+            id: None,
+            market_id: None,
+            query: None,
+        }),
+        ["skills"] | ["skills", "open"] => Ok(DeepLinkIntent {
+            kind: DeepLinkIntentKind::SkillsOpen,
+            text: None,
+            url: None,
+            title: query_text(&parsed, "title", MAX_TITLE_LEN)?,
+            package_id: query_text_any(
+                &parsed,
+                &["packageId", "package_id", "package"],
+                MAX_IDENTIFIER_LEN,
+            )?,
+            id: query_text(&parsed, "id", MAX_IDENTIFIER_LEN)?,
+            market_id: query_text_any(
+                &parsed,
+                &["marketId", "market_id", "market"],
+                MAX_IDENTIFIER_LEN,
+            )?,
+            query: query_text_any(&parsed, &["query", "q", "name"], MAX_IDENTIFIER_LEN)?,
         }),
         _ => Err(DeepLinkParseError::new(
             "unsupported_action",
@@ -103,6 +138,19 @@ fn query_text(
                 ));
             }
             return Ok(Some(trimmed.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn query_text_any(
+    parsed: &Url,
+    keys: &[&str],
+    max_len: usize,
+) -> Result<Option<String>, DeepLinkParseError> {
+    for key in keys {
+        if let Some(value) = query_text(parsed, key, max_len)? {
+            return Ok(Some(value));
         }
     }
     Ok(None)
@@ -164,6 +212,22 @@ mod tests {
         assert_eq!(intent.kind, DeepLinkIntentKind::ImportUrl);
         assert_eq!(intent.url.as_deref(), Some("https://example.com/post?a=1"));
         assert_eq!(intent.title.as_deref(), Some("Demo"));
+    }
+
+    #[test]
+    fn parses_skills_open_page() {
+        let intent = parse_deep_link("beav://skills").unwrap();
+        assert_eq!(intent.kind, DeepLinkIntentKind::SkillsOpen);
+    }
+
+    #[test]
+    fn parses_skills_open_package() {
+        let intent =
+            parse_deep_link("beav://skills/open?marketId=redskill&packageId=social-cover-director")
+                .unwrap();
+        assert_eq!(intent.kind, DeepLinkIntentKind::SkillsOpen);
+        assert_eq!(intent.market_id.as_deref(), Some("redskill"));
+        assert_eq!(intent.package_id.as_deref(), Some("social-cover-director"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { REDBOX_NAVIGATE_EVENT } from '../../notifications/types';
-import type { AppIntent, AppNavigateEventDetail, GenerationIntent, RedClawNavigationAction, SettingsNavigationTarget, ViewType } from './types';
+import type { AppIntent, AppNavigateEventDetail, GenerationIntent, RedClawNavigationAction, SettingsNavigationTarget, SkillsNavigationTarget, ViewType } from './types';
 
 function recordFromUnknown(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -69,6 +69,7 @@ type UseGlobalIntentRouterParams = {
   setActiveManuscriptEditorFile: (value: string | null) => void;
   setSettingsNavigationTarget: (value: SettingsNavigationTarget | null) => void;
   setRedClawNavigationAction: (value: RedClawNavigationAction | null) => void;
+  setSkillsNavigationTarget: (value: SkillsNavigationTarget | null) => void;
   setApprovalTargetDocketId: (value: string) => void;
   setPendingGenerationIntent: (value: GenerationIntent | null) => void;
 };
@@ -79,6 +80,7 @@ export function useGlobalIntentRouter({
   setActiveManuscriptEditorFile,
   setSettingsNavigationTarget,
   setRedClawNavigationAction,
+  setSkillsNavigationTarget,
   setApprovalTargetDocketId,
   setPendingGenerationIntent,
 }: UseGlobalIntentRouterParams) {
@@ -94,6 +96,18 @@ export function useGlobalIntentRouter({
           nonce: Date.now(),
         });
         navigateToView('settings');
+        return;
+      }
+
+      if (intent.type === 'skills.open') {
+        setSkillsNavigationTarget({
+          packageId: intent.packageId,
+          id: intent.id,
+          marketId: intent.marketId,
+          query: intent.query,
+          nonce: Date.now(),
+        });
+        navigateToView('skills');
         return;
       }
 
@@ -170,6 +184,7 @@ export function useGlobalIntentRouter({
     setPendingGenerationIntent,
     setRedClawNavigationAction,
     setSettingsNavigationTarget,
+    setSkillsNavigationTarget,
   ]);
 
   useEffect(() => {

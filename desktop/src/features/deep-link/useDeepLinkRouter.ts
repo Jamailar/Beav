@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
-import type { PendingChatMessage, RedClawNavigationAction, ViewType } from '../app-shell/types';
+import type { PendingChatMessage, RedClawNavigationAction, SkillsNavigationTarget, ViewType } from '../app-shell/types';
 import type { DeepLinkEventPayload, DeepLinkIntent, DeepLinkPendingResponse } from './types';
 
 type UseDeepLinkRouterParams = {
   navigateToView: (view: ViewType) => void;
   navigateToRedClaw: (message: PendingChatMessage) => void;
   setRedClawNavigationAction: (value: RedClawNavigationAction | null) => void;
+  setSkillsNavigationTarget: (value: SkillsNavigationTarget | null) => void;
 };
 
 function recordFromUnknown(value: unknown): Record<string, unknown> {
@@ -22,7 +23,13 @@ function normalizeString(value: unknown): string | undefined {
 function normalizeIntent(value: unknown): DeepLinkIntent | null {
   const record = recordFromUnknown(value);
   const type = normalizeString(record.type);
-  if (type !== 'open' && type !== 'chat.new' && type !== 'import.url' && type !== 'knowledge.save') {
+  if (
+    type !== 'open'
+    && type !== 'chat.new'
+    && type !== 'import.url'
+    && type !== 'knowledge.save'
+    && type !== 'skills.open'
+  ) {
     return null;
   }
   return {
@@ -30,6 +37,10 @@ function normalizeIntent(value: unknown): DeepLinkIntent | null {
     text: normalizeString(record.text),
     url: normalizeString(record.url),
     title: normalizeString(record.title),
+    packageId: normalizeString(record.packageId),
+    id: normalizeString(record.id),
+    marketId: normalizeString(record.marketId),
+    query: normalizeString(record.query),
   };
 }
 
@@ -77,6 +88,7 @@ export function useDeepLinkRouter({
   navigateToView,
   navigateToRedClaw,
   setRedClawNavigationAction,
+  setSkillsNavigationTarget,
 }: UseDeepLinkRouterParams) {
   const handledKeysRef = useRef<Set<string>>(new Set());
 
@@ -96,6 +108,18 @@ export function useDeepLinkRouter({
     const intent = payload.intent;
     if (intent.type === 'open') {
       navigateToView('redclaw');
+      return;
+    }
+
+    if (intent.type === 'skills.open') {
+      setSkillsNavigationTarget({
+        packageId: intent.packageId,
+        id: intent.id,
+        marketId: intent.marketId,
+        query: intent.query,
+        nonce: Date.now(),
+      });
+      navigateToView('skills');
       return;
     }
 
@@ -123,7 +147,7 @@ export function useDeepLinkRouter({
       navigateToView('redclaw');
       navigateToRedClaw(messageForUrlIntent(intent));
     }
-  }, [navigateToRedClaw, navigateToView, setRedClawNavigationAction]);
+  }, [navigateToRedClaw, navigateToView, setRedClawNavigationAction, setSkillsNavigationTarget]);
 
   useEffect(() => {
     let disposed = false;

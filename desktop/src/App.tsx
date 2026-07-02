@@ -22,7 +22,7 @@ import { useRedClawShellNavigation } from './features/app-shell/useRedClawShellN
 import { useSettingsShellNavigation } from './features/app-shell/useSettingsShellNavigation';
 import { useSubjectsModal } from './features/app-shell/useSubjectsModal';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
-import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from './features/app-shell/types';
+import type { GenerationIntent, ImmersiveMode, PendingChatMessage, SkillsNavigationTarget } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
 import { useDeepLinkRouter } from './features/deep-link/useDeepLinkRouter';
 
@@ -71,6 +71,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
   const [approvalTargetDocketId, setApprovalTargetDocketId] = useState('');
+  const [skillsNavigationTarget, setSkillsNavigationTarget] = useState<SkillsNavigationTarget | null>(null);
 
   const globalAuthNotice = useOfficialAuthNotice();
   const {
@@ -130,6 +131,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setActiveManuscriptEditorFile,
     setSettingsNavigationTarget,
     setRedClawNavigationAction,
+    setSkillsNavigationTarget,
     setApprovalTargetDocketId,
     setPendingGenerationIntent,
   });
@@ -138,6 +140,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     navigateToView,
     navigateToRedClaw,
     setRedClawNavigationAction,
+    setSkillsNavigationTarget,
   });
 
   const {
@@ -227,6 +230,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
               <SkillsPage
                 isActive={currentView === 'skills'}
                 onTrySkillInChat={handleTrySkillInChat}
+                navigationTarget={skillsNavigationTarget}
               />
             </Suspense>
           </div>

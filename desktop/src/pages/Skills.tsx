@@ -12,7 +12,7 @@ import {
     Search,
 } from 'lucide-react';
 import { clsx } from 'clsx';
-import type { PendingChatMessage } from '../features/app-shell/types';
+import type { PendingChatMessage, SkillsNavigationTarget } from '../features/app-shell/types';
 import type { SkillMarketCollection, SkillMarketIntroNote, SkillMarketSource, SkillMarketplaceInstallResponse, ThriveSkillMarketplaceItem } from '../types';
 
 const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
@@ -500,6 +500,57 @@ function skillRuntimeNameCandidates(skill: ThriveSkillMarketplaceItem) {
         }
     });
     return candidates;
+}
+
+function skillNavigationExactCandidates(skill: ThriveSkillMarketplaceItem) {
+    return [
+        skill.packageId,
+        skill.id,
+        skill.name,
+        ...skillRuntimeNameCandidates(skill),
+    ].map(normalizeKey).filter(Boolean);
+}
+
+function skillNavigationSearchCandidates(skill: ThriveSkillMarketplaceItem) {
+    return [
+        skill.name,
+        skill.packageId,
+        skill.id,
+        skill.author,
+        skill.description,
+        ...skillDisplayTags(skill),
+        ...skillRuntimeNameCandidates(skill),
+    ].map(normalizeKey).filter(Boolean);
+}
+
+function skillMatchesNavigationMarket(skill: ThriveSkillMarketplaceItem, target: SkillsNavigationTarget) {
+    const marketId = normalizeKey(target.marketId);
+    if (!marketId) return true;
+    return [
+        skill.marketId,
+        skill.marketName,
+        skill.sourceKind,
+    ].some((value) => normalizeKey(value) === marketId);
+}
+
+function skillMatchesNavigationTarget(skill: ThriveSkillMarketplaceItem, target: SkillsNavigationTarget) {
+    if (!skillMatchesNavigationMarket(skill, target)) return false;
+    const exactCandidates = skillNavigationExactCandidates(skill);
+    const packageId = normalizeKey(target.packageId);
+    if (packageId) return exactCandidates.includes(packageId);
+    const id = normalizeKey(target.id);
+    if (id) return exactCandidates.includes(id);
+    const query = normalizeKey(target.query);
+    if (!query) return false;
+    return skillNavigationSearchCandidates(skill).some((value) => value.includes(query));
+}
+
+function skillNavigationSearchText(target: SkillsNavigationTarget) {
+    return firstText([target.packageId, target.id, target.query]);
+}
+
+function hasSkillNavigationLocator(target: SkillsNavigationTarget) {
+    return Boolean(skillNavigationSearchText(target));
 }
 
 function isRetiredSkillMarketSourceId(value: unknown) {
@@ -1117,9 +1168,10 @@ function EmptyPanel({ title, action }: { title: string; action?: ReactNode }) {
 type SkillsProps = {
     isActive?: boolean;
     onTrySkillInChat?: (message: PendingChatMessage) => void;
+    navigationTarget?: SkillsNavigationTarget | null;
 };
 
-export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
+export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: SkillsProps) {
     const initialMarketCache = initialMarketplaceCache();
     const [marketItems, setMarketItems] = useState<ThriveSkillMarketplaceItem[]>(() => initialMarketCache?.items || []);
     const [marketSources, setMarketSources] = useState<SkillMarketSource[]>(() => initialMarketCache?.sources || []);
@@ -1136,6 +1188,7 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
     const [isSkillDetailLoading, setIsSkillDetailLoading] = useState(false);
     const marketRequestRef = useRef(0);
     const detailRequestRef = useRef(0);
+    const lastNavigationTargetNonceRef = useRef<number | null>(null);
 
     const categoryCounts = useMemo(() => {
         const counts = new Map<string, number>(SKILL_CATEGORY_LABELS.map((category) => [category, 0] as [string, number]));
@@ -1328,6 +1381,47 @@ export function Skills({ isActive = true, onTrySkillInChat }: SkillsProps) {
         setSelectedAuthorKey('');
         setStatusMessage('');
     }, []);
+
+    useEffect(() => {
+        if (!isActive || !navigationTarget) return;
+        if (lastNavigationTargetNonceRef.current === navigationTarget.nonce) return;
+
+        if (!hasSkillNavigationLocator(navigationTarget)) {
+            lastNavigationTargetNonceRef.current = navigationTarget.nonce;
+            detailRequestRef.current += 1;
+            setSelectedAuthorKey('');
+            setSelectedSkill(null);
+            setSelectedSkillDetail(null);
+            setIsSkillDetailLoading(false);
+            setSelectedCategory('');
+            setSelectedCollectionKey('');
+            setQuery('');
+            setStatusMessage('');
+            return;
+        }
+
+        const matchingSkill = marketItems.find((item) => skillMatchesNavigationTarget(item, navigationTarget));
+        if (matchingSkill) {
+            lastNavigationTargetNonceRef.current = navigationTarget.nonce;
+            setSelectedCategory('');
+            setSelectedCollectionKey('');
+            setQuery('');
+            void handleOpenSkillHome(matchingSkill);
+            return;
+        }
+
+        if (isMarketLoading) return;
+
+        detailRequestRef.current += 1;
+        setSelectedAuthorKey('');
+        setSelectedSkill(null);
+        setSelectedSkillDetail(null);
+        setIsSkillDetailLoading(false);
+        setSelectedCategory('');
+        setSelectedCollectionKey('');
+        setQuery(skillNavigationSearchText(navigationTarget));
+        setStatusMessage('没有找到指定技能');
+    }, [handleOpenSkillHome, isActive, isMarketLoading, marketItems, navigationTarget]);
 
     const handleInstallMarketplaceSkill = useCallback(async (skill: ThriveSkillMarketplaceItem) => {
         const key = marketItemKey(skill);
