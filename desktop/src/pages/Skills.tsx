@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
+import xiaohongshuPlatformIcon from '../../../Plugin/src/assets/platforms/xiaohongshu.svg';
 import type { PendingChatMessage, SkillsNavigationTarget } from '../features/app-shell/types';
 import { type SettingsSkill, formatSettingsSkillSource } from '../features/settings/settingsModel';
 import type { SkillMarketCollection, SkillMarketIntroNote, SkillMarketSource, SkillMarketplaceInstallResponse, ThriveSkillMarketplaceItem } from '../types';
@@ -401,8 +402,25 @@ function collectionPackageKeys(collection: SkillMarketCollection) {
     return values.map((value) => String(value || '').trim()).filter(Boolean);
 }
 
+function isRedSkillMarketplaceCollection(collection: SkillMarketCollection) {
+    return [
+        collection.collectionKey,
+        collection.collection_key,
+        collection.id,
+        collection.marketId,
+        collection.marketName,
+        collection.sourceKind,
+        collection.title,
+        collection.subtitle,
+        collection.description,
+        collection.author,
+    ].some(isRedSkillText);
+}
+
 function collectionImageUrl(collection: SkillMarketCollection) {
-    return String(collection.avatarUrl || collection.avatar_url || collection.coverUrl || collection.cover_url || '').trim();
+    const explicitImageUrl = String(collection.avatarUrl || collection.avatar_url || collection.coverUrl || collection.cover_url || '').trim();
+    if (explicitImageUrl) return explicitImageUrl;
+    return isRedSkillMarketplaceCollection(collection) ? xiaohongshuPlatformIcon : '';
 }
 
 function collectionTitle(collection: SkillMarketCollection) {
