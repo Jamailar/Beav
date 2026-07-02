@@ -24,6 +24,14 @@ pub(crate) struct DeepLinkIntent {
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -36,6 +44,8 @@ pub(crate) enum DeepLinkIntentKind {
     ImportUrl,
     #[serde(rename = "knowledge.save")]
     KnowledgeSave,
+    #[serde(rename = "skills.open")]
+    SkillsOpen,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

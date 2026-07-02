@@ -14,6 +14,8 @@ Supported actions:
 - `beav://chat/new?text=...`
 - `beav://import/url?url=https%3A%2F%2F...`
 - `beav://knowledge/save?url=https%3A%2F%2F...`
+- `beav://skills`
+- `beav://skills/open?packageId=...`
 
 This module must not execute arbitrary IPC channels, write workspace files, start paid AI/media work, delete data, publish content, or read local file paths. It only creates a safe intent for the renderer to route through normal in-app confirmation flows.
 

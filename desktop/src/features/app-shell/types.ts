@@ -16,6 +16,14 @@ export type RedClawNavigationAction = {
   nonce: number;
 };
 
+export type SkillsNavigationTarget = {
+  packageId?: string;
+  id?: string;
+  marketId?: string;
+  query?: string;
+  nonce: number;
+};
+
 export type AppIntent =
   | {
       type: 'settings.open';
@@ -26,6 +34,13 @@ export type AppIntent =
       type: 'redclaw.open';
       action?: RedClawNavigationAction['action'];
       sessionId?: string;
+    }
+  | {
+      type: 'skills.open';
+      packageId?: string;
+      id?: string;
+      marketId?: string;
+      query?: string;
     }
   | {
       type: 'approval.open';
