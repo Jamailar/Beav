@@ -110,6 +110,18 @@ export function createSystemBridge(core: BridgeCore) {
     offSettingsUpdated: (listener: Listener) => core.off('settings:updated', listener),
     onDataChanged: (listener: Listener) => core.on('data:changed', listener),
     offDataChanged: (listener: Listener) => core.off('data:changed', listener),
+    deepLink: {
+      consumePending: <T = Record<string, unknown>>() => core.invokeChannelGuarded<T>(
+        'app:deep-link-consume-pending',
+        {},
+        {
+          timeoutMs: 1200,
+          fallback: { success: false, items: [] } as T,
+        },
+      ),
+      onOpen: (listener: Listener) => core.on('app:deep-link', listener),
+      offOpen: (listener: Listener) => core.off('app:deep-link', listener),
+    },
     pickWorkspaceDir: () => core.invokeChannel('settings:pick-workspace-dir'),
     debug: {
       getStatus: () => core.invokeChannel('debug:get-status'),

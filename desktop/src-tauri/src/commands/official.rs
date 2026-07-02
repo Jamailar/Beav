@@ -22,10 +22,9 @@ use crate::official_base_url_for_realm;
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
     app_brand_display_name, app_brand_slug, append_debug_trace_state, auth,
-    create_official_payment_form, emit_redbox_auth_session_updated, make_id,
-    normalize_official_auth_session, normalize_official_model_catalog, now_iso, now_ms,
-    official_access_token_from_settings, official_account_summary_local,
-    official_ai_api_key_from_settings, official_base_url_from_settings, official_fallback_products,
+    emit_redbox_auth_session_updated, make_id, normalize_official_auth_session,
+    normalize_official_model_catalog, now_iso, now_ms, official_access_token_from_settings,
+    official_account_summary_local, official_ai_api_key_from_settings, official_fallback_products,
     official_realm_from_settings, official_realms_payload, official_response_items,
     official_settings_api_keys, official_settings_call_records_list, official_settings_models,
     official_settings_orders, official_settings_pricing, official_settings_session,
@@ -58,10 +57,8 @@ use points::{
     cached_official_points, fetch_remote_official_points, official_points_need_silent_refresh,
 };
 pub(crate) use pricing::refresh_official_pricing_cache;
+use request::run_authenticated_official_request;
 pub(crate) use request::run_authenticated_official_request_response;
-use request::{
-    run_authenticated_official_request, run_authenticated_official_request_skip_preflight_refresh,
-};
 #[cfg(test)]
 use session::session_refresh_window_ms;
 use session::{

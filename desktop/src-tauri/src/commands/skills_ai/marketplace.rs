@@ -181,6 +181,29 @@ struct SkillMarketItem {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillMarketCollection {
+    id: String,
+    collection_key: String,
+    market_id: String,
+    market_name: String,
+    source_kind: String,
+    title: String,
+    subtitle: Option<String>,
+    description: Option<String>,
+    avatar_url: Option<String>,
+    cover_url: Option<String>,
+    homepage_url: Option<String>,
+    external_url: Option<String>,
+    author: Option<String>,
+    author_avatar_url: Option<String>,
+    author_homepage_url: Option<String>,
+    package_keys: Vec<String>,
+    skill_count: usize,
+    tags: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct RedboxSkillRegistryEntry {
@@ -334,6 +357,7 @@ pub(super) fn list_skill_marketplace(
     };
     let installed = installed_skill_index(state)?;
     let mut items = Vec::<SkillMarketItem>::new();
+    let mut collections = Vec::<SkillMarketCollection>::new();
     let mut warnings = Vec::<SkillMarketWarning>::new();
     for source in sources {
         if !request.include_disabled_sources && !source.enabled {
@@ -349,8 +373,16 @@ pub(super) fn list_skill_marketplace(
         match load_skill_market_source_items(&source, &installed) {
             Ok(mut loaded) => items.append(&mut loaded),
             Err(error) => warnings.push(SkillMarketWarning {
-                market_id: source.id,
-                market_name: source.name,
+                market_id: source.id.clone(),
+                market_name: source.name.clone(),
+                error,
+            }),
+        }
+        match load_skill_market_source_collections(&source) {
+            Ok(mut loaded) => collections.append(&mut loaded),
+            Err(error) => warnings.push(SkillMarketWarning {
+                market_id: source.id.clone(),
+                market_name: source.name.clone(),
                 error,
             }),
         }
@@ -377,11 +409,18 @@ pub(super) fn list_skill_marketplace(
             .cmp(&right.market_name)
             .then(left.name.cmp(&right.name))
     });
+    collections.sort_by(|left, right| {
+        left.market_name
+            .cmp(&right.market_name)
+            .then(left.title.cmp(&right.title))
+    });
     let skills = serde_json::to_value(&items).map_err(|error| error.to_string())?;
+    let collections = serde_json::to_value(&collections).map_err(|error| error.to_string())?;
     Ok(json!({
         "success": true,
         "registryUrl": REDBOX_SERVER_SKILL_MARKET_URL,
         "sources": skill_market_sources(state)?,
+        "collections": collections,
         "items": skills,
         "skills": skills,
         "warnings": warnings,
@@ -1188,6 +1227,157 @@ fn load_skill_market_source_items(
         "url" => load_url_market_items(source, installed),
         other => Err(format!("不支持的技能市场源类型: {other}")),
     }
+}
+
+fn load_skill_market_source_collections(
+    source: &SkillMarketSource,
+) -> Result<Vec<SkillMarketCollection>, String> {
+    match source.kind.as_str() {
+        "redbox-server" => load_redbox_server_market_collections(source),
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn load_redbox_server_market_collections(
+    source: &SkillMarketSource,
+) -> Result<Vec<SkillMarketCollection>, String> {
+    let base = redbox_server_skill_market_base_url(source)?;
+    let value =
+        match http_get_redbox_server_json::<Value>(&format!("{base}/collections?page_size=50")) {
+            Ok(value) => value,
+            Err(error) if error.contains("HTTP 404") => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+    let entries = value
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "RedBox skill collection response is missing items".to_string())?;
+    Ok(entries
+        .iter()
+        .filter_map(|entry| redbox_server_collection_to_item(source, entry).ok())
+        .collect())
+}
+
+fn redbox_server_collection_to_item(
+    source: &SkillMarketSource,
+    entry: &Value,
+) -> Result<SkillMarketCollection, String> {
+    let collection_key = value_first_string(entry, &["collection_key", "collectionKey", "id"])
+        .ok_or_else(|| "RedBox skill collection missing collection_key".to_string())?;
+    let title =
+        value_first_string(entry, &["title", "name"]).unwrap_or_else(|| collection_key.clone());
+    let package_keys = value_string_list(
+        entry
+            .get("package_keys")
+            .or_else(|| entry.get("packageKeys"))
+            .or_else(|| entry.get("packages")),
+    );
+    let publisher = entry.get("publisher");
+    let xiaohongshu_profile = publisher.and_then(|publisher| {
+        publisher
+            .get("xiaohongshu_profile")
+            .or_else(|| publisher.get("xiaohongshuProfile"))
+    });
+    let author = xiaohongshu_profile
+        .and_then(|profile| {
+            value_first_string(profile, &["nickname", "display_name", "displayName"])
+        })
+        .or_else(|| {
+            publisher.and_then(|publisher| {
+                value_first_string(
+                    publisher,
+                    &[
+                        "display_name",
+                        "displayName",
+                        "publisher_key",
+                        "publisherKey",
+                    ],
+                )
+            })
+        });
+    let author_avatar_url = xiaohongshu_profile
+        .and_then(|profile| {
+            value_first_string(
+                profile,
+                &["avatar_url", "avatarUrl", "image_url", "imageUrl"],
+            )
+        })
+        .or_else(|| {
+            publisher.and_then(|publisher| {
+                value_first_string(
+                    publisher,
+                    &[
+                        "avatar_url",
+                        "avatarUrl",
+                        "logo_url",
+                        "logoUrl",
+                        "image_url",
+                        "imageUrl",
+                    ],
+                )
+            })
+        });
+    let author_homepage_url = xiaohongshu_profile
+        .and_then(|profile| {
+            value_first_string(
+                profile,
+                &[
+                    "profile_url",
+                    "profileUrl",
+                    "homepage_url",
+                    "homepageUrl",
+                    "url",
+                ],
+            )
+        })
+        .or_else(|| {
+            publisher.and_then(|publisher| {
+                value_first_string(
+                    publisher,
+                    &[
+                        "homepage_url",
+                        "homepageUrl",
+                        "profile_url",
+                        "profileUrl",
+                        "url",
+                    ],
+                )
+            })
+        });
+    let source_value = entry.get("source");
+    let market_name = source_value
+        .and_then(|source_value| value_first_string(source_value, &["display_name", "displayName"]))
+        .unwrap_or_else(|| source.name.clone());
+    Ok(SkillMarketCollection {
+        id: scoped_market_item_id(&source.id, &collection_key),
+        collection_key,
+        market_id: source.id.clone(),
+        market_name,
+        source_kind: source.kind.clone(),
+        title,
+        subtitle: value_first_string(
+            entry,
+            &["subtitle", "short_description", "shortDescription"],
+        ),
+        description: value_first_string(entry, &["description"]),
+        avatar_url: value_first_string(
+            entry,
+            &["avatar_url", "avatarUrl", "image_url", "imageUrl"],
+        ),
+        cover_url: value_first_string(
+            entry,
+            &["cover_url", "coverUrl", "thumbnail_url", "thumbnailUrl"],
+        ),
+        homepage_url: value_first_string(entry, &["homepage_url", "homepageUrl"]),
+        external_url: value_first_string(entry, &["external_url", "externalUrl", "url"]),
+        author,
+        author_avatar_url,
+        author_homepage_url,
+        skill_count: value_first_usize(entry, &["skill_count", "skillCount"])
+            .unwrap_or(package_keys.len()),
+        package_keys,
+        tags: value_string_list(entry.get("tags")),
+    })
 }
 
 fn installed_market_state<'a>(
@@ -2591,6 +2781,15 @@ fn value_first_string(value: &Value, keys: &[&str]) -> Option<String> {
 fn value_first_bool(value: &Value, keys: &[&str]) -> Option<bool> {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(Value::as_bool))
+}
+
+fn value_first_usize(value: &Value, keys: &[&str]) -> Option<usize> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_u64)
+            .and_then(|number| usize::try_from(number).ok())
+    })
 }
 
 fn value_string_list(value: Option<&Value>) -> Vec<String> {

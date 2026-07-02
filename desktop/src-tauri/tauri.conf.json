@@ -92,6 +92,13 @@
     ]
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "beav"
+        ]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1QThCMzUzODYzNUMzNjQKUldSa3d6V0dVN09vZFc5SGVYOTF4M2RRbG5keEZ5NGV6Y24yOHdXeDlSR3N1Q29XQXFHZFpHM0kK",
       "endpoints": [

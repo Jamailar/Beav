@@ -4,10 +4,9 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
 use crate::{
-    app_brand_display_name, app_brand_slug, append_debug_trace_global, escape_html,
-    format_http_error_message, http_error_debug_line, http_error_details_from_value,
-    normalize_anthropic_base_url, normalize_base_url, now_ms, payload_field, payload_string,
-    run_curl_json_response,
+    app_brand_display_name, app_brand_slug, append_debug_trace_global, format_http_error_message,
+    http_error_debug_line, http_error_details_from_value, normalize_anthropic_base_url,
+    normalize_base_url, now_ms, payload_field, payload_string, run_curl_json_response,
 };
 
 const REDBOX_OFFICIAL_CN_GATEWAY_ROOT: &str = "https://api.ziz.hk";
@@ -2354,14 +2353,6 @@ pub(crate) fn emit_redbox_auth_session_updated(app: &AppHandle, session: Option<
 
 pub(crate) fn emit_redbox_auth_data_updated(app: &AppHandle, payload: Value) {
     let _ = app.emit(REDBOX_AUTH_DATA_UPDATED_EVENT, payload);
-}
-
-pub(crate) fn create_official_payment_form(order_no: &str, amount: f64, subject: &str) -> String {
-    let safe_subject = escape_html(subject);
-    let brand_name = app_brand_display_name();
-    format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{brand_name} 支付</title></head><body><div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px;\"><h3>{brand_name} 充值订单</h3><p>订单号：{order_no}</p><p>金额：¥{amount:.2}</p><p>{safe_subject}</p><button style=\"padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#111;color:#fff;\">请在正式环境接入支付网关</button></div></body></html>"
-    )
 }
 
 pub(crate) fn open_payment_form(app: &AppHandle, payment_form: &str) -> Result<String, String> {
