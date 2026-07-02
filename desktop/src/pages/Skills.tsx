@@ -40,6 +40,11 @@ type MarketplaceCacheSnapshot = {
     entries?: Record<string, MarketplaceCacheEntry>;
 };
 
+type MarketplaceDetailCacheSnapshot = {
+    savedAt?: number;
+    entries?: Record<string, MarketplacePackageDetail & { savedAt?: number }>;
+};
+
 type MarketplacePackageDetail = {
     item?: ThriveSkillMarketplaceItem;
     manifest?: unknown;
@@ -70,6 +75,8 @@ type SkillSubmissionForm = {
 
 const ALL_MARKET_CACHE_KEY = '__all__';
 const MARKETPLACE_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-cache:v2';
+const MARKETPLACE_DETAIL_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-detail-cache:v1';
+const MAX_SKILL_DETAIL_CACHE_ENTRIES = 36;
 const MAX_AVATAR_CACHE_CONCURRENCY = 4;
 const RETIRED_SKILL_MARKET_SOURCE_IDS = new Set(['thrive-community']);
 const RED_SKILL_TAG_LABEL = 'RED skill';
@@ -88,6 +95,7 @@ const skillDetailCache = new Map<string, MarketplacePackageDetail>();
 const skillAvatarDataUrlCache = new Map<string, string>();
 const skillAvatarRequestCache = new Map<string, Promise<string>>();
 let skillMarketCacheHydrated = false;
+let skillDetailCacheHydrated = false;
 let activeAvatarCacheRequests = 0;
 const queuedAvatarCacheRequests: Array<() => void> = [];
 
@@ -675,6 +683,119 @@ function persistSkillMarketCache() {
 function setSkillMarketCacheEntry(key: string, entry: MarketplaceCacheEntry) {
     skillMarketCache.set(key, sanitizeMarketplaceCacheEntry(entry));
     persistSkillMarketCache();
+}
+
+function asMarketplacePackageDetail(value: unknown): MarketplacePackageDetail | null {
+    if (!isRecord(value)) return null;
+    const item = isRecord(value.item) ? value.item as unknown as ThriveSkillMarketplaceItem : undefined;
+    const manifest = Object.prototype.hasOwnProperty.call(value, 'manifest') ? value.manifest : undefined;
+    const skillMarkdown = typeof value.skillMarkdown === 'string' ? value.skillMarkdown : '';
+    if (!item && typeof manifest === 'undefined' && !skillMarkdown) return null;
+    return { item, manifest, skillMarkdown };
+}
+
+function hydrateSkillDetailCache() {
+    if (skillDetailCacheHydrated) return;
+    skillDetailCacheHydrated = true;
+    if (typeof window === 'undefined') return;
+    try {
+        const raw = window.localStorage.getItem(MARKETPLACE_DETAIL_CACHE_STORAGE_KEY);
+        if (!raw) return;
+        const snapshot = JSON.parse(raw) as MarketplaceDetailCacheSnapshot;
+        const entries = isRecord(snapshot?.entries) ? snapshot.entries : {};
+        Object.entries(entries)
+            .sort(([, left], [, right]) => (
+                Number(isRecord(left) ? left.savedAt || 0 : 0)
+                - Number(isRecord(right) ? right.savedAt || 0 : 0)
+            ))
+            .slice(-MAX_SKILL_DETAIL_CACHE_ENTRIES)
+            .forEach(([key, value]) => {
+                const detail = asMarketplacePackageDetail(value);
+                if (detail) skillDetailCache.set(key, detail);
+            });
+    } catch (error) {
+        console.warn('Failed to read cached skill marketplace details:', error);
+    }
+}
+
+function persistSkillDetailCache() {
+    if (typeof window === 'undefined') return;
+    const savedAt = Date.now();
+    const cachedEntries = Array.from(skillDetailCache.entries()).slice(-MAX_SKILL_DETAIL_CACHE_ENTRIES);
+    const writeEntries = (entriesToWrite: Array<[string, MarketplacePackageDetail]>) => {
+        const entries: MarketplaceDetailCacheSnapshot['entries'] = {};
+        entriesToWrite.forEach(([key, detail]) => {
+            entries[key] = {
+                item: detail.item,
+                manifest: typeof detail.manifest === 'undefined' ? null : detail.manifest,
+                skillMarkdown: detail.skillMarkdown || '',
+                savedAt,
+            };
+        });
+        window.localStorage.setItem(
+            MARKETPLACE_DETAIL_CACHE_STORAGE_KEY,
+            JSON.stringify({ savedAt, entries }),
+        );
+    };
+    try {
+        writeEntries(cachedEntries);
+    } catch (error) {
+        try {
+            writeEntries(cachedEntries.slice(-Math.ceil(MAX_SKILL_DETAIL_CACHE_ENTRIES / 2)));
+        } catch {
+            console.warn('Failed to cache skill marketplace details:', error);
+        }
+    }
+}
+
+function cachedSkillDetail(key: string) {
+    hydrateSkillDetailCache();
+    return skillDetailCache.get(key) || null;
+}
+
+function cachedSkillDetailHasContent(detail: MarketplacePackageDetail | null) {
+    if (!detail) return false;
+    if (String(detail.skillMarkdown || '').trim()) return true;
+    return typeof detail.manifest !== 'undefined' && detail.manifest !== null;
+}
+
+function canUseCachedSkillDetail(detail: MarketplacePackageDetail | null, skill: ThriveSkillMarketplaceItem) {
+    if (!cachedSkillDetailHasContent(detail)) return false;
+    const cachedItem = detail?.item;
+    if (!cachedItem) return true;
+    const cachedPackageKey = normalizeKey(cachedItem.packageId || cachedItem.id || cachedItem.name);
+    const currentPackageKey = normalizeKey(skill.packageId || skill.id || skill.name);
+    if (cachedPackageKey && currentPackageKey && cachedPackageKey !== currentPackageKey) return false;
+    const cachedVersion = normalizeKey(cachedItem.version);
+    const currentVersion = normalizeKey(skill.version);
+    return !(cachedVersion && currentVersion && cachedVersion !== currentVersion);
+}
+
+function mergeCachedSkillDetail(detail: MarketplacePackageDetail | null, skill: ThriveSkillMarketplaceItem) {
+    if (!detail) return null;
+    return {
+        ...detail,
+        item: detail.item ? {
+            ...detail.item,
+            ...skill,
+            introNote: detail.item.introNote || detail.item.intro_note || skill.introNote || skill.intro_note,
+        } : skill,
+    };
+}
+
+function setSkillDetailCacheEntry(key: string, detail: MarketplacePackageDetail) {
+    hydrateSkillDetailCache();
+    const normalized = asMarketplacePackageDetail(detail);
+    if (!normalized) return;
+    skillDetailCache.delete(key);
+    skillDetailCache.set(key, normalized);
+    persistSkillDetailCache();
+}
+
+function deleteSkillDetailCacheEntry(key: string) {
+    hydrateSkillDetailCache();
+    if (!skillDetailCache.delete(key)) return;
+    persistSkillDetailCache();
 }
 
 function cachedMarketplaceEntry(cacheKey: string, marketId: string): MarketplaceCacheEntry | undefined {
@@ -1610,18 +1731,22 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
 
     const handleOpenSkillHome = useCallback(async (skill: ThriveSkillMarketplaceItem) => {
         const key = marketItemKey(skill);
+        const cached = cachedSkillDetail(key);
+        const cachedForDisplay = mergeCachedSkillDetail(cached, skill);
         setIsManagingSkills(false);
         setSelectedAuthorKey('');
         setSelectedSkill(skill);
-        setSelectedSkillDetail(skillDetailCache.get(key) || null);
+        setSelectedSkillDetail(cachedForDisplay);
         setStatusMessage('');
 
-        const cached = skillDetailCache.get(key);
-        if (cached && skillIntroNote(cached.item || skill)) return;
+        if (canUseCachedSkillDetail(cached, skill)) {
+            setIsSkillDetailLoading(false);
+            return;
+        }
 
         const requestId = detailRequestRef.current + 1;
         detailRequestRef.current = requestId;
-        setIsSkillDetailLoading(true);
+        setIsSkillDetailLoading(!cachedSkillDetailHasContent(cachedForDisplay));
         try {
             const detail = await window.ipcRenderer.skills.readMarketplacePackage<MarketplacePackageResponse>({
                 id: skill.id,
@@ -1637,13 +1762,15 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
                 manifest: detail.manifest,
                 skillMarkdown: typeof detail.skillMarkdown === 'string' ? detail.skillMarkdown : '',
             };
-            skillDetailCache.set(key, normalized);
+            setSkillDetailCacheEntry(key, normalized);
             setSelectedSkillDetail(normalized);
         } catch (error) {
             console.error('Failed to load marketplace skill detail:', error);
             if (requestId === detailRequestRef.current) {
-                setStatusMessage(error instanceof Error ? error.message : '技能主页加载失败');
-                setSelectedSkillDetail({ item: skill, manifest: null });
+                if (!cachedForDisplay) {
+                    setStatusMessage(error instanceof Error ? error.message : '技能主页加载失败');
+                    setSelectedSkillDetail({ item: skill, manifest: null });
+                }
             }
         } finally {
             if (requestId === detailRequestRef.current) {
@@ -1752,7 +1879,7 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
                 updateAvailable: false,
             };
             updateCachedMarketplaceItem(key, installedSkill);
-            skillDetailCache.delete(key);
+            deleteSkillDetailCacheEntry(key);
             setMarketItems((items) => items.map((item) => marketItemKey(item) === key ? installedSkill : item));
             setSelectedSkill((current) => current && marketItemKey(current) === key ? installedSkill : current);
             setSelectedSkillDetail((current) => current ? {
