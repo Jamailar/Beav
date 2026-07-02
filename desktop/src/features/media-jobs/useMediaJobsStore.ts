@@ -143,19 +143,39 @@ export function useMediaJobsStore<T>(
     selector: Selector<T>,
     isEqual: (left: T, right: T) => boolean = Object.is,
 ): T {
-    const selectedSnapshotRef = useRef<{ state: MediaJobsState; selected: T } | null>(null);
+    const selectedSnapshotRef = useRef<{
+        state: MediaJobsState;
+        selector: Selector<T>;
+        isEqual: (left: T, right: T) => boolean;
+        selected: T;
+    } | null>(null);
     const getSelectedSnapshot = useCallback(() => {
         const nextState = mediaJobsStore.getState();
         const nextSelected = selector(nextState);
         const previous = selectedSnapshotRef.current;
-        if (previous && previous.state === nextState) {
+        if (
+            previous &&
+            previous.state === nextState &&
+            previous.selector === selector &&
+            previous.isEqual === isEqual
+        ) {
             return previous.selected;
         }
         if (previous && isEqual(previous.selected, nextSelected)) {
-            selectedSnapshotRef.current = { state: nextState, selected: previous.selected };
+            selectedSnapshotRef.current = {
+                state: nextState,
+                selector,
+                isEqual,
+                selected: previous.selected,
+            };
             return previous.selected;
         }
-        selectedSnapshotRef.current = { state: nextState, selected: nextSelected };
+        selectedSnapshotRef.current = {
+            state: nextState,
+            selector,
+            isEqual,
+            selected: nextSelected,
+        };
         return nextSelected;
     }, [isEqual, selector]);
 
