@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BadgeCheck, Box, Check, ChevronDown, Copy, Crown, Gem, Gift, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
+import { Box, Check, ChevronDown, Copy, Crown, Gem, Gift, Globe2, LockKeyhole, QrCode, RefreshCw, ShieldCheck, Smartphone, Table2, UserRound, Zap } from 'lucide-react';
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
@@ -42,10 +42,31 @@ interface RedboxCallRecordItem {
   endpoint: string;
   tokens: number;
   points: number;
+  pointsDelta?: number;
+  direction?: string;
+  title?: string;
+  entryType?: string;
+  eventType?: string;
+  referenceType?: string;
+  balanceAfter?: number | null;
   createdAt: string;
   status: string;
   purpose?: string | null;
 }
+
+const CALL_RECORD_EVENT_LABELS: Record<string, string> = {
+  invite_reward: '邀请奖励',
+  order_points_topup: '积分充值',
+  order_points_refund: '订单积分退回',
+  order_points_deduct: '订单积分抵扣',
+  redeem_ai_points: '兑换积分',
+  manual_grant: '后台赠送',
+  feedback_reward: '反馈奖励',
+  initial_grant: '初始积分',
+  wallet_init: '初始积分',
+  ai_usage_refund: 'AI 调用退回',
+  points_credit: '积分入账',
+};
 
 const CALL_RECORD_API_LABELS: Record<string, string> = {
   'douyin.video.detail': '抖音视频详情',
@@ -72,6 +93,10 @@ function normalizeCallRecordApiKey(value: unknown): string {
 }
 
 function callRecordDisplayName(record: RedboxCallRecordItem): string {
+  const title = String(record.title || '').trim();
+  if (title) return title;
+  const eventLabel = CALL_RECORD_EVENT_LABELS[String(record.eventType || '').trim()];
+  if (eventLabel) return eventLabel;
   const candidates = [
     normalizeCallRecordApiKey(record.model),
     normalizeCallRecordApiKey(record.endpoint),
@@ -80,6 +105,28 @@ function callRecordDisplayName(record: RedboxCallRecordItem): string {
     if (CALL_RECORD_API_LABELS[candidate]) return CALL_RECORD_API_LABELS[candidate];
   }
   return String(record.model || record.endpoint || '-').trim() || '-';
+}
+
+function callRecordPointsDelta(record: RedboxCallRecordItem): number {
+  const explicitDelta = Number(record.pointsDelta);
+  if (Number.isFinite(explicitDelta) && explicitDelta !== 0) return explicitDelta;
+  const points = Number(record.points || 0);
+  if (!Number.isFinite(points) || points === 0) return 0;
+  return String(record.direction || '').toLowerCase() === 'credit' ? points : -points;
+}
+
+function formatCallRecordPoints(record: RedboxCallRecordItem): string {
+  const delta = callRecordPointsDelta(record);
+  const value = Math.abs(delta || Number(record.points || 0));
+  const formatted = value.toLocaleString(undefined, {
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+  return delta > 0 ? `+${formatted}` : formatted;
+}
+
+function callRecordPointsClass(record: RedboxCallRecordItem): string {
+  return callRecordPointsDelta(record) > 0 ? 'text-emerald-600 dark:text-emerald-300' : 'text-accent-primary';
 }
 
 interface OfficialRealmConfig {
@@ -1115,7 +1162,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                 )}
               >
                 <Smartphone className="w-3.5 h-3.5 text-blue-500" />
-                短信极速登录
+                短信/邀请码
               </button>
             </div>
 
@@ -1208,7 +1255,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                   type="text"
                   value={smsForm.inviteCode}
                   onChange={(e) => setSmsForm((prev) => ({ ...prev, inviteCode: e.target.value }))}
-                  placeholder="注册邀请码（可选）"
+                  placeholder="好友邀请码（注册可选）"
                   className="w-full bg-black/[0.01] dark:bg-white/[0.01] rounded-xl border border-black/[0.05] dark:border-white/[0.05] px-3.5 py-2 text-sm focus:outline-none focus:border-accent-primary focus:bg-white dark:focus:bg-surface-primary transition-all font-medium"
                 />
                 <div className="text-[11px] font-medium leading-5 text-text-tertiary">
@@ -1286,7 +1333,7 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
               ? 'border-amber-300/60 bg-[linear-gradient(135deg,rgb(255_251_235/0.92),rgb(255_255_255/0.88))] dark:border-amber-300/20 dark:bg-[linear-gradient(135deg,rgb(146_64_14/0.18),rgb(255_255_255/0.03))]'
               : 'border-black/[0.06] bg-white dark:border-white/[0.06] dark:bg-surface-primary'
           )}>
-            <div className="flex items-center justify-between gap-4">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
               <div className="flex min-w-0 items-center gap-3">
                 {isFounderSponsorMember ? (
                   <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(180deg,#f8d77a,#d69222)] text-white shadow-[0_10px_20px_-14px_rgb(146_64_14/0.9)]">
@@ -1323,51 +1370,28 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                   </div>
                 </div>
               </div>
-              <div className="hidden shrink-0 text-right sm:block">
-                <div className="text-[11px] font-bold text-text-tertiary">会员身份</div>
-                <div className={clsx(
-                  'mt-1 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-black',
-                  isFounderSponsorMember
-                    ? 'bg-amber-500/12 text-amber-700 dark:text-amber-200'
-                    : 'bg-black/[0.035] text-text-secondary dark:bg-white/[0.05]'
-                )}>
-                  {isFounderSponsorMember ? (
-                    <BadgeCheck className="h-3.5 w-3.5" strokeWidth={2} />
-                  ) : (
-                    <Crown className="h-3.5 w-3.5" strokeWidth={1.8} />
-                  )}
-                  {isFounderSponsorMember ? '创始赞助会员' : '免费用户'}
-                </div>
-              </div>
-            </div>
-          </section>
 
-          <section className="rounded-xl border border-black/[0.06] bg-white p-4 shadow-sm dark:border-white/[0.06] dark:bg-surface-primary">
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-              <div className="flex min-w-0 items-start gap-3">
-                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
-                  <Gift className="h-5 w-5" strokeWidth={1.9} />
-                </span>
-                <div className="min-w-0">
-                  <div className="text-sm font-black text-text-primary">邀请好友</div>
-                  <div className="mt-1 text-xs font-medium leading-5 text-text-secondary">
-                    好友注册时填写邀请码后，积分会自动到账。
+              <div className="min-w-0 border-t border-black/[0.06] pt-4 lg:w-[320px] lg:justify-self-end lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0 xl:w-[340px] dark:border-white/[0.08]">
+                <div className="mb-2 flex min-w-0 items-center gap-2">
+                  <Gift className="h-4 w-4 shrink-0 text-accent-primary" strokeWidth={1.9} />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-black text-text-primary">邀请好友，双方获得200积分</div>
                   </div>
                 </div>
-              </div>
-              <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(160px,1fr)_auto] sm:items-center">
-                <div className="min-w-0 rounded-lg border border-black/[0.06] bg-black/[0.015] px-3 py-2 font-mono text-sm font-black tracking-normal text-text-primary dark:border-white/[0.08] dark:bg-white/[0.025]">
-                  <span className="block truncate">{inviteCode || '待同步'}</span>
+                <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(140px,1fr)_auto] sm:items-center">
+                  <div className="min-w-0 rounded-lg border border-black/[0.06] bg-black/[0.015] px-3 py-2 font-mono text-sm font-black tracking-normal text-text-primary dark:border-white/[0.08] dark:bg-white/[0.025]">
+                    <span className="block truncate">{inviteCode || '待同步'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void copyInviteCode()}
+                    disabled={!inviteCode}
+                    className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-black/[0.08] bg-white px-3 text-xs font-bold text-text-secondary transition-all hover:border-accent-primary/[0.24] hover:bg-accent-primary/5 hover:text-text-primary disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.02]"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    复制
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void copyInviteCode()}
-                  disabled={!inviteCode}
-                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-black/[0.08] bg-white px-3 text-xs font-bold text-text-secondary transition-all hover:border-accent-primary/[0.24] hover:bg-accent-primary/5 hover:text-text-primary disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.02]"
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                  复制
-                </button>
               </div>
             </div>
           </section>
@@ -1618,8 +1642,8 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                       <thead className="bg-black/[0.015] text-text-tertiary font-bold border-b border-black/[0.04] dark:bg-white/[0.01] dark:border-white/[0.04]">
                         <tr>
                           <th className="px-5 py-3 font-bold">时间</th>
-                          <th className="px-5 py-3 font-bold">模型</th>
-                          <th className="px-5 py-3 text-right font-bold">积分消耗</th>
+                          <th className="px-5 py-3 font-bold">项目</th>
+                          <th className="px-5 py-3 text-right font-bold">积分变动</th>
                           <th className="px-5 py-3 text-right font-bold">Tokens</th>
                         </tr>
                       </thead>
@@ -1637,7 +1661,9 @@ const OfficialAiPanel = ({ onReloadSettings, onOpenPricing }: OfficialAiPanelPro
                                 )}
                               </span>
                             </td>
-                            <td className="px-5 py-3 text-right text-sm font-bold text-accent-primary">{record.points}</td>
+                            <td className={clsx('px-5 py-3 text-right text-sm font-bold', callRecordPointsClass(record))}>
+                              {formatCallRecordPoints(record)}
+                            </td>
                             <td className="px-5 py-3 text-right text-sm font-medium text-text-tertiary">{record.tokens}</td>
                           </tr>
                         ))}

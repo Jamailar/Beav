@@ -65,6 +65,81 @@ fn normalize_official_call_record_items_marks_knowledge_visual_index() {
 }
 
 #[test]
+fn normalize_official_call_record_items_preserves_points_credit_entries() {
+    let records = normalize_official_call_record_items(&[json!({
+        "id": "ledger-1",
+        "title": "邀请奖励",
+        "event_type": "invite_reward",
+        "entry_type": "points_ledger",
+        "direction": "credit",
+        "points_delta": 200,
+        "points": 200,
+        "balance_after": 1250,
+        "created_at": "2026-07-02T12:00:00Z"
+    })]);
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        payload_string(&records[0], "model").as_deref(),
+        Some("邀请奖励")
+    );
+    assert_eq!(
+        payload_string(&records[0], "title").as_deref(),
+        Some("邀请奖励")
+    );
+    assert_eq!(
+        payload_string(&records[0], "direction").as_deref(),
+        Some("credit")
+    );
+    assert_eq!(
+        payload_string(&records[0], "eventType").as_deref(),
+        Some("invite_reward")
+    );
+    assert_eq!(
+        payload_string(&records[0], "entryType").as_deref(),
+        Some("points_ledger")
+    );
+    assert_eq!(records[0].get("points").and_then(value_as_f64), Some(200.0));
+    assert_eq!(
+        records[0].get("pointsDelta").and_then(value_as_f64),
+        Some(200.0)
+    );
+    assert_eq!(
+        records[0].get("balanceAfter").and_then(value_as_f64),
+        Some(1250.0)
+    );
+}
+
+#[test]
+fn normalize_official_call_record_items_maps_credit_reason_from_event_type() {
+    let records = normalize_official_call_record_items(&[json!({
+        "id": "ledger-2",
+        "event_type": "manual_grant",
+        "points_delta": "500",
+        "created_at": "2026-07-02T12:00:00Z"
+    })]);
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        payload_string(&records[0], "model").as_deref(),
+        Some("后台赠送")
+    );
+    assert_eq!(
+        payload_string(&records[0], "title").as_deref(),
+        Some("后台赠送")
+    );
+    assert_eq!(
+        payload_string(&records[0], "direction").as_deref(),
+        Some("credit")
+    );
+    assert_eq!(records[0].get("points").and_then(value_as_f64), Some(500.0));
+    assert_eq!(
+        records[0].get("pointsDelta").and_then(value_as_f64),
+        Some(500.0)
+    );
+}
+
+#[test]
 fn normalize_official_call_records_value_merges_multiple_payload_arrays() {
     let records = normalize_official_call_records_value(&json!({
         "data": {

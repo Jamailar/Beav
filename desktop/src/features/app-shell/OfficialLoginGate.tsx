@@ -127,6 +127,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
   const [activeRealm, setActiveRealm] = useState<OfficialAuthRealm>('cn');
   const [activeSetupTab, setActiveSetupTab] = useState<LlmSetupTab>('official');
   const [smsBusy, setSmsBusy] = useState(false);
+  const [smsAuthMode, setSmsAuthMode] = useState<'login' | 'register' | null>(null);
   const [smsForm, setSmsForm] = useState({ phone: '', code: '', inviteCode: '' });
   const [customBusy, setCustomBusy] = useState(false);
   const [customForm, setCustomForm] = useState({
@@ -304,11 +305,16 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
       return;
     }
     setSmsBusy(true);
+    setSmsAuthMode(mode);
     try {
+      const inviteCode = String(smsForm.inviteCode || '').trim();
+      const smsPayload: { phone: string; code: string; inviteCode?: string } = mode === 'register'
+        ? { phone, code, inviteCode: inviteCode || undefined }
+        : { phone, code };
       const result = await (
         mode === 'login'
-          ? window.ipcRenderer.officialAuth.loginSms({ phone, code, inviteCode: smsForm.inviteCode.trim() || undefined })
-          : window.ipcRenderer.officialAuth.registerSms({ phone, code, inviteCode: smsForm.inviteCode.trim() || undefined })
+          ? window.ipcRenderer.officialAuth.loginSms(smsPayload)
+          : window.ipcRenderer.officialAuth.registerSms(smsPayload)
       ) as {
         success?: boolean;
         session?: unknown;
@@ -323,6 +329,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
       setLoginNotice('error', error instanceof Error ? error.message : (mode === 'login' ? '登录失败' : '注册失败'));
     } finally {
       setSmsBusy(false);
+      setSmsAuthMode(null);
     }
   }, [refreshAuthAfterLogin, setLoginNotice, smsForm.code, smsForm.inviteCode, smsForm.phone]);
 
@@ -504,7 +511,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           onClick={returnToSmsLogin}
                           className="text-sm font-semibold text-[rgb(var(--color-text-secondary))] transition hover:text-[rgb(var(--color-accent-primary))]"
                         >
-                          手机号登录
+                          手机号/邀请码
                         </button>
                       </div>
                       <div className="flex justify-center py-2">
@@ -519,7 +526,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         void handleSmsAuth('login');
                       }}
                     >
-                      <div className={sectionLabelClassName}>手机号登录</div>
+                      <div className={sectionLabelClassName}>手机号登录 / 注册</div>
                       <input
                         type="tel"
                         value={smsForm.phone}
@@ -552,20 +559,30 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         type="text"
                         value={smsForm.inviteCode}
                         onChange={(event) => setSmsForm((prev) => ({ ...prev, inviteCode: event.target.value }))}
-                        placeholder="邀请码（新用户选填）"
+                        placeholder="好友邀请码（注册可选）"
                         autoComplete="off"
                         autoCapitalize="characters"
                         spellCheck={false}
                         disabled={authBusy}
                         className={inputClassName}
                       />
-                      <button
-                        type="submit"
-                        disabled={authBusy}
-                        className={primaryButtonClassName}
-                      >
-                        {smsBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录 / 注册'}
-                      </button>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="submit"
+                          disabled={authBusy}
+                          className={primaryButtonClassName}
+                        >
+                          {smsAuthMode === 'login' ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录账户'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleSmsAuth('register')}
+                          disabled={authBusy}
+                          className="h-12 w-full rounded-2xl bg-[rgb(var(--color-surface-secondary)/0.62)] text-sm font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-primary)/0.78)] hover:text-[rgb(var(--color-text-primary))] active:scale-[0.99] disabled:opacity-60"
+                        >
+                          {smsAuthMode === 'register' ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '注册新账号'}
+                        </button>
+                      </div>
                     </form>
                   )}
 
