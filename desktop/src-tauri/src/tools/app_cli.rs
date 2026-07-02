@@ -1113,6 +1113,17 @@ impl<'a> AppCliExecutor<'a> {
         let request = consolidated_action_payload(payload);
         let token = match operation.as_str() {
             "installfromrepo" | "installfromgithub" | "install" => "install-from-repo",
+            "listmarketplace" | "marketplacelist" | "marketplace" | "marketlist" => "marketplace",
+            "readmarketpackage" | "readpackage" | "marketpackageread" => "market-package-read",
+            "installfrommarket" | "installmarketplace" | "marketinstall" | "marketplaceinstall" => {
+                "market-install"
+            }
+            "updatefrommarket" | "updatemarketplace" | "marketupdate" => "market-update",
+            "listmarketsources" | "marketsourceslist" | "marketsources" => "market-sources-list",
+            "addmarketsource" | "marketsourceadd" => "market-source-add",
+            "removemarketsource" | "marketsourceremove" | "deletemarketsource" => {
+                "market-source-remove"
+            }
             "uninstall" | "delete" | "remove" => "uninstall",
             _ => {
                 return Err(app_cli_error_json(
@@ -3613,7 +3624,9 @@ fn help_response(namespace: Option<&str>) -> Value {
             "skills disable --name <skill>",
             "skills uninstall --name <skill> [--scope user|workspace]",
             "skills install-from-repo --source <github-url-or-owner/repo> [--ref <ref>] [--path <path>] [--scope user|workspace]",
-            "skills market-install --slug <slug>  # placeholder registration only; use cli_runtime.* to provision external tools",
+            "skills marketplace [--market-id <id>] [--query <text>]",
+            "skills market-source-add --name <name> --kind github|local|url --source <repo-or-path-or-url>",
+            "skills market-install --market-id <id> --package-id <package>",
         ],
         "mcp" => vec![
             "mcp list",

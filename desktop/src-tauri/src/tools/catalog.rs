@@ -3522,7 +3522,17 @@ fn skills_manage_input_schema() -> Value {
                 json!({
                     "type": "string",
                     "description": "Skill management operation.",
-                    "enum": ["installFromRepo", "uninstall"]
+                    "enum": [
+                        "installFromRepo",
+                        "uninstall",
+                        "marketplaceList",
+                        "readMarketPackage",
+                        "installFromMarket",
+                        "updateFromMarket",
+                        "listMarketSources",
+                        "addMarketSource",
+                        "removeMarketSource"
+                    ]
                 }),
             ),
             (
@@ -3548,6 +3558,22 @@ fn skills_manage_input_schema() -> Value {
                 }),
             ),
             ("name", string_schema("Skill name when operation=uninstall.")),
+            (
+                "marketId",
+                string_schema("Skill market source id when operating on one configured market."),
+            ),
+            (
+                "packageId",
+                string_schema("Marketplace package id when reading, installing, or updating a skill-pack."),
+            ),
+            (
+                "kind",
+                string_schema("Marketplace source kind when operation=addMarketSource: github, local, url, or legacy-thrive."),
+            ),
+            (
+                "registryUrl",
+                string_schema("GitHub-hosted registry URL when operation=addMarketSource with kind=url or legacy-thrive."),
+            ),
             (
                 "scope",
                 json!({
@@ -6235,7 +6261,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "skills.manage",
         namespace: "skills",
-        description: "Run one explicit skill management operation such as installing skills from a repository or uninstalling a managed skill. Use this consolidated action instead of skills.installFromRepo or skills.uninstall compatibility actions.",
+        description: "Run one explicit skill management operation: install/uninstall skills, list skill marketplace packages, manage skill marketplace sources, or install/update a package from a configured skill market. Use this consolidated action instead of compatibility actions.",
         input_schema: skills_manage_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
