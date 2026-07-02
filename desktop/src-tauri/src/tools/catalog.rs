@@ -4635,6 +4635,13 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
 
 fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
     let descriptors = descriptors.unwrap_or(&[]);
+    let mut description = REDBOX_DESCRIPTION.to_string();
+    if descriptors
+        .iter()
+        .any(|descriptor| descriptor.action == "capture.collect")
+    {
+        description.push_str(" For saving, importing, downloading, or collecting platform URLs into Knowledge, use resource=\"capture\", operation=\"run\", input={\"url\":\"...\",\"platform\":\"auto\",\"target\":\"content\"}; use browser.control only when the user asks to inspect or interact with the web page.");
+    }
     let resource_schema = if descriptors.is_empty() {
         redbox_resource_schema()
     } else {
@@ -4649,7 +4656,7 @@ fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
         "type": "function",
         "function": {
             "name": "Operate",
-            "description": REDBOX_DESCRIPTION,
+            "description": description,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4670,6 +4677,13 @@ fn redbox_input_schema() -> Value {
         "type": "object",
         "description": "Structured operation input. For image generation, put prompt/count/aspectRatio/resolution/quality/referenceImages here; aspectRatio, resolution, and quality are required and must be non-empty.",
         "properties": {
+            "url": { "type": "string", "description": "HTTP(S) URL for the operation. For platform content/profile/comment capture and save-to-Knowledge requests, pass this to Operate(resource=\"capture\", operation=\"run\", input={\"url\":\"...\"}) instead of opening the page in browser.control." },
+            "platform": { "type": "string", "enum": ["auto", "xhs", "xiaohongshu", "douyin", "youtube"], "description": "Source platform for capture.run. Use auto when the URL host can identify Xiaohongshu/xhslink, Douyin, or YouTube." },
+            "target": { "type": "string", "enum": ["auto", "content", "profile", "comments"], "description": "Capture target for capture.run: one content item, a creator profile/homepage, or comments for one content item." },
+            "includeComments": { "type": "boolean", "description": "For capture.run, request supported comments together with the content capture." },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum items for paged operations such as capture profile/comment requests." },
+            "downloadMedia": { "type": "boolean", "description": "For capture.run, download supported media assets. Defaults to true." },
+            "ingestToKnowledge": { "type": "boolean", "description": "For capture.run, write completed capture entries into the local Knowledge base. Defaults to true." },
             "prompt": { "type": "string", "description": "Generation or operation prompt." },
             "input": { "type": "string", "description": "Literal text input for speech/TTS. If the user asks for any video or 口播视频, start from video-director instead of voice.speech. For CosyVoice, activate cosyvoice-ssml only inside a video-director managed digital-human / VideoRetalk / asset-library talking-head TTS substep after the script, role voiceId, and character video reference are resolved. In that narrow flow, segments may use complete <speak rate pitch volume> SSML input and segment-specific prompt. Outside that flow, keep CosyVoice payloads conservative and do not activate cosyvoice-ssml. For MiniMax expressive narration, invoke tts-director and prefer segments. MiniMax pause markers like <#0.6#> and tone tags like (laughs) are allowed only for MiniMax." },
             "segments": {
@@ -4707,7 +4721,7 @@ fn redbox_input_schema() -> Value {
             "prefer_sync_tts": { "type": "boolean", "description": "Prefer synchronous TTS when supported." },
             "prefer_async_tts": { "type": "boolean", "description": "Prefer asynchronous TTS for long narration when supported." },
             "async_tts": { "type": "boolean", "description": "Force async TTS when supported." },
-            "waitForCompletion": { "type": "boolean", "description": "For generated media needed by the next step, set true so the tool returns the completed asset path." },
+            "waitForCompletion": { "type": "boolean", "description": "For generated media or capture results needed by the next step, set true so the tool returns the completed asset or saved Knowledge result when supported." },
             "count": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Number of images or generated items." },
             "aspectRatio": image_aspect_ratio_schema("Required image output ratio for image generation. Pick one explicitly, such as 1:1, 3:4, 4:3, 9:16, or 16:9."),
             "ratio": image_aspect_ratio_schema("Alias for aspectRatio; prefer aspectRatio in new calls."),
@@ -4790,7 +4804,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "capture.collect",
         namespace: "capture",
-        description: "Capture a platform content URL, profile/homepage URL, or comments target through the existing RedBox capture pipeline. Use platform and target instead of separate tools; defaults to downloading supported media and ingesting completed results into Knowledge.",
+        description: "Capture and save a Xiaohongshu/xhslink, Douyin, or YouTube content URL, profile/homepage URL, or comments target through the RedBox capture pipeline. Use this, not browser.control or web.fetch, when the user asks to save/import/download a platform URL into Knowledge; defaults to downloading supported media and ingesting completed results into Knowledge.",
         input_schema: capture_collect_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -7779,6 +7793,47 @@ mod tests {
             redbox.pointer("/function/parameters/properties/input/properties/aspectRatio/enum/1"),
             Some(&json!("3:4"))
         );
+    }
+
+    #[test]
+    fn operate_direct_schema_guides_platform_capture_to_knowledge() {
+        let actions =
+            action_descriptors_for_tool("workflow", Some("redclaw"), ActionVisibility::Model);
+        let schema = schema_for_tool_from_action_descriptors("Operate", &actions)
+            .expect("Operate schema should be generated");
+
+        let description = schema
+            .pointer("/function/description")
+            .and_then(Value::as_str)
+            .expect("Operate description");
+        assert!(description.contains("resource=\"capture\""));
+        assert!(description.contains("Knowledge"));
+        assert!(description.contains("browser.control only"));
+
+        let resources = schema
+            .pointer("/function/parameters/properties/resource/enum")
+            .and_then(Value::as_array)
+            .expect("resource enum should exist");
+        assert!(resources.contains(&json!("capture")));
+        let operations = schema
+            .pointer("/function/parameters/properties/operation/enum")
+            .and_then(Value::as_array)
+            .expect("operation enum should exist");
+        assert!(operations.contains(&json!("run")));
+
+        let input = &schema["function"]["parameters"]["properties"]["input"]["properties"];
+        assert!(input["url"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("save-to-Knowledge"));
+        assert!(input["platform"]["enum"]
+            .as_array()
+            .expect("platform enum")
+            .contains(&json!("xiaohongshu")));
+        assert!(input["target"]["enum"]
+            .as_array()
+            .expect("target enum")
+            .contains(&json!("comments")));
     }
 
     #[test]

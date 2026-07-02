@@ -163,6 +163,102 @@ pub fn merge_chat_messages_with_bundle_history(
     merged
 }
 
+fn bundle_message_key(message: &Value) -> Option<(String, String)> {
+    let role = message.get("role")?.as_str()?.trim().to_string();
+    let content = message.get("content")?.as_str()?.trim().to_string();
+    if role.is_empty() || content.is_empty() {
+        return None;
+    }
+    Some((role, content))
+}
+
+fn visible_chat_message_count(messages: &[Value]) -> usize {
+    messages
+        .iter()
+        .filter(|message| {
+            !is_internal_runtime_bundle_message(message)
+                && matches!(
+                    message.get("role").and_then(Value::as_str),
+                    Some("user" | "assistant")
+                )
+        })
+        .count()
+}
+
+fn append_missing_bundle_messages(base: &mut Vec<Value>, next: &[Value]) {
+    let mut seen = base
+        .iter()
+        .filter_map(bundle_message_key)
+        .collect::<std::collections::HashSet<_>>();
+    for message in next {
+        if bundle_message_key(message)
+            .map(|key| seen.insert(key))
+            .unwrap_or(true)
+        {
+            base.push(message.clone());
+        }
+    }
+}
+
+fn merge_session_bundle_messages(
+    existing: Option<&SessionRuntimeBundle>,
+    next: &[Value],
+    chat_snapshot: &[Value],
+) -> Vec<Value> {
+    let mut merged = existing
+        .filter(|bundle| bundle.messages.len() > next.len())
+        .map(|bundle| bundle.messages.clone())
+        .unwrap_or_else(|| next.to_vec());
+    if let Some(bundle) = existing {
+        append_missing_bundle_messages(&mut merged, &bundle.messages);
+    }
+    append_missing_bundle_messages(&mut merged, next);
+
+    if chat_snapshot.len() > visible_chat_message_count(&merged) {
+        let previous = merged;
+        merged = chat_snapshot.to_vec();
+        append_missing_bundle_messages(&mut merged, &previous);
+    } else {
+        append_missing_bundle_messages(&mut merged, chat_snapshot);
+    }
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::{merge_session_bundle_messages, visible_chat_message_count};
+
+    #[test]
+    fn bundle_save_merge_restores_chat_messages_missing_from_provider_snapshot() {
+        let next = vec![
+            json!({ "role": "user", "content": "你可以保存小红书url到知识库吗" }),
+            json!({ "role": "assistant", "content": "请提供要保存的小红书笔记链接。" }),
+            json!({ "role": "user", "content": "你没有相应的工具吗" }),
+            json!({ "role": "assistant", "content": "请给我具体的小红书 URL。" }),
+        ];
+        let chat_snapshot = vec![
+            json!({ "role": "user", "content": "你可以保存小红书url到知识库吗" }),
+            json!({ "role": "assistant", "content": "请提供要保存的小红书笔记链接。" }),
+            json!({ "role": "user", "content": "http://xhslink.com/o/6ea4DsyOJtR" }),
+            json!({ "role": "user", "content": "你没有相应的工具吗" }),
+            json!({ "role": "assistant", "content": "请给我具体的小红书 URL。" }),
+        ];
+
+        let merged = merge_session_bundle_messages(None, &next, &chat_snapshot);
+
+        assert_eq!(visible_chat_message_count(&merged), 5);
+        assert_eq!(
+            merged
+                .get(2)
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_str),
+            Some("http://xhslink.com/o/6ea4DsyOJtR")
+        );
+    }
+}
+
 pub fn save_session_bundle_messages(
     state: &State<'_, AppState>,
     session_id: &str,
@@ -174,6 +270,15 @@ pub fn save_session_bundle_messages(
     let resolved_session_id =
         resolve_session_id_or_latest(state, session_id).unwrap_or_else(|_| session_id.to_string());
     let existing = load_session_runtime_bundle(state, &resolved_session_id)?;
+    let chat_snapshot = with_store(state, |store| {
+        Ok(chat_messages_for_session(&store, &resolved_session_id)
+            .into_iter()
+            .map(runtime_history_message_from_chat_record)
+            .collect::<Vec<_>>())
+    })
+    .unwrap_or_default();
+    let merged_messages =
+        merge_session_bundle_messages(existing.as_ref(), messages, &chat_snapshot);
     let bundle = SessionRuntimeBundle {
         session_id: resolved_session_id,
         created_at: existing
@@ -184,9 +289,9 @@ pub fn save_session_bundle_messages(
         protocol: protocol.to_string(),
         runtime_mode: runtime_mode.to_string(),
         model_name: model_name.map(ToString::to_string),
-        message_count: messages.len() as i64,
+        message_count: merged_messages.len() as i64,
         updated_at: now_iso(),
-        messages: messages.to_vec(),
+        messages: merged_messages,
     };
     persist_session_runtime_bundle(state, &bundle)?;
     sync_transcript_from_bundle(state, &bundle)
