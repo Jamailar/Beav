@@ -11,7 +11,10 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     fs: {
-      allow: [path.resolve(__dirname)],
+      allow: [
+        path.resolve(__dirname),
+        path.resolve(__dirname, '../Plugin/src/assets/platforms'),
+      ],
     },
   },
   resolve: {
