@@ -3417,6 +3417,28 @@ mod tests {
     }
 
     #[test]
+    fn skill_markdown_from_zip_artifact_reads_skill_file() {
+        use std::io::Write as _;
+
+        let mut writer = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
+        writer
+            .start_file("nested/SKILL.md", zip::write::FileOptions::default())
+            .unwrap();
+        writer.write_all(b"# Demo\n\nUse demo.").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let artifact = json!({
+            "filename": "demo.zip",
+            "contentType": "application/zip",
+        });
+
+        let markdown =
+            skill_markdown_from_redbox_artifact("https://cdn.ziz.hk/demo.zip", &artifact, &bytes)
+                .unwrap();
+
+        assert_eq!(markdown, "# Demo\n\nUse demo.");
+    }
+
+    #[test]
     fn explicit_legacy_thrive_url_keeps_compatibility_adapter() {
         let source = legacy_thrive_source_for_url(Some(
             "https://github.com/acme/skills/raw/main/community-skills.json".to_string(),
