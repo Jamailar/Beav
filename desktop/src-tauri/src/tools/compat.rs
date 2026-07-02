@@ -176,6 +176,11 @@ fn normalize_app_cli_call(arguments: &Value) -> NormalizedToolCall {
             arguments: Value::Object(normalized),
         };
     }
+    if let Some(payload) = object.get("payload").and_then(Value::as_object) {
+        if has_structured_operate_fields(payload) {
+            return normalize_redbox_call(&Value::Object(payload.clone()));
+        }
+    }
     let command = object
         .get("command")
         .and_then(Value::as_str)
@@ -967,6 +972,18 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("browser.control"),
         ),
+        ("capture", "run" | "collect" | "create" | "submit") => app_cli_action_call(
+            "capture.collect",
+            payload,
+            Some("Operate"),
+            Some("capture.collect"),
+        ),
+        ("capture", "status" | "get" | "list") => app_cli_action_call(
+            "capture.status",
+            payload,
+            Some("Operate"),
+            Some("capture.status"),
+        ),
         ("taskbrief" | "task-brief" | "task_brief", "get" | "read") => app_cli_action_call(
             "taskBrief.get",
             payload,
@@ -1690,6 +1707,19 @@ fn normalized_universal_arguments(arguments: &Value) -> Map<String, Value> {
         }
     }
     flatten_payload_fields(object)
+}
+
+fn has_structured_operate_fields(object: &Map<String, Value>) -> bool {
+    object
+        .get("resource")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+        && object
+            .get("operation")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
 }
 
 fn split_virtual_path(path: &str) -> (String, String) {
@@ -3930,6 +3960,76 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("query")),
             Some(&json!("SpaceX valuation today"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_capture_run_to_capture_collect() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "capture",
+                "operation": "run",
+                "input": {
+                    "url": "http://xhslink.com/o/6ea4DsyOJtR",
+                    "platform": "auto",
+                    "target": "content",
+                    "ingestToKnowledge": true
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("capture.collect"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("url")),
+            Some(&json!("http://xhslink.com/o/6ea4DsyOJtR"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/__compat/legacyCommand"),
+            Some(&json!("capture.collect"))
+        );
+    }
+
+    #[test]
+    fn normalizes_nested_structured_capture_payload_from_workflow_help() {
+        let normalized = normalize_tool_call(
+            "workflow",
+            &json!({
+                "command": "help",
+                "payload": {
+                    "resource": "capture",
+                    "operation": "collect",
+                    "input": {
+                        "url": "http://xhslink.com/o/6ea4DsyOJtR",
+                        "platform": "auto",
+                        "ingestToKnowledge": true
+                    }
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("capture.collect"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("url")),
+            Some(&json!("http://xhslink.com/o/6ea4DsyOJtR"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/__compat/legacyToolName"),
+            Some(&json!("Operate"))
         );
     }
 

@@ -4542,6 +4542,7 @@ fn redbox_operation_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'
             "update",
             "delete",
             "run",
+            "collect",
             "generate",
             "speech",
             "transcribe",
@@ -4619,7 +4620,7 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
         "cancel" => Some("cancel"),
         "resume" => Some("resume"),
         "confirm" | "approve" => Some("confirm"),
-        "collect" => Some("run"),
+        "collect" => Some("collect"),
         "invoke" | "call" | "execute" => Some("run"),
         "generate" => Some("generate"),
         "speech" => Some("speech"),
@@ -4640,7 +4641,7 @@ fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
         .iter()
         .any(|descriptor| descriptor.action == "capture.collect")
     {
-        description.push_str(" For saving, importing, downloading, or collecting platform URLs into Knowledge, use resource=\"capture\", operation=\"run\", input={\"url\":\"...\",\"platform\":\"auto\",\"target\":\"content\"}; use browser.control only when the user asks to inspect or interact with the web page.");
+        description.push_str(" For saving, importing, downloading, or collecting platform URLs into Knowledge, use resource=\"capture\", operation=\"collect\", input={\"url\":\"...\",\"platform\":\"auto\",\"target\":\"content\"}; use browser.control only when the user asks to inspect or interact with the web page.");
     }
     let resource_schema = if descriptors.is_empty() {
         redbox_resource_schema()
@@ -4677,13 +4678,13 @@ fn redbox_input_schema() -> Value {
         "type": "object",
         "description": "Structured operation input. For image generation, put prompt/count/aspectRatio/resolution/quality/referenceImages here; aspectRatio, resolution, and quality are required and must be non-empty.",
         "properties": {
-            "url": { "type": "string", "description": "HTTP(S) URL for the operation. For platform content/profile/comment capture and save-to-Knowledge requests, pass this to Operate(resource=\"capture\", operation=\"run\", input={\"url\":\"...\"}) instead of opening the page in browser.control." },
-            "platform": { "type": "string", "enum": ["auto", "xhs", "xiaohongshu", "douyin", "youtube"], "description": "Source platform for capture.run. Use auto when the URL host can identify Xiaohongshu/xhslink, Douyin, or YouTube." },
-            "target": { "type": "string", "enum": ["auto", "content", "profile", "comments"], "description": "Capture target for capture.run: one content item, a creator profile/homepage, or comments for one content item." },
-            "includeComments": { "type": "boolean", "description": "For capture.run, request supported comments together with the content capture." },
+            "url": { "type": "string", "description": "HTTP(S) URL for the operation. For platform content/profile/comment capture and save-to-Knowledge requests, pass this to Operate(resource=\"capture\", operation=\"collect\", input={\"url\":\"...\"}) instead of opening the page in browser.control." },
+            "platform": { "type": "string", "enum": ["auto", "xhs", "xiaohongshu", "douyin", "youtube"], "description": "Source platform for capture.collect. Use auto when the URL host can identify Xiaohongshu/xhslink, Douyin, or YouTube." },
+            "target": { "type": "string", "enum": ["auto", "content", "profile", "comments"], "description": "Capture target for capture.collect: one content item, a creator profile/homepage, or comments for one content item." },
+            "includeComments": { "type": "boolean", "description": "For capture.collect, request supported comments together with the content capture." },
             "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum items for paged operations such as capture profile/comment requests." },
-            "downloadMedia": { "type": "boolean", "description": "For capture.run, download supported media assets. Defaults to true." },
-            "ingestToKnowledge": { "type": "boolean", "description": "For capture.run, write completed capture entries into the local Knowledge base. Defaults to true." },
+            "downloadMedia": { "type": "boolean", "description": "For capture.collect, download supported media assets. Defaults to true." },
+            "ingestToKnowledge": { "type": "boolean", "description": "For capture.collect, write completed capture entries into the local Knowledge base. Defaults to true." },
             "prompt": { "type": "string", "description": "Generation or operation prompt." },
             "input": { "type": "string", "description": "Literal text input for speech/TTS. If the user asks for any video or 口播视频, start from video-director instead of voice.speech. For CosyVoice, activate cosyvoice-ssml only inside a video-director managed digital-human / VideoRetalk / asset-library talking-head TTS substep after the script, role voiceId, and character video reference are resolved. In that narrow flow, segments may use complete <speak rate pitch volume> SSML input and segment-specific prompt. Outside that flow, keep CosyVoice payloads conservative and do not activate cosyvoice-ssml. For MiniMax expressive narration, invoke tts-director and prefer segments. MiniMax pause markers like <#0.6#> and tone tags like (laughs) are allowed only for MiniMax." },
             "segments": {
@@ -7819,7 +7820,7 @@ mod tests {
             .pointer("/function/parameters/properties/operation/enum")
             .and_then(Value::as_array)
             .expect("operation enum should exist");
-        assert!(operations.contains(&json!("run")));
+        assert!(operations.contains(&json!("collect")));
 
         let input = &schema["function"]["parameters"]["properties"]["input"]["properties"];
         assert!(input["url"]["description"]
