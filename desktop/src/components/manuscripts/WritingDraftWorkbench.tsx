@@ -1,12 +1,17 @@
 import { lazy, Suspense, useEffect, useMemo } from 'react';
-import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
+import { FileAudio, FileVideo, Image as ImageIcon, Loader2, Plus, X } from 'lucide-react';
 import { CodeMirrorEditor } from './CodeMirrorEditor';
+import { MarkdownItPreview } from './MarkdownItPreview';
+import { inferAssetKind, type MediaAsset } from '../../features/manuscripts/editorModel';
+import { resolveAssetUrl } from '../../utils/pathManager';
 
 const ChatWorkspace = lazy(async () => ({
   default: (await import('../../pages/Chat')).Chat,
 }));
 
-type WritingDraftType = 'longform' | 'unknown';
+type WritingDraftType = 'longform' | 'html' | 'unknown';
+type WritingContentFormat = 'markdown' | 'html';
+export type EditorBodyViewMode = 'edit' | 'preview';
 
 type AiWorkspaceMode = {
   id: string;
@@ -18,22 +23,23 @@ export interface WritingDraftWorkbenchProps {
   title: string;
   filePath: string;
   editorBody: string;
+  bodyViewMode: EditorBodyViewMode;
+  contentFormat?: WritingContentFormat;
+  fileBaseUrl?: string;
+  boundAssets?: MediaAsset[];
   writeProposal?: {
     id?: string;
     baseBody: string;
     isStale?: boolean;
   } | null;
-  editorBodyDirty: boolean;
-  isSavingEditorBody: boolean;
-  isApplyingWriteProposal?: boolean;
-  isRejectingWriteProposal?: boolean;
   editorChatSessionId: string | null;
   editorChatReady?: boolean;
   editorSessionMetadata?: Record<string, unknown> | null;
   isActive?: boolean;
   onEditorBodyChange: (value: string) => void;
-  onAcceptWriteProposal?: () => void;
-  onRejectWriteProposal?: () => void;
+  onRequestBindImages?: () => void;
+  onPreviewAsset?: (asset: MediaAsset) => void;
+  onRemoveBoundImage?: (asset: MediaAsset) => void;
   onAiWorkspaceModeChange?: (mode: AiWorkspaceMode) => void;
 }
 
@@ -44,11 +50,13 @@ function buildWritingEditorAiContext({
   filePath,
   draftType,
   editorBody,
+  contentFormat,
 }: {
   title: string;
   filePath: string;
   draftType: WritingDraftType;
   editorBody: string;
+  contentFormat: WritingContentFormat;
 }): string {
   const body = String(editorBody || '');
   const truncated = body.length > EDITOR_AI_CONTEXT_MAX_CHARS;
@@ -61,10 +69,154 @@ function buildWritingEditorAiContext({
     `当前稿件路径：${filePath}`,
     `当前稿件类型：${draftType}`,
     truncated ? `当前稿件正文超过上下文限制，下面只包含前 ${EDITOR_AI_CONTEXT_MAX_CHARS} 个字符。` : '当前稿件正文如下。',
-    '```markdown',
+    `\`\`\`${contentFormat === 'html' ? 'html' : 'markdown'}`,
     bodyForContext,
     '```',
   ].join('\n');
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildHtmlPreviewDocument(content: string, baseUrl?: string): string {
+  const source = String(content || '').trim();
+  const fallback = '<!doctype html><html><body></body></html>';
+  const html = source || fallback;
+  const base = String(baseUrl || '').trim()
+    ? `<base href="${escapeHtmlAttribute(baseUrl || '')}">`
+    : '';
+  if (!base) return html;
+  if (/<head(\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${base}`);
+  }
+  if (/<html(\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<html(\s[^>]*)?>/i, (match) => `${match}<head>${base}</head>`);
+  }
+  return `<!doctype html><html><head>${base}</head><body>${html}</body></html>`;
+}
+
+function HtmlPreview({ content, fileBaseUrl }: { content: string; fileBaseUrl?: string }) {
+  const srcDoc = useMemo(
+    () => buildHtmlPreviewDocument(content, fileBaseUrl),
+    [content, fileBaseUrl],
+  );
+  return (
+    <iframe
+      title="HTML 预览"
+      className="h-full min-h-0 w-full border-0 bg-white"
+      sandbox="allow-same-origin"
+      srcDoc={srcDoc}
+    />
+  );
+}
+
+function BoundMediaStrip({ assets }: { assets: MediaAsset[] }) {
+  const visibleAssets = assets.filter((asset) => inferAssetKind(asset) !== 'image');
+  if (visibleAssets.length === 0) return null;
+  return (
+    <div className="shrink-0 overflow-x-auto border-t border-border bg-surface-primary/92 px-4 py-3">
+      <div className="flex gap-2">
+        {visibleAssets.slice(0, 12).map((asset) => {
+          const kind = inferAssetKind(asset);
+          const src = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+          return (
+            <div
+              key={asset.id}
+              className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-secondary text-text-tertiary"
+              title={asset.title || asset.id}
+            >
+              {kind === 'image' && src ? (
+                <img src={src} alt={asset.title || asset.id} className="h-full w-full object-cover" loading="lazy" />
+              ) : kind === 'video' ? (
+                <FileVideo className="h-5 w-5" />
+              ) : kind === 'audio' ? (
+                <FileAudio className="h-5 w-5" />
+              ) : (
+                <ImageIcon className="h-5 w-5" />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function XhsMediaDeck({
+  assets,
+  onAddImage,
+  onPreviewAsset,
+  onRemoveImage,
+}: {
+  assets: MediaAsset[];
+  onAddImage?: () => void;
+  onPreviewAsset?: (asset: MediaAsset) => void;
+  onRemoveImage?: (asset: MediaAsset) => void;
+}) {
+  const imageAssets = assets.filter((asset) => inferAssetKind(asset) === 'image');
+  if (imageAssets.length === 0) return null;
+  return (
+    <div className="shrink-0 overflow-x-auto border-b border-border bg-surface-primary px-5 py-3">
+      <div className="flex w-max min-w-full items-center gap-3">
+        {imageAssets.slice(0, 12).map((asset) => {
+          const src = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+          return (
+            <div
+              key={asset.id}
+              className="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-border bg-surface-secondary text-left shadow-sm"
+              title={asset.title || asset.id}
+            >
+              <button
+                type="button"
+                onClick={() => onPreviewAsset?.(asset)}
+                className="block h-full w-full"
+                aria-label="查看大图"
+              >
+                {src ? (
+                  <img
+                    src={src}
+                    alt={asset.title || asset.id}
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                    <ImageIcon className="h-7 w-7" />
+                  </div>
+                )}
+              </button>
+              <button
+                type="button"
+                className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-surface-primary/92 text-text-tertiary shadow-sm ring-1 ring-border transition hover:bg-[rgb(var(--color-danger-bg))] hover:text-[rgb(var(--color-danger-text))]"
+                aria-label="移除配图"
+                title="移除配图"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemoveImage?.(asset);
+                }}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          onClick={onAddImage}
+          className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg border border-dashed border-border bg-surface-secondary/55 text-text-tertiary transition hover:border-accent-primary/40 hover:bg-surface-secondary hover:text-accent-primary"
+          aria-label="添加配图"
+          title="添加配图"
+        >
+          <Plus className="h-8 w-8 stroke-[1.5]" />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function WritingDraftWorkbench({
@@ -72,18 +224,19 @@ export function WritingDraftWorkbench({
   title,
   filePath,
   editorBody,
+  bodyViewMode,
+  contentFormat = 'markdown',
+  fileBaseUrl,
+  boundAssets = [],
   writeProposal = null,
-  editorBodyDirty,
-  isSavingEditorBody,
-  isApplyingWriteProposal = false,
-  isRejectingWriteProposal = false,
   editorChatSessionId,
   editorChatReady = true,
   editorSessionMetadata = null,
   isActive = false,
   onEditorBodyChange,
-  onAcceptWriteProposal,
-  onRejectWriteProposal,
+  onRequestBindImages,
+  onPreviewAsset,
+  onRemoveBoundImage,
   onAiWorkspaceModeChange,
 }: WritingDraftWorkbenchProps) {
   const aiWorkspaceMode = useMemo<AiWorkspaceMode>(() => (
@@ -99,7 +252,8 @@ export function WritingDraftWorkbench({
     filePath,
     draftType,
     editorBody,
-  }), [draftType, editorBody, filePath, title]);
+    contentFormat,
+  }), [contentFormat, draftType, editorBody, filePath, title]);
 
   const editorChatTaskHints = useMemo(() => ({
     ...(editorSessionMetadata || {}),
@@ -107,57 +261,50 @@ export function WritingDraftWorkbench({
     initialContext: editorChatMessageContext,
   }), [aiWorkspaceMode.id, editorChatMessageContext, editorSessionMetadata]);
 
+  const shouldShowMediaDeck = contentFormat === 'markdown';
+
+  const previewPane = (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="min-h-0 flex-1 overflow-auto p-8">
+        {contentFormat === 'html' ? (
+          <div className="h-full min-h-[420px] overflow-hidden rounded-lg border border-border bg-white">
+            <HtmlPreview content={editorBody} fileBaseUrl={fileBaseUrl} />
+          </div>
+        ) : (
+          <MarkdownItPreview content={editorBody} />
+        )}
+      </div>
+      <BoundMediaStrip assets={boundAssets} />
+    </div>
+  );
+
   return (
     <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_420px] bg-surface-primary text-text-primary">
       <section className="relative min-h-0 border-r border-border bg-surface-primary">
         <div className="flex h-full min-h-0 flex-col">
-          {(editorBodyDirty || isSavingEditorBody || writeProposal) ? (
-            <div className="absolute right-5 top-4 z-20 flex items-center gap-2">
-              {editorBodyDirty || isSavingEditorBody ? (
-                <div className="rounded-full bg-surface-primary/86 px-2.5 py-1 text-xs font-medium text-text-tertiary shadow-sm ring-1 ring-border/70 backdrop-blur">
-                  {isSavingEditorBody ? '保存中' : '未保存'}
-                </div>
-              ) : null}
-              {writeProposal ? (
-                <div className="flex items-center gap-2 rounded-full bg-surface-primary/86 p-1 shadow-sm ring-1 ring-border/70 backdrop-blur">
-                  {writeProposal.isStale ? (
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full text-amber-700" title="稿件在提案生成后发生过变化" aria-label="稿件在提案生成后发生过变化">
-                      <AlertTriangle className="h-4 w-4" />
-                    </span>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => onRejectWriteProposal?.()}
-                    disabled={isApplyingWriteProposal || isRejectingWriteProposal}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-full text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-35"
-                    aria-label="拒绝 AI 修改"
-                    title="拒绝 AI 修改"
-                  >
-                    {isRejectingWriteProposal ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onAcceptWriteProposal?.()}
-                    disabled={isApplyingWriteProposal || isRejectingWriteProposal}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary text-white transition hover:bg-accent-primary/92 disabled:opacity-35"
-                    aria-label="接受 AI 修改"
-                    title="接受 AI 修改"
-                  >
-                    {isApplyingWriteProposal ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <CodeMirrorEditor
-              key={`${filePath}:${writeProposal?.id || 'body'}`}
-              value={editorBody}
-              onChange={onEditorBodyChange}
-              diffOriginalValue={writeProposal?.baseBody ?? null}
-              className="manuscript-editor-shell h-full min-h-0 bg-transparent"
+          {shouldShowMediaDeck ? (
+            <XhsMediaDeck
+              assets={boundAssets}
+              onAddImage={onRequestBindImages}
+              onPreviewAsset={onPreviewAsset}
+              onRemoveImage={onRemoveBoundImage}
             />
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="grid h-full min-h-0 grid-cols-1">
+              {bodyViewMode !== 'preview' ? (
+                <div className="min-h-0">
+                  <CodeMirrorEditor
+                    key={`${filePath}:${writeProposal?.id || 'body'}`}
+                    value={editorBody}
+                    onChange={onEditorBodyChange}
+                    diffOriginalValue={writeProposal?.baseBody ?? null}
+                    className="manuscript-editor-shell h-full min-h-0 bg-transparent"
+                  />
+                </div>
+              ) : null}
+              {bodyViewMode !== 'edit' ? previewPane : null}
+            </div>
           </div>
         </div>
       </section>

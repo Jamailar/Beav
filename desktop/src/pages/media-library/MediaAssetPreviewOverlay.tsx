@@ -2,7 +2,7 @@ import { X } from 'lucide-react';
 import { resolveAssetUrl } from '../../utils/pathManager';
 import { formatTimestampDateTime } from '../../utils/time';
 
-type MediaAssetSource = 'generated' | 'planned' | 'imported';
+type MediaAssetSource = 'generated' | 'planned' | 'imported' | 'external';
 
 interface MediaAssetLike {
     id: string;
@@ -27,6 +27,7 @@ const SOURCE_LABEL: Record<MediaAssetSource, string> = {
     generated: '已生成',
     planned: '计划项',
     imported: '导入',
+    external: '外部素材',
 };
 
 function isVideoAsset(asset: Pick<MediaAssetLike, 'mimeType' | 'relativePath' | 'absolutePath' | 'previewUrl'>): boolean {

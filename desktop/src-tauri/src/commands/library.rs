@@ -27,6 +27,7 @@ pub struct KnowledgeListPageRequest {
     pub cursor: Option<String>,
     pub limit: Option<usize>,
     pub kind: Option<String>,
+    pub type_filter: Option<String>,
     pub query: Option<String>,
     pub sort: Option<String>,
     pub ready_for_wander_only: Option<bool>,
@@ -1028,6 +1029,7 @@ pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value,
         Some("redbook-note"),
         None,
         None,
+        None,
         false,
     )?;
     Ok(Value::Array(
@@ -1046,6 +1048,7 @@ pub(crate) fn knowledge_list_youtube_value(state: &State<'_, AppState>) -> Resul
         Some("youtube-video"),
         None,
         None,
+        None,
         false,
     )?;
     Ok(Value::Array(
@@ -1062,6 +1065,7 @@ pub(crate) fn knowledge_docs_list_value(state: &State<'_, AppState>) -> Result<V
         None,
         200,
         Some("document-source"),
+        None,
         None,
         None,
         false,
@@ -1083,6 +1087,7 @@ pub(crate) fn knowledge_list_page_value(
         payload.cursor.as_deref(),
         payload.limit.unwrap_or(60),
         payload.kind.as_deref(),
+        payload.type_filter.as_deref(),
         payload.query.as_deref(),
         payload.sort.as_deref(),
         payload.ready_for_wander_only.unwrap_or(false),
