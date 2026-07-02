@@ -5,6 +5,8 @@ import {
   Archive,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Download,
   ExternalLink,
@@ -486,6 +488,38 @@ interface ImageContextMenuState {
   src: string;
   actionSource: string;
 }
+
+interface PreviewImageItem {
+  src: string;
+  alt: string;
+  actionSource: string;
+}
+
+interface PreviewImageState extends PreviewImageItem {
+  items: PreviewImageItem[];
+  index: number;
+}
+
+const CHAT_PREVIEW_IMAGE_SELECTOR = 'img[data-chat-preview-image="true"]';
+
+const normalizePreviewImageItem = (item: PreviewImageItem): PreviewImageItem | null => {
+  const src = String(item.src || '').trim();
+  const actionSource = String(item.actionSource || item.src || '').trim();
+  if (!src || !actionSource) return null;
+  return {
+    src,
+    alt: String(item.alt || ''),
+    actionSource,
+  };
+};
+
+const previewImageItemFromElement = (element: HTMLImageElement): PreviewImageItem | null => (
+  normalizePreviewImageItem({
+    src: element.dataset.previewSrc || element.currentSrc || element.src || '',
+    alt: element.dataset.previewAlt || element.alt || '',
+    actionSource: element.dataset.previewActionSource || element.dataset.previewSrc || element.currentSrc || element.src || '',
+  })
+);
 
 function formatProcessingElapsed(totalMs: number): string {
   const safeMs = Number.isFinite(totalMs) ? Math.max(0, totalMs) : 0;
@@ -978,7 +1012,7 @@ export const MessageItem = memo(({
     return '';
   }, [isUser, msg.attachment, msg.attachments, msg.content, msg.displayContent]);
   const aiContentRef = useRef<HTMLDivElement | null>(null);
-  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+  const [previewImage, setPreviewImage] = useState<PreviewImageState | null>(null);
   const [imageMenu, setImageMenu] = useState<ImageContextMenuState>({
     visible: false,
     x: 0,
@@ -1061,6 +1095,41 @@ export const MessageItem = memo(({
     };
   }, [imageMenu.visible]);
 
+  const showPreviewImageAt = useCallback((index: number) => {
+    setPreviewImage((current) => {
+      if (!current || current.items.length === 0) return current;
+      const count = current.items.length;
+      const nextIndex = ((index % count) + count) % count;
+      const next = current.items[nextIndex];
+      return {
+        ...next,
+        items: current.items,
+        index: nextIndex,
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!previewImage) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setPreviewImage(null);
+        return;
+      }
+      if (previewImage.items.length <= 1) return;
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        showPreviewImageAt(previewImage.index - 1);
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        showPreviewImageAt(previewImage.index + 1);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewImage, showPreviewImageAt]);
+
   const openImageMenu = useCallback((x: number, y: number, source: string, actionSource?: string) => {
     const normalized = resolveAssetUrl(String(source || '').trim());
     const rawActionSource = String(actionSource || source || '').trim();
@@ -1071,6 +1140,34 @@ export const MessageItem = memo(({
       y,
       src: normalized,
       actionSource: rawActionSource,
+    });
+  }, []);
+
+  const openPreviewImage = useCallback((
+    event: React.MouseEvent<HTMLImageElement>,
+    item: PreviewImageItem,
+  ) => {
+    const fallback = normalizePreviewImageItem(item);
+    if (!fallback) return;
+    const nodes = Array.from(document.querySelectorAll<HTMLImageElement>(CHAT_PREVIEW_IMAGE_SELECTOR));
+    const items = nodes
+      .map(previewImageItemFromElement)
+      .filter((candidate): candidate is PreviewImageItem => Boolean(candidate));
+    let index = nodes.indexOf(event.currentTarget);
+    if (index < 0 || !items[index]) {
+      index = items.findIndex((candidate) => (
+        candidate.src === fallback.src && candidate.actionSource === fallback.actionSource
+      ));
+    }
+    const nextItems = items.length > 0 ? items : [fallback];
+    if (index < 0 || !nextItems[index]) {
+      nextItems.push(fallback);
+      index = nextItems.length - 1;
+    }
+    setPreviewImage({
+      ...nextItems[index],
+      items: nextItems,
+      index,
     });
   }, []);
 
@@ -1127,6 +1224,40 @@ export const MessageItem = memo(({
     }
   };
 
+  const handleCopyImage = async () => {
+    if (!imageMenu.actionSource) return;
+    try {
+      const result = await window.ipcRenderer.files.copyImage({ source: imageMenu.actionSource }) as {
+        success?: boolean;
+        error?: string;
+      };
+      if (!result?.success) {
+        throw new Error(result?.error || '复制图片失败');
+      }
+    } catch (error) {
+      console.error('Failed to copy media image:', error);
+    } finally {
+      setImageMenu((prev) => ({ ...prev, visible: false }));
+    }
+  };
+
+  const handleDownloadImage = async (item: PreviewImageItem) => {
+    const source = String(item.actionSource || item.src || '').trim();
+    if (!source) return;
+    try {
+      const defaultName = getUrlFilename(source) || getUrlFilename(item.src) || `generated-media-${Date.now()}`;
+      const result = await window.ipcRenderer.files.downloadToDownloads({
+        source,
+        defaultName,
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || '下载失败');
+      }
+    } catch (error) {
+      console.error('Failed to download media image:', error);
+    }
+  };
+
   const markdownComponents = useMemo<Components>(() => ({
     ...MARKDOWN_COMPONENTS,
     a({ children, href }: any) {
@@ -1164,14 +1295,18 @@ export const MessageItem = memo(({
         <img
           src={mediaUrl}
           alt={alt || ''}
+          data-chat-preview-image="true"
+          data-preview-src={mediaUrl}
+          data-preview-alt={alt || ''}
+          data-preview-action-source={rawSource || mediaUrl}
           className="my-3 max-h-[28rem] w-auto max-w-full cursor-zoom-in rounded-xl border border-border bg-surface-secondary object-contain shadow-sm"
-          onClick={() => setPreviewImage({ src: mediaUrl, alt: alt || '' })}
+          onClick={(event) => openPreviewImage(event, { src: mediaUrl, alt: alt || '', actionSource: rawSource || mediaUrl })}
           onContextMenu={(event) => handleImageContextMenu(event, mediaUrl, rawSource)}
           title="点击预览，右键复制或在文件夹中打开"
         />
       );
     },
-  }), [activePreviewHref, handleImageContextMenu, handleMediaContextMenu, isUser, linkRenderMode, msg.id, onPreviewLink]);
+  }), [activePreviewHref, handleImageContextMenu, handleMediaContextMenu, isUser, linkRenderMode, msg.id, onPreviewLink, openPreviewImage]);
   const markdownUrlTransform = linkRenderMode === 'preview-card'
     ? transformMarkdownUrlForPreviewCards
     : transformMarkdownUrl;
@@ -1389,8 +1524,12 @@ export const MessageItem = memo(({
           <img
             src={imageSrc}
             alt={attachment.name}
+            data-chat-preview-image="true"
+            data-preview-src={imageSrc}
+            data-preview-alt={attachment.name}
+            data-preview-action-source={actionSource || imageSrc}
             className="h-24 w-24 cursor-zoom-in rounded-2xl border border-border bg-surface-secondary object-cover shadow-sm"
-            onClick={() => setPreviewImage({ src: imageSrc, alt: attachment.name })}
+            onClick={(event) => openPreviewImage(event, { src: imageSrc, alt: attachment.name, actionSource: actionSource || imageSrc })}
             onContextMenu={(event) => handleImageContextMenu(event, imageSrc, actionSource)}
             title={attachment.name}
           />
@@ -1713,6 +1852,15 @@ export const MessageItem = memo(({
           <button
             type="button"
             className={getLiquidGlassMenuItemClassName()}
+            onClick={() => void handleCopyImage()}
+          >
+            <Copy className="h-3.5 w-3.5" />
+            复制图片
+          </button>
+          <LiquidGlassMenuSeparator />
+          <button
+            type="button"
+            className={getLiquidGlassMenuItemClassName()}
             onClick={() => void handleShowInFolder()}
           >
             <FolderOpen className="h-3.5 w-3.5" />
@@ -1735,13 +1883,54 @@ export const MessageItem = memo(({
           className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 p-6"
           onClick={() => setPreviewImage(null)}
         >
-          <img
-            src={previewImage.src}
-            alt={previewImage.alt}
-            className="max-h-[90vh] max-w-[90vw] rounded-xl border border-white/15 bg-black/10 object-contain shadow-2xl"
+          {previewImage.items.length > 1 && (
+            <>
+              <button
+                type="button"
+                className="fixed left-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white shadow-lg backdrop-blur transition hover:bg-black/55"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  showPreviewImageAt(previewImage.index - 1);
+                }}
+                aria-label="上一张"
+                title="上一张"
+              >
+                <ChevronLeft className="h-6 w-6" />
+              </button>
+              <button
+                type="button"
+                className="fixed right-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white shadow-lg backdrop-blur transition hover:bg-black/55"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  showPreviewImageAt(previewImage.index + 1);
+                }}
+                aria-label="下一张"
+                title="下一张"
+              >
+                <ChevronRight className="h-6 w-6" />
+              </button>
+            </>
+          )}
+          <div
+            className="flex max-h-[90vh] max-w-[94vw] items-start gap-3"
             onClick={(event) => event.stopPropagation()}
-            onContextMenu={(event) => handleImageContextMenu(event, previewImage.src)}
-          />
+          >
+            <img
+              src={previewImage.src}
+              alt={previewImage.alt}
+              className="max-h-[90vh] max-w-[calc(94vw-3.25rem)] rounded-xl border border-white/15 bg-black/10 object-contain shadow-2xl"
+              onContextMenu={(event) => handleImageContextMenu(event, previewImage.src, previewImage.actionSource)}
+            />
+            <button
+              type="button"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white shadow-lg backdrop-blur transition hover:bg-black/55"
+              onClick={() => void handleDownloadImage(previewImage)}
+              aria-label="下载"
+              title="下载"
+            >
+              <Download className="h-5 w-5" />
+            </button>
+          </div>
         </div>
       )}
     </div>

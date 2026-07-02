@@ -1,4 +1,4 @@
-import { Copy, FileText, Image, LayoutGrid, Scissors, Sparkles, TrendingUp, Type, Video } from 'lucide-react';
+import { Copy, FileText, Image, LayoutGrid, MessageSquareText, Scissors, Sparkles, TrendingUp, Type, Video } from 'lucide-react';
 import type { UploadedFileAttachment } from '../../../components/ChatComposer';
 import { resolveAssetUrl } from '../../../utils/pathManager';
 import type { ChatAttachmentActionKind } from './types';
@@ -30,6 +30,7 @@ export function getAttachmentPreviewSource(attachment: UploadedFileAttachment): 
 }
 
 export function renderActionIcon(label: string, className: string) {
+  if (label.includes('自定义')) return <MessageSquareText className={className} strokeWidth={1.8} />;
   if (label.includes('爆款')) return <TrendingUp className={className} strokeWidth={1.8} />;
   if (label.includes('字幕') || label.includes('文案')) return <Type className={className} strokeWidth={1.8} />;
   if (label.includes('剪辑') || label.includes('切片')) return <Scissors className={className} strokeWidth={1.8} />;
@@ -40,6 +41,7 @@ export function renderActionIcon(label: string, className: string) {
 }
 
 export function getActionDescription(label: string): string {
+  if (label.includes('自定义')) return '回到输入框，自己写提示词';
   if (label.includes('爆款')) return '拆解钩子、节奏和传播亮点';
   if (label.includes('字幕')) return '提取字幕文本和可用字幕文件';
   if (label.includes('剪辑') || label.includes('切片')) return '找出精彩片段并剪成短视频';
@@ -51,6 +53,11 @@ export function getActionDescription(label: string): string {
 }
 
 export function getActionTone(label: string, darkEmbedded: boolean): { card: string; icon: string; arrow: string; wash: string; dots: string } {
+  if (label.includes('自定义')) {
+    return darkEmbedded
+      ? { card: 'border-white/12 bg-white/[0.045] hover:border-white/24 hover:bg-white/[0.08]', icon: 'bg-white/10 text-white/76', arrow: 'bg-white/10 text-white/70', wash: 'bg-white/10', dots: 'text-white/12' }
+      : { card: 'border-[#e8e2d8] bg-white hover:border-[#d9d0c2] hover:shadow-[0_24px_60px_rgba(64,54,42,0.1)]', icon: 'bg-stone-100 text-stone-700', arrow: 'bg-stone-100 text-stone-700 shadow-sm', wash: 'bg-stone-100/80', dots: 'text-stone-200/80' };
+  }
   if (label.includes('爆款')) {
     return darkEmbedded
       ? { card: 'border-rose-300/20 bg-[linear-gradient(145deg,rgba(244,63,94,0.14),rgba(255,255,255,0.04))] hover:border-rose-300/34', icon: 'bg-rose-400/18 text-rose-200', arrow: 'bg-[linear-gradient(135deg,#fb7185,#e11d48)] text-white', wash: 'bg-rose-400/16', dots: 'text-rose-300/18' }

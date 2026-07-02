@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-05-13
+last_updated: 2026-07-01
 ---
 
 # Manuscript Folder Format
@@ -11,6 +11,15 @@ RedConvert 稿件工程使用普通文件夹管理，不再使用自定义稿件
 ## Minimal Project Protocol
 
 工程目录的唯一强约束是：根目录必须包含 `manifest.json`。目录内部结构按项目需要自然增长，不要求所有项目都预置同一批子目录。
+
+## Standalone Preview Files
+
+稿件树也支持普通主体文件，不要求所有内容都升级为工程目录：
+
+- `.md`：Markdown 主体，可在编辑器内编辑 / 预览，并可绑定媒体库素材。
+- `.html`：HTML 主体，可在编辑器内编辑，并通过 sandbox iframe 预览。
+
+除 `.md` / `.html` 外的普通文件不会作为稿件主体出现在稿件树；它们应作为媒体库素材、知识库文件或工程目录内部文件存在。
 
 AI 创建长期项目时，优先使用通用 workspace 文件能力创建目录和写入文件：
 

@@ -11,7 +11,7 @@ mod actions;
 mod archive;
 mod preview;
 
-use actions::{copy_image, save_as, show_in_folder};
+use actions::{copy_image, download_to_downloads, save_as, show_in_folder};
 use archive::write_zip_archive;
 use preview::{resolve_preview_target, resolve_virtual_resource_path};
 
@@ -189,6 +189,7 @@ pub fn handle_file_ops_channel(
         channel,
         "file:show-in-folder"
             | "file:copy-image"
+            | "file:download-to-downloads"
             | "file:save-as"
             | "file:save-zip"
             | "file:preview-resolve"
@@ -205,6 +206,11 @@ pub fn handle_file_ops_channel(
             "file:copy-image" => {
                 let source = payload_string(payload, "source").unwrap_or_default();
                 copy_image(state, &source)
+            }
+            "file:download-to-downloads" => {
+                let source = payload_string(payload, "source").unwrap_or_default();
+                let default_name = payload_string(payload, "defaultName");
+                download_to_downloads(state, &source, default_name)
             }
             "file:save-as" => {
                 let source = payload_string(payload, "source").unwrap_or_default();

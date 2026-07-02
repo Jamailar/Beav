@@ -197,6 +197,50 @@ export interface ThrivePluginDiscoverLocalResponse {
   error?: string;
 }
 
+export interface SkillMarketIntroNote {
+  sourceType?: string | null;
+  source_type?: string | null;
+  noteUrl?: string | null;
+  note_url?: string | null;
+  resolvedNoteUrl?: string | null;
+  resolved_note_url?: string | null;
+  noteId?: string | null;
+  note_id?: string | null;
+  noteType?: string | null;
+  note_type?: string | null;
+  title?: string | null;
+  authorName?: string | null;
+  author_name?: string | null;
+  authorId?: string | null;
+  author_id?: string | null;
+  authorAvatarUrl?: string | null;
+  author_avatar_url?: string | null;
+  coverUrl?: string | null;
+  cover_url?: string | null;
+  contentText?: string | null;
+  content_text?: string | null;
+  images?: string[];
+  video?: (Record<string, unknown> & {
+    playbackUrl?: string | null;
+    playback_url?: string | null;
+    ossUrl?: string | null;
+    oss_url?: string | null;
+    fileUrl?: string | null;
+    file_url?: string | null;
+    sourceUrl?: string | null;
+    source_url?: string | null;
+    firstUrl?: string | null;
+    first_url?: string | null;
+    urls?: string[];
+  }) | null;
+  tags?: string[];
+  stats?: Record<string, unknown> | null;
+  fetchedAt?: string | null;
+  fetched_at?: string | null;
+  updatedAt?: string | null;
+  updated_at?: string | null;
+}
+
 export interface ThriveSkillMarketplaceItem {
   id: string;
   packageId?: string;
@@ -205,6 +249,12 @@ export interface ThriveSkillMarketplaceItem {
   sourceKind?: string;
   name: string;
   author: string;
+  authorAvatarUrl?: string | null;
+  authorHomepageUrl?: string | null;
+  authorBio?: string | null;
+  authorVerified?: boolean;
+  introNote?: SkillMarketIntroNote | null;
+  intro_note?: SkillMarketIntroNote | null;
   description: string;
   avatarUrl?: string | null;
   iconUrl?: string | null;
@@ -2104,6 +2154,7 @@ declare global {
       files: {
         showInFolder: (payload: { source: string }) => Promise<unknown>;
         copyImage: (payload: { source: string }) => Promise<unknown>;
+        downloadToDownloads: (payload: { source: string; defaultName?: string }) => Promise<{ success?: boolean; error?: string; path?: string }>;
         saveAs: (payload: { source: string; defaultName?: string }) => Promise<unknown>;
         saveZip: (payload: { defaultName?: string; files: Array<{ source: string; name?: string }> }) => Promise<{ success?: boolean; error?: string; canceled?: boolean; path?: string; count?: number }>;
         resolvePreview: (payload: { source: string }) => Promise<{

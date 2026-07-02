@@ -136,6 +136,35 @@ pub(crate) fn ensure_markdown_extension(value: &str) -> String {
     }
 }
 
+pub(crate) fn supported_manuscript_extension(value: &str) -> Option<&'static str> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.ends_with(".md") {
+        Some(".md")
+    } else if normalized.ends_with(".html") {
+        Some(".html")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn manuscript_content_format_from_name(value: &str) -> &'static str {
+    match supported_manuscript_extension(value) {
+        Some(".html") => "html",
+        _ => "markdown",
+    }
+}
+
+pub(crate) fn ensure_manuscript_extension(value: &str, fallback_extension: Option<&str>) -> String {
+    let normalized = normalize_relative_path(value);
+    if supported_manuscript_extension(&normalized).is_some() {
+        return normalized;
+    }
+    if normalized.is_empty() {
+        return format!("Untitled{}", fallback_extension.unwrap_or(".md"));
+    }
+    format!("{}{}", normalized, fallback_extension.unwrap_or(".md"))
+}
+
 pub(crate) fn draft_type_from_package_kind(kind: &str) -> &'static str {
     match kind {
         "post" => "richpost",
@@ -708,6 +737,52 @@ pub(crate) fn markdown_summary(content: &str, max_chars: usize) -> String {
     }
 }
 
+fn html_summary(content: &str, max_chars: usize) -> String {
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for ch in content.replace("\r\n", "\n").replace('\r', "\n").chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                plain.push(' ');
+            }
+            '>' => in_tag = false,
+            _ if !in_tag => plain.push(ch),
+            _ => {}
+        }
+    }
+    let normalized = plain
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let chars = normalized.chars().collect::<Vec<_>>();
+    if chars.len() <= max_chars {
+        normalized
+    } else {
+        chars.into_iter().take(max_chars).collect::<String>()
+    }
+}
+
+fn supported_manuscript_file_format(file_name: &str) -> Option<&'static str> {
+    let normalized = file_name.trim().to_ascii_lowercase();
+    if normalized.ends_with(".md") {
+        Some("markdown")
+    } else if normalized.ends_with(".html") {
+        Some("html")
+    } else {
+        None
+    }
+}
+
 pub(crate) fn split_markdown_frontmatter(content: &str) -> Option<(String, String)> {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---\n") && !trimmed.starts_with("---\r\n") {
@@ -843,6 +918,7 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
         status,
         title: Some(title),
         draft_type: Some(draft_type),
+        content_format: Some("markdown".to_string()),
         updated_at,
         summary,
         richpost_preview_file: None,
@@ -888,6 +964,59 @@ fn file_node_from_markdown(path: &Path, file_name: &str, relative: String) -> Fi
         status,
         title: Some(title),
         draft_type: Some(draft_type),
+        content_format: Some("markdown".to_string()),
+        updated_at,
+        summary,
+        richpost_preview_file: None,
+        richpost_preview_file_url: None,
+        richpost_preview_updated_at: None,
+        richpost_preview_page_file: None,
+        richpost_preview_page_file_url: None,
+        richpost_preview_page_updated_at: None,
+    }
+}
+
+fn extract_html_title(content: &str) -> Option<String> {
+    let lower = content.to_ascii_lowercase();
+    let title_start = lower.find("<title")?;
+    let after_open = lower[title_start..].find('>')? + title_start + 1;
+    let title_end = lower[after_open..].find("</title>")? + after_open;
+    let title = content[after_open..title_end]
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .trim()
+        .to_string();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+fn file_node_from_html(path: &Path, file_name: &str, relative: String) -> FileNode {
+    let content = read_text_prefix(path, 8 * 1024);
+    let title = extract_html_title(&content).unwrap_or_else(|| title_from_relative_path(file_name));
+    let updated_at = fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64);
+    let summary = if content.trim().is_empty() {
+        None
+    } else {
+        Some(html_summary(&content, 72))
+    };
+    FileNode {
+        name: file_name.to_string(),
+        path: relative,
+        is_directory: false,
+        children: None,
+        status: None,
+        title: Some(title),
+        draft_type: Some("html".to_string()),
+        content_format: Some("html".to_string()),
         updated_at,
         summary,
         richpost_preview_file: None,
@@ -991,6 +1120,7 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
                 status: None,
                 title: None,
                 draft_type: None,
+                content_format: None,
                 updated_at,
                 summary: None,
                 richpost_preview_file: None,
@@ -1001,8 +1131,12 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
                 richpost_preview_page_updated_at: None,
             });
         } else if file_type.is_file() {
-            if file_name.ends_with(".md") {
-                nodes.push(file_node_from_markdown(&path, &file_name, relative));
+            if let Some(format) = supported_manuscript_file_format(&file_name) {
+                if format == "html" {
+                    nodes.push(file_node_from_html(&path, &file_name, relative));
+                } else {
+                    nodes.push(file_node_from_markdown(&path, &file_name, relative));
+                }
             }
         }
     }
@@ -1264,17 +1398,25 @@ mod tests {
     }
 
     #[test]
-    fn list_tree_ignores_hidden_and_non_markdown_files() {
+    fn list_tree_includes_supported_preview_files() {
         let root =
             std::env::temp_dir().join(format!("redbox-list-tree-filter-{}", crate::now_ms()));
         fs::create_dir_all(&root).expect("root should exist");
         fs::write(root.join(".DS_Store"), "ignored").expect("hidden file should be written");
         fs::write(root.join("notes.txt"), "ignored").expect("txt file should be written");
         fs::write(root.join("draft.md"), "# Draft").expect("markdown should be written");
+        fs::write(
+            root.join("landing.html"),
+            "<!doctype html><html><head><title>Landing</title></head><body>Preview</body></html>",
+        )
+        .expect("html should be written");
 
         let nodes = list_tree(&root, &root).expect("tree should load");
-        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0].name, "draft.md");
+        assert_eq!(nodes[1].name, "landing.html");
+        assert_eq!(nodes[1].draft_type.as_deref(), Some("html"));
+        assert_eq!(nodes[1].content_format.as_deref(), Some("html"));
 
         let _ = fs::remove_dir_all(&root);
     }

@@ -71,6 +71,8 @@ function resolveModeLabel(params: BuildEditorSessionBindingParams): string {
   switch (params.draftType) {
     case 'longform':
       return '长文编辑';
+    case 'html':
+      return 'HTML 编辑';
     default:
       return '文件编辑';
   }
@@ -80,6 +82,8 @@ function resolveTargetTypeLabel(params: BuildEditorSessionBindingParams): string
   switch (params.draftType) {
     case 'longform':
       return '长文稿件';
+    case 'html':
+      return 'HTML 稿件';
     default:
       return '文件';
   }

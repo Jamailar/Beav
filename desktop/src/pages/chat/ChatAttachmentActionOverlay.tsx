@@ -39,6 +39,56 @@ export function ChatAttachmentActionOverlay({
   const title = attachmentCount > 1 ? `${attachmentCount} 个${kindLabel}已就绪` : `${kindLabel}已就绪`;
   const subtitle = attachmentCount > 1 ? '选择接下来要执行的工作流' : attachment.name;
   const previewSource = getAttachmentPreviewSource(attachment);
+  const customActionLabel = '自定义';
+
+  const renderActionButton = (
+    key: string,
+    label: string,
+    onClick: () => void,
+  ) => {
+    const tone = getActionTone(label, darkEmbedded);
+    return (
+      <button
+        key={key}
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        className={clsx(
+          'group relative flex aspect-square min-h-[148px] flex-col items-start overflow-hidden rounded-[28px] border p-5 pb-4 text-left shadow-[0_18px_50px_rgba(28,24,18,0.06)] transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-45',
+          darkEmbedded ? 'text-white' : 'text-text-primary',
+          tone.card,
+        )}
+      >
+        <span className={clsx('pointer-events-none absolute -bottom-12 -left-12 h-32 w-32 rounded-full blur-2xl', tone.wash)} />
+        <span className={clsx('pointer-events-none absolute -right-4 -top-4 h-24 w-24 rounded-full blur-xl', tone.wash)} />
+        <span
+          className={clsx(
+            'pointer-events-none absolute right-5 top-4 h-16 w-16 opacity-80',
+            '[background-image:radial-gradient(currentColor_1.4px,transparent_1.4px)] [background-size:9px_9px]',
+            tone.dots,
+          )}
+        />
+        <span className={clsx(
+          'relative z-10 flex h-12 w-12 items-center justify-center rounded-[17px] shadow-[0_12px_24px_rgba(18,15,10,0.08)] ring-1 ring-white/65 backdrop-blur',
+          tone.icon,
+        )}>
+          {renderActionIcon(label, 'h-6 w-6')}
+        </span>
+        <span className="relative z-10 mt-5 min-w-0 pr-4">
+          <span className="block text-[22px] font-semibold leading-tight tracking-tight">{label}</span>
+          <span className={clsx('mt-2 block text-[12px] leading-[1.55]', darkEmbedded ? 'text-white/48' : 'text-text-secondary')}>
+            {getActionDescription(label)}
+          </span>
+        </span>
+        <span className={clsx(
+          'absolute bottom-4 right-4 z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full shadow-[0_10px_20px_rgba(18,15,10,0.12)] transition-transform group-hover:translate-x-0.5',
+          tone.arrow,
+        )}>
+          <ArrowRight className="h-4.5 w-4.5" />
+        </span>
+      </button>
+    );
+  };
 
   return (
     <div className={clsx(
@@ -88,50 +138,8 @@ export function ChatAttachmentActionOverlay({
         </div>
 
         <div className="mx-auto mt-10 grid w-full max-w-4xl grid-cols-2 gap-5 md:grid-cols-4">
-          {actions.map((action) => {
-            const tone = getActionTone(action.label, darkEmbedded);
-            return (
-              <button
-                key={action.label}
-                type="button"
-                disabled={disabled}
-                onClick={() => onAction(action)}
-                className={clsx(
-                  'group relative flex aspect-square min-h-[148px] flex-col items-start overflow-hidden rounded-[28px] border p-5 pb-4 text-left shadow-[0_18px_50px_rgba(28,24,18,0.06)] transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-45',
-                  darkEmbedded ? 'text-white' : 'text-text-primary',
-                  tone.card,
-                )}
-              >
-                <span className={clsx('pointer-events-none absolute -bottom-12 -left-12 h-32 w-32 rounded-full blur-2xl', tone.wash)} />
-                <span className={clsx('pointer-events-none absolute -right-4 -top-4 h-24 w-24 rounded-full blur-xl', tone.wash)} />
-                <span
-                  className={clsx(
-                    'pointer-events-none absolute right-5 top-4 h-16 w-16 opacity-80',
-                    '[background-image:radial-gradient(currentColor_1.4px,transparent_1.4px)] [background-size:9px_9px]',
-                    tone.dots,
-                  )}
-                />
-                <span className={clsx(
-                  'relative z-10 flex h-12 w-12 items-center justify-center rounded-[17px] shadow-[0_12px_24px_rgba(18,15,10,0.08)] ring-1 ring-white/65 backdrop-blur',
-                  tone.icon,
-                )}>
-                  {renderActionIcon(action.label, 'h-6 w-6')}
-                </span>
-                <span className="relative z-10 mt-5 min-w-0 pr-4">
-                  <span className="block text-[22px] font-semibold leading-tight tracking-tight">{action.label}</span>
-                  <span className={clsx('mt-2 block text-[12px] leading-[1.55]', darkEmbedded ? 'text-white/48' : 'text-text-secondary')}>
-                    {getActionDescription(action.label)}
-                  </span>
-                </span>
-                <span className={clsx(
-                  'absolute bottom-4 right-4 z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full shadow-[0_10px_20px_rgba(18,15,10,0.12)] transition-transform group-hover:translate-x-0.5',
-                  tone.arrow,
-                )}>
-                  <ArrowRight className="h-4.5 w-4.5" />
-                </span>
-              </button>
-            );
-          })}
+          {actions.map((action) => renderActionButton(action.label, action.label, () => onAction(action)))}
+          {renderActionButton('__custom_prompt__', customActionLabel, onDismiss)}
         </div>
       </div>
     </div>

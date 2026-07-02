@@ -28,18 +28,66 @@ pub(super) fn handle_tree_channel(
                 let content =
                     fs::read_to_string(package_entry_path(&path, file_name, Some(&manifest)))
                         .unwrap_or_default();
+                let base_url = file_url_for_path(&path);
+                let entry_path = package_entry_path(&path, file_name, Some(&manifest));
+                let mut metadata = manifest.as_object().cloned().unwrap_or_default();
+                metadata.insert("contentFormat".to_string(), json!("markdown"));
+                metadata.insert(
+                    "fileBaseUrl".to_string(),
+                    json!(if base_url.ends_with('/') {
+                        base_url
+                    } else {
+                        format!("{base_url}/")
+                    }),
+                );
+                metadata.insert("fileUrl".to_string(), json!(file_url_for_path(&entry_path)));
+                metadata.insert(
+                    "absolutePath".to_string(),
+                    json!(entry_path.display().to_string()),
+                );
                 return Ok(json!({
                     "content": content,
-                    "metadata": manifest
+                    "metadata": Value::Object(metadata)
                 }));
             }
             let content = fs::read_to_string(&path).unwrap_or_default();
+            let content_format = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(manuscript_content_format_from_name)
+                .unwrap_or("markdown");
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("");
+            let frontmatter = if content_format == "markdown" {
+                parse_markdown_frontmatter(&content).unwrap_or_else(|| json!({}))
+            } else {
+                json!({})
+            };
+            let title = payload_string(&frontmatter, "title")
+                .unwrap_or_else(|| title_from_relative_path(&relative));
+            let draft_type = payload_string(&frontmatter, "draftType")
+                .or_else(|| payload_string(&frontmatter, "draft_type"))
+                .unwrap_or_else(|| {
+                    if content_format == "html" {
+                        "html".to_string()
+                    } else {
+                        "unknown".to_string()
+                    }
+                });
+            let base_url = path.parent().map(file_url_for_path).unwrap_or_default();
             Ok(json!({
                 "content": content,
                 "metadata": {
                     "id": slug_from_relative_path(&relative),
-                    "title": title_from_relative_path(&relative),
-                    "draftType": "unknown",
+                    "title": title,
+                    "draftType": draft_type,
+                    "contentFormat": content_format,
+                    "fileName": file_name,
+                    "fileBaseUrl": if base_url.ends_with('/') { base_url } else { format!("{base_url}/") },
+                    "fileUrl": file_url_for_path(&path),
+                    "absolutePath": path.display().to_string(),
                 }
             }))
         })()),
@@ -112,7 +160,7 @@ pub(super) fn handle_tree_channel(
             }
             let relative = normalize_relative_path(&join_relative(
                 &parent_path,
-                &ensure_markdown_extension(&name),
+                &ensure_manuscript_extension(&name, Some(".md")),
             ));
             let path = resolve_manuscript_path(state, &relative)?;
             if let Some(parent) = path.parent() {
@@ -177,14 +225,16 @@ pub(super) fn handle_tree_channel(
                     .unwrap_or(""),
             );
             let mut target_relative = join_relative(&parent_rel, &new_name);
+            let fallback_extension = supported_manuscript_extension(source_name).unwrap_or(".md");
             if !target_relative.contains('.') {
                 if source.is_file() {
-                    target_relative = ensure_markdown_extension(&target_relative);
+                    target_relative =
+                        ensure_manuscript_extension(&target_relative, Some(fallback_extension));
                 } else {
                     target_relative = normalize_relative_path(&target_relative);
                 }
             } else if source.is_file() && !source_name.contains('.') {
-                target_relative = ensure_markdown_extension(&target_relative);
+                target_relative = ensure_manuscript_extension(&target_relative, Some(".md"));
             } else {
                 target_relative = normalize_relative_path(&target_relative);
             }
