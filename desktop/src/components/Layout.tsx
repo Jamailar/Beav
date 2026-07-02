@@ -1,5 +1,5 @@
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, Dices, Pencil, ChevronDown, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2, Crown, BadgeCheck, X, Loader2, ExternalLink, RefreshCw, Gift, Monitor, Box, ShieldCheck, Coins, Headphones, Sparkles, Plug } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, Dices, Pencil, ChevronDown, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2, Crown, BadgeCheck, X, Loader2, ExternalLink, RefreshCw, Gift, Monitor, Box, ShieldCheck, Coins, Headphones, Sparkles, Puzzle } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { ImmersiveMode, ViewType } from '../features/app-shell/types';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
@@ -49,7 +49,7 @@ const NAV_ITEMS: SidebarNavItem[] = [
   { key: 'search', view: 'knowledge', labelKey: 'nav.search', icon: BookOpenText, primary: true },
   { key: 'assets', view: 'subjects', labelKey: 'nav.assets', icon: Folder, primary: true },
   { key: 'automation', view: 'automation', labelKey: 'nav.automation', icon: Clock3, primary: true },
-  { key: 'skills', view: 'skills', labelKey: 'nav.skills', icon: Plug, primary: true },
+  { key: 'skills', view: 'skills', labelKey: 'nav.skills', icon: Puzzle, primary: true },
   { key: 'free-creation', view: 'generation-studio', labelKey: 'nav.home', icon: Pencil },
   { key: 'wander', view: 'wander', labelKey: 'nav.wander', icon: Dices },
   // { id: 'archives', label: '档案', icon: Archive },
