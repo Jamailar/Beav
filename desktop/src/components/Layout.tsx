@@ -369,6 +369,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       aiModelSubTab: 'login',
     });
   }, []);
+  const openSettingsFromSidebar = useCallback(() => {
+    dispatchAppIntent({ type: 'settings.open' });
+  }, []);
   const openFounderSponsorModalFromSidebar = useCallback(() => {
     setFounderSponsorOpen(true);
     void window.ipcRenderer.analytics.track('founder_sponsor_modal_opened', {
@@ -522,10 +525,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             {sidebarVisualCollapsed && (
               <button
                 type="button"
-                onClick={() => onNavigate('settings')}
-                className="h-8 w-8 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
+                onClick={openSettingsFromSidebar}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="h-10 w-10 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-primary transition-colors inline-flex items-center justify-center shrink-0"
                 title={t('nav.settings')}
                 aria-label={t('nav.settings')}
+                data-no-window-drag
               >
                 <SettingsIcon className="w-[17px] h-[17px]" strokeWidth={1.75} />
               </button>
@@ -539,10 +544,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             >
               <button
                 type="button"
-                onClick={() => onNavigate('settings')}
-                className="h-8 rounded-md px-2 text-text-tertiary hover:text-text-primary hover:bg-surface-primary transition-colors inline-flex items-center justify-center gap-1.5 shrink-0"
+                onClick={openSettingsFromSidebar}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="h-9 rounded-lg px-2.5 text-text-tertiary hover:text-text-primary hover:bg-surface-primary transition-colors inline-flex items-center justify-center gap-1.5 shrink-0"
                 title={t('nav.settings')}
                 aria-label={t('nav.settings')}
+                data-no-window-drag
               >
                 <SettingsIcon className="w-[19px] h-[19px]" strokeWidth={1.75} />
                 <span className="text-xs font-medium">{t('nav.settings')}</span>
