@@ -72,6 +72,9 @@ interface KnowledgeMentionCatalogRecord {
 }
 
 interface SkillMentionCatalogRecord {
+  id?: string;
+  packageId?: string;
+  package_id?: string;
   name?: string;
   description?: string;
   location?: string;
@@ -79,6 +82,18 @@ interface SkillMentionCatalogRecord {
   sourceScope?: string;
   isBuiltin?: boolean;
   disabled?: boolean;
+  avatarUrl?: string;
+  avatar_url?: string;
+  iconUrl?: string;
+  icon_url?: string;
+  logoUrl?: string;
+  logo_url?: string;
+  imageUrl?: string;
+  image_url?: string;
+  thumbnailUrl?: string;
+  thumbnail_url?: string;
+  authorAvatarUrl?: string;
+  author_avatar_url?: string;
 }
 
 interface AssetMentionCatalogRecord {
@@ -99,6 +114,103 @@ interface KnowledgeMentionListPageResponse {
   items?: KnowledgeMentionCatalogRecord[];
   nextCursor?: string | null;
   total?: number;
+}
+
+const SKILL_MARKETPLACE_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-cache:v2';
+const skillMentionMarketAvatarCache = new Map<string, Partial<ChatSkillMentionOption>>();
+let skillMentionMarketAvatarCacheHydrated = false;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function normalizeSkillMentionLookupKey(value: unknown) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function recordString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function avatarFieldsFromMarketRecord(record: Record<string, unknown>): Partial<ChatSkillMentionOption> {
+  const fields: Partial<ChatSkillMentionOption> = {
+    packageId: recordString(record, ['packageId', 'package_id', 'packageKey', 'package_key']),
+    avatarUrl: recordString(record, ['avatarUrl', 'avatar_url']),
+    iconUrl: recordString(record, ['iconUrl', 'icon_url']),
+    logoUrl: recordString(record, ['logoUrl', 'logo_url']),
+    imageUrl: recordString(record, ['imageUrl', 'image_url']),
+    thumbnailUrl: recordString(record, ['thumbnailUrl', 'thumbnail_url']),
+    authorAvatarUrl: recordString(record, ['authorAvatarUrl', 'author_avatar_url']),
+  };
+  const publisher = isPlainRecord(record.publisher) ? record.publisher : null;
+  if (!fields.authorAvatarUrl && publisher) {
+    fields.authorAvatarUrl = recordString(publisher, ['avatarUrl', 'avatar_url', 'imageUrl', 'image_url']);
+  }
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => Boolean(value))) as Partial<ChatSkillMentionOption>;
+}
+
+function marketRecordLookupKeys(record: Record<string, unknown>) {
+  const keys = [
+    recordString(record, ['packageId', 'package_id', 'packageKey', 'package_key']),
+    recordString(record, ['id']),
+    recordString(record, ['name', 'title', 'displayName', 'display_name']),
+  ];
+  const installedSkillNames = Array.isArray(record.installedSkillNames)
+    ? record.installedSkillNames
+    : Array.isArray(record.installed_skill_names)
+      ? record.installed_skill_names
+      : [];
+  installedSkillNames.forEach((name) => keys.push(String(name || '').trim()));
+  return keys.map(normalizeSkillMentionLookupKey).filter(Boolean);
+}
+
+function hydrateSkillMentionMarketAvatarCache(options: { force?: boolean } = {}) {
+  if (skillMentionMarketAvatarCacheHydrated && !options.force) return;
+  skillMentionMarketAvatarCacheHydrated = true;
+  if (options.force) {
+    skillMentionMarketAvatarCache.clear();
+  }
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(SKILL_MARKETPLACE_CACHE_STORAGE_KEY);
+    if (!raw) return;
+    const snapshot = JSON.parse(raw) as unknown;
+    const entries = isPlainRecord(snapshot) && isPlainRecord(snapshot.entries) ? snapshot.entries : {};
+    Object.values(entries).forEach((entry) => {
+      if (!isPlainRecord(entry) || !Array.isArray(entry.items)) return;
+      entry.items.forEach((item) => {
+        if (!isPlainRecord(item)) return;
+        const fields = avatarFieldsFromMarketRecord(item);
+        if (!fields.avatarUrl && !fields.iconUrl && !fields.logoUrl && !fields.imageUrl && !fields.thumbnailUrl && !fields.authorAvatarUrl) {
+          return;
+        }
+        marketRecordLookupKeys(item).forEach((key) => {
+          skillMentionMarketAvatarCache.set(key, fields);
+        });
+      });
+    });
+  } catch (error) {
+    console.warn('Failed to read cached skill marketplace avatars:', error);
+  }
+}
+
+function cachedSkillMentionAvatarFields(item: SkillMentionCatalogRecord) {
+  hydrateSkillMentionMarketAvatarCache();
+  const keys = [
+    item.packageId,
+    item.package_id,
+    item.id,
+    item.name,
+  ].map(normalizeSkillMentionLookupKey).filter(Boolean);
+  for (const key of keys) {
+    const fields = skillMentionMarketAvatarCache.get(key);
+    if (fields) return fields;
+  }
+  return {};
 }
 
 function memberActorFromMessageMetadata(metadata: unknown): ChatMessageMemberActor | undefined {
@@ -146,6 +258,7 @@ function normalizeKnowledgeMentionRecord(item: KnowledgeMentionCatalogRecord): C
 function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkillMentionOption | null {
   const name = String(item.name || '').trim();
   if (!name || item.disabled) return null;
+  const cachedAvatarFields = cachedSkillMentionAvatarFields(item);
   return {
     name,
     description: String(item.description || '').trim() || undefined,
@@ -153,6 +266,13 @@ function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkill
     sourceScope: String(item.sourceScope || '').trim() || undefined,
     isBuiltin: Boolean(item.isBuiltin),
     aliases: Array.isArray(item.aliases) ? item.aliases.map((alias) => String(alias || '').trim()).filter(Boolean) : [],
+    packageId: String(item.packageId || item.package_id || cachedAvatarFields.packageId || '').trim() || undefined,
+    avatarUrl: String(item.avatarUrl || item.avatar_url || cachedAvatarFields.avatarUrl || '').trim() || undefined,
+    iconUrl: String(item.iconUrl || item.icon_url || cachedAvatarFields.iconUrl || '').trim() || undefined,
+    logoUrl: String(item.logoUrl || item.logo_url || cachedAvatarFields.logoUrl || '').trim() || undefined,
+    imageUrl: String(item.imageUrl || item.image_url || cachedAvatarFields.imageUrl || '').trim() || undefined,
+    thumbnailUrl: String(item.thumbnailUrl || item.thumbnail_url || cachedAvatarFields.thumbnailUrl || '').trim() || undefined,
+    authorAvatarUrl: String(item.authorAvatarUrl || item.author_avatar_url || cachedAvatarFields.authorAvatarUrl || '').trim() || undefined,
   };
 }
 
@@ -2149,6 +2269,7 @@ export function Chat({
   const loadSkillMentionOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
     try {
+      hydrateSkillMentionMarketAvatarCache({ force: true });
       const skills = await window.ipcRenderer.listSkills();
       setSkillMentionOptions(
         (skills || [])

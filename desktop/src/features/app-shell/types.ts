@@ -78,6 +78,13 @@ export interface PendingChatSkillMention {
   sourceScope?: string;
   isBuiltin?: boolean;
   aliases?: string[];
+  packageId?: string;
+  avatarUrl?: string;
+  iconUrl?: string;
+  logoUrl?: string;
+  imageUrl?: string;
+  thumbnailUrl?: string;
+  authorAvatarUrl?: string;
 }
 
 export interface PendingChatMessage {

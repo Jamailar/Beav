@@ -136,6 +136,13 @@ export interface ChatSkillMentionOption {
   sourceScope?: string;
   isBuiltin?: boolean;
   aliases?: string[];
+  packageId?: string;
+  avatarUrl?: string;
+  iconUrl?: string;
+  logoUrl?: string;
+  imageUrl?: string;
+  thumbnailUrl?: string;
+  authorAvatarUrl?: string;
 }
 
 export interface ChatAssetMentionOption {
@@ -402,6 +409,7 @@ function skillMentionMatches(skill: ChatSkillMentionOption, query: string): bool
   if (!normalizedQuery) return true;
   return [
     skill.name,
+    skill.packageId,
     skill.description,
     skill.location,
     skill.sourceScope,
@@ -465,6 +473,37 @@ function renderMemberMentionAvatar(member: ChatMemberMentionOption, darkEmbedded
   return (
     <span className={avatarClass}>
       {avatar || member.name.trim().slice(0, 1).toUpperCase() || <UserRound className="h-3.5 w-3.5" />}
+    </span>
+  );
+}
+
+function skillMentionAvatarUrl(skill: ChatSkillMentionOption) {
+  return [
+    skill.avatarUrl,
+    skill.iconUrl,
+    skill.logoUrl,
+    skill.imageUrl,
+    skill.thumbnailUrl,
+    skill.authorAvatarUrl,
+  ].map((value) => String(value || '').trim()).find(Boolean) || '';
+}
+
+function renderSkillMentionAvatar(skill: ChatSkillMentionOption, darkEmbedded: boolean) {
+  const avatar = skillMentionAvatarUrl(skill);
+  const avatarClass = clsx(
+    'flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full',
+    darkEmbedded ? 'bg-white/[0.08] text-white/72' : 'bg-[rgb(var(--color-accent-muted))] text-[rgb(var(--color-accent-primary))]',
+  );
+  if (avatar) {
+    return (
+      <span className={avatarClass}>
+        <img src={resolveAssetUrl(avatar)} alt="" className="h-full w-full object-cover" loading="lazy" />
+      </span>
+    );
+  }
+  return (
+    <span className={avatarClass}>
+      <Sparkles className="h-4 w-4" />
     </span>
   );
 }
@@ -2019,9 +2058,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                     : darkEmbedded ? 'hover:bg-white/[0.06]' : 'hover:bg-[rgb(var(--color-surface-secondary))]',
                 )}
               >
-                <span className={clsx('flex h-8 w-8 shrink-0 items-center justify-center rounded-full', darkEmbedded ? 'bg-white/[0.08] text-white/72' : 'bg-[rgb(var(--color-accent-muted))] text-[rgb(var(--color-accent-primary))]')}>
-                  <Sparkles className="h-4 w-4" />
-                </span>
+                {renderSkillMentionAvatar(skill, darkEmbedded)}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{skill.name}</span>
                   {skill.description ? (
