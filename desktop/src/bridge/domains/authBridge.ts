@@ -43,6 +43,8 @@ export function createAuthBridge(core: BridgeCore) {
         core.invokeChannel('redbox-auth:login-sms', payload),
       registerSms: (payload: { phone: string; code: string; inviteCode?: string }) =>
         core.invokeChannel('redbox-auth:register-sms', payload),
+      redeemInviteCode: (payload: { inviteCode: string }) =>
+        core.invokeChannel('redbox-auth:redeem-invite-code', payload),
       logout: () => core.invokeChannel('redbox-auth:logout'),
       createPagePayOrder: (payload: Record<string, unknown>) =>
         core.invokeChannel('redbox-auth:create-page-pay-order', payload),

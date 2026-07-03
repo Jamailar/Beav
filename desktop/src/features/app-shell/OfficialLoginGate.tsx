@@ -511,7 +511,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           onClick={returnToSmsLogin}
                           className="text-sm font-semibold text-[rgb(var(--color-text-secondary))] transition hover:text-[rgb(var(--color-accent-primary))]"
                         >
-                          手机号/邀请码
+                          使用邀请码注册
                         </button>
                       </div>
                       <div className="flex justify-center py-2">
@@ -526,7 +526,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         void handleSmsAuth('login');
                       }}
                     >
-                      <div className={sectionLabelClassName}>手机号登录 / 注册</div>
+                      <div className={sectionLabelClassName}>手机号登录 / 使用邀请码注册</div>
                       <input
                         type="tel"
                         value={smsForm.phone}
