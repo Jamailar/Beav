@@ -36,6 +36,7 @@ pub fn handle_system_channel(
         | "settings:pick-workspace-dir"
         | "ai-model-manager:snapshot"
         | "ai-model-manager:resolve"
+        | "ai-providers:fetch-models"
         | "db:get-settings"
         | "db:save-settings"
         | "debug:get-status"
@@ -76,6 +77,7 @@ pub fn handle_system_channel(
                 "settings:pick-workspace-dir" => app_actions::pick_workspace_dir(),
                 "ai-model-manager:snapshot" => ai_model_ops::snapshot(state),
                 "ai-model-manager:resolve" => ai_model_ops::resolve(state, payload),
+                "ai-providers:fetch-models" => ai_model_ops::fetch_models(state, payload),
                 "db:get-settings" => settings_ops::get_settings(state),
                 "db:save-settings" => settings_ops::save_settings(app, state, payload),
                 "debug:get-status" | "logs:get-status" => logging_ops::status(state),
