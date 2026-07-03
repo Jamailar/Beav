@@ -55,11 +55,44 @@ async function removeLegacyAppImages(dirPath) {
     entries
       .filter((entry) => entry.isFile() && (
         entry.name.endsWith('.AppImage')
+        || entry.name.endsWith('.AppImage.sig')
         || entry.name.endsWith('.AppImage.tar.gz')
         || entry.name.endsWith('.AppImage.tar.gz.sig')
       ))
       .map((entry) => fs.rm(path.join(dirPath, entry.name), { force: true })),
   );
+}
+
+async function removeStaleTargetBundles(target) {
+  const bundleRoot = bundleRootForTarget(target);
+  await Promise.all([
+    fs.rm(path.join(bundleRoot, 'appimage'), { recursive: true, force: true }),
+    fs.rm(path.join(bundleRoot, 'deb'), { recursive: true, force: true }),
+  ]);
+}
+
+async function patchLinuxDeployGtkPlugin() {
+  const homeDir = process.env.HOME;
+  if (!homeDir) return;
+
+  const pluginPath = path.join(homeDir, '.cache', 'tauri', 'linuxdeploy-plugin-gtk.sh');
+  if (!(await pathExists(pluginPath))) return;
+
+  const source = await fs.readFile(pluginPath, 'utf8');
+  const patched = source
+    .split('\n')
+    .map((line) => (
+      line.includes('ln $verbose -s "${file/')
+      && line.includes('"$APPDIR/usr/lib"')
+        ? line.replace('ln $verbose -s ', 'ln $verbose -sf ')
+        : line
+    ))
+    .join('\n');
+
+  if (patched !== source) {
+    await fs.writeFile(pluginPath, patched, 'utf8');
+    logStep(`Patched linuxdeploy GTK plugin symlink handling: ${pluginPath}`);
+  }
 }
 
 async function resolveLinuxArtifacts(bundleRoot) {
@@ -68,7 +101,10 @@ async function resolveLinuxArtifacts(bundleRoot) {
   const debPath = await findNewestFile(debDir, (filePath) => filePath.endsWith('.deb'));
   const updaterArchivePath = await findNewestFile(
     appImageDir,
-    (filePath) => filePath.toLowerCase().endsWith('.appimage.tar.gz'),
+    (filePath) => (
+      filePath.toLowerCase().endsWith('.appimage.tar.gz')
+      || filePath.toLowerCase().endsWith('.appimage')
+    ),
   );
   const updaterSignaturePath = updaterArchivePath && (await pathExists(`${updaterArchivePath}.sig`))
     ? `${updaterArchivePath}.sig`
@@ -83,8 +119,15 @@ function linuxUpdaterArchLabel(target) {
   return 'x86_64';
 }
 
+function appImageArchEnv(target) {
+  const arch = linuxUpdaterArchLabel(target);
+  if (arch === 'i686') return 'i386';
+  if (arch === 'armv7') return 'armhf';
+  return arch;
+}
+
 function linuxUpdaterArtifactFilename(productName, version, target, suffix) {
-  return `${productName}_${version}_${linuxUpdaterArchLabel(target)}.AppImage.tar.gz${suffix}`;
+  return `${productName}_${version}_${linuxUpdaterArchLabel(target)}.AppImage${suffix}`;
 }
 
 function linuxUpdaterFilenameMatchesTarget(filePath, target) {
@@ -96,10 +139,47 @@ function linuxUpdaterFilenameMatchesTarget(filePath, target) {
   return filename.includes(arch);
 }
 
-function withDefaultTauriSigningEnv(env) {
+async function resolveDefaultAppImageRuntimeFile(target) {
+  const arch = appImageArchEnv(target);
+  const homeDir = process.env.HOME || '';
+  const candidates = [
+    process.env.LDAI_RUNTIME_FILE,
+    path.join(homeDir, 'build', `runtime-${arch}`),
+    path.join(homeDir, '.cache', 'tauri', `runtime-${arch}`),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function withDefaultTauriSigningEnv(env, target) {
   const nextEnv = { ...env };
-  if (!nextEnv.TAURI_SIGNING_PRIVATE_KEY && !nextEnv.TAURI_SIGNING_PRIVATE_KEY_PATH) {
-    nextEnv.TAURI_SIGNING_PRIVATE_KEY_PATH = path.join(process.env.HOME || '', '.tauri', 'redbox-updater.key');
+  if (!nextEnv.TAURI_SIGNING_PRIVATE_KEY) {
+    const signingKeyPath = String(
+      nextEnv.TAURI_SIGNING_PRIVATE_KEY_PATH ||
+        path.join(nextEnv.HOME || process.env.HOME || '', '.tauri', 'redbox-updater.key'),
+    ).trim();
+    const signingKey = await fs.readFile(signingKeyPath, 'utf8').catch(() => '');
+    if (signingKey.trim()) {
+      nextEnv.TAURI_SIGNING_PRIVATE_KEY = signingKey;
+    }
+    nextEnv.TAURI_SIGNING_PRIVATE_KEY_PATH = signingKeyPath;
+  }
+  if (!nextEnv.APPIMAGE_EXTRACT_AND_RUN) {
+    nextEnv.APPIMAGE_EXTRACT_AND_RUN = '1';
+  }
+  if (!nextEnv.ARCH) {
+    nextEnv.ARCH = appImageArchEnv(target);
+  }
+  if (!nextEnv.LDAI_RUNTIME_FILE) {
+    const runtimeFile = await resolveDefaultAppImageRuntimeFile(target);
+    if (runtimeFile) {
+      nextEnv.LDAI_RUNTIME_FILE = runtimeFile;
+    }
   }
   return nextEnv;
 }
@@ -115,7 +195,10 @@ async function resolveFetchedLinuxArtifactsForTarget(localDir, target) {
     updaterArchivePath && (await pathExists(path.join(localDir, path.basename(updaterArchivePath))))
       ? path.join(localDir, path.basename(updaterArchivePath))
       : await findNewestFile(localDir, (filePath) => (
-        filePath.toLowerCase().endsWith('.appimage.tar.gz')
+        (
+          filePath.toLowerCase().endsWith('.appimage.tar.gz')
+          || filePath.toLowerCase().endsWith('.appimage')
+        )
         && linuxUpdaterFilenameMatchesTarget(filePath, target)
       ));
   const localUpdaterSignaturePath =
@@ -124,7 +207,10 @@ async function resolveFetchedLinuxArtifactsForTarget(localDir, target) {
       : localUpdaterArchivePath && (await pathExists(`${localUpdaterArchivePath}.sig`))
         ? `${localUpdaterArchivePath}.sig`
         : await findNewestFile(localDir, (filePath) => (
-          filePath.toLowerCase().endsWith('.appimage.tar.gz.sig')
+          (
+            filePath.toLowerCase().endsWith('.appimage.tar.gz.sig')
+            || filePath.toLowerCase().endsWith('.appimage.sig')
+          )
           && linuxUpdaterFilenameMatchesTarget(filePath, target)
         ));
 
@@ -150,10 +236,16 @@ async function buildLocalTarget(target, pluginInfo) {
 
   try {
     logStep(`Building Linux desktop packages for ${target}`);
+    await removeStaleTargetBundles(target);
+    await patchLinuxDeployGtkPlugin();
+    const tauriEnv = await withDefaultTauriSigningEnv(process.env, target);
+    if (tauriEnv.LDAI_RUNTIME_FILE) {
+      logStep(`Using AppImage runtime file: ${tauriEnv.LDAI_RUNTIME_FILE}`);
+    }
     await runCommand(
       'pnpm',
       ['tauri', 'build', '--ci', '--config', tempConfig.configPath, '--target', target],
-      { cwd: repoRoot, env: withDefaultTauriSigningEnv(process.env) },
+      { cwd: repoRoot, env: tauriEnv },
     );
 
     const releaseRoot = path.join(repoRoot, 'src-tauri', 'target', target, 'release');
@@ -333,6 +425,8 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
       '-az',
       '--include=*/',
       '--include=*.deb',
+      '--include=*.AppImage',
+      '--include=*.AppImage.sig',
       '--include=*.AppImage.tar.gz',
       '--include=*.AppImage.tar.gz.sig',
       '--exclude=*',
