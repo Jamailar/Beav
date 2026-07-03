@@ -17,8 +17,8 @@ use tauri::{AppHandle, State};
 
 use ai_control::{ai_detect_protocol_value, ai_roles_list_value, ai_test_connection_value};
 use marketplace::{
-    handle_marketplace_channel, install_skill_marketplace_package, list_skill_marketplace,
-    marketplace_channel_names,
+    enrich_skill_catalog_list_with_market_metadata, handle_marketplace_channel,
+    install_skill_marketplace_package, list_skill_marketplace, marketplace_channel_names,
 };
 
 fn requested_skill_name(payload: &Value) -> String {
@@ -86,13 +86,21 @@ pub fn handle_skills_ai_channel(
                 let workspace = workspace_root(state).ok();
                 let discovery_fingerprint =
                     compute_skill_discovery_fingerprint(workspace.as_deref());
-                let (list, watcher_snapshot) = with_store(state, |store| {
-                    Ok(skills_catalog_list_value(
-                        &store.skills,
-                        Some(discovery_fingerprint.as_str()),
-                        include_body,
+                let ((mut list, watcher_snapshot), skill_records) = with_store(state, |store| {
+                    Ok((
+                        skills_catalog_list_value(
+                            &store.skills,
+                            Some(discovery_fingerprint.as_str()),
+                            include_body,
+                        ),
+                        store.skills.clone(),
                     ))
                 })?;
+                enrich_skill_catalog_list_with_market_metadata(
+                    &mut list,
+                    &skill_records,
+                    workspace.as_deref(),
+                );
                 let changed = {
                     let mut guard = state
                         .skill_watch

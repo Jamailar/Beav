@@ -288,6 +288,18 @@ struct InstalledMarketProvenance {
     kind: Option<String>,
     install_root: Option<String>,
     installed_skill_names: Vec<String>,
+    #[serde(alias = "avatar_url")]
+    avatar_url: Option<String>,
+    #[serde(alias = "icon_url")]
+    icon_url: Option<String>,
+    #[serde(alias = "logo_url")]
+    logo_url: Option<String>,
+    #[serde(alias = "image_url")]
+    image_url: Option<String>,
+    #[serde(alias = "thumbnail_url")]
+    thumbnail_url: Option<String>,
+    #[serde(alias = "author_avatar_url")]
+    author_avatar_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -526,6 +538,8 @@ pub(super) fn install_skill_marketplace_package(
                 "version": item.version,
                 "kind": item.kind,
                 "sourceKind": item.source_kind,
+                "avatarUrl": item.avatar_url,
+                "authorAvatarUrl": item.author_avatar_url,
                 "repo": repo.clone(),
                 "refName": ref_name.clone(),
                 "paths": paths.clone(),
@@ -549,6 +563,13 @@ pub(super) fn install_skill_marketplace_package(
         ref_name: request.ref_name.clone(),
         ref_alias: request.ref_alias.clone(),
     }) {
+        let avatar_url = first_avatar_url(&[
+            entry.avatar_url.as_deref(),
+            entry.icon_url.as_deref(),
+            entry.logo_url.as_deref(),
+            entry.image_url.as_deref(),
+            entry.thumbnail_url.as_deref(),
+        ]);
         return install_market_item_from_repo(
             state,
             &entry.repo,
@@ -561,6 +582,7 @@ pub(super) fn install_skill_marketplace_package(
                 "packageId": entry.id.clone(),
                 "kind": REDBOX_MARKET_KIND_SKILL_PACK,
                 "sourceKind": "legacy-thrive",
+                "avatarUrl": avatar_url,
                 "repo": entry.repo.clone(),
                 "installedAt": now_iso(),
             })),
@@ -2312,6 +2334,95 @@ fn installed_skill_index(
     Ok(index)
 }
 
+pub(super) fn enrich_skill_catalog_list_with_market_metadata(
+    list: &mut Value,
+    skills: &[crate::runtime::SkillRecord],
+    workspace_root: Option<&Path>,
+) {
+    let Some(items) = list.as_array_mut() else {
+        return;
+    };
+    if items.is_empty() {
+        return;
+    }
+
+    let mut provenance_by_name = HashMap::<String, InstalledMarketProvenance>::new();
+    for skill in skills {
+        let Some(provenance) = skill_market_provenance_path(skill, workspace_root)
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|raw| serde_json::from_str::<InstalledMarketProvenance>(&raw).ok())
+        else {
+            continue;
+        };
+        provenance_by_name.insert(skill.name.to_ascii_lowercase(), provenance);
+    }
+    if provenance_by_name.is_empty() {
+        return;
+    }
+
+    for item in items {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let Some(name) = object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase)
+        else {
+            continue;
+        };
+        let Some(provenance) = provenance_by_name.get(&name) else {
+            continue;
+        };
+        insert_missing_market_string(object, "marketId", provenance.market_id.as_deref());
+        insert_missing_market_string(object, "marketName", provenance.market_name.as_deref());
+        insert_missing_market_string(object, "packageId", provenance.package_id.as_deref());
+        insert_missing_market_string(object, "marketVersion", provenance.version.as_deref());
+        insert_missing_market_string(
+            object,
+            "marketSourceKind",
+            provenance.source_kind.as_deref(),
+        );
+        insert_missing_market_string(object, "marketKind", provenance.kind.as_deref());
+        insert_missing_market_string(
+            object,
+            "marketInstallRoot",
+            provenance.install_root.as_deref(),
+        );
+        insert_missing_market_string(object, "avatarUrl", provenance.avatar_url.as_deref());
+        insert_missing_market_string(object, "iconUrl", provenance.icon_url.as_deref());
+        insert_missing_market_string(object, "logoUrl", provenance.logo_url.as_deref());
+        insert_missing_market_string(object, "imageUrl", provenance.image_url.as_deref());
+        insert_missing_market_string(object, "thumbnailUrl", provenance.thumbnail_url.as_deref());
+        insert_missing_market_string(
+            object,
+            "authorAvatarUrl",
+            provenance.author_avatar_url.as_deref(),
+        );
+    }
+}
+
+fn insert_missing_market_string(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<&str>,
+) {
+    let Some(clean) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|current| !current.is_empty())
+    {
+        return;
+    }
+    object.insert(key.to_string(), json!(clean));
+}
+
 fn skill_market_provenance_path(
     skill: &crate::runtime::SkillRecord,
     workspace_root: Option<&Path>,
@@ -2390,6 +2501,8 @@ fn install_redbox_server_market_package(
     let package_segment = url_path_segment(package_id);
     let plan_url = format!("{base}/skills/{package_segment}/install-plan");
     let plan = http_post_redbox_server_json::<Value>(&plan_url, &json!({}))?;
+    let skill = plan.get("skill").cloned().unwrap_or_else(|| json!({}));
+    let publisher = skill.get("publisher").cloned().unwrap_or_else(|| json!({}));
     let version = plan.get("version").cloned().unwrap_or_else(|| json!({}));
     let artifact = plan.get("artifact").cloned().unwrap_or_else(|| json!({}));
     let download_url = value_first_string(&artifact, &["download_url", "downloadUrl"])
@@ -2399,6 +2512,26 @@ fn install_redbox_server_market_package(
         value_first_string(&artifact, &["sha256", "artifact_sha256", "artifactSha256"]);
     let version_id = value_first_string(&version, &["id"]);
     let version_label = value_first_string(&version, &["version"]);
+    let avatar_url = value_first_string(
+        &skill,
+        &[
+            "avatar_url",
+            "avatarUrl",
+            "icon_url",
+            "iconUrl",
+            "logo_url",
+            "logoUrl",
+            "image_url",
+            "imageUrl",
+            "thumbnail_url",
+            "thumbnailUrl",
+        ],
+    );
+    let author_avatar_url = value_first_string(
+        &publisher,
+        &["avatar_url", "avatarUrl", "image_url", "imageUrl"],
+    )
+    .or_else(|| avatar_url.clone());
     record_redbox_server_install_event(source, package_id, version_id.as_deref(), "started", None);
 
     let install_result = (|| -> Result<Value, String> {
@@ -2429,6 +2562,8 @@ fn install_redbox_server_market_package(
             "sourceKind": source.kind.clone(),
             "serverBaseUrl": base,
             "artifactSha256": expected_sha256,
+            "avatarUrl": avatar_url,
+            "authorAvatarUrl": author_avatar_url,
             "installedAt": now_iso(),
         });
         let outcome = install_market_item_from_repo(

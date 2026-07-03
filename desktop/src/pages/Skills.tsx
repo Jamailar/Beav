@@ -1932,6 +1932,13 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
                 {
                     name: primarySkillName,
                     description: skill.description || undefined,
+                    packageId: String(skill.packageId || skill.id || '').trim() || undefined,
+                    avatarUrl: skill.avatarUrl || skillAvatarUrl(skill) || undefined,
+                    iconUrl: skill.iconUrl || undefined,
+                    logoUrl: skill.logoUrl || undefined,
+                    imageUrl: skill.imageUrl || undefined,
+                    thumbnailUrl: skill.thumbnailUrl || undefined,
+                    authorAvatarUrl: skill.authorAvatarUrl || undefined,
                 },
             ],
             taskHints: {
