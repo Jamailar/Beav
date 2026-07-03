@@ -326,7 +326,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     isOpeningReleasePage,
     installState,
     isInstallingUpdate,
-    openInstallableUpdateNotice,
     openReleasePage,
     installUpdate,
     closeUpdateNotice,
@@ -385,8 +384,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     });
   }, [founderSponsorState.active, sidebarVisualCollapsed]);
   const openCurrentReleaseNotesFromTitleBar = useCallback(async () => {
-    await openInstallableUpdateNotice();
-  }, [openInstallableUpdateNotice]);
+    await installUpdate();
+  }, [installUpdate]);
 
   const renderSidebarNavItem = (item: SidebarNavItem) => {
     const { key, view, labelKey, icon: Icon, primary } = item;

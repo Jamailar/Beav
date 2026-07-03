@@ -18,6 +18,7 @@ export type AppUpdateInstallStatus =
   | 'idle'
   | 'checking'
   | 'downloading'
+  | 'downloaded'
   | 'installing'
   | 'installed'
   | 'failed';
@@ -38,8 +39,6 @@ export interface AppUpdateInstallState {
   error: string;
 }
 
-const UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY = 'redbox:update-notice-shown-version:v1';
-
 const initialInstallState: AppUpdateInstallState = {
   status: 'idle',
   version: '',
@@ -47,28 +46,6 @@ const initialInstallState: AppUpdateInstallState = {
   contentLength: null,
   error: '',
 };
-
-function shouldShowAppUpdateNotice(payload: AppUpdateNoticePayload): boolean {
-  if (payload.mode === 'current') return true;
-  const latestVersion = String(payload.latestVersion || '').trim();
-  if (!latestVersion || typeof window === 'undefined') return Boolean(latestVersion);
-  try {
-    return window.localStorage.getItem(UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY) !== latestVersion;
-  } catch {
-    return true;
-  }
-}
-
-function markAppUpdateNoticeShown(payload: AppUpdateNoticePayload): void {
-  if (payload.mode === 'current') return;
-  const latestVersion = String(payload.latestVersion || '').trim();
-  if (!latestVersion || typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY, latestVersion);
-  } catch {
-    // Ignore storage failures; update checks should never break the shell.
-  }
-}
 
 export function useAppUpdateNotice(openDownloadFailedLabel: string) {
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
@@ -83,9 +60,9 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
       if (payload.mode !== 'current') {
         setHasInstallableUpdate(true);
         setLastInstallableNotice(payload);
+        setUpdateNotice((current) => current?.mode === 'current' ? current : null);
+        return;
       }
-      if (!shouldShowAppUpdateNotice(payload)) return;
-      markAppUpdateNoticeShown(payload);
       setInstallState(initialInstallState);
       setUpdateNotice(payload);
     };
@@ -95,9 +72,19 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
         status: payload.status || current.status,
         version: String(payload.version || current.version || ''),
         downloaded: Number(payload.downloaded ?? current.downloaded) || 0,
-        contentLength: typeof payload.contentLength === 'number' ? payload.contentLength : current.contentLength,
+        contentLength: Object.prototype.hasOwnProperty.call(payload, 'contentLength')
+          ? typeof payload.contentLength === 'number'
+            ? payload.contentLength
+            : null
+          : current.contentLength,
         error: String(payload.error || ''),
       }));
+      if (payload.status === 'downloading') {
+        setHasInstallableUpdate(false);
+      } else if (payload.status === 'installed') {
+        setHasInstallableUpdate(false);
+        setLastInstallableNotice(null);
+      }
     };
     const handleCurrentReleaseNotes = (event: Event) => {
       const detail = event instanceof CustomEvent
@@ -126,12 +113,9 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
     };
     const updateCheckTimer = window.setTimeout(() => {
       void window.ipcRenderer.checkAppUpdate(false).then((result) => {
-        if (result?.hasUpdate && result.notice) {
+        if (result?.hasUpdate && result.notice && (result.downloaded || result.readyToInstall)) {
           setHasInstallableUpdate(true);
           setLastInstallableNotice(result.notice);
-          if (!shouldShowAppUpdateNotice(result.notice)) return;
-          markAppUpdateNoticeShown(result.notice);
-          setUpdateNotice(result.notice);
         }
       }).catch((error) => {
         console.warn('[AppUpdate] check failed:', error);
@@ -193,12 +177,10 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
     if (isInstallingUpdate) return false;
     try {
       const result = await window.ipcRenderer.checkAppUpdate(true);
-      if (result?.hasUpdate && result.notice) {
+      if (result?.hasUpdate && result.notice && (result.downloaded || result.readyToInstall)) {
         setHasInstallableUpdate(true);
         setLastInstallableNotice(result.notice);
         setInstallState(initialInstallState);
-        setUpdateNotice(result.notice);
-        markAppUpdateNoticeShown(result.notice);
         return true;
       }
       setHasInstallableUpdate(false);
@@ -212,24 +194,26 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
     return false;
   }, [isInstallingUpdate]);
 
-  const openInstallableUpdateNotice = useCallback(async () => {
-    if (lastInstallableNotice) {
-      setInstallState(initialInstallState);
-      setUpdateNotice(lastInstallableNotice);
-      return true;
-    }
-    return checkForUpdateNow();
-  }, [checkForUpdateNow, lastInstallableNotice]);
-
   const installUpdate = useCallback(async () => {
-    if (!updateNotice || updateNotice.mode === 'current' || isInstallingUpdate) return;
+    if (isInstallingUpdate) return;
+    if (!lastInstallableNotice) {
+      const ready = await checkForUpdateNow();
+      if (!ready) return;
+    }
+    const version = lastInstallableNotice?.latestVersion || installState.version || '';
     setInstallState({
       ...initialInstallState,
-      status: 'checking',
-      version: updateNotice.latestVersion,
+      status: 'installing',
+      version,
     });
     try {
       const result = await window.ipcRenderer.installAppUpdate();
+      if (result?.success) {
+        setHasInstallableUpdate(false);
+        setLastInstallableNotice(null);
+        setUpdateNotice((current) => current?.mode === 'current' ? current : null);
+        return;
+      }
       if (!result?.success) {
         const error = result?.error || openDownloadFailedLabel;
         setInstallState((current) => ({
@@ -249,7 +233,7 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
       }));
       void appAlert(message);
     }
-  }, [isInstallingUpdate, openDownloadFailedLabel, updateNotice]);
+  }, [checkForUpdateNow, installState.version, isInstallingUpdate, lastInstallableNotice, openDownloadFailedLabel]);
 
   return {
     updateNotice,
@@ -258,7 +242,7 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
     isOpeningReleasePage,
     installState,
     isInstallingUpdate,
-    openInstallableUpdateNotice,
+    checkForUpdateNow,
     openReleasePage,
     installUpdate,
     closeUpdateNotice,

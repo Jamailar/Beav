@@ -21,6 +21,14 @@ struct AppUpdateCheckState {
     install_in_flight: bool,
     last_checked_at: Option<Instant>,
     last_notified_version: String,
+    downloaded_update: Option<DownloadedAppUpdate>,
+}
+
+struct DownloadedAppUpdate {
+    version: String,
+    notice: Value,
+    update: Update,
+    bytes: Vec<u8>,
 }
 
 static APP_UPDATE_CHECK_STATE: OnceLock<Mutex<AppUpdateCheckState>> = OnceLock::new();
@@ -359,15 +367,38 @@ async fn check_app_update_native(
     force_notify: bool,
 ) -> Result<Value, String> {
     let now = Instant::now();
+    let cached_update = {
+        let state = app_update_state()
+            .lock()
+            .map_err(|_| "App update state lock is poisoned".to_string())?;
+        state
+            .downloaded_update
+            .as_ref()
+            .map(|downloaded| (downloaded.version.clone(), downloaded.notice.clone()))
+    };
+    if let Some((version, notice)) = cached_update {
+        if force_notify {
+            maybe_emit_app_update_available(app, &notice, &version, true);
+        }
+        return Ok(json!({
+            "success": true,
+            "hasUpdate": true,
+            "downloaded": true,
+            "readyToInstall": true,
+            "notice": notice,
+        }));
+    }
+
     {
         let mut state = app_update_state()
             .lock()
             .map_err(|_| "App update state lock is poisoned".to_string())?;
         if state.in_flight {
             return Ok(json!({
-                "success": false,
+                "success": true,
                 "hasUpdate": false,
                 "inFlight": true,
+                "downloading": true,
                 "message": "Update check already in flight",
             }));
         }
@@ -391,6 +422,10 @@ async fn check_app_update_native(
     }
 
     let result: Result<Value, String> = async {
+        let _ = app.emit(
+            "app:update-install-progress",
+            json!({ "status": "checking" }),
+        );
         let update = app
             .updater()
             .map_err(|error| error.to_string())?
@@ -401,13 +436,72 @@ async fn check_app_update_native(
         if let Some(update) = update {
             let latest_version = normalize_version_tag(&update.version);
             let notice = native_update_notice_payload(&update);
+            let _ = app.emit(
+                "app:update-install-progress",
+                json!({
+                    "status": "downloading",
+                    "version": latest_version.clone(),
+                    "downloaded": 0,
+                    "contentLength": null,
+                }),
+            );
+
+            let mut downloaded = 0_u64;
+            let progress_app = app.clone();
+            let progress_version = latest_version.clone();
+            let bytes = update
+                .download(
+                    move |chunk_length, content_length| {
+                        downloaded = downloaded.saturating_add(chunk_length as u64);
+                        let _ = progress_app.emit(
+                            "app:update-install-progress",
+                            json!({
+                                "status": "downloading",
+                                "version": progress_version.clone(),
+                                "downloaded": downloaded,
+                                "contentLength": content_length,
+                            }),
+                        );
+                    },
+                    || {},
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+
+            {
+                let mut state = app_update_state()
+                    .lock()
+                    .map_err(|_| "App update state lock is poisoned".to_string())?;
+                state.downloaded_update = Some(DownloadedAppUpdate {
+                    version: latest_version.clone(),
+                    notice: notice.clone(),
+                    update: update.clone(),
+                    bytes,
+                });
+            }
+
+            let _ = app.emit(
+                "app:update-install-progress",
+                json!({
+                    "status": "downloaded",
+                    "version": latest_version.clone(),
+                }),
+            );
             maybe_emit_app_update_available(app, &notice, &latest_version, force_notify);
             Ok(json!({
                 "success": true,
                 "hasUpdate": true,
+                "downloaded": true,
+                "readyToInstall": true,
                 "notice": notice,
             }))
         } else {
+            let _ = app.emit(
+                "app:update-install-progress",
+                json!({
+                    "status": "idle",
+                }),
+            );
             Ok(json!({
                 "success": true,
                 "hasUpdate": false,
@@ -426,6 +520,13 @@ async fn check_app_update_native(
             if app_update_debug_log_enabled() {
                 eprintln!("[AppUpdate] native check failed: {message}");
             }
+            let _ = app.emit(
+                "app:update-install-progress",
+                json!({
+                    "status": "failed",
+                    "error": message,
+                }),
+            );
             Ok(json!({
                 "success": false,
                 "hasUpdate": false,
@@ -442,74 +543,56 @@ pub(crate) async fn app_check_update(app: AppHandle, force: Option<bool>) -> Res
 }
 
 async fn install_app_update_inner(app: &AppHandle) -> Result<Value, String> {
-    let _ = app.emit(
-        "app:update-install-progress",
-        json!({ "status": "checking" }),
-    );
-    let update = app
-        .updater()
-        .map_err(|error| error.to_string())?
-        .check()
-        .await
-        .map_err(|error| error.to_string())?;
-
-    let Some(update) = update else {
-        let payload = json!({
-            "status": "idle",
-            "hasUpdate": false,
-        });
-        let _ = app.emit("app:update-install-progress", payload.clone());
-        return Ok(json!({
-            "success": false,
-            "hasUpdate": false,
-            "error": "No installable update is available",
-        }));
+    let downloaded_update = {
+        let mut state = app_update_state()
+            .lock()
+            .map_err(|_| "App update state lock is poisoned".to_string())?;
+        if state.in_flight {
+            return Ok(json!({
+                "success": false,
+                "inFlight": true,
+                "error": "Update package is still downloading",
+            }));
+        }
+        let Some(downloaded_update) = state.downloaded_update.take() else {
+            let payload = json!({
+                "status": "idle",
+                "hasUpdate": false,
+            });
+            let _ = app.emit("app:update-install-progress", payload.clone());
+            return Ok(json!({
+                "success": false,
+                "hasUpdate": false,
+                "error": "No downloaded update package is ready to install",
+            }));
+        };
+        downloaded_update
     };
 
-    let version = normalize_version_tag(&update.version);
+    let version = downloaded_update.version.clone();
     let _ = app.emit(
         "app:update-install-progress",
         json!({
-            "status": "downloading",
+            "status": "installing",
             "version": version.clone(),
-            "downloaded": 0,
-            "contentLength": null,
         }),
     );
 
-    let mut downloaded = 0_u64;
-    let progress_app = app.clone();
-    let finish_app = app.clone();
-    update
-        .download_and_install(
-            move |chunk_length, content_length| {
-                downloaded = downloaded.saturating_add(chunk_length as u64);
-                let _ = progress_app.emit(
-                    "app:update-install-progress",
-                    json!({
-                        "status": "downloading",
-                        "version": version.clone(),
-                        "downloaded": downloaded,
-                        "contentLength": content_length,
-                    }),
-                );
-            },
-            move || {
-                let _ = finish_app.emit(
-                    "app:update-install-progress",
-                    json!({
-                        "status": "installing",
-                    }),
-                );
-            },
-        )
-        .await
-        .map_err(|error| error.to_string())?;
+    if let Err(error) = downloaded_update.update.install(&downloaded_update.bytes) {
+        let message = error.to_string();
+        if let Ok(mut state) = app_update_state().lock() {
+            if state.downloaded_update.is_none() {
+                state.downloaded_update = Some(downloaded_update);
+            }
+        }
+        return Err(message);
+    }
 
     let _ = app.emit(
         "app:update-install-progress",
         json!({
             "status": "installed",
+            "version": version,
         }),
     );
 
@@ -520,10 +603,10 @@ async fn install_app_update_inner(app: &AppHandle) -> Result<Value, String> {
 
     #[cfg(target_os = "windows")]
     {
-        Ok(json!({
+        return Ok(json!({
             "success": true,
             "installed": true,
-        }))
+        }));
     }
 }
 

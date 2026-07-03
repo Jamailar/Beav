@@ -15,6 +15,9 @@ interface AppUpdateCheckResult {
   success: boolean;
   hasUpdate: boolean;
   notice?: AppUpdateNotice | null;
+  downloaded?: boolean;
+  readyToInstall?: boolean;
+  downloading?: boolean;
   throttled?: boolean;
   inFlight?: boolean;
   message?: string;
