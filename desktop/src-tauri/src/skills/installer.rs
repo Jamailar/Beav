@@ -234,21 +234,16 @@ fn parse_repo_source(source: &str, explicit_ref: Option<String>) -> Result<RepoS
     if source.is_empty() {
         return Err("repo source must not be empty".to_string());
     }
-    let (base_source, parsed_ref) = split_source_ref(source);
-    let ref_name = explicit_ref
-        .or(parsed_ref)
+    let explicit_ref = explicit_ref
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    if looks_like_local_path(source) {
+        return local_repo_source(source, explicit_ref);
+    }
+    let (base_source, parsed_ref) = split_source_ref(source);
+    let ref_name = explicit_ref.or(parsed_ref);
     if looks_like_local_path(&base_source) {
-        if ref_name.is_some() {
-            return Err("ref is only supported for git repository sources".to_string());
-        }
-        let path = fs::canonicalize(&base_source)
-            .map_err(|err| format!("failed to resolve local repository source: {err}"))?;
-        if !path.is_dir() {
-            return Err("local repository source must be a directory".to_string());
-        }
-        return Ok(RepoSource::Local { path });
+        return local_repo_source(&base_source, ref_name);
     }
     if is_git_url(&base_source) || is_ssh_git_url(&base_source) {
         return Ok(RepoSource::Git {
@@ -268,7 +263,22 @@ fn parse_repo_source(source: &str, explicit_ref: Option<String>) -> Result<RepoS
     )
 }
 
+fn local_repo_source(source: &str, ref_name: Option<String>) -> Result<RepoSource, String> {
+    if ref_name.is_some() {
+        return Err("ref is only supported for git repository sources".to_string());
+    }
+    let path = fs::canonicalize(source)
+        .map_err(|err| format!("failed to resolve local repository source: {err}"))?;
+    if !path.is_dir() {
+        return Err("local repository source must be a directory".to_string());
+    }
+    Ok(RepoSource::Local { path })
+}
+
 fn split_source_ref(source: &str) -> (String, Option<String>) {
+    if looks_like_local_path(source) {
+        return (source.to_string(), None);
+    }
     if let Some((base, ref_name)) = source.rsplit_once('#') {
         return (base.to_string(), non_empty_ref(ref_name));
     }
@@ -286,10 +296,21 @@ fn non_empty_ref(value: &str) -> Option<String> {
 }
 
 fn looks_like_local_path(source: &str) -> bool {
+    let source = source.trim();
     source.starts_with('/')
+        || source.starts_with('\\')
         || source.starts_with("./")
         || source.starts_with("../")
         || source.starts_with("~/")
+        || is_windows_drive_absolute_path(source)
+}
+
+fn is_windows_drive_absolute_path(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
 }
 
 fn is_git_url(source: &str) -> bool {
@@ -697,6 +718,32 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn local_path_detection_accepts_windows_paths() {
+        assert!(looks_like_local_path(
+            r"C:\Users\Jam\AppData\Local\Temp\redbox\extracted"
+        ));
+        assert!(looks_like_local_path(
+            "C:/Users/Jam/AppData/Local/Temp/redbox/extracted"
+        ));
+        assert!(looks_like_local_path(
+            r"\\server\share\redbox\skills\bundle"
+        ));
+        assert!(looks_like_local_path(r"\Users\Jam\redbox\skills\bundle"));
+        assert!(!looks_like_local_path("owner/repo"));
+        assert!(!looks_like_local_path("xhs-visual-director-skill"));
+    }
+
+    #[test]
+    fn local_path_ref_split_preserves_windows_user_paths() {
+        let source = r"C:\Users\name@example\RedBox\skills\bundle";
+
+        let (base, ref_name) = split_source_ref(source);
+
+        assert_eq!(base, source);
+        assert_eq!(ref_name, None);
     }
 
     #[test]
