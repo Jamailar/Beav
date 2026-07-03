@@ -100,13 +100,23 @@ function buildHtmlPreviewDocument(content: string, baseUrl?: string): string {
   return `<!doctype html><html><head>${base}</head><body>${html}</body></html>`;
 }
 
+function stableContentFingerprint(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  }
+  return `${value.length}:${hash}`;
+}
+
 function HtmlPreview({ content, fileBaseUrl }: { content: string; fileBaseUrl?: string }) {
   const srcDoc = useMemo(
     () => buildHtmlPreviewDocument(content, fileBaseUrl),
     [content, fileBaseUrl],
   );
+  const srcDocKey = useMemo(() => stableContentFingerprint(srcDoc), [srcDoc]);
   return (
     <iframe
+      key={srcDocKey}
       title="HTML 预览"
       className="h-full min-h-0 w-full border-0 bg-white"
       sandbox="allow-same-origin"
