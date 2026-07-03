@@ -1,5 +1,16 @@
 # Beav（原RedBox）更新日志
 
+## v2.6.1 (2026-07-03)
+
+### Skill 市场安装修复
+- 修复 Skill 市场安装 RedSkill / 官方技能时，旧本地缓存里的 `repo` 字段会让桌面端误走 Git 仓库安装器的问题。
+- 官方 Skill 市场条目现在会优先按 `marketId + packageId` 走 RedBox 受控市场安装协议，避免绕过我们的 install-plan 和 OSS artifact。
+- Skills 页面会净化受控市场条目的缓存与安装 payload，旧缓存不再污染后续安装请求。
+
+### 发布说明
+- 本次为预发布修复版本，重点验证 Skill 市场安装链路。
+- 发布资产应继续同时包含普通安装包、Tauri updater 包及对应 `.sig` 签名，以及浏览器插件 zip。
+
 ## v2.6.0 (2026-07-03)
 
 ### Skill 市场与技能管理
