@@ -476,7 +476,13 @@ export function normalizeAssetKindReference(value: string | null | undefined): s
 }
 
 export function isSameDraftRelativePath(left: string | null | undefined, right: string | null | undefined): boolean {
-    return String(left || '').replace(/\\/g, '/').trim() === String(right || '').replace(/\\/g, '/').trim();
+    const normalize = (value: string | null | undefined) => String(value || '')
+        .replace(/\\/g, '/')
+        .trim()
+        .split('/')
+        .filter((segment) => segment && segment !== '.')
+        .join('/');
+    return normalize(left) === normalize(right);
 }
 
 export function inferAssetKind(asset: MediaAsset): 'image' | 'video' | 'audio' | 'unknown' {

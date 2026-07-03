@@ -94,13 +94,16 @@ pub(super) fn handle_tree_channel(
         "manuscripts:save" => Some((|| -> Result<Value, String> {
             let target = payload_string(&payload, "path").unwrap_or_default();
             let content = payload_string(&payload, "content").unwrap_or_default();
-            save_manuscript_content(
+            let result = save_manuscript_content(
                 state,
                 &target,
                 &content,
                 payload_field(&payload, "metadata").and_then(Value::as_object),
                 "user",
-            )
+            )?;
+            let changed_path = payload_string(&result, "newPath").unwrap_or(target);
+            crate::events::emit_manuscripts_changed(app, "save", &changed_path);
+            Ok(result)
         })()),
         "manuscripts:get-write-proposal" => Some((|| -> Result<Value, String> {
             let file_path = payload_string(&payload, "filePath")
@@ -156,6 +159,7 @@ pub(super) fn handle_tree_channel(
                 let title = payload_string(&payload, "title")
                     .unwrap_or_else(|| title_from_relative_path(&relative));
                 create_manuscript_package(&path, &content, &project_kind, &title)?;
+                crate::events::emit_manuscripts_changed(app, "create", &relative);
                 return Ok(json!({ "success": true, "path": relative }));
             }
             let relative = normalize_relative_path(&join_relative(
@@ -167,6 +171,7 @@ pub(super) fn handle_tree_channel(
                 fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
             fs::write(&path, content).map_err(|error| error.to_string())?;
+            crate::events::emit_manuscripts_changed(app, "create", &relative);
             Ok(json!({ "success": true, "path": normalize_relative_path(&relative) }))
         })()),
         "manuscripts:upgrade-to-package" => Some((|| -> Result<Value, String> {
@@ -185,6 +190,7 @@ pub(super) fn handle_tree_channel(
             } else if path.exists() {
                 fs::remove_file(&path).map_err(|error| error.to_string())?;
             }
+            crate::events::emit_manuscripts_changed(app, "delete", &relative);
             Ok(json!({ "success": true }))
         })()),
         "manuscripts:rename" => Some((|| -> Result<Value, String> {
@@ -214,6 +220,7 @@ pub(super) fn handle_tree_channel(
                     });
                 }
                 write_json_value(&package_manifest_path(&source), &manifest)?;
+                crate::events::emit_manuscripts_changed(app, "rename", &old_path);
                 return Ok(
                     json!({ "success": true, "newPath": normalize_relative_path(&old_path) }),
                 );
@@ -243,6 +250,7 @@ pub(super) fn handle_tree_channel(
                 fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
             fs::rename(&source, &target).map_err(|error| error.to_string())?;
+            crate::events::emit_manuscripts_changed(app, "rename", &target_relative);
             Ok(json!({ "success": true, "newPath": target_relative }))
         })()),
         "manuscripts:move" => Some((|| -> Result<Value, String> {
@@ -287,6 +295,7 @@ pub(super) fn handle_tree_channel(
                 fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
             fs::rename(&source, &target).map_err(|error| error.to_string())?;
+            crate::events::emit_manuscripts_changed(app, "move", &target_relative);
             Ok(json!({ "success": true, "newPath": target_relative }))
         })()),
         _ => None,

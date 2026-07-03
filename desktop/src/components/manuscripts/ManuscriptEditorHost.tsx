@@ -143,6 +143,19 @@ const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
     { id: 'folders', label: '文件夹' },
 ];
 
+function mergeMediaAssets(current: MediaAsset[], incoming: MediaAsset[]): MediaAsset[] {
+    if (incoming.length === 0) return current;
+    const byId = new Map(current.map((asset) => [asset.id, asset]));
+    for (const asset of incoming) {
+        byId.set(asset.id, asset);
+    }
+    return Array.from(byId.values()).sort((left, right) => {
+        const rightKey = String(right.updatedAt || right.createdAt || '');
+        const leftKey = String(left.updatedAt || left.createdAt || '');
+        return rightKey.localeCompare(leftKey);
+    });
+}
+
 export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigateToGenerationStudio, isActive = false, onClose, onImmersiveModeChange }: ManuscriptEditorHostProps) {
     const [mode, setMode] = useState<'editor' | 'list'>('editor');
     const [editorFile, setEditorFile] = useState<string | null>(null);
@@ -263,6 +276,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const [immersiveTimelineCollapsed, setImmersiveTimelineCollapsed] = useState(false);
     const treeRequestIdRef = useRef(0);
     const assetsRequestIdRef = useRef(0);
+    const boundAssetsRequestIdRef = useRef(0);
     const hasLoadedSnapshotRef = useRef(false);
     const deferredAssetsTimerRef = useRef<number | null>(null);
     const searchPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -278,7 +292,10 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const editorFrontmatterBlockRef = useRef<string | null>(null);
     const editorMetadataRef = useRef<Record<string, unknown>>({});
     const editorBodyDirtyRef = useRef(false);
+    const isSavingEditorBodyRef = useRef(false);
     const editorSavePromiseRef = useRef<Promise<boolean> | null>(null);
+    const editorBodyReadRequestIdRef = useRef(0);
+    const editorBodyRefreshTimerRef = useRef<number | null>(null);
     const skipEditorTitleBlurCommitRef = useRef(false);
     const handledImageTerminalJobIdRef = useRef<string | null>(null);
     const handledVideoTerminalJobIdRef = useRef<string | null>(null);
@@ -395,6 +412,10 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [editorBodyDirty]);
 
     useEffect(() => {
+        isSavingEditorBodyRef.current = isSavingEditorBody;
+    }, [isSavingEditorBody]);
+
+    useEffect(() => {
         setActiveImageJobId(null);
         setActiveVideoJobId(null);
         setIsGenerating(false);
@@ -450,10 +471,43 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, [isActive, mode]);
 
+    const loadBoundAssetsForEditor = useCallback(async (targetPath: string | null | undefined = editorFileRef.current) => {
+        const manuscriptPath = String(targetPath || '').trim();
+        if (!manuscriptPath) return;
+        const requestId = ++boundAssetsRequestIdRef.current;
+        try {
+            const mediaResult = await uiMeasure('manuscripts', 'load_bound_assets', async () => (
+                window.ipcRenderer.media.list({ manuscriptPath }) as Promise<{ success?: boolean; assets?: MediaAsset[]; error?: string }>
+            ), { requestId, mode, isActive, manuscriptPath });
+            if (requestId !== boundAssetsRequestIdRef.current) return;
+            if (!mediaResult?.success) {
+                throw new Error(mediaResult?.error || '加载稿件配图失败');
+            }
+            const nextAssets = Array.isArray(mediaResult.assets) ? mediaResult.assets : [];
+            const nextAssetIds = new Set(nextAssets.map((asset) => asset.id));
+            setAssets((current) => {
+                const currentWithoutStaleBindings = current.filter((asset) => (
+                    !isSameDraftRelativePath(asset.boundManuscriptPath, manuscriptPath)
+                    || nextAssetIds.has(asset.id)
+                ));
+                return mergeMediaAssets(currentWithoutStaleBindings, nextAssets);
+            });
+        } catch (loadError) {
+            if (requestId !== boundAssetsRequestIdRef.current) return;
+            console.error('Failed to load bound manuscript media assets:', loadError);
+        }
+    }, [isActive, mode]);
+
     useEffect(() => {
         if (!isBindAssetModalOpen) return;
-        void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
-    }, [isBindAssetModalOpen, loadAssets]);
+        void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT)
+            .catch(() => undefined)
+            .finally(() => {
+                if (editorFileRef.current) {
+                    void loadBoundAssetsForEditor(editorFileRef.current);
+                }
+            });
+    }, [isBindAssetModalOpen, loadAssets, loadBoundAssetsForEditor]);
 
     const loadData = useCallback(async () => {
         uiDebug('manuscripts', 'load_data:start', { mode, isActive, hasSnapshot: hasLoadedSnapshotRef.current });
@@ -464,7 +518,11 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
         setError('');
         try {
+            const activeEditorFile = editorFileRef.current;
             await Promise.all([loadTree(), loadAssets(MANUSCRIPTS_INITIAL_ASSET_LIMIT)]);
+            if (activeEditorFile && mode === 'editor') {
+                await loadBoundAssetsForEditor(activeEditorFile);
+            }
             hasLoadedSnapshotRef.current = true;
             uiDebug('manuscripts', 'load_data:done', {
                 mode,
@@ -478,7 +536,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             setLoading(false);
             setIsRefreshing(false);
         }
-    }, [assets.length, isActive, loadAssets, loadTree, mode, tree.length]);
+    }, [assets.length, isActive, loadAssets, loadBoundAssetsForEditor, loadTree, mode, tree.length]);
 
     const handleImportMediaFiles = useCallback(async () => {
         setWorkingId('media-import');
@@ -517,11 +575,73 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, []);
 
+    const reloadEditorBodyFromDisk = useCallback(async (
+        targetPath: string | null,
+        options?: { force?: boolean; reason?: string },
+    ) => {
+        const normalizedTarget = String(targetPath || '').trim();
+        if (!normalizedTarget || mode !== 'editor') return false;
+        if (!options?.force && (editorBodyDirtyRef.current || isSavingEditorBodyRef.current || editorSavePromiseRef.current)) {
+            return false;
+        }
+        const requestId = ++editorBodyReadRequestIdRef.current;
+        try {
+            const result = await window.ipcRenderer.manuscripts.read(normalizedTarget) as ManuscriptReadResult;
+            if (requestId !== editorBodyReadRequestIdRef.current) return false;
+            if (!isSameDraftRelativePath(editorFileRef.current, normalizedTarget)) return false;
+            if (!options?.force && (editorBodyDirtyRef.current || isSavingEditorBodyRef.current || editorSavePromiseRef.current)) {
+                return false;
+            }
+            const nextContent = String(result?.content || '');
+            const nextDraft = splitWritingDraftContent(nextContent, editorDescriptor?.draftType);
+            const nextMetadata = (result?.metadata || {}) as Record<string, unknown>;
+            const currentContent = composeMarkdownWithFrontmatter(
+                editorBodyRef.current,
+                editorFrontmatterBlockRef.current
+            );
+            const metadataKey = JSON.stringify(editorMetadataRef.current || {});
+            const nextMetadataKey = JSON.stringify(nextMetadata || {});
+            if (nextContent === currentContent && nextMetadataKey === metadataKey) {
+                return false;
+            }
+            editorBodyRef.current = nextDraft.body;
+            editorFrontmatterBlockRef.current = nextDraft.frontmatterBlock;
+            editorMetadataRef.current = nextMetadata;
+            editorBodyDirtyRef.current = false;
+            setEditorBody(nextDraft.body);
+            setEditorFrontmatterBlock(nextDraft.frontmatterBlock);
+            setEditorMetadata(nextMetadata);
+            setEditorBodyDirty(false);
+            const nextTitle = String(nextMetadata.title || '').trim();
+            const nextDraftType = String(nextMetadata.draftType || '').trim();
+            if (nextTitle || nextDraftType) {
+                setEditorDescriptor((current) => current ? {
+                    ...current,
+                    title: nextTitle || current.title,
+                    draftType: (nextDraftType as CreateKind | '') || current.draftType,
+                } : current);
+            }
+            uiDebug('manuscripts', 'editor_body_refreshed', {
+                reason: options?.reason || 'manual',
+                filePath: normalizedTarget,
+            });
+            return true;
+        } catch (readError) {
+            console.error('Failed to refresh editor body:', readError);
+            return false;
+        }
+    }, [editorDescriptor?.draftType, mode]);
+
     const refreshWorkspace = useCallback(async () => {
         // Keep editor interactions smooth: skip heavy media refresh while actively editing.
         if (mode === 'editor') {
             uiDebug('manuscripts', 'refresh_workspace:editor_fast_path');
-            await loadTree();
+            const activeEditorFile = editorFileRef.current;
+            await Promise.all([
+                loadTree(),
+                reloadEditorBodyFromDisk(activeEditorFile, { reason: 'page-refresh' }),
+                loadBoundAssetsForEditor(activeEditorFile),
+            ]);
             return;
         }
         uiDebug('manuscripts', 'refresh_workspace:gallery_split_load');
@@ -544,9 +664,11 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
         deferredAssetsTimerRef.current = window.setTimeout(() => {
             deferredAssetsTimerRef.current = null;
-            void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT).finally(() => setIsRefreshing(false));
+            void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT)
+                .catch(() => undefined)
+                .finally(() => setIsRefreshing(false));
         }, 0);
-    }, [loadAssets, loadTree, mode]);
+    }, [loadAssets, loadBoundAssetsForEditor, loadTree, mode, reloadEditorBodyFromDisk]);
 
     usePageRefresh({
         isActive,
@@ -560,17 +682,48 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
 
     useEffect(() => {
         if (!isActive) return;
-        const handleDataChanged = (_event: unknown, payload?: { scope?: string }) => {
+        const handleDataChanged = (_event: unknown, payload?: { scope?: string; filePath?: string; entityId?: string }) => {
             if (payload?.scope === 'manuscripts') {
                 void loadTree();
+                const changedPath = String(payload.filePath || payload.entityId || '').trim();
+                const activeEditorFile = editorFileRef.current;
+                if (mode === 'editor' && activeEditorFile && (!changedPath || isSameDraftRelativePath(changedPath, activeEditorFile))) {
+                    if (editorBodyRefreshTimerRef.current != null) {
+                        window.clearTimeout(editorBodyRefreshTimerRef.current);
+                    }
+                    editorBodyRefreshTimerRef.current = window.setTimeout(() => {
+                        editorBodyRefreshTimerRef.current = null;
+                        void reloadEditorBodyFromDisk(activeEditorFile, { reason: 'data-changed' });
+                    }, 160);
+                }
                 return;
             }
             if (payload?.scope === 'media') {
-                void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
+                void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT)
+                    .catch(() => undefined)
+                    .finally(() => {
+                        const activeEditorFile = editorFileRef.current;
+                        if (mode === 'editor' && activeEditorFile) {
+                            void loadBoundAssetsForEditor(activeEditorFile);
+                        }
+                    });
             }
         };
         return subscribeDataChanged(handleDataChanged);
-    }, [isActive, loadAssets, loadTree]);
+    }, [isActive, loadAssets, loadBoundAssetsForEditor, loadTree, mode, reloadEditorBodyFromDisk]);
+
+    useEffect(() => {
+        if (!isActive || mode !== 'editor' || !editorFile) return;
+        const interval = window.setInterval(() => {
+            void reloadEditorBodyFromDisk(editorFileRef.current, { reason: 'auto-poll' });
+        }, 1500);
+        return () => window.clearInterval(interval);
+    }, [editorFile, isActive, mode, reloadEditorBodyFromDisk]);
+
+    useEffect(() => {
+        if (!isActive || mode !== 'editor' || !editorFile) return;
+        void loadBoundAssetsForEditor(editorFile);
+    }, [editorFile, isActive, loadBoundAssetsForEditor, mode]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -596,6 +749,10 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             if (deferredAssetsTimerRef.current != null) {
                 window.clearTimeout(deferredAssetsTimerRef.current);
                 deferredAssetsTimerRef.current = null;
+            }
+            if (editorBodyRefreshTimerRef.current != null) {
+                window.clearTimeout(editorBodyRefreshTimerRef.current);
+                editorBodyRefreshTimerRef.current = null;
             }
         };
     }, []);
@@ -1318,6 +1475,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 throw new Error(result?.error || '导入素材失败');
             }
             await loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
+            await loadBoundAssetsForEditor(editorFile);
             if (result.state) {
                 applyPackageState(editorFile, result.state);
             } else {
@@ -1328,7 +1486,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         } finally {
             setWorkingId(null);
         }
-    }, [applyPackageState, editorFile, loadAssets, refreshPackageState]);
+    }, [applyPackageState, editorFile, loadAssets, loadBoundAssetsForEditor, refreshPackageState]);
 
     const handleDownloadEditorFile = useCallback(async () => {
         if (!editorFileRef.current || workingId) return;
@@ -1807,6 +1965,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 loadTree(),
                 loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT),
             ]);
+            await loadBoundAssetsForEditor(editorFile);
             if (result.state) {
                 applyPackageState(editorFile, result.state);
             } else {
@@ -1816,7 +1975,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         } catch (bindError) {
             void appAlert(bindError instanceof Error ? bindError.message : '绑定素材失败');
         }
-    }, [applyPackageState, bindAssetRole, editorFile, loadAssets, loadTree, refreshPackageState]);
+    }, [applyPackageState, bindAssetRole, editorFile, loadAssets, loadBoundAssetsForEditor, loadTree, refreshPackageState]);
 
     const handlePreviewBoundAsset = useCallback((asset: MediaAsset) => {
         const src = asset.previewUrl || asset.absolutePath || asset.relativePath || '';
@@ -1834,18 +1993,27 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             const result = await window.ipcRenderer.media.bind({
                 assetId: asset.id,
                 manuscriptPath: '',
-            }) as { success?: boolean; error?: string };
+            }) as { success?: boolean; error?: string; asset?: MediaAsset };
             if (!result?.success) {
                 throw new Error(result?.error || '移除配图失败');
             }
             setPreviewAsset((current) => current?.asset.id === asset.id ? null : current);
+            setAssets((current) => current.map((item) => (
+                item.id === asset.id
+                    ? {
+                        ...(result.asset || item),
+                        boundManuscriptPath: undefined,
+                    }
+                    : item
+            )));
             await loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
+            await loadBoundAssetsForEditor(editorFile);
         } catch (unbindError) {
             void appAlert(unbindError instanceof Error ? unbindError.message : '移除配图失败');
         } finally {
             setWorkingId(null);
         }
-    }, [editorFile, loadAssets]);
+    }, [editorFile, loadAssets, loadBoundAssetsForEditor]);
 
     const pushToRedClaw = useCallback((filePath: string) => {
         const meta = fileMetaMap[filePath];
@@ -2135,7 +2303,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             ...timelineClips.map((item) => String(item?.assetId || '').trim()),
         ].filter(Boolean));
         const manuscriptBoundAssets = assets
-            .filter((asset) => String(asset.boundManuscriptPath || '').trim() === editorFile)
+            .filter((asset) => isSameDraftRelativePath(asset.boundManuscriptPath, editorFile))
             .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
         const timelineFallbackAssets = timelineClips
             .filter((item) => {
@@ -2407,9 +2575,12 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                         editorSessionMetadata={editorChatBinding?.metadata ?? null}
                         onEditorBodyChange={(value) => {
                             if (editorWriteProposalView) {
+                                editorReviewBodyRef.current = value;
                                 setEditorReviewBody(value);
                                 return;
                             }
+                            editorBodyRef.current = value;
+                            editorBodyDirtyRef.current = true;
                             setEditorBody(value);
                             setEditorBodyDirty(true);
                         }}

@@ -749,6 +749,19 @@ pub fn emit_manuscript_write_proposal_changed(
     );
 }
 
+pub fn emit_manuscripts_changed(app: &AppHandle, action: &str, file_path: &str) {
+    let _ = app.emit(
+        "data:changed",
+        json!({
+            "scope": "manuscripts",
+            "action": action,
+            "filePath": file_path,
+            "entityId": file_path,
+            "timestamp": now_i64(),
+        }),
+    );
+}
+
 pub fn emit_redclaw_task_event(
     app: &AppHandle,
     event_type: &str,

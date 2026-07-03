@@ -79,6 +79,7 @@ pub(crate) fn accept_manuscript_write_proposal(
         "ai-proposal-accepted",
     )?;
     let _ = reject_manuscript_write_proposal(app, state, &proposal.file_path)?;
+    crate::events::emit_manuscripts_changed(app, "save", &proposal.file_path);
     let mut object = saved.as_object().cloned().unwrap_or_default();
     object.insert("proposalId".to_string(), json!(proposal.id));
     object.insert("filePath".to_string(), json!(proposal.file_path));
