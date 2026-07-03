@@ -85,13 +85,13 @@ pnpm release:oss -- --repo <owner/name>
 - `desktop/src-tauri/tauri.conf.json` 启用 `bundle.createUpdaterArtifacts`。
 - `plugins.updater.pubkey` 固定写入公开签名 key。
 - 私钥不进入仓库。默认本机路径是 `~/.tauri/redbox-updater.key`，也可以显式设置 `TAURI_SIGNING_PRIVATE_KEY` 或 `TAURI_SIGNING_PRIVATE_KEY_PATH`。
-- Windows 远程构建机也必须有同一把 updater 私钥，默认路径同样是 `~/.tauri/redbox-updater.key`。
+- Windows / Linux 远程构建机也必须有同一把 updater 私钥，默认路径同样是 `~/.tauri/redbox-updater.key`。
 
 发布产物：
 
 - macOS：`*.app.tar.gz` 和同名 `*.app.tar.gz.sig`
 - Windows NSIS：`*-setup.exe.zip` 和同名 `*-setup.exe.zip.sig`
-- Linux AppImage：`*.AppImage.tar.gz` 和同名 `*.AppImage.tar.gz.sig`
+- Linux AppImage：`*.AppImage` 和同名 `*.AppImage.sig`
 
 发布脚本会把这些 updater 资产写入平台 summary，并由 `pnpm release:oss` 上传到 GitHub release。RedBoxweb 同步任务随后镜像到 OSS 的 `updaters/<tag>/`，并把 `.sig` 内容写进 `manifests/latest.json` 的 `updaterAssets`。
 
@@ -326,7 +326,7 @@ REDBOX_REQUIRE_WINDOWS_SIGN=1 pnpm release:win
 
 ### 目标
 
-`pnpm release:linux` 默认生成 Linux x64 桌面端 `.deb` 安装包，并同时生成 Tauri updater 使用的 AppImage 压缩包与签名。
+`pnpm release:linux` 默认生成 Linux x64 桌面端 `.deb` 安装包，并同时生成 Tauri updater 使用的 AppImage 与签名。
 
 在 Linux 主机上默认原生打包；在 macOS / 非 Linux 主机上默认通过 `ssh jamdebian` 远程构建并拉回产物。
 
@@ -343,7 +343,7 @@ pnpm release:linux
 1. `rsync` 当前仓库到 `ssh jamdebian:/home/jam/build/redbox-tauri-linux-release`
 2. 在远端执行 `pnpm install --frozen-lockfile`
 3. 在远端以 `REDBOX_LINUX_MODE=local` 触发 Linux 原生打包
-4. 从远端拉回 `.deb`、`*.AppImage.tar.gz` 和 `*.AppImage.tar.gz.sig` 到 `artifacts/installers/linux/`
+4. 从远端拉回 `.deb`、`*.AppImage` 和 `*.AppImage.sig` 到 `artifacts/installers/linux/`
 5. 本地写入 `artifacts/release/linux-build-summary.json`
 
 ### Linux 主机原生打包
@@ -361,11 +361,11 @@ pnpm release:linux -- --mode local
 ### 产物
 
 - `src-tauri/target/<target>/release/bundle/deb/*.deb`
-- `src-tauri/target/<target>/release/bundle/appimage/*.AppImage.tar.gz`
-- `src-tauri/target/<target>/release/bundle/appimage/*.AppImage.tar.gz.sig`
+- `src-tauri/target/<target>/release/bundle/appimage/*.AppImage`
+- `src-tauri/target/<target>/release/bundle/appimage/*.AppImage.sig`
 - `artifacts/installers/linux/*.deb`
-- `artifacts/installers/linux/*.AppImage.tar.gz`
-- `artifacts/installers/linux/*.AppImage.tar.gz.sig`
+- `artifacts/installers/linux/*.AppImage`
+- `artifacts/installers/linux/*.AppImage.sig`
 - `artifacts/release/linux-build-summary.json`
 
 ## 用户需要手动准备的密钥
