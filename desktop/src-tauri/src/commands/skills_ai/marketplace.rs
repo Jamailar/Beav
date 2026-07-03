@@ -454,6 +454,24 @@ pub(super) fn install_skill_marketplace_package(
         .or(request.slug.clone())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let sources = skill_market_sources(state)?;
+    if let Some(package_id) = direct_package_id.as_deref() {
+        if let Some(source) =
+            managed_market_source_for_request(&sources, request.market_id.as_deref())
+        {
+            if source.kind == "redbox-server" {
+                return install_redbox_server_market_package(
+                    state,
+                    source,
+                    package_id,
+                    request.scope.clone(),
+                );
+            }
+            if source.kind == "redskill-cli" {
+                return install_redskill_market_identifier(state, source, package_id);
+            }
+        }
+    }
     if let Some(repo) = request
         .repo
         .as_deref()
@@ -486,7 +504,6 @@ pub(super) fn install_skill_marketplace_package(
 
     let package_id = direct_package_id.ok_or_else(|| "缺少技能市场 packageId".to_string())?;
     let package_id_ref = package_id.as_str();
-    let sources = skill_market_sources(state)?;
     for source in sources {
         if request
             .market_id
@@ -590,6 +607,16 @@ pub(super) fn install_skill_marketplace_package(
     }
 
     Err(format!("未找到技能市场包: {package_id}"))
+}
+
+fn managed_market_source_for_request<'a>(
+    sources: &'a [SkillMarketSource],
+    market_id: Option<&str>,
+) -> Option<&'a SkillMarketSource> {
+    let market_id = market_id.map(str::trim).filter(|value| !value.is_empty())?;
+    sources.iter().find(|source| {
+        source.id == market_id && matches!(source.kind.as_str(), "redbox-server" | "redskill-cli")
+    })
 }
 
 pub(super) fn resolve_market_install_entry(
@@ -3549,6 +3576,24 @@ mod tests {
 
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].id, "custom");
+    }
+
+    #[test]
+    fn managed_market_source_requires_explicit_managed_market_id() {
+        let sources = default_skill_market_sources();
+
+        assert_eq!(
+            managed_market_source_for_request(&sources, Some("redbox-official"))
+                .map(|source| source.kind.as_str()),
+            Some("redbox-server")
+        );
+        assert_eq!(
+            managed_market_source_for_request(&sources, Some("redskill-official"))
+                .map(|source| source.kind.as_str()),
+            Some("redskill-cli")
+        );
+        assert!(managed_market_source_for_request(&sources, None).is_none());
+        assert!(managed_market_source_for_request(&sources, Some("missing")).is_none());
     }
 
     #[test]

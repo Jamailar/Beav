@@ -80,6 +80,7 @@ const MARKETPLACE_DETAIL_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-detail-ca
 const MAX_SKILL_DETAIL_CACHE_ENTRIES = 36;
 const MAX_AVATAR_CACHE_CONCURRENCY = 4;
 const RETIRED_SKILL_MARKET_SOURCE_IDS = new Set(['thrive-community']);
+const MANAGED_SKILL_MARKET_SOURCE_KINDS = new Set(['redbox-server', 'redskill-cli']);
 const RED_SKILL_TAG_LABEL = 'RED skill';
 const CATEGORY_SECTION_PREVIEW_ITEMS = 6;
 const SKILL_CATEGORY_LABELS = [
@@ -643,11 +644,29 @@ function isRetiredSkillMarketItem(item: ThriveSkillMarketplaceItem) {
         && normalizeKey(item.marketName) === 'thrive community';
 }
 
+function isManagedSkillMarketItem(item: ThriveSkillMarketplaceItem) {
+    return MANAGED_SKILL_MARKET_SOURCE_KINDS.has(normalizeKey(item.sourceKind))
+        || normalizeKey(item.marketId) === 'redbox-official'
+        || normalizeKey(item.marketId) === 'redskill-official';
+}
+
+function sanitizeMarketplaceItem(item: ThriveSkillMarketplaceItem): ThriveSkillMarketplaceItem {
+    if (!isManagedSkillMarketItem(item)) return item;
+    return {
+        ...item,
+        repo: null,
+        refName: null,
+        paths: [],
+    };
+}
+
 function sanitizeMarketplaceCacheEntry(entry: MarketplaceCacheEntry): MarketplaceCacheEntry {
     return {
         sources: entry.sources.filter((source) => !isRetiredSkillMarketSourceId(source.id)),
         collections: Array.isArray(entry.collections) ? entry.collections : [],
-        items: entry.items.filter((item) => !isRetiredSkillMarketItem(item)),
+        items: entry.items
+            .filter((item) => !isRetiredSkillMarketItem(item))
+            .map(sanitizeMarketplaceItem),
     };
 }
 
@@ -1866,13 +1885,18 @@ export function Skills({ isActive = true, onTrySkillInChat, navigationTarget }: 
         setBusyMarketItemId(key);
         setStatusMessage(`正在安装 ${skill.name}`);
         try {
+            const directRepoPayload = !isManagedSkillMarketItem(skill) && skill.repo
+                ? {
+                    repo: skill.repo,
+                    refName: skill.refName || undefined,
+                    paths: skill.paths,
+                }
+                : {};
             const result = await window.ipcRenderer.skills.marketInstall({
                 id: skill.id,
                 packageId: skill.packageId,
                 marketId: skill.marketId,
-                repo: skill.repo || undefined,
-                refName: skill.refName || undefined,
-                paths: skill.paths,
+                ...directRepoPayload,
             }) as SkillMarketplaceInstallResponse;
             if (result.success === false) {
                 throw new Error(result.error || '技能安装失败');
