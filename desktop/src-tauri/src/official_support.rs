@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
 use std::fs;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, Size, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
 use url::Url;
 
 use crate::{
@@ -17,6 +19,10 @@ pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-update
 pub(crate) const AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY: &str = "ai_model_defaults_initialized_at";
 const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
 const PAYMENT_WINDOW_LABEL: &str = "redbox-payment";
+const PAYMENT_WINDOW_WIDTH: f64 = 860.0;
+const PAYMENT_WINDOW_HEIGHT: f64 = 760.0;
+const PAYMENT_WINDOW_MIN_WIDTH: f64 = 760.0;
+const PAYMENT_WINDOW_MIN_HEIGHT: f64 = 620.0;
 
 fn log_non_200_http(scope: &str, method: &str, url: &str, status: u16, body: &Value) {
     let details = http_error_details_from_value(status, body);
@@ -2375,12 +2381,13 @@ fn open_payment_url_window(app: AppHandle, url: Url) {
     std::thread::spawn(move || {
         let fallback_url = url.as_str().to_string();
         let result = if let Some(window) = app.get_webview_window(PAYMENT_WINDOW_LABEL) {
+            configure_payment_window(&window);
             window.navigate(url).and_then(|_| window.set_focus())
         } else {
             WebviewWindowBuilder::new(&app, PAYMENT_WINDOW_LABEL, WebviewUrl::External(url))
                 .title(format!("{} 支付", app_brand_display_name()))
-                .inner_size(520.0, 760.0)
-                .min_inner_size(420.0, 560.0)
+                .inner_size(PAYMENT_WINDOW_WIDTH, PAYMENT_WINDOW_HEIGHT)
+                .min_inner_size(PAYMENT_WINDOW_MIN_WIDTH, PAYMENT_WINDOW_MIN_HEIGHT)
                 .resizable(true)
                 .maximizable(false)
                 .center()
@@ -2392,6 +2399,17 @@ fn open_payment_url_window(app: AppHandle, url: Url) {
             let _ = open::that(fallback_url);
         }
     });
+}
+
+fn configure_payment_window(window: &WebviewWindow) {
+    let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(
+        PAYMENT_WINDOW_MIN_WIDTH,
+        PAYMENT_WINDOW_MIN_HEIGHT,
+    ))));
+    let _ = window.set_size(Size::Logical(LogicalSize::new(
+        PAYMENT_WINDOW_WIDTH,
+        PAYMENT_WINDOW_HEIGHT,
+    )));
 }
 
 pub(crate) fn invoke_chat_by_protocol(

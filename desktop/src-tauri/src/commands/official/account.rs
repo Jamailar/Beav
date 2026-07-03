@@ -5,10 +5,40 @@ pub(super) fn handle_account_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
     channel: &str,
-    _payload: &Value,
+    payload: &Value,
     request_generation: Option<u64>,
 ) -> Option<Result<Value, String>> {
     match channel {
+        "redbox-auth:redeem-invite-code" => Some((|| -> Result<Value, String> {
+            let invite_code = payload_string(payload, "inviteCode")
+                .or_else(|| payload_string(payload, "invite_code"))
+                .unwrap_or_default();
+            if invite_code.trim().is_empty() {
+                return Ok(json!({ "success": false, "error": "请输入邀请码" }));
+            }
+            let settings_snapshot =
+                with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;
+            let mut settings = settings_snapshot.clone();
+            let result = run_authenticated_official_request(
+                app,
+                state,
+                &mut settings,
+                "POST",
+                "/users/me/invite-code/redeem",
+                Some(json!({ "invite_code": invite_code })),
+                request_generation,
+            )?;
+            apply_official_settings_update(
+                app,
+                state,
+                &settings,
+                "official-invite-code-redeem",
+                None,
+                request_generation,
+            )?;
+            trigger_official_cached_data_refresh(app.clone());
+            Ok(result)
+        })()),
         "redbox-auth:points" => Some((|| -> Result<Value, String> {
             let settings_snapshot =
                 with_store(state, |store| Ok(settings_store::settings_snapshot(&store)))?;

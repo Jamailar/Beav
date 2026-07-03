@@ -1439,6 +1439,15 @@ declare global {
           session?: unknown;
           error?: string;
         }>;
+        redeemInviteCode: (payload: { inviteCode: string }) => Promise<{
+          success?: boolean;
+          status?: string;
+          error?: string;
+          message?: string;
+          inviter_reward_points?: number;
+          invitee_reward_points?: number;
+          redemption_id?: string;
+        }>;
         logout: () => Promise<{ success?: boolean; error?: string }>;
         getProducts: () => Promise<{
           success?: boolean;
