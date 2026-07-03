@@ -20,6 +20,13 @@ const SILENT_TRANSCRIPTION_REASONS = new Set([
   'transcription_unavailable',
 ]);
 
+const TRANSCRIPTION_UNAVAILABLE_ERROR_PATTERNS = [
+  /program not found/i,
+  /未找到\s*curl/i,
+  /转写接口不可用/i,
+  /audio transcription failed:\s*program not found/i,
+];
+
 export function resolveUsableTranscript(
   response: AudioTranscriptionResponse | null | undefined,
 ): { text: string | null; error: string | null } {
@@ -36,6 +43,10 @@ export function resolveUsableTranscript(
   }
 
   if (SILENT_TRANSCRIPTION_REASONS.has(reason)) {
+    return { text: null, error: null };
+  }
+
+  if (error && TRANSCRIPTION_UNAVAILABLE_ERROR_PATTERNS.some((pattern) => pattern.test(error))) {
     return { text: null, error: null };
   }
 

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { appConfirm } from '../utils/appDialogs';
 import { clsx } from 'clsx';
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
 
 interface ArchiveProfileRecord {
     id: string;
@@ -72,6 +73,17 @@ interface ArchiveSample {
     createdAt: number;
 }
 
+interface RedClawProfileBundleSnapshot {
+    profileRoot?: string;
+    user?: string;
+    creatorProfile?: string;
+    files?: {
+        user?: string;
+        creatorProfile?: string;
+    };
+    onboardingState?: Record<string, unknown>;
+}
+
 const normalizeProfile = (profile: ArchiveProfileRecord): ArchiveProfile => ({
     id: profile.id,
     name: profile.name,
@@ -104,9 +116,25 @@ const formatDate = (sample: ArchiveSample) => {
     return Number.isNaN(date.valueOf()) ? '' : date.toISOString().slice(0, 10);
 };
 
+const profileMarkdownExcerpt = (markdown: string, fallback: string): string => {
+    const normalized = markdown
+        .replace(/^#{1,6}\s*/gm, '')
+        .replace(/\*\*/g, '')
+        .replace(/\[[^\]]+\]\([^)]+\)/g, (match) => match.replace(/^\[|\]\([^)]+\)$/g, ''))
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join('\n');
+    if (!normalized) return fallback;
+    return normalized.length > 320 ? `${normalized.slice(0, 320).trim()}...` : normalized;
+};
+
 export function Archives({ isActive = true }: { isActive?: boolean }) {
     const [profiles, setProfiles] = useState<ArchiveProfile[]>([]);
     const [samples, setSamples] = useState<ArchiveSample[]>([]);
+    const [creatorProfileBundle, setCreatorProfileBundle] = useState<RedClawProfileBundleSnapshot | null>(null);
+    const [isLoadingCreatorProfile, setIsLoadingCreatorProfile] = useState(false);
+    const [creatorProfileError, setCreatorProfileError] = useState('');
     const [selectedProfileId, setSelectedProfileId] = useState('');
     const [selectedSampleId, setSelectedSampleId] = useState('');
     const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
@@ -122,6 +150,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     const hasLoadedSamplesSnapshotRef = useRef(false);
     const loadProfilesRequestRef = useRef(0);
     const loadSamplesRequestRef = useRef(0);
+    const loadCreatorProfileRequestRef = useRef(0);
 
     const [profileForm, setProfileForm] = useState({
         name: '',
@@ -171,7 +200,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
             setIsLoadingProfiles(true);
         }
         try {
-            const result = await window.ipcRenderer.invoke('archives:list') as ArchiveProfileRecord[];
+            const result = await window.ipcRenderer.archives.list<ArchiveProfileRecord[]>();
             if (requestId !== loadProfilesRequestRef.current) return;
             const list = (result || []).map(normalizeProfile);
             setProfiles(list);
@@ -197,6 +226,26 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
         }
     }, []);
 
+    const loadCreatorProfileBundle = useCallback(async () => {
+        const requestId = loadCreatorProfileRequestRef.current + 1;
+        loadCreatorProfileRequestRef.current = requestId;
+        setIsLoadingCreatorProfile(true);
+        setCreatorProfileError('');
+        try {
+            const bundle = await window.ipcRenderer.redclawProfile.getBundle() as RedClawProfileBundleSnapshot;
+            if (requestId !== loadCreatorProfileRequestRef.current) return;
+            setCreatorProfileBundle(bundle || null);
+        } catch (error) {
+            if (requestId !== loadCreatorProfileRequestRef.current) return;
+            console.error('Failed to load creator profile bundle:', error);
+            setCreatorProfileError(error instanceof Error ? error.message : '加载长期创作档案失败');
+        } finally {
+            if (requestId === loadCreatorProfileRequestRef.current) {
+                setIsLoadingCreatorProfile(false);
+            }
+        }
+    }, []);
+
     const loadSamples = useCallback(async (profileId: string) => {
         if (!profileId) return;
         const requestId = loadSamplesRequestRef.current + 1;
@@ -206,7 +255,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
             setIsLoadingSamples(true);
         }
         try {
-            const result = await window.ipcRenderer.invoke('archives:samples:list', profileId) as ArchiveSampleRecord[];
+            const result = await window.ipcRenderer.archives.samples.list<ArchiveSampleRecord[]>(profileId);
             if (requestId !== loadSamplesRequestRef.current) return;
             const list = (result || []).map(normalizeSample);
             setSamples(list);
@@ -225,7 +274,8 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     useEffect(() => {
         if (!isActive) return;
         void loadProfiles();
-    }, [isActive, loadProfiles]);
+        void loadCreatorProfileBundle();
+    }, [isActive, loadCreatorProfileBundle, loadProfiles]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -241,8 +291,8 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 void loadSamples(selectedProfileIdRef.current);
             }
         };
-        window.ipcRenderer.on('archives:sample-created', handleSampleCreated);
-        return () => window.ipcRenderer.off('archives:sample-created', handleSampleCreated);
+        window.ipcRenderer.archives.onSampleCreated(handleSampleCreated);
+        return () => window.ipcRenderer.archives.offSampleCreated(handleSampleCreated);
     }, [isActive, loadSamples]);
 
     const openCreateProfile = () => {
@@ -281,7 +331,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
         if (!profileForm.name.trim()) return;
 
         if (editingProfile) {
-            await window.ipcRenderer.invoke('archives:update', {
+            await window.ipcRenderer.archives.update({
                 id: editingProfile.id,
                 name: profileForm.name.trim(),
                 platform: profileForm.platform.trim(),
@@ -291,14 +341,14 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 toneTags
             });
         } else {
-            const created = await window.ipcRenderer.invoke('archives:create', {
+            const created = await window.ipcRenderer.archives.create<ArchiveProfileRecord>({
                 name: profileForm.name.trim(),
                 platform: profileForm.platform.trim(),
                 goal: profileForm.goal.trim(),
                 domain: profileForm.domain.trim(),
                 audience: profileForm.audience.trim(),
                 toneTags
-            }) as ArchiveProfileRecord;
+            });
             const normalized = created ? normalizeProfile(created) : null;
             if (normalized) {
                 setSelectedProfileId(normalized.id);
@@ -312,7 +362,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     const deleteProfile = async () => {
         if (!selectedProfile) return;
         if (!(await appConfirm(`确定删除档案“${selectedProfile.name}”及其样本吗？`, { title: '删除档案', confirmLabel: '删除', tone: 'danger' }))) return;
-        await window.ipcRenderer.invoke('archives:delete', selectedProfile.id);
+        await window.ipcRenderer.archives.delete(selectedProfile.id);
         await loadProfiles();
     };
 
@@ -352,7 +402,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
             .filter(Boolean);
 
         if (editingSample) {
-            await window.ipcRenderer.invoke('archives:samples:update', {
+            await window.ipcRenderer.archives.samples.update({
                 id: editingSample.id,
                 profileId: selectedProfile.id,
                 title: sampleForm.title.trim(),
@@ -363,7 +413,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 isFeatured: sampleForm.isFeatured
             });
         } else {
-            await window.ipcRenderer.invoke('archives:samples:create', {
+            await window.ipcRenderer.archives.samples.create({
                 profileId: selectedProfile.id,
                 title: sampleForm.title.trim(),
                 content: sampleForm.content.trim(),
@@ -381,13 +431,13 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     const deleteSample = async () => {
         if (!selectedSample) return;
         if (!(await appConfirm(`确定删除样本“${selectedSample.title}”吗？`, { title: '删除样本', confirmLabel: '删除', tone: 'danger' }))) return;
-        await window.ipcRenderer.invoke('archives:samples:delete', selectedSample.id);
+        await window.ipcRenderer.archives.samples.delete(selectedSample.id);
         await loadSamples(selectedProfileId);
     };
 
     const markFeatured = async () => {
         if (!selectedSample || !selectedProfile) return;
-        await window.ipcRenderer.invoke('archives:samples:update', {
+        await window.ipcRenderer.archives.samples.update({
             id: selectedSample.id,
             profileId: selectedProfile.id,
             title: selectedSample.title,
@@ -399,6 +449,13 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
         });
         await loadSamples(selectedProfile.id);
     };
+
+    const userProfileMarkdown = String(creatorProfileBundle?.user || creatorProfileBundle?.files?.user || '').trim();
+    const creatorProfileMarkdown = String(creatorProfileBundle?.creatorProfile || creatorProfileBundle?.files?.creatorProfile || '').trim();
+    const profileDocsReadyCount = [userProfileMarkdown, creatorProfileMarkdown].filter(Boolean).length;
+    const onboardingCompleted = Boolean((creatorProfileBundle?.onboardingState as { completed?: boolean } | undefined)?.completed);
+    const userProfileExcerpt = profileMarkdownExcerpt(userProfileMarkdown, '暂无用户档案。建议在设置里补充个人目标、内容边界和账号背景。');
+    const creatorProfileExcerpt = profileMarkdownExcerpt(creatorProfileMarkdown, '暂无创作档案。建议记录内容定位、受众痛点、视觉风格和运营策略。');
 
     return (
         <div className="flex h-full min-h-0">
@@ -502,6 +559,88 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                    <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                                    <Sparkles className="w-4 h-4 text-accent-primary" />
+                                    长期创作档案
+                                </div>
+                                <div className="mt-1 text-xs text-text-tertiary">
+                                    RedClaw 会读取用户档案和创作档案，为选题、标题、正文和素材判断提供长期上下文。
+                                </div>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                                <button
+                                    onClick={() => void loadCreatorProfileBundle()}
+                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-primary transition-colors disabled:opacity-50"
+                                    disabled={isLoadingCreatorProfile}
+                                >
+                                    {isLoadingCreatorProfile ? '刷新中' : '刷新'}
+                                </button>
+                                <button
+                                    onClick={() => dispatchAppIntent({ type: 'settings.open', tab: 'profile' })}
+                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-primary transition-colors"
+                                >
+                                    编辑档案
+                                </button>
+                            </div>
+                        </div>
+
+                        {creatorProfileError ? (
+                            <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                                {creatorProfileError}
+                            </div>
+                        ) : null}
+
+                        <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-3">
+                            <div className="rounded-lg border border-border bg-surface-primary p-3">
+                                <div className="text-xs text-text-tertiary">档案完整度</div>
+                                <div className="mt-1 text-lg font-semibold text-text-primary">{profileDocsReadyCount}/2</div>
+                                <div className="mt-1 text-[11px] text-text-tertiary">
+                                    {profileDocsReadyCount === 2 ? '用户档案和创作档案已建立' : '建议补齐用户档案和创作档案'}
+                                </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary p-3">
+                                <div className="text-xs text-text-tertiary">初始化状态</div>
+                                <div className="mt-1 text-lg font-semibold text-text-primary">{onboardingCompleted ? '已完成' : '待完善'}</div>
+                                <div className="mt-1 text-[11px] text-text-tertiary">
+                                    {creatorProfileBundle?.profileRoot ? '本地 profile 目录已就绪' : '等待创建本地 profile 目录'}
+                                </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary p-3">
+                                <div className="text-xs text-text-tertiary">档案位置</div>
+                                <div className="mt-1 truncate text-sm font-medium text-text-primary" title={creatorProfileBundle?.profileRoot || undefined}>
+                                    {creatorProfileBundle?.profileRoot || '未加载'}
+                                </div>
+                                <div className="mt-1 text-[11px] text-text-tertiary">
+                                    CreatorProfile.md / user.md
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+                            <div className="rounded-lg border border-border bg-surface-primary p-3">
+                                <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                                    <UserRound className="h-4 w-4 text-text-secondary" />
+                                    用户档案
+                                </div>
+                                <p className="mt-3 line-clamp-6 whitespace-pre-line text-xs leading-6 text-text-secondary">
+                                    {userProfileExcerpt}
+                                </p>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary p-3">
+                                <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                                    <Sparkles className="h-4 w-4 text-accent-primary" />
+                                    创作档案
+                                </div>
+                                <p className="mt-3 line-clamp-6 whitespace-pre-line text-xs leading-6 text-text-secondary">
+                                    {creatorProfileExcerpt}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                         <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
                             <div className="flex items-center gap-2 text-sm font-medium text-text-primary mb-3">

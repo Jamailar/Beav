@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { MediaJobLogRecord, MediaJobProjection } from './types';
 
 type MediaJobsState = {
@@ -14,6 +14,8 @@ type MediaJobsStore = {
     subscribe: (listener: Listener) => () => void;
     upsertJob: (job: MediaJobProjection) => void;
     upsertJobs: (jobs: MediaJobProjection[]) => void;
+    removeJob: (jobId: string) => void;
+    removeJobs: (jobIds: string[]) => void;
     appendLog: (log: MediaJobLogRecord) => void;
 };
 
@@ -30,7 +32,7 @@ function emit(): void {
     }
 }
 
-function shallowArrayEqual<T>(left: T[], right: T[]): boolean {
+export function shallowArrayEqual<T>(left: T[], right: T[]): boolean {
     if (left.length !== right.length) return false;
     for (let index = 0; index < left.length; index += 1) {
         if (!Object.is(left[index], right[index])) return false;
@@ -44,6 +46,23 @@ function replaceState(next: MediaJobsState): void {
     emit();
 }
 
+function mediaJobChanged(current: MediaJobProjection | undefined, next: MediaJobProjection): boolean {
+    if (!current) return true;
+    return current.status !== next.status
+        || current.updatedAt !== next.updatedAt
+        || current.completedAt !== next.completedAt
+        || current.archivedAt !== next.archivedAt
+        || current.archiveReason !== next.archiveReason
+        || current.cancelReason !== next.cancelReason
+        || current.artifacts.length !== next.artifacts.length
+        || current.recentEvents.length !== next.recentEvents.length
+        || current.attempt?.attemptId !== next.attempt?.attemptId
+        || current.attempt?.attemptNo !== next.attempt?.attemptNo
+        || current.attempt?.updatedAt !== next.attempt?.updatedAt
+        || current.attempt?.leaseExpiresAt !== next.attempt?.leaseExpiresAt
+        || current.attempt?.nextPollAt !== next.attempt?.nextPollAt;
+}
+
 export const mediaJobsStore: MediaJobsStore = {
     getState: () => state,
     subscribe: (listener) => {
@@ -52,7 +71,7 @@ export const mediaJobsStore: MediaJobsStore = {
     },
     upsertJob: (job) => {
         const current = state.jobsById[job.jobId];
-        if (current && JSON.stringify(current) === JSON.stringify(job)) return;
+        if (!mediaJobChanged(current, job)) return;
         replaceState({
             ...state,
             jobsById: {
@@ -67,7 +86,7 @@ export const mediaJobsStore: MediaJobsStore = {
         const nextJobsById = { ...state.jobsById };
         for (const job of jobs) {
             const current = nextJobsById[job.jobId];
-            if (current && JSON.stringify(current) === JSON.stringify(job)) continue;
+            if (!mediaJobChanged(current, job)) continue;
             nextJobsById[job.jobId] = job;
             changed = true;
         }
@@ -75,6 +94,35 @@ export const mediaJobsStore: MediaJobsStore = {
         replaceState({
             ...state,
             jobsById: nextJobsById,
+        });
+    },
+    removeJob: (jobId) => {
+        if (!state.jobsById[jobId] && !state.logsByJobId[jobId]) return;
+        const nextJobsById = { ...state.jobsById };
+        const nextLogsByJobId = { ...state.logsByJobId };
+        delete nextJobsById[jobId];
+        delete nextLogsByJobId[jobId];
+        replaceState({
+            jobsById: nextJobsById,
+            logsByJobId: nextLogsByJobId,
+        });
+    },
+    removeJobs: (jobIds) => {
+        if (jobIds.length === 0) return;
+        let changed = false;
+        const nextJobsById = { ...state.jobsById };
+        const nextLogsByJobId = { ...state.logsByJobId };
+        for (const jobId of jobIds) {
+            if (nextJobsById[jobId] || nextLogsByJobId[jobId]) {
+                changed = true;
+                delete nextJobsById[jobId];
+                delete nextLogsByJobId[jobId];
+            }
+        }
+        if (!changed) return;
+        replaceState({
+            jobsById: nextJobsById,
+            logsByJobId: nextLogsByJobId,
         });
     },
     appendLog: (log) => {
@@ -91,10 +139,40 @@ export const mediaJobsStore: MediaJobsStore = {
     },
 };
 
-export function useMediaJobsStore<T>(selector: Selector<T>): T {
+export function useMediaJobsStore<T>(
+    selector: Selector<T>,
+    isEqual: (left: T, right: T) => boolean = Object.is,
+): T {
+    const selectedSnapshotRef = useRef<{ state: MediaJobsState; selected: T } | null>(null);
+    const getSelectedSnapshot = useCallback(() => {
+        const nextState = mediaJobsStore.getState();
+        const nextSelected = selector(nextState);
+        const previous = selectedSnapshotRef.current;
+        if (previous && previous.state === nextState) {
+            return previous.selected;
+        }
+        if (previous && isEqual(previous.selected, nextSelected)) {
+            selectedSnapshotRef.current = { state: nextState, selected: previous.selected };
+            return previous.selected;
+        }
+        selectedSnapshotRef.current = { state: nextState, selected: nextSelected };
+        return nextSelected;
+    }, [isEqual, selector]);
+
     return useSyncExternalStore(
         mediaJobsStore.subscribe,
-        () => selector(mediaJobsStore.getState()),
-        () => selector(mediaJobsStore.getState()),
+        getSelectedSnapshot,
+        getSelectedSnapshot,
     );
+}
+
+export function useMediaJobsByIds(jobIds: string[]): MediaJobProjection[] {
+    const jobIdsKey = jobIds.join('\u0000');
+    const selectJobsById = useCallback((nextState: MediaJobsState) => (
+        (jobIdsKey ? jobIdsKey.split('\u0000') : [])
+            .map((jobId) => nextState.jobsById[jobId])
+            .filter((job): job is MediaJobProjection => Boolean(job))
+    ), [jobIdsKey]);
+
+    return useMediaJobsStore(selectJobsById, shallowArrayEqual);
 }

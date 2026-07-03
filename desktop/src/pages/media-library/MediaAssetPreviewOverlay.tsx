@@ -29,10 +29,19 @@ const SOURCE_LABEL: Record<MediaAssetSource, string> = {
     imported: '导入',
 };
 
-function isVideoAsset(asset: Pick<MediaAssetLike, 'mimeType' | 'relativePath'>): boolean {
+function isVideoAsset(asset: Pick<MediaAssetLike, 'mimeType' | 'relativePath' | 'absolutePath' | 'previewUrl'>): boolean {
     const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return false;
     if (mimeType.startsWith('video/')) return true;
-    return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
+    const source = String(asset.relativePath || asset.absolutePath || asset.previewUrl || '').trim();
+    return /\.(mp4|webm|mov)(?:[?#].*)?$/i.test(source);
+}
+
+function isAudioAsset(asset: Pick<MediaAssetLike, 'mimeType' | 'relativePath' | 'absolutePath' | 'previewUrl'>): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return true;
+    const source = String(asset.relativePath || asset.absolutePath || asset.previewUrl || '').trim();
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i.test(source);
 }
 
 export function MediaAssetPreviewOverlay({
@@ -64,7 +73,7 @@ export function MediaAssetPreviewOverlay({
             >
                 <X className="h-5 w-5" />
             </button>
-            <div className="flex h-full w-full max-w-[1600px] items-center gap-6">
+            <div className="flex h-full min-h-0 w-full max-w-[1600px] items-center gap-6">
                 <div
                     className="hidden h-full w-[280px] shrink-0 md:flex md:items-end"
                     onClick={(event) => event.stopPropagation()}
@@ -92,21 +101,26 @@ export function MediaAssetPreviewOverlay({
                     </div>
                 </div>
                 <div
-                    className="flex min-w-0 flex-1 items-center justify-center"
+                    className="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden"
                     onClick={(event) => event.stopPropagation()}
                 >
                     {isVideoAsset(asset) ? (
                         <video
                             src={src}
-                            className="block max-h-[90vh] max-w-[90vw] rounded-xl border border-white/10 bg-black/10 object-contain shadow-2xl"
+                            className="block max-h-full max-w-full rounded-xl border border-white/10 bg-black/10 object-contain shadow-2xl"
                             controls
                             autoPlay
                         />
+                    ) : isAudioAsset(asset) ? (
+                        <div className="w-full max-w-2xl rounded-xl border border-white/10 bg-black/38 p-5 shadow-2xl">
+                            <div className="mb-3 text-sm text-white/78">{asset.title || asset.id}</div>
+                            <audio src={src} className="w-full" controls autoPlay />
+                        </div>
                     ) : (
                         <img
                             src={src}
                             alt={asset.title || asset.id}
-                            className="block max-h-[90vh] max-w-[90vw] rounded-xl border border-white/10 bg-black/10 object-contain shadow-2xl"
+                            className="block max-h-full max-w-full rounded-xl border border-white/10 bg-black/10 object-contain shadow-2xl"
                         />
                     )}
                 </div>

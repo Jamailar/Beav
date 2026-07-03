@@ -1,32 +1,21 @@
 # `src/components/manuscripts/`
 
-这里是稿件编辑和视频/音频工作台的核心前端区域，包含文字稿件、时间线、预览、Remotion 场景编辑以及 vendored timeline 适配。
+这里是稿件编辑的核心前端区域，包含文字稿件、素材绑定、包状态预览和视频导出入口。
 
 ## Main Responsibilities
 
-- 稿件编辑器和工具栏
-- 视频/音频工作台
-- 时间线与轨道 UI
-- Remotion 预览阶段壳层
-- FreeCut vendored timeline 桥接
-
-## High-Risk Files
-
-- `VideoDraftWorkbench.tsx`
-- `AudioDraftWorkbench.tsx`
-- `EditableTrackTimeline.tsx`
-- `VendoredFreecutTimeline.tsx`
-- `freecutTimelineBridge.ts`
-- `editorProject.ts`
+- `ManuscriptEditorHost.tsx`：编辑器页面 host，负责数据加载、当前编辑状态和 UI composition。
+- `../../features/manuscripts/editorModel.ts`：稿件树、素材分类、草稿卡片、生成素材投影、导出尺寸等纯 model/helper。
+- `WritingDraftWorkbench.tsx`：沉浸式写作工作台。
+- `ManuscriptToolbar.tsx`、`CodeMirrorEditor.tsx`、`GraphView.tsx`：局部编辑控件。
 
 ## Rules
 
-- 编辑器协议优先统一在 `editorProject.ts` 和共享类型层，不要在多个组件里各自发明字段。
-- 时间线和预览相关改动要同时考虑 React UI、vendored FreeCut 桥和 Remotion 预览。
 - 重交互组件避免在 render 阶段做大规模转换。
+- 树、素材和卡片 projection 优先放在 `features/manuscripts/editorModel.ts`，页面只做 memoized composition。
 
 ## Verification
 
-- 打开稿件页并切换不同 draft 类型
-- 验证选中、拖拽、时间线滚动、预览更新
-- 如改动 FreeCut 适配，验证 vendored timeline 未断裂
+- 打开稿件编辑器并验证文字稿件读写。
+- 验证创建/重命名/删除文件夹与草稿。
+- 验证包素材绑定、Remotion 场景保存和导出入口。

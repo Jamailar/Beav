@@ -489,6 +489,7 @@ export class SessionBridgeService extends EventEmitter {
   }
 
   private broadcast(sessionId: string, message: SessionBridgeMessage): void {
+    this.emit('session-message', { sessionId, message });
     const subscribers = this.subscribers.get(sessionId);
     if (!subscribers?.size) return;
     for (const ws of subscribers) {

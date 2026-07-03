@@ -23,22 +23,22 @@ export interface ChatComposerPalette {
 export function getChatComposerPalette(theme: ChatComposerTheme = 'default'): ChatComposerPalette {
     if (theme === 'dark') {
         return {
-            shellMain: 'bg-[#121417] border border-white/10 rounded-[24px] p-1.5',
-            shellEmpty: 'bg-[#121417] border border-white/10 rounded-[28px] p-2',
+            shellMain: 'bg-[rgb(var(--color-surface-primary))] border border-white/10 rounded-[24px] p-1.5',
+            shellEmpty: 'bg-[rgb(var(--color-surface-primary))] border border-white/10 rounded-[28px] p-2',
             text: 'text-white placeholder:text-white/28',
             subtleButton: 'text-white/48 hover:text-white/82',
-            sendButtonActive: 'bg-[#4c82ff] text-white hover:bg-[#5b8eff]',
+            sendButtonActive: 'bg-[rgb(var(--color-accent-primary))] text-white hover:bg-[rgb(var(--color-accent-hover))]',
             sendButtonIdle: 'bg-white/10 text-white/45 opacity-80',
         };
     }
 
     return {
-        shellMain: 'bg-[#fdfcf9] border border-[#edebe4] rounded-[24px] p-1.5',
-        shellEmpty: 'bg-[#fdfcf9] border border-[#edebe4] rounded-[28px] p-2',
-        text: 'text-text-primary placeholder:text-[#b4b2a8]',
+        shellMain: 'bg-[rgb(var(--color-surface-primary))] border border-[rgb(var(--color-border))] rounded-[24px] p-1.5',
+        shellEmpty: 'bg-[rgb(var(--color-surface-primary))] border border-[rgb(var(--color-border))] rounded-[28px] p-2',
+        text: 'text-text-primary placeholder:text-[rgb(var(--color-text-tertiary))]',
         subtleButton: 'text-text-tertiary hover:text-text-secondary',
-        sendButtonActive: 'bg-[#4c82ff] text-white hover:bg-[#5b8eff]',
-        sendButtonIdle: 'bg-[#edebe4] text-white opacity-60',
+        sendButtonActive: 'bg-[rgb(var(--color-accent-primary))] text-white hover:bg-[rgb(var(--color-accent-hover))]',
+        sendButtonIdle: 'bg-[rgb(var(--color-border))] text-white opacity-60',
     };
 }
 

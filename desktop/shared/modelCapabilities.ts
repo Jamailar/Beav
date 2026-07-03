@@ -5,6 +5,8 @@ export type ModelCapability =
     | 'image'
     | 'video'
     | 'audio'
+    | 'tts'
+    | 'voice_clone'
     | 'transcription'
     | 'embedding';
 
@@ -21,11 +23,18 @@ export const MODEL_INPUT_CAPABILITY_ORDER: ModelInputCapability[] = [
     'file',
 ];
 
+export const DEFAULT_UNKNOWN_CHAT_MODEL_INPUT_CAPABILITIES: ModelInputCapability[] = [
+    'image',
+    'file',
+];
+
 export const MODEL_CAPABILITY_ORDER: ModelCapability[] = [
     'chat',
     'image',
     'video',
     'audio',
+    'tts',
+    'voice_clone',
     'transcription',
     'embedding',
 ];
@@ -35,6 +44,8 @@ export const MODEL_CAPABILITY_META: Record<ModelCapability, { label: string; sho
     image: { label: '图片生成', shortLabel: '图片' },
     video: { label: '视频生成', shortLabel: '视频' },
     audio: { label: '音频生成', shortLabel: '音频' },
+    tts: { label: '语音合成', shortLabel: 'TTS' },
+    voice_clone: { label: '音色克隆', shortLabel: '克隆' },
     transcription: { label: '转录', shortLabel: '转录' },
     embedding: { label: '向量', shortLabel: '向量' },
 };
@@ -51,11 +62,43 @@ export interface ModelProfileRule {
 
 const CAPABILITY_RULES: Array<{ capability: ModelCapability; patterns: RegExp[] }> = [
     { capability: 'embedding', patterns: [/\bembedding\b/i, /\bembed\b/i] },
-    { capability: 'transcription', patterns: [/\basr\b/i, /\bwhisper\b/i] },
-    { capability: 'audio', patterns: [/\btts\b/i, /\bspeech\b/i] },
-    { capability: 'video', patterns: [/\bvideo\b/i, /\bveo\b/i, /\bseedance\b/i, /\bkling\b/i, /\bvidu\b/i, /\bluma\b/i, /\bsora\b/i] },
-    { capability: 'image', patterns: [/\bimage\b/i, /\bdall-?e\b/i, /\bimagen\b/i, /\bseedream\b/i, /nanobanana/i, /banana/i] },
+    { capability: 'transcription', patterns: [/asr/i, /\bwhisper\b/i, /\bnova-3\b/i] },
+    { capability: 'voice_clone', patterns: [/clone/i] },
+    { capability: 'tts', patterns: [/voice/i, /\btts\b/i, /\bspeech\b/i] },
+    { capability: 'video', patterns: [/video/i, /\bveo\b/i, /\bseedance\b/i, /\bkling\b/i, /\bvidu\b/i, /\bluma\b/i, /\bsora\b/i] },
+    { capability: 'image', patterns: [/image/i, /\bdall-?e\b/i, /\bimagen\b/i, /\bseedream\b/i, /nanobanana/i, /banana/i] },
 ];
+
+const inferForcedNameCapabilities = (modelId: string): ModelCapability[] => {
+    const normalized = String(modelId || '').trim().toLowerCase();
+    if (!normalized) return [];
+    if (normalized.includes('asr')) return ['transcription'];
+    if (normalized === 'nova-3') return ['transcription'];
+    if (normalized.includes('tts')) return ['tts'];
+    if (normalized.includes('clone')) return ['voice_clone'];
+    if (normalized.includes('voice')) return ['tts'];
+    return [];
+};
+
+export const modelNameDisallowsChatList = (modelId: string): boolean => {
+    return String(modelId || '').trim().toLowerCase().includes('omni');
+};
+
+export const enforceModelCapabilityPolicy = (
+    modelId: string,
+    capabilities: Iterable<ModelCapability>,
+): ModelCapability[] => {
+    const normalized = new Set<ModelCapability>();
+    for (const capability of capabilities) {
+        if (MODEL_CAPABILITY_ORDER.includes(capability)) {
+            normalized.add(capability);
+        }
+    }
+    if (modelNameDisallowsChatList(modelId)) {
+        normalized.delete('chat');
+    }
+    return MODEL_CAPABILITY_ORDER.filter((capability) => normalized.has(capability));
+};
 
 const normalizeModelInputCapabilities = (values: unknown): ModelInputCapability[] => {
     const allowed = new Set<ModelInputCapability>(MODEL_INPUT_CAPABILITY_ORDER);
@@ -72,6 +115,21 @@ const normalizeModelInputCapabilities = (values: unknown): ModelInputCapability[
     return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => normalized.has(capability));
 };
 
+const modelNameAllowsVideoInput = (modelId: string): boolean => {
+    return /\bomni\b/i.test(String(modelId || '').trim());
+};
+
+const enforceModelInputCapabilityPolicy = (
+    modelId: string,
+    capabilities: Iterable<ModelInputCapability>,
+): ModelInputCapability[] => {
+    const normalized = new Set(capabilities);
+    if (!modelNameAllowsVideoInput(modelId)) {
+        normalized.delete('video');
+    }
+    return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => normalized.has(capability));
+};
+
 const normalizeModelCapabilitiesList = (values: unknown): ModelCapability[] => {
     const allowed = new Set<ModelCapability>(MODEL_CAPABILITY_ORDER);
     const normalized = new Set<ModelCapability>();
@@ -79,7 +137,8 @@ const normalizeModelCapabilitiesList = (values: unknown): ModelCapability[] => {
         return [];
     }
     for (const value of values) {
-        const text = String(value || '').trim().toLowerCase();
+        const raw = String(value || '').trim().toLowerCase();
+        const text = raw === 'stt' ? 'transcription' : raw;
         if (allowed.has(text as ModelCapability)) {
             normalized.add(text as ModelCapability);
         }
@@ -111,6 +170,7 @@ const ATTACHMENT_KIND_TO_INPUT_CAPABILITY: Record<string, ModelInputCapability |
     image: 'image',
     audio: 'audio',
     video: 'video',
+    document: 'file',
     text: 'file',
     binary: 'file',
 };
@@ -126,6 +186,8 @@ export const findMatchedModelProfiles = (modelId: string): Array<Omit<ModelProfi
 export const getForcedModelCapabilities = (modelId: string): ModelCapability[] => {
     const normalized = String(modelId || '').trim().toLowerCase();
     if (!normalized) return [];
+    const forcedByName = inferForcedNameCapabilities(normalized);
+    if (forcedByName.length > 0) return enforceModelCapabilityPolicy(normalized, forcedByName);
     const detected = new Set<ModelCapability>();
     for (const rule of MODEL_PROFILE_RULES) {
         if (rule.patterns.some((pattern) => pattern.test(normalized))) {
@@ -134,7 +196,7 @@ export const getForcedModelCapabilities = (modelId: string): ModelCapability[] =
             }
         }
     }
-    return MODEL_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
+    return enforceModelCapabilityPolicy(normalized, detected);
 };
 
 export const inferModelCapabilities = (modelId: string): ModelCapability[] => {
@@ -157,7 +219,7 @@ export const inferModelCapabilities = (modelId: string): ModelCapability[] => {
         detected.add('chat');
     }
 
-    return MODEL_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
+    return enforceModelCapabilityPolicy(normalized, detected);
 };
 
 export const hasModelCapability = (modelId: string, capability: ModelCapability): boolean => {
@@ -176,7 +238,15 @@ export const getModelInputCapabilities = (modelId: string): ModelInputCapability
             }
         }
     }
-    return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
+    if (detected.size > 0) {
+        return enforceModelInputCapabilityPolicy(normalized, detected);
+    }
+
+    if (inferModelCapabilities(normalized).includes('chat')) {
+        return enforceModelInputCapabilityPolicy(normalized, DEFAULT_UNKNOWN_CHAT_MODEL_INPUT_CAPABILITIES);
+    }
+
+    return enforceModelInputCapabilityPolicy(normalized, detected);
 };
 
 export const hasModelInputCapability = (modelId: string, capability: ModelInputCapability): boolean => {
@@ -192,7 +262,8 @@ export const supportsAttachmentKindDirectInput = (modelId: string, attachmentKin
 export const normalizeModelCapabilities = (values: Array<ModelCapability | string | null | undefined>): ModelCapability[] => {
     const normalized = new Set<ModelCapability>();
     for (const value of values) {
-        const text = String(value || '').trim().toLowerCase();
+        const raw = String(value || '').trim().toLowerCase();
+        const text = raw === 'stt' ? 'transcription' : raw;
         if (!text) continue;
         if (MODEL_CAPABILITY_ORDER.includes(text as ModelCapability)) {
             normalized.add(text as ModelCapability);

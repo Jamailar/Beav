@@ -80,7 +80,7 @@ async function readRichpostPlan(planFile: string | null | undefined): Promise<Ri
   if (!String(planFile || '').trim()) {
     return null;
   }
-  const result = await window.ipcRenderer.invoke('manuscripts:read', String(planFile).trim()) as { content?: string };
+  const result = await window.ipcRenderer.manuscripts.read(String(planFile).trim()) as { content?: string };
   const content = String(result?.content || '').trim();
   if (!content) {
     return null;
@@ -459,7 +459,7 @@ export async function stabilizeRichpostPagination<TState extends RichpostPackage
     if (!changed) {
       break;
     }
-    const result = await window.ipcRenderer.invoke('manuscripts:apply-richpost-page-plan', {
+    const result = await window.ipcRenderer.manuscripts.applyRichpostPagePlan({
       filePath: input.filePath,
       plan: nextPlan,
     }) as {

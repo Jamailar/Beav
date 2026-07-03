@@ -6,7 +6,6 @@
 
 - `Chat.tsx`
 - `Knowledge.tsx`
-- `Manuscripts.tsx`
 - `RedClaw.tsx`
 - `Settings.tsx`
 - `MediaLibrary.tsx`

@@ -72,6 +72,266 @@ export interface NotificationPermissionState {
   state: 'granted' | 'denied' | 'prompt' | 'unknown';
 }
 
+export interface RendererAuthStateSnapshot {
+  status?: string;
+  loggedIn?: boolean;
+  session?: Record<string, unknown> | null;
+  points?: unknown;
+  models?: unknown[];
+  callRecords?: unknown[];
+  degradedReason?: string | null;
+  lastError?: string | null;
+  lastErrorKind?: string | null;
+  lastRefreshAt?: string | null;
+  nextRefreshAtMs?: number | null;
+  [key: string]: unknown;
+}
+
+export interface ThrivePluginSummary {
+  id: string;
+  name: string;
+  displayName: string;
+  version: string;
+  description?: string | null;
+  enabled: boolean;
+  marketplace: string;
+  installedAt: string;
+  updatedAt: string;
+  root: string;
+  dataDir: string;
+  capabilities: string[];
+  approvalRequired: string[];
+  uiSlots: string[];
+  appConnectorIds?: string[];
+  appConnectors?: Array<{
+    name: string;
+    id: string;
+    category?: string | null;
+  }>;
+  mcpServersPath?: string | null;
+  skillsPath?: string | null;
+  appsPath?: string | null;
+  hooksPath?: string | null;
+  actionsPath?: string | null;
+  mediaPath?: string | null;
+  homeWidgets?: number;
+  homeQuickActions?: number;
+  error?: string | null;
+}
+
+export interface ThrivePluginConnectorAppInfo {
+  id: string;
+  name: string;
+  description?: string | null;
+  logoUrl?: string | null;
+  logoUrlDark?: string | null;
+  distributionChannel?: string | null;
+  branding?: unknown;
+  appMetadata?: unknown;
+  labels?: unknown;
+  installUrl?: string | null;
+  isAccessible: boolean;
+  isEnabled: boolean;
+  pluginDisplayNames: string[];
+  category?: string | null;
+}
+
+export interface ThrivePluginMarketplaceItem {
+  id: string;
+  name: string;
+  author: string;
+  description: string;
+  repo: string;
+  version?: string | null;
+  displayName?: string | null;
+  capabilities: string[];
+  packageUrl?: string | null;
+  packageAssetName?: string | null;
+  manifestUrl?: string | null;
+  installed: boolean;
+  installedPluginId?: string | null;
+  error?: string | null;
+}
+
+export interface ThrivePluginMarketplaceResponse {
+  success: boolean;
+  registryUrl: string;
+  plugins: ThrivePluginMarketplaceItem[];
+  error?: string;
+}
+
+export interface CodexPluginMarketplaceItem {
+  id: string;
+  name: string;
+  remotePluginId?: string | null;
+  version?: string | null;
+  displayName?: string | null;
+  description?: string | null;
+  shortDescription?: string | null;
+  category?: string | null;
+  logoUrl?: string | null;
+  keywords: string[];
+  capabilities: string[];
+  appConnectorIds: string[];
+  sourceRoot?: string | null;
+  sourceLabel: string;
+  remote: boolean;
+  installable: boolean;
+  installed: boolean;
+  installedPluginId: string;
+  error?: string | null;
+}
+
+export interface CodexPluginMarketplaceResponse {
+  success: boolean;
+  sourceRoots: string[];
+  remoteCatalogRoots?: string[];
+  plugins: CodexPluginMarketplaceItem[];
+  errors?: Array<{ path?: string; error?: string }>;
+  error?: string;
+}
+
+export interface ThrivePluginLocalCandidate {
+  name: string;
+  sourcePath?: string | null;
+  pluginRoot?: string | null;
+  valid: boolean;
+  version?: string | null;
+  displayName?: string | null;
+  description?: string | null;
+  error?: string | null;
+}
+
+export interface ThrivePluginDiscoverLocalResponse {
+  success: boolean;
+  sourceRoot: string;
+  kind: 'plugin' | 'codex-marketplace' | 'directory' | string;
+  marketplacePath?: string;
+  marketplaceName?: string;
+  plugins: ThrivePluginLocalCandidate[];
+  error?: string;
+}
+
+export interface ThrivePluginHomeWidget {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  zone?: 'main' | 'sidebar' | string;
+  title: string;
+  subtitle?: string | null;
+  kind: 'metric' | 'list' | 'prompt' | 'action' | string;
+  source?: string | null;
+  label?: string | null;
+  prompt?: string | null;
+  icon?: string | null;
+  tone?: string | null;
+  order?: number;
+  limit?: number;
+  data?: Record<string, unknown> | null;
+}
+
+export interface ThrivePluginHomeAction {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  label: string;
+  prompt?: string | null;
+  target?: 'redclaw' | 'coverStudio' | 'generationStudio' | 'manuscripts' | string | null;
+  mode?: string | null;
+  icon?: string | null;
+  tone?: string | null;
+  order?: number;
+}
+
+export interface ThrivePluginHomeResponse {
+  success: boolean;
+  widgets: ThrivePluginHomeWidget[];
+  sidebarSections: ThrivePluginHomeWidget[];
+  quickActions: ThrivePluginHomeAction[];
+  error?: string;
+}
+
+export interface RendererSettingsPayload {
+  api_endpoint?: string;
+  api_key?: string;
+  model_name?: string;
+  model_name_wander?: string;
+  model_name_chatroom?: string;
+  model_name_knowledge?: string;
+  model_name_redclaw?: string;
+  search_provider?: string;
+  search_endpoint?: string;
+  search_api_key?: string;
+  visual_index_enabled?: boolean;
+  visual_index_provider?: string;
+  visual_index_endpoint?: string;
+  visual_index_api_key?: string;
+  visual_index_model?: string;
+  visual_index_prompt_version?: string;
+  visual_index_timeout_seconds?: number;
+  visual_index_max_image_edge?: number;
+  visual_index_skip_small_images?: boolean;
+  visual_index_pdf_max_pages?: number;
+  visual_index_pdf_render_dpi?: number;
+  visual_index_concurrency?: number;
+  video_analysis_enabled?: boolean;
+  video_analysis_endpoint?: string;
+  video_analysis_api_key?: string;
+  video_analysis_model?: string;
+  video_analysis_protocol?: string;
+  video_analysis_max_direct_video_bytes?: number;
+  proxy_enabled?: boolean;
+  proxy_url?: string;
+  proxy_bypass?: string;
+  workspace_dir?: string;
+  active_space_id?: string;
+  role_mapping?: Record<string, string> | string;
+  transcription_model?: string;
+  transcription_endpoint?: string;
+  transcription_key?: string;
+  embedding_endpoint?: string;
+  embedding_key?: string;
+  embedding_model?: string;
+  ai_sources_json?: string;
+  default_ai_source_id?: string;
+  image_provider?: string;
+  image_endpoint?: string;
+  image_api_key?: string;
+  image_model?: string;
+  video_endpoint?: string;
+  video_api_key?: string;
+  video_model?: string;
+  image_provider_template?: string;
+  image_aspect_ratio?: string;
+  image_size?: string;
+  image_quality?: string;
+  mcp_servers_json?: string;
+  ecommerce_platforms_json?: string;
+  redclaw_compact_target_tokens?: number;
+  wander_deep_think_enabled?: boolean;
+  wander_skill_loading_enabled?: boolean;
+  memberSkillDistillation?: boolean;
+  memberRuntimeOverlay?: boolean;
+  memberToolPolicy?: boolean;
+  memberSkillAutoRefresh?: boolean;
+  debug_log_enabled?: boolean;
+  developer_mode_enabled?: boolean;
+  developer_mode_unlocked_at?: string | null;
+  cli_runtime_execution_mode?: string;
+  chat_max_tokens_default?: number;
+  chat_max_tokens_deepseek?: number;
+  diagnostics_upload_consent?: 'none' | 'prompt' | 'approved';
+  diagnostics_include_advanced_context?: boolean;
+  diagnostics_auto_send_same_crash?: boolean;
+  diagnostics_last_prompted_at?: string | null;
+  analytics_consent?: 'none' | 'prompt' | 'approved';
+  analytics_last_prompted_at?: string | null;
+  release_log_retention_days?: number;
+  release_log_max_file_mb?: number;
+  notifications_json?: string;
+  ai_model_routes_json?: string;
+}
+
 export interface AgentTaskNode {
   id: string;
   type: string;
@@ -166,6 +426,12 @@ export type RuntimeUnifiedEventType =
   | 'runtime:cli-escalation-requested'
   | 'runtime:cli-escalation-resolved'
   | 'runtime:cli-verification-finished'
+  | 'runtime:collab-session-changed'
+  | 'runtime:collab-member-changed'
+  | 'runtime:collab-task-changed'
+  | 'runtime:collab-report-submitted'
+  | 'runtime:collab-message-delivered'
+  | 'runtime:collab-report-tick'
   | 'stream_start'
   | 'text_delta'
   | 'tool_request'
@@ -183,6 +449,227 @@ export interface RuntimeUnifiedEvent {
   parentRuntimeId?: string | null;
   payload?: unknown;
   timestamp: number;
+}
+
+export interface CollabSessionRecord {
+  id: string;
+  ownerSessionId?: string | null;
+  coordinatorMemberId?: string | null;
+  workspaceRoot?: string | null;
+  title: string;
+  objective: string;
+  status: string;
+  runtimeMode: string;
+  source: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number | null;
+}
+
+export interface CollabMemberRecord {
+  id: string;
+  sessionId: string;
+  displayName: string;
+  roleId: string;
+  sourceKind: string;
+  backend: string;
+  adapterKind: string;
+  status: string;
+  currentTaskId?: string | null;
+  conversationId?: string | null;
+  runtimeId?: string | null;
+  capabilities: string[];
+  allowedTools: string[];
+  progressIntervalMs: number;
+  reportIntervalSeconds: number;
+  lastSeenAt?: number | null;
+  lastReportAt?: number | null;
+  lastActivityAt?: number | null;
+  lastError?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface CollabTaskRecord {
+  id: string;
+  sessionId: string;
+  parentTaskId?: string | null;
+  source: string;
+  memberId?: string | null;
+  assigneeAgentId?: string | null;
+  reviewerMemberId?: string | null;
+  title: string;
+  objective: string;
+  description: string;
+  status: string;
+  priority: number;
+  taskType: string;
+  dependsOnTaskIds: string[];
+  blockedByTaskIds: string[];
+  blocksTaskIds: string[];
+  runtimeTaskId?: string | null;
+  externalTaskRef?: string | null;
+  attempt: number;
+  maxAttempts: number;
+  leaseOwner?: string | null;
+  leaseExpiresAt?: number | null;
+  sessionResumeId?: string | null;
+  workDir?: string | null;
+  failureReason?: string | null;
+  resultSummary?: string | null;
+  progressPercent?: number | null;
+  artifacts: unknown[];
+  artifactIds: string[];
+  dueAt?: number | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number | null;
+  completedAt?: number | null;
+}
+
+export interface CollabMailboxMessageRecord {
+  id: string;
+  sessionId: string;
+  fromMemberId?: string | null;
+  toMemberId?: string | null;
+  fromKind: string;
+  taskId?: string | null;
+  kind: string;
+  messageType: string;
+  status: string;
+  subject?: string | null;
+  body: string;
+  attachmentRefs: string[];
+  payload?: Record<string, unknown> | null;
+  createdAt: number;
+  readAt?: number | null;
+}
+
+export interface CollabProgressReportRecord {
+  id: string;
+  sessionId: string;
+  memberId: string;
+  taskId?: string | null;
+  reportType: string;
+  status: string;
+  summary: string;
+  nextAction?: string | null;
+  nextSteps: string[];
+  progressPercent?: number | null;
+  blockers: string[];
+  artifacts: unknown[];
+  artifactIds: string[];
+  payload?: Record<string, unknown> | null;
+  createdAt: number;
+}
+
+export interface ReviewDocketRecord {
+  id: string;
+  sourceKind: string;
+  sourceId?: string | null;
+  sessionId?: string | null;
+  taskId?: string | null;
+  title: string;
+  summary: string;
+  body: string;
+  decisionType: string;
+  priority: string;
+  status: string;
+  riskLevel: string;
+  proposedAction?: Record<string, unknown> | null;
+  evidenceRefs: unknown[];
+  artifactRefs: string[];
+  options: unknown[];
+  createdByAgentId?: string | null;
+  assignedToUserId?: string | null;
+  expiresAt?: number | null;
+  createdAt: number;
+  updatedAt: number;
+  decidedAt?: number | null;
+}
+
+export interface ReviewDecisionRecord {
+  id: string;
+  docketId: string;
+  decision: string;
+  comment?: string | null;
+  selectedOptionId?: string | null;
+  patch?: Record<string, unknown> | null;
+  decidedAt: number;
+}
+
+export interface ReviewDocketStats {
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  changesRequested: number;
+  skipped: number;
+  archived: number;
+  expiredPending: number;
+  linkedTasks: number;
+}
+
+export interface TaskPanelItem {
+  id: string;
+  source: 'redclaw' | 'collaboration' | 'approval' | string;
+  sourceLabel: string;
+  sourceId?: string | null;
+  sourceTaskId?: string | null;
+  title: string;
+  summary: string;
+  status: 'queued' | 'running' | 'review' | 'blocked' | 'completed' | 'failed' | 'paused' | string;
+  owner: string;
+  sessionTitle: string;
+  priorityLabel: string;
+  progress: number;
+  artifactCount: number;
+  updatedAt: number;
+  createdAt: number;
+  reviewCount: number;
+  taskId?: string | null;
+  definitionId?: string | null;
+  latestReportSummary?: string;
+  failureReason?: string | null;
+  latestExecution?: {
+    status?: string;
+    scheduledForAt?: string | null;
+    lastHeartbeatAt?: string | null;
+    lastError?: string | null;
+  } | null;
+}
+
+export interface TaskPanelListResponse {
+  success?: boolean;
+  items?: TaskPanelItem[];
+  count?: number;
+}
+
+export interface CollabMemberMatchCandidate {
+  memberId: string;
+  displayName?: string;
+  roleId?: string;
+  status?: string;
+  score?: number;
+  reasons?: string[];
+  activeExecutorCount?: number;
+  maxExecutorThreads?: number;
+  agentCard?: Record<string, unknown>;
+}
+
+export interface CollabMemberMatchResult {
+  sessionId: string;
+  query?: Record<string, unknown>;
+  candidates: CollabMemberMatchCandidate[];
+}
+
+export interface CollabSessionSnapshot {
+  session: CollabSessionRecord | null;
+  members: CollabMemberRecord[];
+  tasks: CollabTaskRecord[];
+  mailbox: CollabMailboxMessageRecord[];
+  reports: CollabProgressReportRecord[];
 }
 
 export type CliRuntimeToolSource =
@@ -514,6 +1001,11 @@ declare global {
     id: string;
     title: string;
     updatedAt: string;
+    createdAt?: string;
+    starred?: boolean;
+    archived?: boolean;
+    unread?: boolean;
+    metadata?: Record<string, unknown> | null;
   }
 
   interface ContextChatSessionListItem {
@@ -523,10 +1015,16 @@ declare global {
     transcriptCount: number;
     checkpointCount: number;
     context?: unknown;
+    starred?: boolean;
+    archived?: boolean;
+    unread?: boolean;
+    workingDirectory?: string;
+    metadata?: Record<string, unknown> | null;
     chatSession?: {
       id: string;
       title?: string;
       updatedAt?: string;
+      createdAt?: string;
     } | null;
   }
 
@@ -560,6 +1058,7 @@ declare global {
     attributes: SubjectAttribute[];
     imagePaths: string[];
     voicePath?: string;
+    videoPath?: string;
     voiceScript?: string;
     createdAt: string;
     updatedAt: string;
@@ -568,10 +1067,25 @@ declare global {
     primaryPreviewUrl?: string;
     absoluteVoicePath?: string;
     voicePreviewUrl?: string;
+    absoluteVideoPath?: string;
+    videoPreviewUrl?: string;
   }
 
   interface Window {
     ipcRenderer: {
+      windowControls: {
+        startDragging: () => Promise<void>;
+        minimize: () => Promise<unknown>;
+        toggleMaximize: () => Promise<unknown>;
+        close: () => Promise<unknown>;
+      };
+      analytics: {
+        getStatus: () => Promise<{ consent: 'none' | 'prompt' | 'approved'; enabled: boolean; endpoint: string; pendingCount: number }>;
+        setConsent: (consent: 'none' | 'prompt' | 'approved') => Promise<unknown>;
+        track: (event: string, payload?: { surface?: string; origin?: string; properties?: Record<string, string | number | boolean | null | undefined> }) => Promise<unknown>;
+        flush: () => Promise<unknown>;
+        clearQueue: () => Promise<unknown>;
+      };
       audio: {
         getCaptureCapability: () => Promise<{
           success?: boolean;
@@ -607,8 +1121,8 @@ declare global {
         cancelRecording: () => Promise<{ success?: boolean; error?: string; reason?: string; durationMs?: number; discarded?: boolean }>;
         openMicrophoneSettings: () => Promise<{ success?: boolean; error?: string; path?: string }>;
       };
-      saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number; notifications_json?: string }) => Promise<unknown>;
-      getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number; notifications_json?: string } | undefined>;
+      saveSettings: (settings: RendererSettingsPayload) => Promise<unknown>;
+      getSettings: () => Promise<RendererSettingsPayload | undefined>;
       pickWorkspaceDir: () => Promise<{ success: boolean; canceled?: boolean; path?: string | null; error?: string }>;
       debug: {
         getStatus: () => Promise<{ enabled: boolean; logDirectory: string }>;
@@ -680,10 +1194,14 @@ declare global {
         openDir: () => Promise<{ success: boolean; error?: string; path: string }>;
         listPendingReports: () => Promise<DiagnosticsPendingReport[]>;
         exportBundle: (reportId?: string, payload?: { includeAdvancedContext?: boolean }) => Promise<{ success: boolean; reportId: string; path: string; error?: string }>;
+        createFeedbackReport: (payload: { title?: string; content: string; category?: string; priority?: 'low' | 'medium' | 'high' | 'urgent'; source?: string; contact?: string; includeAdvancedContext?: boolean; uploadNow?: boolean; context?: Record<string, unknown> }) => Promise<{ success: boolean; uploaded?: boolean; report?: DiagnosticsPendingReport; response?: unknown; error?: string }>;
         uploadReport: (reportId: string) => Promise<{ success: boolean; report?: DiagnosticsPendingReport; response?: { reportId: string; receivedAt: string; retentionDays: number; dedupeKey: string }; error?: string }>;
         dismissReport: (reportId: string) => Promise<{ success: boolean; reportId: string; error?: string }>;
         setUploadConsent: (payload: { consent: 'none' | 'prompt' | 'approved'; autoSendSameCrash?: boolean }) => Promise<{ success: boolean; error?: string }>;
         appendRenderer: (payload: { level?: 'trace' | 'debug' | 'info' | 'warn' | 'error'; category?: string; event?: string; message?: string; fields?: unknown }) => Promise<{ success: boolean; error?: string }>;
+        createAutoReport: (payload: { level?: 'trace' | 'debug' | 'info' | 'warn' | 'error'; category?: string; event?: string; message?: string; fields?: unknown; trigger?: string }) => Promise<{ success: boolean; uploaded?: boolean; report?: DiagnosticsPendingReport; upload?: unknown; error?: string }>;
+        onReportPending: (listener: (...args: unknown[]) => void) => void;
+        offReportPending: (listener: (...args: unknown[]) => void) => void;
       };
       startupMigration: {
         getStatus: () => Promise<{
@@ -718,6 +1236,9 @@ declare global {
           importedCounts?: Record<string, number> | null;
           projectUpgradeCounts?: Record<string, number> | null;
         }>;
+        onStatus: (listener: (...args: unknown[]) => void) => void;
+        offStatus: (listener: (...args: unknown[]) => void) => void;
+        bindEditorSession: (payload: Record<string, unknown>) => Promise<unknown>;
       };
       officialAuth: {
         bootstrap: (payload?: { reason?: string }) => Promise<{
@@ -737,13 +1258,54 @@ declare global {
           data?: Record<string, unknown> | null;
           error?: string;
         }>;
+        getConfig: <T = unknown>() => Promise<T>;
+        setRealm: <T = unknown>(payload: { realm: 'cn' | 'global' }) => Promise<T>;
+        getMe: <T = unknown>() => Promise<T>;
+        getPoints: <T = unknown>() => Promise<T>;
+        getProducts: <T = unknown>() => Promise<T>;
+        getProduct: <T = unknown>(payload: { productId: string }) => Promise<T>;
+        getCallRecords: <T = unknown>() => Promise<T>;
+        getWechatStatus: <T = unknown>(payload: { sessionId: string }) => Promise<T>;
+        getWechatUrl: <T = unknown>(payload?: { state?: string }) => Promise<T>;
+        sendSmsCode: <T = unknown>(payload: { phone: string }) => Promise<T>;
+        loginSms: <T = unknown>(payload: { phone: string; code: string; inviteCode?: string }) => Promise<T>;
+        registerSms: <T = unknown>(payload: { phone: string; code: string; inviteCode?: string }) => Promise<T>;
+        logout: <T = unknown>() => Promise<T>;
+        createPagePayOrder: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        getOrderStatus: <T = unknown>(payload: { outTradeNo: string }) => Promise<T>;
+        openPaymentForm: <T = unknown>(payload: { paymentForm: string }) => Promise<T>;
+        getPricing: <T = unknown>() => Promise<T>;
+        refreshPricing: <T = unknown>() => Promise<T>;
+      };
+      llmReadiness: {
+        getState: <T = unknown>() => Promise<T>;
+        refresh: <T = unknown>() => Promise<T>;
+        configureCustomSource: <T = unknown>(payload: unknown) => Promise<T>;
+        onStateChanged: (listener: (...args: unknown[]) => void) => void;
+        offStateChanged: (listener: (...args: unknown[]) => void) => void;
+      };
+      auth: {
+        getState: <T = RendererAuthStateSnapshot>() => Promise<T>;
+        loginSms: <T = unknown>(payload: { phone: string; code: string; inviteCode?: string }) => Promise<T>;
+        loginWechatStart: <T = unknown>(payload?: { state?: string }) => Promise<T>;
+        loginWechatPoll: <T = unknown>(payload: { sessionId: string }) => Promise<T>;
+        logout: <T = unknown>() => Promise<T>;
+        refreshNow: <T = unknown>() => Promise<T>;
+        onStateChanged: (listener: (...args: unknown[]) => void) => void;
+        offStateChanged: (listener: (...args: unknown[]) => void) => void;
+        onDataChanged: (listener: (...args: unknown[]) => void) => void;
+        offDataChanged: (listener: (...args: unknown[]) => void) => void;
       };
       sessions: {
         list: () => Promise<Array<{
           id: string;
           transcriptCount: number;
           checkpointCount: number;
-          chatSession?: { id: string; title?: string; updatedAt?: string } | null;
+          metadata?: Record<string, unknown> | null;
+          archived?: boolean;
+          starred?: boolean;
+          unread?: boolean;
+          chatSession?: ChatSession | null;
         }>>;
         get: (sessionId: string) => Promise<{
           chatSession?: { id: string; title?: string; updatedAt?: string } | null;
@@ -780,7 +1342,61 @@ declare global {
         getTrace: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionRuntimeRecord[]>;
         getCheckpoints: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionCheckpointRecord[]>;
         getToolResults: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionToolResultItem[]>;
+        onEvent: (listener: (...args: unknown[]) => void) => void;
+        offEvent: (listener: (...args: unknown[]) => void) => void;
       };
+      taskPanel: {
+        list: (payload?: { limit?: number }) => Promise<TaskPanelListResponse>;
+      };
+      teamRuntime: {
+        listSessions: () => Promise<CollabSessionRecord[]>;
+        createSession: (payload: Record<string, unknown>) => Promise<CollabSessionRecord>;
+        getSession: (payload: { sessionId: string; mailboxLimit?: number; reportLimit?: number }) => Promise<CollabSessionSnapshot>;
+        listMembers: (payload: { sessionId: string }) => Promise<CollabMemberRecord[]>;
+        addMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
+        setSessionCoordinator: (payload: Record<string, unknown>) => Promise<CollabSessionRecord>;
+        matchMember: (payload: Record<string, unknown>) => Promise<CollabMemberMatchResult>;
+        renameMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
+        shutdownMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
+        listTasks: (payload: { sessionId: string }) => Promise<CollabTaskRecord[]>;
+        createTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        updateTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        claimTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        startTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        waitReviewTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        completeTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        failTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        cancelTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        pinTaskSession: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        retryTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        listReviewDockets: (payload?: Record<string, unknown>) => Promise<ReviewDocketRecord[]>;
+        getReviewDocket: (payload: { docketId: string }) => Promise<ReviewDocketRecord>;
+        reviewDocketStats: () => Promise<ReviewDocketStats>;
+        createReviewDocket: (payload: Record<string, unknown>) => Promise<ReviewDocketRecord>;
+        decideReviewDocket: (payload: Record<string, unknown>) => Promise<ReviewDecisionRecord>;
+        skipReviewDocket: (payload: { docketId: string }) => Promise<ReviewDocketRecord>;
+        archiveReviewDocket: (payload: { docketId: string }) => Promise<ReviewDocketRecord>;
+        listMessages: (payload: { sessionId: string; memberId?: string; taskId?: string; unreadOnly?: boolean; limit?: number }) => Promise<CollabMailboxMessageRecord[]>;
+        readMailbox: (payload: { sessionId: string; memberId?: string; taskId?: string; unreadOnly?: boolean; markRead?: boolean; limit?: number }) => Promise<CollabMailboxMessageRecord[]>;
+        sendMessage: (payload: Record<string, unknown>) => Promise<CollabMailboxMessageRecord>;
+        postMessage: (payload: Record<string, unknown>) => Promise<CollabMailboxMessageRecord>;
+        listReports: (payload: { sessionId: string; memberId?: string; taskId?: string; limit?: number }) => Promise<CollabProgressReportRecord[]>;
+        requestReport: (payload: Record<string, unknown>) => Promise<CollabMailboxMessageRecord>;
+        submitReport: (payload: Record<string, unknown>) => Promise<CollabProgressReportRecord>;
+        attachArtifact: (payload: Record<string, unknown>) => Promise<CollabProgressReportRecord>;
+        raiseBlocker: (payload: Record<string, unknown>) => Promise<CollabProgressReportRecord>;
+        pauseSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;
+        resumeSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;
+        archiveSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;
+        tickReports: (payload: { sessionId: string }) => Promise<Record<string, unknown>>;
+        listAgentBackends: () => Promise<Array<Record<string, unknown>>>;
+        listTools: () => Promise<Array<Record<string, unknown>>>;
+        executeTool: (payload: { action: string; payload?: Record<string, unknown> }) => Promise<unknown>;
+        runExternalMember: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        onEvent: (listener: (event: RuntimeUnifiedEvent) => void) => void;
+        offEvent: (listener: (event: RuntimeUnifiedEvent) => void) => void;
+      };
+      collab: Window['ipcRenderer']['teamRuntime'];
       toolHooks: {
         list: () => Promise<unknown[]>;
         register: (hook: unknown) => Promise<{ success: boolean; hookId: string }>;
@@ -894,6 +1510,8 @@ declare global {
         } | null>;
         retry: (taskId: string) => Promise<{ success: boolean; executionId: string; definitionId: string }>;
         archive: (taskId: string) => Promise<{ success: boolean; executionId: string }>;
+        onUpdated: (listener: (...args: unknown[]) => void) => void;
+        offUpdated: (listener: (...args: unknown[]) => void) => void;
       };
       backgroundWorkers: {
         getPoolState: () => Promise<{
@@ -1096,6 +1714,7 @@ declare global {
         create: (payload: unknown) => Promise<{ success?: boolean; error?: string; subject?: SubjectRecord }>;
         update: (payload: unknown) => Promise<{ success?: boolean; error?: string; subject?: SubjectRecord }>;
         delete: (payload: { id: string }) => Promise<{ success?: boolean; error?: string }>;
+        generateCharacterCard: (payload: { id: string }) => Promise<{ success?: boolean; error?: string; subject?: SubjectRecord; asset?: unknown }>;
         search: (payload?: { query?: string; categoryId?: string; limit?: number }) => Promise<{ success?: boolean; error?: string; subjects?: SubjectRecord[] }>;
         categories: {
           list: () => Promise<{ success?: boolean; error?: string; categories?: SubjectCategory[] }>;
@@ -1104,11 +1723,82 @@ declare global {
           delete: (payload: { id: string }) => Promise<{ success?: boolean; error?: string }>;
         };
       };
+      brandWorkspace: {
+        list: <T = { success?: boolean; error?: string; brands?: unknown[] }>() => Promise<T>;
+        get: <T = { success?: boolean; error?: string; brand?: unknown }>(payload: { id: string }) => Promise<T>;
+        upsertBrand: <T = { success?: boolean; error?: string; brand?: unknown }>(payload: unknown) => Promise<T>;
+        upsertProduct: <T = { success?: boolean; error?: string; product?: unknown }>(payload: unknown) => Promise<T>;
+        upsertSku: <T = { success?: boolean; error?: string; product?: unknown }>(payload: unknown) => Promise<T>;
+        upsertProductDetailPage: <T = { success?: boolean; error?: string; product?: unknown }>(payload: unknown) => Promise<T>;
+        rebuildAiIndex: <T = { success?: boolean; error?: string }>() => Promise<T>;
+      };
       getAppVersion: () => Promise<string>;
+      getAppOnboardingStatus: (payload?: { legacySeen?: boolean }) => Promise<{ success?: boolean; seen?: boolean; seenAt?: string; migrated?: boolean; path?: string; error?: string }>;
+      markAppOnboardingSeen: () => Promise<{ success?: boolean; seen?: boolean; seenAt?: string; path?: string; error?: string }>;
+      getAppReleaseNotes: (version?: string) => Promise<{ success: boolean; version?: string; tag?: string; name?: string; htmlUrl?: string; publishedAt?: string; body?: string; error?: string }>;
       checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string } }>;
+      installAppUpdate: () => Promise<{ success: boolean; installed?: boolean; hasUpdate?: boolean; inFlight?: boolean; error?: string }>;
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
+      openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string; url?: string }>;
       openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
       clipboardReadText: () => Promise<string>;
+      clipboardWriteText: (text: string) => Promise<{ success: boolean; error?: string; text?: string }>;
+      capture: {
+        saveYoutubeNote: (payload: {
+          videoId: string;
+          videoUrl: string;
+          title: string;
+          description?: string;
+          thumbnailUrl?: string;
+        }) => Promise<{
+          success?: boolean;
+          duplicate?: boolean;
+          error?: string;
+          noteId?: string;
+        } | null>;
+        createServerJob: (payload: Record<string, unknown>) => Promise<{
+          success?: boolean;
+          duplicate?: boolean;
+          job?: unknown;
+          jobId?: string;
+          status?: string;
+          error?: string;
+        }>;
+        getServerJob: (payload: { jobId: string }) => Promise<{
+          success?: boolean;
+          job?: unknown;
+          jobId?: string;
+          status?: string;
+          error?: string;
+        }>;
+        listServerJobs: (payload?: { limit?: number }) => Promise<{
+          success?: boolean;
+          jobs?: unknown[];
+          error?: string;
+        }>;
+      };
+      accounts: {
+        list: <T = unknown>() => Promise<T>;
+        get: <T = unknown>(payload: { accountId: string }) => Promise<T>;
+      };
+      plugins: {
+        list: () => Promise<{ success: boolean; schemaVersion: number; root: string; plugins: ThrivePluginSummary[]; error?: string }>;
+        connectors: () => Promise<{ success: boolean; connectors: ThrivePluginConnectorAppInfo[]; error?: string }>;
+        marketplace: (payload?: { url?: string }) => Promise<ThrivePluginMarketplaceResponse>;
+        codexMarketplace: (payload?: { path?: string; codexRoot?: string }) => Promise<CodexPluginMarketplaceResponse>;
+        discoverLocal: (payload: { path?: string; sourceRoot?: string }) => Promise<ThrivePluginDiscoverLocalResponse>;
+        install: (payload: { path: string; pluginName?: string; pluginId?: string; id?: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        installCodex: (payload: { path?: string; pluginName?: string; pluginId?: string; id?: string; remotePluginId?: string; remoteMarketplaceName?: string; codexRoot?: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        installMarketplace: (payload: { id?: string; repo: string; version?: string; packageUrl?: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        setEnabled: (payload: { pluginId: string; enabled: boolean }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        uninstall: (payload: { pluginId: string }) => Promise<{ success: boolean; pluginId?: string; error?: string }>;
+        openDataDir: (payload?: { pluginId?: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
+        syncCapabilities: () => Promise<{ success: boolean; pluginIds?: string[]; skills?: number; mcpServers?: number; error?: string }>;
+        readData: (payload: { pluginId: string; source: string; limit?: number; kind?: string; query?: string }) => Promise<{ success: boolean; pluginId?: string; source?: string; data?: Record<string, unknown>; error?: string }>;
+        home: () => Promise<ThrivePluginHomeResponse>;
+        onChanged: (listener: (...args: unknown[]) => void) => void;
+        offChanged: (listener: (...args: unknown[]) => void) => void;
+      };
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       openRichpostThemeGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       browserPlugin: {
@@ -1126,14 +1816,34 @@ declare global {
       cancelChat: () => void;
       confirmTool: (callId: string, confirmed: boolean) => void;
       listSkills: () => Promise<SkillDefinition[]>;
+      listSkillsGuarded: <T = Record<string, unknown>>() => Promise<Array<T> | null>;
       skills: {
         save: (payload: Record<string, unknown>) => Promise<unknown>;
-        create: (payload: { name: string }) => Promise<unknown>;
-        enable: (payload: { name: string }) => Promise<unknown>;
-        disable: (payload: { name: string }) => Promise<unknown>;
-        marketInstall: (payload: { slug: string; tag?: string }) => Promise<unknown>;
+        create: <T = unknown>(payload: { name: string }) => Promise<T>;
+        enable: <T = unknown>(payload: { name: string }) => Promise<T>;
+        disable: <T = unknown>(payload: { name: string }) => Promise<T>;
+        uninstall: <T = unknown>(payload: { name: string; scope?: 'user' | 'workspace' | string }) => Promise<T>;
+        marketplace: (payload?: Record<string, unknown>) => Promise<any>;
+        marketplaceList: (payload?: Record<string, unknown>) => Promise<any>;
+        readMarketplacePackage: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        installMarketplace: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        updateMarketplaceInstalled: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        marketInstall: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        marketSearch: <T = unknown>(payload?: Record<string, unknown>) => Promise<T>;
+        marketSources: {
+          list: <T = unknown>(payload?: Record<string, unknown>) => Promise<T>;
+          add: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+          update: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+          remove: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+          refresh: <T = unknown>(payload?: Record<string, unknown>) => Promise<T>;
+        };
+        installFromRepo: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
       };
       cover: {
+        list: (payload?: Record<string, unknown>) => Promise<unknown>;
+        generate: (payload: Record<string, unknown>) => Promise<unknown>;
+        openRoot: () => Promise<unknown>;
+        open: (payload: { assetId: string }) => Promise<unknown>;
         saveTemplateImage: (payload: { imageSource: string }) => Promise<unknown>;
         templates: {
           list: () => Promise<unknown>;
@@ -1141,6 +1851,21 @@ declare global {
           delete: (payload: { templateId: string }) => Promise<unknown>;
           importLegacy: (payload: { templates: Record<string, unknown>[] }) => Promise<unknown>;
         };
+      };
+      media: {
+        list: <T = unknown>(payload?: Record<string, unknown>) => Promise<T>;
+        update: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        bind: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        delete: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        open: <T = unknown>(payload: { assetId: string }) => Promise<T>;
+        openRoot: <T = unknown>() => Promise<T>;
+        importFiles: <T = unknown>() => Promise<T>;
+      };
+      imageGeneration: {
+        generate: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+      };
+      videoGeneration: {
+        generate: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
       };
       toolDiagnostics: {
         list: () => Promise<ToolDiagnosticDescriptor[]>;
@@ -1162,6 +1887,9 @@ declare global {
         switch: (spaceId: string) => Promise<unknown>;
         create: (name: string) => Promise<unknown>;
         rename: (payload: { id: string; name: string }) => Promise<unknown>;
+        delete: (spaceId: string) => Promise<unknown>;
+        onChanged: (listener: (...args: unknown[]) => void) => void;
+        offChanged: (listener: (...args: unknown[]) => void) => void;
       };
       advisors: {
         list: <T = Record<string, unknown>>() => Promise<Array<T>>;
@@ -1169,13 +1897,26 @@ declare global {
         create: (payload: Record<string, unknown>) => Promise<unknown>;
         update: (payload: Record<string, unknown>) => Promise<unknown>;
         delete: (advisorId: string) => Promise<unknown>;
-        uploadKnowledge: (advisorId: string) => Promise<unknown>;
+        pickKnowledgeFiles: <T = Record<string, unknown>>() => Promise<T>;
+        pickKnowledgeFolder: <T = Record<string, unknown>>() => Promise<T>;
+        uploadKnowledge: (payload: string | { advisorId: string; filePaths?: string[] }) => Promise<unknown>;
         deleteKnowledge: (payload: { advisorId: string; fileName: string }) => Promise<unknown>;
+        inspectMemberSkill: (payload: { advisorId: string }) => Promise<unknown>;
         optimizePrompt: (payload: Record<string, unknown>) => Promise<unknown>;
         optimizePromptDeep: (payload: Record<string, unknown>) => Promise<unknown>;
+        distillMemberSkill: (payload: { advisorId: string }) => Promise<unknown>;
+        promoteMemberSkillCandidate: (payload: { advisorId: string; candidateVersion?: string }) => Promise<unknown>;
+        discardMemberSkillCandidate: (payload: { advisorId: string }) => Promise<unknown>;
+        rollbackMemberSkillVersion: (payload: { advisorId: string; version: string }) => Promise<unknown>;
         generatePersona: (payload: Record<string, unknown>) => Promise<unknown>;
         selectAvatar: () => Promise<unknown>;
+        onDownloadProgress: (listener: (...args: unknown[]) => void) => void;
+        offDownloadProgress: (listener: (...args: unknown[]) => void) => void;
+        onChanged: (listener: (...args: unknown[]) => void) => void;
+        offChanged: (listener: (...args: unknown[]) => void) => void;
       };
+      onFetchYoutubeInfoProgress: (listener: (...args: unknown[]) => void) => void;
+      offFetchYoutubeInfoProgress: (listener: (...args: unknown[]) => void) => void;
       knowledge: {
         listNotes: <T = Record<string, unknown>>() => Promise<Array<T>>;
         listYoutube: <T = Record<string, unknown>>() => Promise<Array<T>>;
@@ -1188,6 +1929,8 @@ declare global {
         rebuildCatalog: () => Promise<unknown>;
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;
+        deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source' }> }) => Promise<unknown>;
+        batchIngest: (payload: { entries?: unknown[]; documentSources?: unknown[]; mediaAssets?: unknown[] }) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;
         deleteYoutube: (videoId: string) => Promise<unknown>;
         retryYoutubeSubtitle: (videoId: string) => Promise<unknown>;
@@ -1196,6 +1939,20 @@ declare global {
         addDocFolder: () => Promise<unknown>;
         addObsidianVault: () => Promise<unknown>;
         deleteDocSource: (sourceId: string) => Promise<unknown>;
+        onChanged: (listener: (...args: unknown[]) => void) => void;
+        offChanged: (listener: (...args: unknown[]) => void) => void;
+        onCatalogUpdated: (listener: (...args: unknown[]) => void) => void;
+        offCatalogUpdated: (listener: (...args: unknown[]) => void) => void;
+        onYoutubeVideoUpdated: (listener: (...args: unknown[]) => void) => void;
+        offYoutubeVideoUpdated: (listener: (...args: unknown[]) => void) => void;
+        onNewYoutubeVideo: (listener: (...args: unknown[]) => void) => void;
+        offNewYoutubeVideo: (listener: (...args: unknown[]) => void) => void;
+        onDocsUpdated: (listener: (...args: unknown[]) => void) => void;
+        offDocsUpdated: (listener: (...args: unknown[]) => void) => void;
+        onNoteUpdated: (listener: (...args: unknown[]) => void) => void;
+        offNoteUpdated: (listener: (...args: unknown[]) => void) => void;
+        onFileIndexUpdated: (listener: (...args: unknown[]) => void) => void;
+        offFileIndexUpdated: (listener: (...args: unknown[]) => void) => void;
       };
       embedding: {
         getManuscriptCache: (manuscriptId: string) => Promise<unknown>;
@@ -1208,20 +1965,53 @@ declare global {
         getKnowledgeVersion: () => Promise<unknown>;
         saveCache: (payload: Record<string, unknown>) => Promise<unknown>;
       };
+      memory: {
+        list: <T = unknown>() => Promise<T>;
+        archived: <T = unknown>() => Promise<T>;
+        history: <T = unknown>() => Promise<T>;
+        maintenanceStatus: <T = unknown>() => Promise<T>;
+        search: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        add: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        runMaintenance: <T = unknown>() => Promise<T>;
+        delete: <T = unknown>(memoryId: string) => Promise<T>;
+      };
       files: {
         showInFolder: (payload: { source: string }) => Promise<unknown>;
         copyImage: (payload: { source: string }) => Promise<unknown>;
+        saveAs: (payload: { source: string; defaultName?: string }) => Promise<{ success?: boolean; error?: string; canceled?: boolean; path?: string }>;
+        saveZip: (payload: { defaultName?: string; files: Array<{ source: string; name?: string }> }) => Promise<{ success?: boolean; error?: string; canceled?: boolean; path?: string; count?: number }>;
+        resolvePreview: (payload: { source: string }) => Promise<{
+          success: boolean;
+          error?: string;
+          isLocal?: boolean;
+          exists?: boolean;
+          isDirectory?: boolean;
+          absolutePath?: string | null;
+          localPathCandidate?: string | null;
+          resolvedUrl?: string | null;
+          title?: string | null;
+          extension?: string | null;
+          kind?: string | null;
+          mimeType?: string | null;
+          sizeBytes?: number | null;
+          previewText?: string | null;
+        }>;
       };
       notifications: {
         getPermissionState: () => Promise<NotificationPermissionState>;
         requestPermission: () => Promise<NotificationPermissionState>;
         showSystem: (payload: { title: string; body?: string; sound?: string }) => Promise<{ success: boolean; error?: string }>;
+        syncRemote: (payload?: { cursor?: string | null; limit?: number; unreadOnly?: boolean }) => Promise<{ success?: boolean; data?: Record<string, unknown>; raw?: Record<string, unknown>; error?: string }>;
+        listRemote: (payload?: { limit?: number; unreadOnly?: boolean }) => Promise<{ success?: boolean; data?: Record<string, unknown>; raw?: Record<string, unknown>; error?: string }>;
+        markRemoteRead: (payload: { notificationId: string }) => Promise<{ success?: boolean; data?: Record<string, unknown>; raw?: Record<string, unknown>; error?: string }>;
+        markAllRemoteRead: () => Promise<{ success?: boolean; data?: Record<string, unknown>; raw?: Record<string, unknown>; error?: string }>;
       };
 
       // YouTube Import
       checkYtdlp: () => Promise<{ installed: boolean; version?: string; path?: string }>;
       installYtdlp: () => Promise<{ success: boolean; error?: string }>;
       updateYtdlp: () => Promise<{ success: boolean; error?: string }>;
+      saveYoutubeNote: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
       fetchYoutubeInfo: (channelUrl: string) => Promise<{ success: boolean; data?: any; error?: string }>;
       downloadYoutubeSubtitles: (params: { channelUrl: string; videoCount: number; advisorId: string }) => Promise<{ success: boolean; successCount?: number; failCount?: number; error?: string }>;
       readYoutubeSubtitle: (videoId: string) => Promise<{ success: boolean; subtitleContent?: string; hasSubtitle?: boolean; error?: string }>;
@@ -1242,11 +2032,16 @@ declare global {
         message: string;
         displayContent?: string;
         attachment?: unknown;
+        attachments?: unknown[];
+        knowledgeReferences?: Array<Record<string, unknown>>;
+        assetReferences?: Array<{ id: string; name: string }>;
+        memberMention?: Record<string, unknown>;
         modelConfig?: unknown;
         taskHints?: {
           intent?: string;
           forceMultiAgent?: boolean;
           forceLongRunningTask?: boolean;
+          activeSkills?: string[];
           platform?: 'xiaohongshu' | 'wechat_official_account';
           taskType?: 'direct_write' | 'expand_from_xhs';
           formatTarget?: 'markdown' | 'wechat_rich_text';
@@ -1258,7 +2053,10 @@ declare global {
         };
       }) => void;
         pickAttachment: (payload?: { sessionId?: string }) => Promise<{ success?: boolean; canceled?: boolean; error?: string; attachment?: unknown }>;
+        createPathAttachment: (payload: { path: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; attachment?: unknown }>;
         createInlineAttachment: (payload: { dataUrl: string; fileName?: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; attachment?: unknown }>;
+        createVideoThumbnail: (payload: { path?: string; source?: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; source?: string; thumbnailUrl?: string; thumbnailDataUrl?: string }>;
+        discardAttachments: (payload: { attachments: unknown[] }) => Promise<{ success?: boolean; error?: string; removed?: number }>;
         transcribeAudio: (payload: { audioBase64: string; mimeType?: string; fileName?: string }) => Promise<{ success?: boolean; text?: string; error?: string; reason?: string; diagnostic?: string }>;
         cancel: (data?: { sessionId?: string } | string) => void;
         confirmTool: (callId: string, confirmed: boolean) => void;
@@ -1266,9 +2064,17 @@ declare global {
         createSession: (title?: string) => Promise<ChatSession>;
         createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) => Promise<ChatSession>;
         listContextSessions: (payload: { contextId: string; contextType: string }) => Promise<ContextChatSessionListItem[]>;
+        listContextSessionsGuarded: <T = ContextChatSessionListItem>(payload: { contextId: string; contextType: string }) => Promise<T[] | null>;
         createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
+        createContextSessionGuarded: <T = ChatSession>(payload: { contextId: string; contextType: string; title?: string; initialContext?: string; metadata?: Record<string, unknown> }) => Promise<T | null>;
         getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
         deleteSession: (sessionId: string) => Promise<{ success: boolean }>;
+        renameSession: (payload: { sessionId: string; title: string }) => Promise<{ success?: boolean; error?: string; session?: { id: string; title?: string; updatedAt?: string } | null }>;
+        setSessionStarred: (payload: { sessionId: string; starred: boolean }) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
+        setSessionUnread: (payload: { sessionId: string; unread: boolean }) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
+        archiveSession: (sessionId: string) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
+        unarchiveSession: (sessionId: string) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
+        listArchivedSessions: () => Promise<ChatSession[]>;
         getMessages: (sessionId: string) => Promise<ChatMessage[]>;
         clearMessages: (sessionId: string) => Promise<{ success: boolean }>;
         compactContext: (sessionId: string) => Promise<{ success: boolean; compacted: boolean; message: string; compactRounds?: number; compactUpdatedAt?: string }>;
@@ -1296,16 +2102,92 @@ declare global {
           partialResponse: string;
           updatedAt: number;
         }>;
+        onSessionTitleUpdated: (listener: (...args: unknown[]) => void) => void;
+        offSessionTitleUpdated: (listener: (...args: unknown[]) => void) => void;
+      };
+      chatrooms: {
+        list: <T = unknown>() => Promise<T>;
+        messages: <T = unknown>(roomId: string) => Promise<T>;
+        send: (payload: Record<string, unknown>) => void;
+        cancel: (payload: { roomId: string }) => Promise<unknown>;
+        create: <T = unknown>(payload: { name: string; advisorIds: string[] }) => Promise<T>;
+        delete: (roomId: string) => Promise<unknown>;
+        clear: <T = unknown>(roomId: string) => Promise<T>;
+        update: <T = unknown>(payload: { roomId: string; name: string; advisorIds: string[] }) => Promise<T>;
+      };
+      manuscripts: {
+        list: <T = unknown>() => Promise<T>;
+        read: <T = unknown>(filePath: string) => Promise<T>;
+        save: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        createFile: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        createFolder: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        rename: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        move: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        delete: <T = unknown>(targetPath: string) => Promise<T>;
+        attachExternalFiles: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        getPackageState: <T = unknown>(targetPath: string) => Promise<T>;
+        generateRemotionScene: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        saveRemotionScene: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        pickExportPath: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        renderRemotionVideo: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        getWriteProposal: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        acceptWriteProposal: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        rejectWriteProposal: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        confirmPackageScript: <T = unknown>(payload: { filePath: string }) => Promise<T>;
+        getLayout: <T = unknown>() => Promise<T>;
+        saveLayout: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        saveRichpostCardPreview: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        generatePackageHtml: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        setRichpostTheme: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        renderRichpostPages: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        setLongformLayoutPreset: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        upgradeToPackage: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        applyRichpostPagePlan: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        saveEditorProject: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        getEditorRuntimeState: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        updateEditorRuntimeState: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        undoEditorProject: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        redoEditorProject: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        updatePackageTrackUi: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        updatePackageSceneUi: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        addPackageTrack: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        movePackageTrack: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        deletePackageTrack: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        addPackageClip: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        insertPackageClipAtPlayhead: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        insertPackageSubtitleAtPlayhead: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        insertPackageTextAtPlayhead: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        updatePackageClip: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        deletePackageClip: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        splitPackageClip: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        transcribePackageSubtitles: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        saveRichpostCustomTheme: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        createRichpostCustomTheme: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        previewRichpostThemeDraft: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        getRichpostThemePreviews: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        deleteRichpostCustomTheme: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        uploadRichpostThemeBackground: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        pickRichpostExportPath: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        saveRichpostExportArchive: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        onRenderProgress: (listener: (...args: any[]) => void) => void;
+        offRenderProgress: (listener: (...args: any[]) => void) => void;
+        onWriteProposal: (listener: (...args: any[]) => void) => void;
+        offWriteProposal: (listener: (...args: any[]) => void) => void;
       };
       generation: {
         submitImage: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
         submitVideo: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        submitAudio: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        submitVoiceClone: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        prepareVideoRetalkSource: (payload: Record<string, unknown>) => Promise<unknown>;
+        uploadTempFile: (payload: Record<string, unknown>) => Promise<unknown>;
         listJobSummaries: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         listJobs: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         getJob: (jobId: string) => Promise<Record<string, unknown> | null>;
         getJobArtifacts: (jobId: string) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         awaitJob: (payload: { jobId: string; timeoutMs?: number }) => Promise<Record<string, unknown> | null>;
         cancelJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; error?: string }>;
+        deleteJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; error?: string }>;
         retryJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; attemptNo?: number; error?: string }>;
         getRuntimeStatus: () => Promise<{ success?: boolean; runtimeReady?: boolean; runtimeRunning?: boolean }>;
         onJobUpdated: (listener: (...args: any[]) => void) => void;
@@ -1398,6 +2280,10 @@ declare global {
         }) => Promise<unknown>;
         stop: () => Promise<unknown>;
         runNow: (payload?: { projectId?: string }) => Promise<unknown>;
+        onStatus: (listener: (...args: any[]) => void) => void;
+        offStatus: (listener: (...args: any[]) => void) => void;
+        onTaskEvent: (listener: (...args: any[]) => void) => void;
+        offTaskEvent: (listener: (...args: any[]) => void) => void;
         setProject: (payload: { projectId: string; enabled: boolean; prompt?: string }) => Promise<unknown>;
         setConfig: (payload: {
           intervalMinutes?: number;
@@ -1484,7 +2370,7 @@ declare global {
         taskCreate: (payload: Record<string, unknown>) => Promise<unknown>;
         taskConfirm: (payload: { draftId: string; confirm: boolean }) => Promise<unknown>;
         taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => Promise<unknown>;
-        taskCancel: (payload: { jobDefinitionId: string; reason?: string }) => Promise<unknown>;
+        taskCancel: (payload: { jobDefinitionId: string; reason?: string; deleteSource?: boolean }) => Promise<unknown>;
         taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => Promise<{
           success?: boolean;
           items?: Array<{
@@ -1563,6 +2449,20 @@ declare global {
           };
         }>;
       };
+      redclawOrchestration: {
+        createRun: (payload: { goal: string; sessionId?: string; projectId?: string; platform?: string; format?: string }) => Promise<unknown>;
+        getRegistry: () => Promise<unknown>;
+      };
+      redclawProjects: {
+        list: () => Promise<unknown>;
+        updateLearningCandidate: (payload: { projectId: string; candidateId: string; status: 'accepted' | 'rejected' | 'pending' }) => Promise<unknown>;
+        updateSection: (payload: { projectId: string; sectionId: string; content: string }) => Promise<unknown>;
+        exportMediaPlan: (payload: { projectId: string }) => Promise<unknown>;
+        renderRoughCut: (payload: { projectId: string }) => Promise<unknown>;
+        exportPublishPackage: (payload: { projectId: string }) => Promise<unknown>;
+        exportReviewReport: (payload: { projectId: string }) => Promise<unknown>;
+        exportXhsPackage: (payload: { projectId: string }) => Promise<unknown>;
+      };
       redclawProfile: {
         getBundle: () => Promise<{
           activeSpaceId?: string;
@@ -1621,6 +2521,8 @@ declare global {
           };
           onboardingState?: Record<string, unknown>;
         }>;
+        startStyleDefinition: (payload?: { forceRestart?: boolean; source?: string; sessionId?: string }) => Promise<unknown>;
+        completeStyleDefinition: (payload: Record<string, unknown>) => Promise<unknown>;
       };
       assistantDaemon: {
         getStatus: () => Promise<{
@@ -1654,6 +2556,16 @@ declare global {
             endpointPath: string;
             authToken?: string;
             webhookUrl: string;
+          };
+          acpGateway: {
+            enabled: boolean;
+            endpointPath: string;
+            manifestPath: string;
+            guidePath: string;
+            baseUrl: string;
+            manifestUrl: string;
+            guideUrl: string;
+            discoveryPath: string;
           };
           knowledgeApi: {
             endpointPath: string;
@@ -1700,6 +2612,16 @@ declare global {
             endpointPath?: string;
             authToken?: string;
           };
+          acpGateway?: {
+            enabled?: boolean;
+            requireToken?: boolean;
+            localOnly?: boolean;
+            endpointPath?: string;
+            manifestPath?: string;
+            guidePath?: string;
+            defaultRuntimeMode?: string;
+            defaultClientLabel?: string;
+          };
           weixin?: {
             enabled?: boolean;
             endpointPath?: string;
@@ -1735,6 +2657,16 @@ declare global {
             endpointPath?: string;
             authToken?: string;
           };
+          acpGateway?: {
+            enabled?: boolean;
+            requireToken?: boolean;
+            localOnly?: boolean;
+            endpointPath?: string;
+            manifestPath?: string;
+            guidePath?: string;
+            defaultRuntimeMode?: string;
+            defaultClientLabel?: string;
+          };
           weixin?: {
             enabled?: boolean;
             endpointPath?: string;
@@ -1748,6 +2680,22 @@ declare global {
             sidecarEnv?: Record<string, string>;
           };
         }) => Promise<unknown>;
+        createAcpClient: (payload?: {
+          name?: string;
+          kind?: string;
+        }) => Promise<{
+          success?: boolean;
+          error?: string;
+          token?: string;
+          status?: unknown;
+        }>;
+        revokeAcpClient: (payload?: {
+          clientId?: string;
+        }) => Promise<{
+          success?: boolean;
+          error?: string;
+          status?: unknown;
+        }>;
         startWeixinLogin: (payload?: {
           accountId?: string;
           force?: boolean;
@@ -1768,6 +2716,10 @@ declare global {
           accountId?: string;
           userId?: string;
         }>;
+        onStatus: (listener: (...args: unknown[]) => void) => void;
+        offStatus: (listener: (...args: unknown[]) => void) => void;
+        onLog: (listener: (...args: unknown[]) => void) => void;
+        offLog: (listener: (...args: unknown[]) => void) => void;
       };
       wechatOfficial: {
         getStatus: () => Promise<{
@@ -1828,6 +2780,42 @@ declare global {
           mediaId?: string;
         }>;
       };
+      archives: {
+        list: <T = unknown>() => Promise<T>;
+        create: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        update: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        delete: <T = unknown>(profileId: string) => Promise<T>;
+        onSampleCreated: (listener: (...args: any[]) => void) => void;
+        offSampleCreated: (listener: (...args: any[]) => void) => void;
+        samples: {
+          list: <T = unknown>(profileId: string) => Promise<T>;
+          create: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+          update: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+          delete: <T = unknown>(sampleId: string) => Promise<T>;
+        };
+      };
+      wander: {
+        listHistory: <T = unknown>(options?: { includeAbandoned?: boolean }) => Promise<T>;
+        abandonHistory: (id: string) => Promise<unknown>;
+        deleteHistory: (id: string) => Promise<unknown>;
+        getGuidedItems: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        listCommentCandidates: <T = unknown>() => Promise<T>;
+        getRandom: <T = unknown>() => Promise<T>;
+        brainstorm: (payload: Record<string, unknown>) => void;
+        onProgress: (listener: (...args: any[]) => void) => void;
+        offProgress: (listener: (...args: any[]) => void) => void;
+        onResult: (listener: (...args: any[]) => void) => void;
+        offResult: (listener: (...args: any[]) => void) => void;
+      };
+      topicCenter: {
+        list: <T = unknown>(options?: { includeAbandoned?: boolean; status?: string; query?: string }) => Promise<T>;
+        get: <T = unknown>(id: string) => Promise<T>;
+        create: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        update: <T = unknown>(id: string, patch: Record<string, unknown>) => Promise<T>;
+        bulkUpsert: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        abandon: <T = unknown>(id: string) => Promise<T>;
+        delete: <T = unknown>(id: string) => Promise<T>;
+      };
       mcp: {
         sessions: () => Promise<{ success: boolean; sessions: Array<{
           key: string;
@@ -1856,6 +2844,21 @@ declare global {
             tokenPath?: string;
           };
         }>; items?: Array<{ server: unknown; session?: unknown }>; sessions?: unknown[] }>;
+        add: (payload: {
+          name: string;
+          url?: string;
+          command?: string;
+          args?: string[];
+          env?: Record<string, string>;
+          cwd?: string;
+          transport?: string;
+          enabled?: boolean;
+          bearerTokenEnvVar?: string;
+        }) => Promise<{ success: boolean; server?: unknown; servers?: unknown[]; error?: string }>;
+        get: (serverId: string) => Promise<{ success: boolean; server?: unknown; error?: string }>;
+        remove: (serverId: string) => Promise<{ success: boolean; serverId?: string; servers?: unknown[]; error?: string }>;
+        enable: (serverId: string) => Promise<{ success: boolean; server?: unknown; servers?: unknown[]; error?: string }>;
+        disable: (serverId: string) => Promise<{ success: boolean; server?: unknown; servers?: unknown[]; error?: string }>;
         save: (servers: unknown[]) => Promise<{ success: boolean; servers?: unknown[]; error?: string }>;
         test: (server: unknown) => Promise<{ success: boolean; message: string; detail?: string; session?: unknown; capabilities?: unknown }>;
         call: (server: unknown, method: string, params?: unknown) => Promise<{ success: boolean; response?: unknown; session?: unknown; capabilities?: unknown; error?: string }>;

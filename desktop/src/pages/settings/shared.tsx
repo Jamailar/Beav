@@ -1,14 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Eye, EyeOff, FileText, Image as ImageIcon, Video, AudioLines } from 'lucide-react';
 import clsx from 'clsx';
+import { APP_BRAND } from '../../config/brand';
 import {
   type AiSourcePreset,
   type AiSourceConfig,
   DEFAULT_AI_PRESET_ID,
+  OFFICIAL_AUTO_SOURCE_ID,
+  OFFICIAL_AI_SOURCE_DISPLAY_NAME,
+  canonicalizeOfficialAutoSourceId,
   findAiPresetById,
   inferPresetIdByEndpoint,
+  isOfficialAutoSourceId,
 } from '../../config/aiSources';
 import {
+  enforceModelCapabilityPolicy,
   getForcedModelCapabilities,
   getModelInputCapabilities,
   MODEL_CAPABILITY_META,
@@ -18,7 +25,7 @@ import {
   type ModelInputCapability,
 } from '../../../shared/modelCapabilities';
 
-const REDBOX_OFFICIAL_LOGO_URL = new URL('../../../redbox.png', import.meta.url).href;
+const REDBOX_OFFICIAL_LOGO_URL = APP_BRAND.logoSrc;
 
 export interface UserMemory {
   id: string;
@@ -313,9 +320,25 @@ export interface OfficialModelInfo {
   id: string;
   capability?: string;
   capabilities?: ModelCapability[];
+  inputCapabilities?: ModelInputCapability[];
+  input_capabilities?: ModelInputCapability[];
+  inputModalities?: ModelInputCapability[];
+  input_modalities?: ModelInputCapability[];
+  modalities?: ModelInputCapability[];
   apiType?: string;
   ownedBy?: string;
 }
+
+type RawAiModelDescriptor = string | {
+  id?: string;
+  capability?: ModelCapability | string | null | undefined;
+  capabilities?: Array<ModelCapability | string | null | undefined>;
+  inputCapabilities?: Array<ModelInputCapability | string | null | undefined>;
+  input_capabilities?: Array<ModelInputCapability | string | null | undefined>;
+  inputModalities?: Array<ModelInputCapability | string | null | undefined>;
+  input_modalities?: Array<ModelInputCapability | string | null | undefined>;
+  modalities?: Array<ModelInputCapability | string | null | undefined>;
+};
 
 export interface AiModelDescriptor {
   id: string;
@@ -324,16 +347,11 @@ export interface AiModelDescriptor {
 }
 
 export const normalizeAiModelDescriptors = (
-  models: Array<
-    | string
-    | null
-    | undefined
-    | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> }
-  >,
+  models: Array<RawAiModelDescriptor | null | undefined>,
 ): AiModelDescriptor[] => {
   const merged = new Map<string, AiModelDescriptor>();
   for (const raw of models) {
-    const descriptor = toAiModelDescriptor(raw as string | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> });
+    const descriptor = toAiModelDescriptor(raw as RawAiModelDescriptor);
     if (!descriptor) continue;
     const previous = merged.get(descriptor.id);
     merged.set(descriptor.id, {
@@ -377,6 +395,8 @@ const MODEL_CAPABILITY_BADGE_META: Record<ModelCapability, string> = {
   image: 'text-emerald-700',
   video: 'text-violet-700',
   audio: 'text-amber-700',
+  tts: 'text-amber-700',
+  voice_clone: 'text-fuchsia-700',
   transcription: 'text-cyan-700',
   embedding: 'text-rose-700',
 };
@@ -391,6 +411,16 @@ const normalizeModelInputCapabilities = (values: Array<ModelInputCapability | st
     }
   }
   return allowed.filter((item) => normalized.has(item));
+};
+
+const modelInputCapabilitiesFromMetadata = (model: Exclude<RawAiModelDescriptor, string>): ModelInputCapability[] => {
+  return normalizeModelInputCapabilities([
+    ...(Array.isArray(model.inputCapabilities) ? model.inputCapabilities : []),
+    ...(Array.isArray(model.input_capabilities) ? model.input_capabilities : []),
+    ...(Array.isArray(model.inputModalities) ? model.inputModalities : []),
+    ...(Array.isArray(model.input_modalities) ? model.input_modalities : []),
+    ...(Array.isArray(model.modalities) ? model.modalities : []),
+  ]);
 };
 
 export type AiProtocol = 'openai' | 'anthropic' | 'gemini';
@@ -521,7 +551,7 @@ export const isLikelyLocalEndpoint = (baseURL: string): boolean => {
 
 export const AI_PRESET_LOGO_BY_ID: Record<string, string> = {
   'redbox-official': REDBOX_OFFICIAL_LOGO_URL,
-  redbox_official_auto: REDBOX_OFFICIAL_LOGO_URL,
+  [OFFICIAL_AUTO_SOURCE_ID]: REDBOX_OFFICIAL_LOGO_URL,
   openai: 'provider-logos/openai.svg',
   anthropic: 'provider-logos/anthropic.svg',
   gemini: 'provider-logos/gemini.svg',
@@ -638,7 +668,10 @@ export const AiSourceLogo = ({
   const normalizedId = String(source.id || '').trim().toLowerCase();
   const normalizedName = String(source.name || '').trim().toLowerCase();
   const resolvedPresetId = (
-    normalizedId === 'redbox_official_auto' || normalizedName === 'redbox official'
+    isOfficialAutoSourceId(normalizedId)
+      || normalizedName === 'redbox official'
+      || normalizedName === `${APP_BRAND.displayName} official`.toLowerCase()
+      || normalizedName === OFFICIAL_AI_SOURCE_DISPLAY_NAME.toLowerCase()
       ? 'redbox-official'
       : source.presetId
   );
@@ -650,6 +683,93 @@ export interface AiPresetGroup {
   label: string;
   items: AiSourcePreset[];
 }
+
+interface DropdownPosition {
+  top: number;
+  left: number;
+  width: number;
+  maxHeight: number;
+}
+
+const useDropdownPosition = (
+  open: boolean,
+  rootRef: RefObject<HTMLElement>,
+): DropdownPosition | null => {
+  const [position, setPosition] = useState<DropdownPosition | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || typeof window === 'undefined') {
+      setPosition(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const root = rootRef.current;
+      if (!root) return;
+      const rect = root.getBoundingClientRect();
+      const viewportPadding = 12;
+      const gap = 4;
+      const availableBelow = window.innerHeight - rect.bottom - viewportPadding;
+      const availableAbove = rect.top - viewportPadding;
+      const placeAbove = availableBelow < 180 && availableAbove > availableBelow;
+      const availableHeight = Math.max(120, placeAbove ? availableAbove : availableBelow);
+      const maxHeight = Math.min(320, availableHeight - gap);
+      const left = Math.min(
+        Math.max(viewportPadding, rect.left),
+        Math.max(viewportPadding, window.innerWidth - rect.width - viewportPadding),
+      );
+      setPosition({
+        top: placeAbove
+          ? Math.max(viewportPadding, rect.top - maxHeight - gap)
+          : Math.min(window.innerHeight - viewportPadding, rect.bottom + gap),
+        left,
+        width: rect.width,
+        maxHeight,
+      });
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open, rootRef]);
+
+  return position;
+};
+
+const SelectDropdownLayer = ({
+  open,
+  rootRef,
+  menuRef,
+  children,
+}: {
+  open: boolean;
+  rootRef: RefObject<HTMLElement>;
+  menuRef: RefObject<HTMLDivElement>;
+  children: ReactNode;
+}) => {
+  const position = useDropdownPosition(open, rootRef);
+  if (!open || !position || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="fixed z-[1000] overflow-auto rounded-lg border border-border bg-surface-primary shadow-xl"
+      style={{
+        top: position.top,
+        left: position.left,
+        width: position.width,
+        maxHeight: position.maxHeight,
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+};
 
 export interface CreateAiSourceDraft {
   presetId: string;
@@ -673,6 +793,7 @@ export const AiPresetSelect = ({
 }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const presets = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const selectedPreset = useMemo(() => {
     return presets.find((item) => item.id === value) || findAiPresetById(value) || presets[0] || null;
@@ -681,8 +802,11 @@ export const AiPresetSelect = ({
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (!rootRef.current) return;
-      if (!rootRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target)
+        && !menuRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -713,40 +837,38 @@ export const AiPresetSelect = ({
         <ChevronDown className={clsx('w-4 h-4 text-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
 
-      {open && (
-        <div className="absolute z-[120] mt-1 w-full max-h-80 overflow-auto rounded-lg border border-border bg-surface-primary shadow-xl">
-          {groups.map((group) => (
-            <div key={group.id} className="border-b border-border/60 last:border-b-0">
-              <div className="px-3 py-1.5 text-[11px] font-medium text-text-tertiary bg-surface-secondary/20">
-                {group.label}
-              </div>
-              {group.items.map((presetOption) => {
-                const active = presetOption.id === value;
-                return (
-                  <button
-                    key={presetOption.id}
-                    type="button"
-                    onClick={() => {
-                      onChange(presetOption.id);
-                      setOpen(false);
-                    }}
-                    className={clsx(
-                      'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
-                      active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
-                    )}
-                  >
-                    <span className="min-w-0 flex items-center gap-2">
-                      <AiPresetLogo presetId={presetOption.id} label={presetOption.label} />
-                      <span className="truncate">{presetOption.label}</span>
-                    </span>
-                    <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
-                  </button>
-                );
-              })}
+      <SelectDropdownLayer open={open} rootRef={rootRef} menuRef={menuRef}>
+        {groups.map((group) => (
+          <div key={group.id} className="border-b border-border/60 last:border-b-0">
+            <div className="px-3 py-1.5 text-[11px] font-medium text-text-tertiary bg-surface-secondary/20">
+              {group.label}
             </div>
-          ))}
-        </div>
-      )}
+            {group.items.map((presetOption) => {
+              const active = presetOption.id === value;
+              return (
+                <button
+                  key={presetOption.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(presetOption.id);
+                    setOpen(false);
+                  }}
+                  className={clsx(
+                    'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
+                    active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
+                  )}
+                >
+                  <span className="min-w-0 flex items-center gap-2">
+                    <AiPresetLogo presetId={presetOption.id} label={presetOption.label} />
+                    <span className="truncate">{presetOption.label}</span>
+                  </span>
+                  <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </SelectDropdownLayer>
     </div>
   );
 };
@@ -764,6 +886,7 @@ export const AiSourceSelect = ({
 }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedSource = useMemo(() => {
     return sources.find((item) => item.id === value) || sources[0] || null;
   }, [sources, value]);
@@ -771,8 +894,11 @@ export const AiSourceSelect = ({
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (!rootRef.current) return;
-      if (!rootRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target)
+        && !menuRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -802,38 +928,36 @@ export const AiSourceSelect = ({
           ) : (
             <span className="w-4 h-4 rounded-sm border border-border bg-surface-secondary/50" />
           )}
-          <span className="truncate">{selectedSource?.name || '选择 AI 源'}</span>
+          <span className="truncate">{selectedSource?.name || '选择供应商'}</span>
         </span>
         <ChevronDown className={clsx('w-4 h-4 text-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
 
-      {open && (
-        <div className="absolute z-[120] mt-1 w-full max-h-80 overflow-auto rounded-lg border border-border bg-surface-primary shadow-xl">
-          {sources.map((source) => {
-            const active = source.id === value;
-            return (
-              <button
-                key={source.id}
-                type="button"
-                onClick={() => {
-                  onChange(source.id);
-                  setOpen(false);
-                }}
-                className={clsx(
-                  'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
-                  active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
-                )}
-              >
-                <span className="min-w-0 flex items-center gap-2">
-                  <AiSourceLogo source={source} />
-                  <span className="truncate">{source.name || '未命名模型源'}</span>
-                </span>
-                <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <SelectDropdownLayer open={open} rootRef={rootRef} menuRef={menuRef}>
+        {sources.map((source) => {
+          const active = source.id === value;
+          return (
+            <button
+              key={source.id}
+              type="button"
+              onClick={() => {
+                onChange(source.id);
+                setOpen(false);
+              }}
+              className={clsx(
+                'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
+                active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
+              )}
+            >
+              <span className="min-w-0 flex items-center gap-2">
+                <AiSourceLogo source={source} />
+                <span className="truncate">{source.name || '未命名供应商'}</span>
+              </span>
+              <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
+            </button>
+          );
+        })}
+      </SelectDropdownLayer>
     </div>
   );
 };
@@ -842,10 +966,10 @@ export interface AiModelOption {
   id: string;
   label?: string;
   badgeText?: string;
-  badgeTone?: 'neutral' | 'recommended';
+  badgeTone?: 'neutral';
   badges?: Array<{
     text: string;
-    tone?: 'neutral' | 'recommended';
+    tone?: 'neutral';
     className?: string;
   }>;
   inputIcons?: Array<{
@@ -873,18 +997,19 @@ export const AiModelSelect = ({
 }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedOption = useMemo(() => {
     return options.find((item) => item.id === value) || null;
   }, [options, value]);
   const resolveBadges = (option: AiModelOption | null | undefined) => {
-    if (!option) return [] as Array<{ text: string; tone?: 'neutral' | 'recommended'; className?: string }>;
+    if (!option) return [] as Array<{ text: string; tone?: 'neutral'; className?: string }>;
     if (Array.isArray(option.badges) && option.badges.length > 0) {
       return option.badges;
     }
     if (option.badgeText) {
       return [{ text: option.badgeText, tone: option.badgeTone }];
     }
-    return [] as Array<{ text: string; tone?: 'neutral' | 'recommended'; className?: string }>;
+    return [] as Array<{ text: string; tone?: 'neutral'; className?: string }>;
   };
   const renderInputIcons = (option: AiModelOption | null | undefined) => {
     const icons = Array.isArray(option?.inputIcons) ? option?.inputIcons || [] : [];
@@ -914,8 +1039,11 @@ export const AiModelSelect = ({
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (!rootRef.current) return;
-      if (!rootRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target)
+        && !menuRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -953,9 +1081,7 @@ export const AiModelSelect = ({
               key={`${selectedOption?.id || 'selected'}-${badge.text}`}
               className={clsx(
                 'px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap font-medium',
-                badge.tone === 'recommended'
-                  ? 'text-emerald-700'
-                  : badge.className || 'text-text-tertiary'
+                badge.className || 'text-text-tertiary'
               )}
             >
               {badge.text}
@@ -966,52 +1092,48 @@ export const AiModelSelect = ({
         <ChevronDown className={clsx('w-4 h-4 text-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
 
-      {open && !disabled && (
-        <div className="absolute z-[120] mt-1 w-full max-h-80 overflow-auto rounded-lg border border-border bg-surface-primary shadow-xl">
-          {!options.length ? (
-            <div className="px-3 py-2 text-sm text-text-tertiary">{placeholder}</div>
-          ) : (
-            options.map((option) => {
-              const active = option.id === value;
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => {
-                    onChange(option.id);
-                    setOpen(false);
-                  }}
-                  className={clsx(
-                    'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
-                    active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
-                  )}
-                >
-                  <span className="min-w-0 flex items-center gap-2 flex-wrap">
-                    <span className="truncate">{option.label || option.id}</span>
-                    {resolveBadges(option).map((badge) => (
-                      <span
-                        key={`${option.id}-${badge.text}`}
-                        className={clsx(
-                          'px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap font-medium',
-                          badge.tone === 'recommended'
-                            ? 'text-emerald-700'
-                            : badge.className || 'text-text-tertiary'
-                        )}
-                      >
-                        {badge.text}
-                      </span>
-                    ))}
-                  </span>
-                  <span className="flex items-center gap-2 pl-2">
-                    {renderInputIcons(option)}
-                    <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
-                  </span>
-                </button>
-              );
-            })
-          )}
-        </div>
-      )}
+      <SelectDropdownLayer open={open && !disabled} rootRef={rootRef} menuRef={menuRef}>
+        {!options.length ? (
+          <div className="px-3 py-2 text-sm text-text-tertiary">{placeholder}</div>
+        ) : (
+          options.map((option) => {
+            const active = option.id === value;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => {
+                  onChange(option.id);
+                  setOpen(false);
+                }}
+                className={clsx(
+                  'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
+                  active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
+                )}
+              >
+                <span className="min-w-0 flex items-center gap-2 flex-wrap">
+                  <span className="truncate">{option.label || option.id}</span>
+                  {resolveBadges(option).map((badge) => (
+                    <span
+                      key={`${option.id}-${badge.text}`}
+                      className={clsx(
+                        'px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap font-medium',
+                        badge.className || 'text-text-tertiary'
+                      )}
+                    >
+                      {badge.text}
+                    </span>
+                  ))}
+                </span>
+                <span className="flex items-center gap-2 pl-2">
+                  {renderInputIcons(option)}
+                  <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
+                </span>
+              </button>
+            );
+          })
+        )}
+      </SelectDropdownLayer>
     </div>
   );
 };
@@ -1065,10 +1187,27 @@ export interface McpServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  cwd?: string;
   url?: string;
   oauth?: {
     enabled?: boolean;
     tokenPath?: string;
+    redbox?: {
+      required?: boolean;
+      approvalMode?: 'never' | 'destructive' | 'always';
+      startupTimeoutMs?: number;
+      toolTimeoutMs?: number;
+      supportsParallelToolCalls?: boolean;
+      elicitationPausesTimeout?: boolean;
+      enabledTools?: string[];
+      disabledTools?: string[];
+      envPassthrough?: string[];
+      perTool?: Record<string, {
+        approvalMode?: 'never' | 'destructive' | 'always';
+        enabled?: boolean;
+        toolTimeoutMs?: number;
+      }>;
+    };
   };
 }
 
@@ -1155,7 +1294,7 @@ export const createAiSourceFromPreset = (presetId: string = DEFAULT_AI_PRESET_ID
   const preset = findAiPresetById(presetId) || findAiPresetById(DEFAULT_AI_PRESET_ID);
   return {
     id: generateAiSourceId(),
-    name: preset?.label || '自定义 AI 源',
+    name: preset?.label || '自定义供应商',
     presetId: preset?.id || 'custom',
     baseURL: preset?.baseURL || '',
     apiKey: '',
@@ -1170,7 +1309,7 @@ export const createAiSourceDraftFromPreset = (presetId: string = DEFAULT_AI_PRES
   const preset = findAiPresetById(presetId) || findAiPresetById(DEFAULT_AI_PRESET_ID);
   return {
     presetId: preset?.id || 'custom',
-    name: preset?.label || '自定义 AI 源',
+    name: preset?.label || '自定义供应商',
     baseURL: preset?.baseURL || '',
     apiKey: '',
     protocol: preset?.protocol || 'openai',
@@ -1189,18 +1328,27 @@ export const parseAiSources = (raw: string | undefined): AiSourceConfig[] => {
         const baseURL = String(item.baseURL || item.baseUrl || '');
         const presetId = String(item.presetId || inferPresetIdByEndpoint(baseURL) || 'custom');
         const model = String(item.model || item.modelName || '');
+        const rawId = String(item.id || '');
+        const name = String(item.name || findAiPresetById(presetId)?.label || '供应商');
+        const isOfficialSource = (
+          isOfficialAutoSourceId(rawId)
+          || presetId === 'redbox-official'
+          || name.trim().toLowerCase() === 'redbox official'
+          || name.trim().toLowerCase() === `${APP_BRAND.displayName} official`.toLowerCase()
+          || name.trim().toLowerCase() === OFFICIAL_AI_SOURCE_DISPLAY_NAME.toLowerCase()
+        );
         const modelsMeta = normalizeAiModelDescriptors(
           Array.isArray(item.modelsMeta)
-            ? item.modelsMeta.map((value) => (value && typeof value === 'object' ? value as { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> } : null))
+            ? item.modelsMeta.map((value) => (value && typeof value === 'object' ? value as RawAiModelDescriptor : null))
             : [],
         );
         const models = Array.isArray(item.models)
           ? normalizeSourceModels(item.models.map((value) => String(value || '')))
           : normalizeSourceModels([model]);
         return {
-          id: String(item.id || generateAiSourceId()),
-          name: String(item.name || findAiPresetById(presetId)?.label || 'AI 源'),
-          presetId,
+          id: isOfficialSource ? OFFICIAL_AUTO_SOURCE_ID : canonicalizeOfficialAutoSourceId(rawId || generateAiSourceId()),
+          name: isOfficialSource ? OFFICIAL_AI_SOURCE_DISPLAY_NAME : name,
+          presetId: isOfficialSource ? 'redbox-official' : presetId,
           baseURL,
           apiKey: String(item.apiKey || item.key || ''),
           models,
@@ -1235,9 +1383,22 @@ export const createDefaultMcpServer = (): McpServerConfig => ({
   command: '',
   args: [],
   env: {},
+  cwd: '',
   url: '',
   oauth: {
     enabled: false,
+    redbox: {
+      required: false,
+      approvalMode: 'destructive',
+      startupTimeoutMs: 15000,
+      toolTimeoutMs: 60000,
+      supportsParallelToolCalls: true,
+      elicitationPausesTimeout: true,
+      enabledTools: [],
+      disabledTools: [],
+      envPassthrough: [],
+      perTool: {},
+    },
   },
 });
 
@@ -1262,6 +1423,7 @@ export const parseMcpServers = (raw: string | undefined): McpServerConfig[] => {
                 .filter(([, value]) => Boolean(value))
             )
           : {},
+        cwd: String(item.cwd || ''),
         url: String(item.url || ''),
         oauth: item.oauth && typeof item.oauth === 'object'
           ? {
@@ -1269,6 +1431,43 @@ export const parseMcpServers = (raw: string | undefined): McpServerConfig[] => {
                 ? undefined
                 : Boolean((item.oauth as Record<string, unknown>).enabled),
               tokenPath: String((item.oauth as Record<string, unknown>).tokenPath || ''),
+              redbox: (() => {
+                const oauth = item.oauth as Record<string, unknown>;
+                const redbox = (oauth.redbox && typeof oauth.redbox === 'object'
+                  ? oauth.redbox
+                  : oauth.policy && typeof oauth.policy === 'object'
+                    ? oauth.policy
+                    : oauth.mcp && typeof oauth.mcp === 'object'
+                      ? oauth.mcp
+                      : {}) as Record<string, unknown>;
+                const approvalMode = String(redbox.approvalMode || redbox.defaultToolsApprovalMode || 'destructive');
+                return {
+                  required: Boolean(redbox.required),
+                  approvalMode: (approvalMode === 'never' || approvalMode === 'always' ? approvalMode : 'destructive') as 'never' | 'destructive' | 'always',
+                  startupTimeoutMs: Number(redbox.startupTimeoutMs || 15000),
+                  toolTimeoutMs: Number(redbox.toolTimeoutMs || 60000),
+                  supportsParallelToolCalls: redbox.supportsParallelToolCalls === undefined ? true : Boolean(redbox.supportsParallelToolCalls),
+                  elicitationPausesTimeout: redbox.elicitationPausesTimeout === undefined ? true : Boolean(redbox.elicitationPausesTimeout),
+                  enabledTools: Array.isArray(redbox.enabledTools) ? redbox.enabledTools.map((tool) => String(tool || '').trim()).filter(Boolean) : [],
+                  disabledTools: Array.isArray(redbox.disabledTools) ? redbox.disabledTools.map((tool) => String(tool || '').trim()).filter(Boolean) : [],
+                  envPassthrough: Array.isArray(redbox.envPassthrough) ? redbox.envPassthrough.map((key) => String(key || '').trim()).filter(Boolean) : [],
+                  perTool: redbox.perTool && typeof redbox.perTool === 'object' && !Array.isArray(redbox.perTool)
+                    ? Object.fromEntries(
+                        Object.entries(redbox.perTool as Record<string, unknown>)
+                          .filter(([key, value]) => Boolean(key.trim()) && Boolean(value && typeof value === 'object' && !Array.isArray(value)))
+                          .map(([key, value]) => {
+                            const policy = value as Record<string, unknown>;
+                            const mode = String(policy.approvalMode || 'destructive');
+                            return [key.trim(), {
+                              approvalMode: (mode === 'never' || mode === 'always' ? mode : 'destructive') as 'never' | 'destructive' | 'always',
+                              enabled: policy.enabled === undefined ? undefined : Boolean(policy.enabled),
+                              toolTimeoutMs: policy.toolTimeoutMs === undefined ? undefined : Number(policy.toolTimeoutMs),
+                            }];
+                          })
+                      )
+                    : {},
+                };
+              })(),
             }
           : undefined,
       }));
@@ -1425,22 +1624,23 @@ export const extractAlipayPayQrContent = (order: Record<string, unknown>): strin
 
 export const filterOfficialModelsByCapability = (
   models: OfficialModelInfo[],
-  capability: 'chat' | 'stt' | 'image' | 'embedding' | 'video' | 'audio',
+  capability: 'chat' | 'stt' | 'image' | 'embedding' | 'video' | 'audio' | 'tts' | 'voice_clone',
 ): OfficialModelInfo[] => {
   const normalizedCapability = capability === 'stt' ? 'transcription' : capability;
   return models.filter((item) => {
-    const capabilities = Array.isArray(item.capabilities) && item.capabilities.length > 0
+    const rawCapabilities = Array.isArray(item.capabilities) && item.capabilities.length > 0
       ? normalizeModelCapabilities(item.capabilities)
       : normalizeModelCapabilities([
         ...(item.capability ? [item.capability] : []),
         ...inferModelCapabilities(item.id),
       ]);
+    const capabilities = enforceModelCapabilityPolicy(item.id, rawCapabilities);
     return capabilities.includes(normalizedCapability as ModelCapability);
   });
 };
 
 export const toAiModelDescriptor = (
-  model: string | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> },
+  model: RawAiModelDescriptor,
 ): AiModelDescriptor | null => {
   if (typeof model === 'string') {
     const id = model.trim();
@@ -1448,7 +1648,7 @@ export const toAiModelDescriptor = (
     const forcedCapabilities = getForcedModelCapabilities(id);
     return {
       id,
-      capabilities: forcedCapabilities.length > 0 ? forcedCapabilities : inferModelCapabilities(id),
+      capabilities: enforceModelCapabilityPolicy(id, forcedCapabilities.length > 0 ? forcedCapabilities : inferModelCapabilities(id)),
       inputCapabilities: getModelInputCapabilities(id),
     };
   }
@@ -1465,8 +1665,11 @@ export const toAiModelDescriptor = (
     : inferModelCapabilities(id);
   return {
     id,
-    capabilities: forcedCapabilities.length > 0 ? forcedCapabilities : capabilities,
-    inputCapabilities: getModelInputCapabilities(id),
+    capabilities: enforceModelCapabilityPolicy(id, forcedCapabilities.length > 0 ? forcedCapabilities : capabilities),
+    inputCapabilities: normalizeModelInputCapabilities([
+      ...getModelInputCapabilities(id),
+      ...modelInputCapabilitiesFromMetadata(model),
+    ]),
   };
 };
 
@@ -1479,17 +1682,12 @@ export const filterAiModelsByCapability = (
 
 export const buildModelCapabilityBadges = (
   capabilities: ModelCapability[],
-  options?: { recommended?: boolean },
-): Array<{ text: string; tone?: 'neutral' | 'recommended'; className?: string }> => {
-  const badges: Array<{ text: string; tone?: 'neutral' | 'recommended'; className?: string }> = capabilities.map((capability) => ({
+): Array<{ text: string; tone?: 'neutral'; className?: string }> => {
+  return capabilities.map((capability) => ({
     text: MODEL_CAPABILITY_META[capability]?.shortLabel || capability,
     tone: 'neutral' as const,
     className: MODEL_CAPABILITY_BADGE_META[capability],
   }));
-  if (options?.recommended) {
-    badges.unshift({ text: '推荐', tone: 'recommended', className: 'text-emerald-700' });
-  }
-  return badges;
 };
 
 export const buildModelInputIcons = (

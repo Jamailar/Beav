@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, nativeImage, shell, clipboard, dialog, net } from 'electron'
+import { app, BrowserWindow, ipcMain, protocol, nativeImage, shell, clipboard, dialog, net, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
@@ -32,6 +32,7 @@ import {
   listSpaces,
   createSpace,
   renameSpace,
+  deleteSpace,
   setActiveSpace,
   listArchiveProfiles,
   createArchiveProfile,
@@ -144,6 +145,18 @@ import {
   openDebugLogDirectory,
   setDebugLoggingEnabled,
 } from './core/debugLogger';
+import {
+  appendRendererDiagnosticLog,
+  createAutoDiagnosticReport,
+  createFeedbackReport,
+  dismissDiagnosticReport,
+  exportDiagnosticBundle,
+  getDiagnosticsLogStatus,
+  getRecentDiagnosticsLogs,
+  listPendingDiagnosticReports,
+  openDiagnosticsReportDirectory,
+  uploadDiagnosticReport,
+} from './core/diagnosticReportService';
 import {
   listToolDiagnostics,
   runAiToolDiagnostic,
@@ -356,6 +369,60 @@ function normalizeBindingMetadata(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? { ...(value as Record<string, unknown>) }
     : {};
+}
+
+function parseChatSessionMetadata(metadata: unknown): Record<string, unknown> {
+  if (!metadata) return {};
+  if (typeof metadata === 'object' && !Array.isArray(metadata)) {
+    return { ...(metadata as Record<string, unknown>) };
+  }
+  try {
+    const parsed = JSON.parse(String(metadata));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function chatSessionTimestampToIso(value: unknown): string {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return new Date(numeric > 1_000_000_000_000 ? numeric : numeric * 1000).toISOString();
+  }
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date(0).toISOString();
+}
+
+function serializeChatSessionForRenderer(session: ReturnType<typeof getChatSession>) {
+  if (!session) return null;
+  const metadata = parseChatSessionMetadata(session.metadata);
+  const archived = Boolean(metadata.archived);
+  const starred = Boolean(metadata.starred);
+  const unread = Boolean(metadata.unread);
+  return {
+    ...session,
+    createdAt: chatSessionTimestampToIso(session.created_at),
+    updatedAt: chatSessionTimestampToIso(session.updated_at),
+    metadata,
+    archived,
+    starred,
+    unread,
+  };
+}
+
+function updateChatSessionMetadataPatch(sessionId: string, patch: Record<string, unknown>) {
+  const session = getChatSession(sessionId);
+  if (!session) {
+    return { success: false, error: 'session not found' };
+  }
+  const metadata = {
+    ...parseChatSessionMetadata(session.metadata),
+    ...patch,
+  };
+  updateChatSessionMetadata(sessionId, metadata);
+  return { success: true, session: serializeChatSessionForRenderer(getChatSession(sessionId)) };
 }
 
 function deriveEditorBindingInitialContext(
@@ -671,12 +738,167 @@ function buildRedClawAuthoringPrompt(userBrief: string, hints: RedClawAuthoringH
 function resolveForcedSkillNames(input: unknown): string[] {
   const record = (input && typeof input === 'object') ? input as Record<string, unknown> : null;
   if (!record) return [];
+  const explicitSkillNames = Array.isArray(record.activeSkills)
+    ? record.activeSkills
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    : [];
+  const forcedSkillNames = Array.from(new Set(explicitSkillNames));
   const platform = String(record.platform || '').trim();
   const formatTarget = String(record.formatTarget || '').trim();
-  if (platform === 'wechat_official_account' || formatTarget === 'wechat_rich_text') {
-    return [WECHAT_OFFICIAL_SKILL_NAME];
+  if (
+    (platform === 'wechat_official_account' || formatTarget === 'wechat_rich_text')
+    && !forcedSkillNames.includes(WECHAT_OFFICIAL_SKILL_NAME)
+  ) {
+    forcedSkillNames.push(WECHAT_OFFICIAL_SKILL_NAME);
   }
-  return [];
+  return forcedSkillNames;
+}
+
+function compactChatKnowledgeReferences(input: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(input)) return [];
+  return input
+    .slice(0, 24)
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const item = raw as Record<string, unknown>;
+      const id = String(item.id || item.knowledgeId || '').trim();
+      if (!id) return null;
+      return {
+        type: 'knowledge',
+        knowledgeId: id,
+        id,
+        title: String(item.title || '未命名内容').trim(),
+        sourceKind: String(item.sourceKind || item.kind || '').trim() || undefined,
+        summary: String(item.summary || '').trim() || undefined,
+        cover: String(item.cover || item.coverUrl || '').trim() || undefined,
+        sourceUrl: String(item.sourceUrl || '').trim() || undefined,
+        folderPath: String(item.folderPath || '').trim() || undefined,
+        rootPath: String(item.rootPath || '').trim() || undefined,
+        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 12) : undefined,
+        updatedAt: String(item.updatedAt || '').trim() || undefined,
+        fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
+        hasTranscript: typeof item.hasTranscript === 'boolean' ? item.hasTranscript : undefined,
+      };
+    })
+    .filter(Boolean) as Array<Record<string, unknown>>;
+}
+
+function compactChatAssetReferences(input: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(input)) return [];
+  return input
+    .slice(0, 24)
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const item = raw as Record<string, unknown>;
+      const id = String(item.id || '').trim();
+      const name = String(item.name || '').trim();
+      if (!id || !name) return null;
+      return {
+        type: 'asset',
+        assetId: id,
+        id,
+        name,
+        description: String(item.description || '').trim() || undefined,
+        primaryPreviewUrl: String(item.primaryPreviewUrl || '').trim() || undefined,
+        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 12) : undefined,
+      };
+    })
+    .filter(Boolean) as Array<Record<string, unknown>>;
+}
+
+function compactChatActiveSkills(input: unknown): string[] {
+  const record = (input && typeof input === 'object') ? input as Record<string, unknown> : null;
+  if (!record || !Array.isArray(record.activeSkills)) return [];
+  return Array.from(new Set(
+    record.activeSkills
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .slice(0, 24),
+  ));
+}
+
+function compactChatReplyActor(input: unknown): Record<string, unknown> | undefined {
+  const record = (input && typeof input === 'object') ? input as Record<string, unknown> : null;
+  if (!record) return undefined;
+  const memberId = String(record.advisorId || record.memberId || record.id || '').trim();
+  const displayName = String(record.name || record.displayName || '').trim();
+  if (!memberId || !displayName) return undefined;
+  return {
+    type: 'member',
+    memberId,
+    displayName,
+    avatar: String(record.avatar || '').trim() || undefined,
+  };
+}
+
+function compactChatAttachments(input: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item): item is Record<string, unknown> => (
+      Boolean(item)
+      && typeof item === 'object'
+      && !Array.isArray(item)
+      && String((item as Record<string, unknown>).type || '').trim() === 'uploaded-file'
+    ))
+    .map((item) => ({
+      type: 'uploaded-file',
+      attachmentId: String(item.attachmentId || '').trim() || undefined,
+      name: String(item.name || '').trim() || '未命名附件',
+      kind: String(item.kind || '').trim() || undefined,
+      mimeType: String(item.mimeType || '').trim() || undefined,
+      size: typeof item.size === 'number' ? item.size : undefined,
+      ext: String(item.ext || '').trim() || undefined,
+      localUrl: String(item.localUrl || '').trim() || undefined,
+      inlineDataUrl: String(item.inlineDataUrl || '').trim() || undefined,
+      thumbnailUrl: String(item.thumbnailUrl || '').trim() || undefined,
+      storageMode: String(item.storageMode || '').trim() || undefined,
+      directUploadEligible: typeof item.directUploadEligible === 'boolean' ? item.directUploadEligible : undefined,
+      processingStrategy: String(item.processingStrategy || '').trim() || undefined,
+      workspaceRelativePath: String(item.workspaceRelativePath || '').trim() || undefined,
+      toolPath: String(item.toolPath || '').trim() || undefined,
+      absolutePath: String(item.absolutePath || '').trim() || undefined,
+      originalAbsolutePath: String(item.originalAbsolutePath || '').trim() || undefined,
+      deliveryMode: String(item.deliveryMode || '').trim() || undefined,
+      deliveryPlan: item.deliveryPlan && typeof item.deliveryPlan === 'object' ? item.deliveryPlan : undefined,
+      summary: String(item.summary || '').trim() || undefined,
+      requiresMultimodal: typeof item.requiresMultimodal === 'boolean' ? item.requiresMultimodal : undefined,
+      attachmentLifecycle: String(item.attachmentLifecycle || '').trim() || undefined,
+    }))
+    .slice(0, 12);
+}
+
+function buildChatMessageMetadata(input: {
+  knowledgeReferences?: unknown;
+  assetReferences?: unknown;
+  memberMention?: unknown;
+  taskHints?: unknown;
+  attachments?: unknown;
+}): string | undefined {
+  const metadata: Record<string, unknown> = {};
+  const explicitKnowledgeRefs = compactChatKnowledgeReferences(input.knowledgeReferences);
+  const explicitAssetRefs = compactChatAssetReferences(input.assetReferences);
+  const activeSkills = compactChatActiveSkills(input.taskHints);
+  const replyActor = compactChatReplyActor(input.memberMention);
+  const uploadedAttachments = compactChatAttachments(input.attachments);
+
+  if (explicitKnowledgeRefs.length > 0) {
+    metadata.explicitKnowledgeRefs = explicitKnowledgeRefs;
+  }
+  if (explicitAssetRefs.length > 0) {
+    metadata.explicitAssetRefs = explicitAssetRefs;
+  }
+  if (activeSkills.length > 0) {
+    metadata.activeSkills = activeSkills;
+  }
+  if (replyActor) {
+    metadata.replyActor = replyActor;
+  }
+  if (uploadedAttachments.length > 0) {
+    metadata.uploadedAttachments = uploadedAttachments;
+  }
+
+  return Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : undefined;
 }
 
 function emitForcedSkillActivationEvents(sender: Electron.WebContents, skillNames: string[]): void {
@@ -1073,6 +1295,17 @@ function createWindow() {
 
   win = new BrowserWindow({
     icon: resolvedIconPath,
+    ...(process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 14, y: 13 },
+        }
+      : {}),
+    ...(process.platform === 'win32'
+      ? {
+          frame: false,
+        }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       webviewTag: true,
@@ -1434,6 +1667,15 @@ const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'
 const VIDEO_ATTACHMENT_EXTENSIONS = new Set(['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v']);
 const AUDIO_ATTACHMENT_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus']);
 
+function inferAttachmentKindFromExt(extension: string): 'text' | 'image' | 'video' | 'audio' | 'binary' {
+  const ext = String(extension || '').trim().replace(/^\./, '').toLowerCase();
+  if (TEXT_ATTACHMENT_EXTENSIONS.has(ext)) return 'text';
+  if (IMAGE_ATTACHMENT_EXTENSIONS.has(ext)) return 'image';
+  if (VIDEO_ATTACHMENT_EXTENSIONS.has(ext)) return 'video';
+  if (AUDIO_ATTACHMENT_EXTENSIONS.has(ext)) return 'audio';
+  return 'binary';
+}
+
 function guessAttachmentMimeType(extension: string, kind?: string): string {
   const ext = String(extension || '').trim().toLowerCase();
   if (ext === 'txt') return 'text/plain';
@@ -1470,6 +1712,38 @@ function guessAttachmentMimeType(extension: string, kind?: string): string {
   if (kind === 'audio') return 'audio/mpeg';
   if (kind === 'video') return 'video/mp4';
   return 'application/octet-stream';
+}
+
+async function buildStagedChatAttachment(targetPath: string, originalPath: string, fileName?: string) {
+  const fileStat = await fs.stat(targetPath);
+  const lowerExt = extensionFromPath(fileName || originalPath || targetPath);
+  const kind = inferAttachmentKindFromExt(lowerExt);
+  let summary = '';
+  if (kind === 'text') {
+    try {
+      const preview = await fs.readFile(targetPath, 'utf-8');
+      summary = String(preview || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+    } catch {
+      summary = '';
+    }
+  }
+
+  return {
+    type: 'uploaded-file',
+    name: fileName || path.basename(originalPath || targetPath),
+    ext: lowerExt,
+    size: Number(fileStat.size || 0),
+    absolutePath: targetPath,
+    originalAbsolutePath: originalPath || targetPath,
+    localUrl: toLocalFileUrl(targetPath),
+    kind,
+    mimeType: guessAttachmentMimeType(lowerExt, kind),
+    storageMode: 'staged',
+    directUploadEligible: kind === 'image',
+    processingStrategy: kind === 'image' ? 'direct-image-or-staged' : kind === 'text' ? 'staged-text' : 'staged-file',
+    requiresMultimodal: kind === 'image',
+    summary,
+  };
 }
 
 const buildAttachmentPromptSuffix = (attachment: Record<string, unknown>): string => {
@@ -1548,6 +1822,75 @@ async function buildAttachmentRuntimeInput(
     { type: 'text', text: textLines.filter(Boolean).join('\n') },
     { type: 'image_url', image_url: { url: dataUrl } },
   ];
+}
+
+function normalizeUploadedChatAttachments(
+  attachment: unknown,
+  attachments: unknown,
+): Record<string, unknown>[] {
+  const rawItems = Array.isArray(attachments) && attachments.length > 0
+    ? attachments
+    : attachment
+      ? [attachment]
+      : [];
+  return rawItems.filter((item): item is Record<string, unknown> => (
+    Boolean(item)
+    && typeof item === 'object'
+    && !Array.isArray(item)
+    && String((item as Record<string, unknown>).type || '').trim() === 'uploaded-file'
+  ));
+}
+
+async function buildAttachmentsRuntimeInput(
+  attachments: Record<string, unknown>[],
+  userText: string,
+  modelName: string,
+): Promise<{
+  outgoingMessage: string;
+  runtimeInput: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> | null;
+}> {
+  let outgoingMessage = String(userText || '');
+  const imageParts: Array<{ type: 'image_url'; image_url: { url: string } }> = [];
+  let textRuntimeInput: string | null = null;
+
+  for (const attachment of attachments) {
+    const suffix = buildAttachmentPromptSuffix(attachment);
+    if (suffix) {
+      outgoingMessage = `${outgoingMessage}${suffix}`;
+    }
+    try {
+      const runtimeInput = await buildAttachmentRuntimeInput(attachment, outgoingMessage, modelName);
+      if (Array.isArray(runtimeInput)) {
+        runtimeInput.forEach((part) => {
+          if (part.type === 'image_url') {
+            imageParts.push(part);
+          }
+        });
+      } else if (typeof runtimeInput === 'string' && runtimeInput.trim()) {
+        textRuntimeInput = runtimeInput;
+      }
+    } catch (error) {
+      console.warn('[chat:send-message] failed to prepare attachment runtime input', {
+        name: attachment.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (imageParts.length > 0) {
+    return {
+      outgoingMessage,
+      runtimeInput: [
+        { type: 'text', text: outgoingMessage.trim() || '请分析这些附件。' },
+        ...imageParts,
+      ],
+    };
+  }
+
+  return {
+    outgoingMessage,
+    runtimeInput: textRuntimeInput,
+  };
 }
 
 function guessMimeTypeByExtension(extension: string): string {
@@ -1681,6 +2024,47 @@ async function enrichCoverAsset(asset: CoverAsset): Promise<CoverAsset & { absol
       exists: false,
     };
   }
+}
+
+function getSubjectsRootPath(): string {
+  const paths = getWorkspacePaths() as ReturnType<typeof getWorkspacePaths> & { subjects?: string };
+  return paths.subjects || path.join(paths.base, 'subjects');
+}
+
+function extensionForCharacterCard(inputPath: string, mimeType?: string): string {
+  const ext = path.extname(inputPath || '').replace(/^\./, '').toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+    return ext === 'jpeg' ? 'jpg' : ext;
+  }
+  const mime = String(mimeType || '').toLowerCase();
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('webp')) return 'webp';
+  return 'png';
+}
+
+function buildSubjectCharacterCardPrompt(input: {
+  name: string;
+  categoryName?: string;
+  description?: string;
+  tags?: string[];
+  attributes?: Array<{ key: string; value: string }>;
+}): string {
+  const lines = [
+    `Create a polished 16:9 character reference card for "${input.name}".`,
+    'Use the attached image as the character identity reference. Preserve face, body shape, outfit cues, colors, and recognizable details.',
+    'The card should be useful for future image/video generation: clean layout, full-body or half-body hero pose, small expression/pose/detail callouts, readable but minimal labels, neutral studio background, no fake UI chrome.',
+  ];
+  if (input.categoryName) lines.push(`Asset category: ${input.categoryName}.`);
+  if (input.description) lines.push(`Character notes: ${input.description}`);
+  if (Array.isArray(input.tags) && input.tags.length > 0) lines.push(`Tags: ${input.tags.slice(0, 12).join(', ')}`);
+  const attributes = Array.isArray(input.attributes)
+    ? input.attributes
+        .map((item) => `${String(item.key || '').trim()}: ${String(item.value || '').trim()}`)
+        .filter((item) => item !== ':')
+        .slice(0, 16)
+    : [];
+  if (attributes.length > 0) lines.push(`Attributes: ${attributes.join('; ')}`);
+  return lines.join('\n');
 }
 
 async function refreshForSpaceChange() {
@@ -2038,6 +2422,63 @@ ipcMain.handle('debug:open-log-dir', async () => {
   return openDebugLogDirectory();
 });
 
+ipcMain.handle('logs:get-status', async () => {
+  return getDiagnosticsLogStatus();
+});
+
+ipcMain.handle('logs:get-recent', (_event, payload?: { limit?: number }) => {
+  const limit = Number(payload?.limit || 200);
+  return getRecentDiagnosticsLogs(limit);
+});
+
+ipcMain.handle('logs:open-dir', async () => {
+  return openDiagnosticsReportDirectory();
+});
+
+ipcMain.handle('logs:list-pending-reports', async () => {
+  return listPendingDiagnosticReports();
+});
+
+ipcMain.handle('logs:export-bundle', async (_event, payload?: { reportId?: string; includeAdvancedContext?: boolean }) => {
+  return exportDiagnosticBundle(payload?.reportId, {
+    includeAdvancedContext: Boolean(payload?.includeAdvancedContext),
+  });
+});
+
+ipcMain.handle('logs:create-feedback-report', async (event, payload?: Parameters<typeof createFeedbackReport>[0]) => {
+  const result = await createFeedbackReport(payload || {});
+  if (result?.success && result.report) {
+    event.sender.send('diagnostics:report-pending', result.report);
+  }
+  return result;
+});
+
+ipcMain.handle('logs:create-auto-report', async (event, payload?: Parameters<typeof createAutoDiagnosticReport>[0]) => {
+  const result = await createAutoDiagnosticReport(payload || {});
+  if (result?.success && result.report) {
+    event.sender.send('diagnostics:report-pending', result.report);
+  }
+  return result;
+});
+
+ipcMain.handle('logs:upload-report', async (_event, payload?: { reportId?: string } | string) => {
+  const reportId = typeof payload === 'string' ? payload : payload?.reportId || '';
+  return uploadDiagnosticReport(reportId);
+});
+
+ipcMain.handle('logs:dismiss-report', async (_event, payload?: { reportId?: string } | string) => {
+  const reportId = typeof payload === 'string' ? payload : payload?.reportId || '';
+  return dismissDiagnosticReport(reportId);
+});
+
+ipcMain.handle('logs:set-upload-consent', () => {
+  return { success: true };
+});
+
+ipcMain.handle('logs:append-renderer', (_event, payload?: Parameters<typeof appendRendererDiagnosticLog>[0]) => {
+  return appendRendererDiagnosticLog(payload);
+});
+
 ipcMain.handle('tools:diagnostics:list', () => {
   return listToolDiagnostics();
 });
@@ -2096,10 +2537,17 @@ ipcMain.handle('tools:hooks:remove', (_event, payload?: { id?: string }) => {
 });
 
 ipcMain.handle('sessions:list', () => {
-  return getSessionRuntimeStore().listSessions().map((session) => ({
-    ...session,
-    chatSession: getChatSession(session.id),
-  }));
+  return getSessionRuntimeStore().listSessions().map((session) => {
+    const chatSession = serializeChatSessionForRenderer(getChatSession(session.id));
+    return {
+      ...session,
+      metadata: chatSession?.metadata || null,
+      archived: Boolean(chatSession?.archived),
+      starred: Boolean(chatSession?.starred),
+      unread: Boolean(chatSession?.unread),
+      chatSession,
+    };
+  });
 });
 
 ipcMain.handle('sessions:get', (_event, payload?: { sessionId?: string }) => {
@@ -2337,6 +2785,121 @@ ipcMain.handle('ai:roles:list', async () => {
 });
 
 ipcMain.handle('app:get-version', () => app.getVersion());
+
+const ELECTRON_ARCHIVE_AUTH_UNAVAILABLE = 'electron-archive-official-auth-unavailable';
+
+function buildElectronArchiveAuthState() {
+  return {
+    status: 'anonymous',
+    loggedIn: false,
+    session: null,
+    user: null,
+    points: null,
+    models: [],
+    callRecords: [],
+    degradedReason: ELECTRON_ARCHIVE_AUTH_UNAVAILABLE,
+    lastError: null,
+    lastErrorKind: null,
+    lastRefreshAt: null,
+    nextRefreshAtMs: null,
+  };
+}
+
+function buildElectronArchiveAuthUnavailableResult(error = 'Official auth is unavailable in the Electron archive') {
+  return {
+    success: false,
+    loggedIn: false,
+    session: null,
+    data: null,
+    error,
+    reason: ELECTRON_ARCHIVE_AUTH_UNAVAILABLE,
+  };
+}
+
+function buildStartupMigrationNotNeededStatus() {
+  return {
+    status: 'not-needed',
+    needsDbImport: false,
+    needsProjectUpgrade: false,
+    shouldShowModal: false,
+    progress: 0,
+    legacyMarkdownCount: 0,
+    projectUpgradeCounts: null,
+  };
+}
+
+ipcMain.handle('app:startup-migration-status', async () => buildStartupMigrationNotNeededStatus());
+ipcMain.handle('app:startup-migration-start', async () => buildStartupMigrationNotNeededStatus());
+ipcMain.handle('auth:get-state', async () => buildElectronArchiveAuthState());
+ipcMain.handle('auth:refresh-now', async () => buildElectronArchiveAuthUnavailableResult('官方账号未登录'));
+ipcMain.handle('auth:login-sms', async () => buildElectronArchiveAuthUnavailableResult());
+ipcMain.handle('auth:login-wechat-start', async () => buildElectronArchiveAuthUnavailableResult());
+ipcMain.handle('auth:login-wechat-poll', async () => buildElectronArchiveAuthUnavailableResult());
+ipcMain.handle('auth:logout', async () => buildElectronArchiveAuthUnavailableResult());
+ipcMain.handle('redbox-auth:bootstrap', async () => buildElectronArchiveAuthUnavailableResult('官方账号未登录'));
+ipcMain.handle('redbox-auth:pricing', async () => ({ success: true, pricing: [], unavailable: true }));
+ipcMain.handle('redbox-auth:pricing-refresh', async () => ({ success: true, pricing: [], unavailable: true }));
+ipcMain.handle('redbox-auth:product', async () => ({
+  success: false,
+  product: null,
+  error: 'Official products are unavailable in the Electron archive',
+}));
+ipcMain.handle('redbox-auth:set-realm', async () => buildElectronArchiveAuthUnavailableResult());
+ipcMain.handle('llm-readiness:get-state', async () => ({
+  ready: false,
+  mode: 'custom',
+  reason: ELECTRON_ARCHIVE_AUTH_UNAVAILABLE,
+  officialLoggedIn: false,
+  canUseOfficial: false,
+  canUseCustom: true,
+  updatedAt: new Date().toISOString(),
+}));
+ipcMain.handle('llm-readiness:refresh', async () => ({
+  success: false,
+  ready: false,
+  reason: ELECTRON_ARCHIVE_AUTH_UNAVAILABLE,
+}));
+ipcMain.handle('llm-readiness:configure-custom-source', async () => ({
+  success: false,
+  ready: false,
+  reason: ELECTRON_ARCHIVE_AUTH_UNAVAILABLE,
+}));
+
+function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindow | null {
+  return BrowserWindow.fromWebContents(event.sender) || win || null;
+}
+
+ipcMain.handle('window:minimize', async (event) => {
+  const targetWindow = getSenderWindow(event);
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return { success: false, error: '窗口不可用' };
+  }
+  targetWindow.minimize();
+  return { success: true };
+});
+
+ipcMain.handle('window:toggle-maximize', async (event) => {
+  const targetWindow = getSenderWindow(event);
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return { success: false, error: '窗口不可用' };
+  }
+  if (targetWindow.isMaximized()) {
+    targetWindow.unmaximize();
+  } else {
+    targetWindow.maximize();
+  }
+  return { success: true, maximized: targetWindow.isMaximized() };
+});
+
+ipcMain.handle('window:close', async (event) => {
+  const targetWindow = getSenderWindow(event);
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return { success: false, error: '窗口不可用' };
+  }
+  targetWindow.close();
+  return { success: true };
+});
+
 ipcMain.handle('plugin:browser-extension-status', async () => {
   try {
     const bundledDir = await findBundledBrowserPluginDir();
@@ -2398,12 +2961,32 @@ ipcMain.handle('app:open-release-page', async (_, payload?: { url?: string }) =>
   }
 });
 
+ipcMain.handle('app:open-external-url', async (_, payload?: { url?: string }) => {
+  const target = String(payload?.url || '').trim();
+  if (!isHttpUrl(target)) {
+    return { success: false, error: 'Invalid external URL' };
+  }
+  try {
+    await shell.openExternal(target);
+    return { success: true, url: target };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
 ipcMain.handle('app:open-path', async (_, payload?: { path?: string }) => {
   const targetPath = String(payload?.path || '').trim();
   if (!targetPath) {
     return { success: false, error: 'path is required' };
   }
   try {
+    if (isHttpUrl(targetPath)) {
+      await shell.openExternal(targetPath);
+      return { success: true, path: targetPath };
+    }
     const openError = await shell.openPath(targetPath);
     if (openError) {
       return { success: false, error: openError };
@@ -2464,8 +3047,12 @@ ipcMain.handle('clipboard:write-html', async (_, payload?: { html?: string; text
   try {
     const html = String(payload?.html || '').trim();
     const text = String(payload?.text || '').trim();
+    if (!html && !text) {
+      throw new Error('html or text is required');
+    }
     if (!html) {
-      throw new Error('html is required');
+      clipboard.writeText(text);
+      return { success: true, text };
     }
     clipboard.writeHTML(html);
     clipboard.writeText(text || html.replace(/<[^>]+>/g, ' '));
@@ -2569,6 +3156,304 @@ ipcMain.handle('file:show-in-folder', async (_, payload?: { source?: string }) =
   }
 });
 
+ipcMain.handle('file:save-as', async (_, payload?: { source?: string; defaultName?: string }) => {
+  try {
+    const source = String(payload?.source || '').trim();
+    if (!source) {
+      throw new Error('路径为空');
+    }
+
+    const rawPath = resolveAssetSourceToPath(source);
+    const normalizedPath = path.resolve(path.normalize(rawPath));
+    let resolvedPath = normalizedPath;
+    try {
+      resolvedPath = fsSync.realpathSync.native(normalizedPath);
+    } catch {
+      resolvedPath = normalizedPath;
+    }
+
+    const allowedRoots = getAllowedLocalFileRoots();
+    if (!isPathWithinRoots(resolvedPath, allowedRoots)) {
+      throw new Error('Access denied');
+    }
+
+    const stat = await fs.stat(resolvedPath);
+    if (!stat.isFile()) {
+      throw new Error('只能另存为文件');
+    }
+
+    const preferredName = String(payload?.defaultName || path.basename(resolvedPath) || 'redbox-file').trim();
+    const safeName = path.basename(preferredName).replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_') || path.basename(resolvedPath);
+    const picker = await dialog.showSaveDialog({
+      title: '另存为',
+      defaultPath: path.join(app.getPath('downloads'), safeName),
+    });
+    if (picker.canceled || !picker.filePath) {
+      return { success: true, canceled: true };
+    }
+
+    await fs.copyFile(resolvedPath, picker.filePath);
+    return { success: true, canceled: false, path: picker.filePath };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
+function safeArchiveEntryName(value: string, fallback: string): string {
+  const raw = String(value || '').trim() || fallback;
+  const normalized = raw
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment && segment !== '.' && segment !== '..')
+    .join('/');
+  const safe = normalized
+    .replace(/^[a-zA-Z]:/, '')
+    .replace(/^\/+/, '')
+    .replace(/[<>:"|?*\x00-\x1F]/g, '_')
+    .trim();
+  return safe || fallback;
+}
+
+function uniqueArchiveEntryName(name: string, usedNames: Set<string>): string {
+  const normalized = name.replace(/\/+/g, '/');
+  if (!usedNames.has(normalized)) {
+    usedNames.add(normalized);
+    return normalized;
+  }
+
+  const parsed = path.posix.parse(normalized);
+  let index = 2;
+  while (true) {
+    const candidate = path.posix.join(parsed.dir, `${parsed.name}-${index}${parsed.ext}`);
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate);
+      return candidate;
+    }
+    index += 1;
+  }
+}
+
+async function resolveAllowedArchiveFile(source: string): Promise<{ path: string; name: string }> {
+  if (/^https?:\/\//i.test(source)) {
+    throw new Error('不支持打包远程文件');
+  }
+
+  const rawPath = resolveAssetSourceToPath(source);
+  const normalizedPath = path.resolve(path.normalize(rawPath));
+  let resolvedPath = normalizedPath;
+  try {
+    resolvedPath = fsSync.realpathSync.native(normalizedPath);
+  } catch {
+    resolvedPath = normalizedPath;
+  }
+
+  const allowedRoots = getAllowedLocalFileRoots();
+  if (!isPathWithinRoots(resolvedPath, allowedRoots)) {
+    throw new Error('Access denied');
+  }
+
+  const stat = await fs.stat(resolvedPath);
+  if (!stat.isFile()) {
+    throw new Error('只能打包文件');
+  }
+
+  return {
+    path: resolvedPath,
+    name: path.basename(resolvedPath),
+  };
+}
+
+ipcMain.handle('file:save-zip', async (_, payload?: { defaultName?: string; files?: Array<{ source?: string; name?: string }> }) => {
+  try {
+    const files = Array.isArray(payload?.files) ? payload.files : [];
+    if (files.length === 0) {
+      return { success: false, error: '没有可下载的文件' };
+    }
+
+    const defaultNameRaw = String(payload?.defaultName || 'assets.zip').trim() || 'assets.zip';
+    const defaultName = path.basename(safeArchiveEntryName(defaultNameRaw, 'assets.zip')).replace(/\.zip$/i, '') + '.zip';
+    const picker = await dialog.showSaveDialog({
+      title: '选择压缩包保存位置',
+      defaultPath: path.join(app.getPath('downloads'), defaultName),
+      filters: [{ name: 'ZIP Archive', extensions: ['zip'] }],
+    });
+    if (picker.canceled || !picker.filePath) {
+      return { success: false, canceled: true };
+    }
+
+    const usedNames = new Set<string>();
+    const entries: Array<{ path: string; name: string }> = [];
+    for (const item of files) {
+      const source = String(item?.source || '').trim();
+      if (!source) continue;
+      const resolved = await resolveAllowedArchiveFile(source);
+      const requestedName = safeArchiveEntryName(String(item?.name || ''), resolved.name);
+      entries.push({
+        path: resolved.path,
+        name: uniqueArchiveEntryName(requestedName, usedNames),
+      });
+    }
+    if (entries.length === 0) {
+      return { success: false, error: '没有可下载的文件' };
+    }
+
+    const createZipArchive = require('archiver') as (format: string, options?: Record<string, unknown>) => any;
+    await fs.mkdir(path.dirname(picker.filePath), { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      const output = fsSync.createWriteStream(picker.filePath!);
+      const archive = createZipArchive('zip', { zlib: { level: 9 } });
+      let settled = false;
+      const settle = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        callback();
+      };
+
+      output.on('close', () => settle(resolve));
+      output.on('error', (error) => settle(() => reject(error)));
+      archive.on('error', (error: unknown) => settle(() => reject(error)));
+      archive.pipe(output);
+      entries.forEach((entry) => {
+        archive.file(entry.path, { name: entry.name });
+      });
+      void archive.finalize();
+    });
+
+    return {
+      success: true,
+      canceled: false,
+      path: picker.filePath,
+      count: entries.length,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
+const PREVIEW_TEXT_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'mdx', 'json', 'yaml', 'yml', 'toml', 'csv', 'tsv',
+  'xml', 'html', 'css', 'js', 'jsx', 'ts', 'tsx', 'py', 'java', 'go', 'rs',
+  'c', 'cc', 'cpp', 'h', 'hpp', 'swift', 'kt', 'sql', 'sh', 'zsh', 'bat',
+  'ps1', 'log', 'ini', 'conf', 'env',
+]);
+
+function previewKindForExtension(extension: string, isLocal: boolean): string {
+  const ext = String(extension || '').trim().toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'avif'].includes(ext)) return 'image';
+  if (['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'].includes(ext)) return 'video';
+  if (['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus'].includes(ext)) return 'audio';
+  if (ext === 'pdf') return 'pdf';
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (ext === 'zip' || ext === 'tar' || ext === 'gz' || ext === 'tgz' || ext === 'rar' || ext === '7z') return 'archive';
+  if (ext === 'md' || ext === 'markdown' || ext === 'mdx') return 'manuscript';
+  if (PREVIEW_TEXT_EXTENSIONS.has(ext)) return 'text';
+  return isLocal ? 'document' : 'web';
+}
+
+function mimeTypeForPreviewExtension(extension: string): string {
+  const ext = String(extension || '').trim().toLowerCase();
+  return guessAttachmentMimeType(ext, previewKindForExtension(ext, true));
+}
+
+async function readPreviewTextFile(filePath: string, extension: string): Promise<string | null> {
+  const ext = String(extension || '').trim().toLowerCase();
+  if (!PREVIEW_TEXT_EXTENSIONS.has(ext)) return null;
+  const maxBytes = 128 * 1024;
+  const file = await fs.open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await file.read(buffer, 0, maxBytes, 0);
+    const text = buffer.subarray(0, bytesRead).toString('utf-8');
+    const stripped = (ext === 'md' || ext === 'markdown' || ext === 'mdx')
+      ? text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n*/, '')
+      : text;
+    return stripped.length > 24000 ? `${stripped.slice(0, 24000)}\n\n...` : stripped;
+  } finally {
+    await file.close();
+  }
+}
+
+ipcMain.handle('file:preview-resolve', async (_, payload?: { source?: string }) => {
+  try {
+    const source = String(payload?.source || '').trim();
+    if (!source) {
+      throw new Error('路径为空');
+    }
+
+    if (/^https?:\/\//i.test(source)) {
+      let extension = '';
+      try {
+        extension = extensionFromPath(new URL(source).pathname);
+      } catch {
+        extension = extensionFromPath(source);
+      }
+      return {
+        success: true,
+        isLocal: false,
+        exists: true,
+        isDirectory: false,
+        absolutePath: null,
+        localPathCandidate: null,
+        resolvedUrl: source,
+        title: source,
+        extension,
+        kind: previewKindForExtension(extension, false),
+        mimeType: mimeTypeForPreviewExtension(extension),
+        sizeBytes: null,
+        previewText: null,
+      };
+    }
+
+    const rawPath = resolveAssetSourceToPath(source);
+    const normalizedPath = path.resolve(path.normalize(rawPath));
+    let resolvedPath = normalizedPath;
+    try {
+      resolvedPath = fsSync.realpathSync.native(normalizedPath);
+    } catch {
+      resolvedPath = normalizedPath;
+    }
+
+    const allowedRoots = getAllowedLocalFileRoots();
+    if (!isPathWithinRoots(resolvedPath, allowedRoots)) {
+      throw new Error('Access denied');
+    }
+
+    const exists = fsSync.existsSync(resolvedPath);
+    const stats = exists ? await fs.stat(resolvedPath) : null;
+    const isDirectory = Boolean(stats?.isDirectory());
+    const extension = extensionFromPath(resolvedPath);
+    const kind = previewKindForExtension(extension, true);
+    const previewText = exists && !isDirectory ? await readPreviewTextFile(resolvedPath, extension) : null;
+    return {
+      success: true,
+      isLocal: true,
+      exists,
+      isDirectory,
+      absolutePath: resolvedPath,
+      localPathCandidate: resolvedPath,
+      resolvedUrl: exists && !isDirectory ? toAppAssetUrl(resolvedPath) : null,
+      title: path.basename(resolvedPath) || source,
+      extension,
+      kind,
+      mimeType: mimeTypeForPreviewExtension(extension),
+      sizeBytes: stats?.size ?? null,
+      previewText,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
 ipcMain.handle('spaces:list', async () => {
   return {
     spaces: listSpaces(),
@@ -2588,6 +3473,26 @@ ipcMain.handle('spaces:rename', async (_, { id, name }: { id: string; name: stri
     return { success: false, error: '空间不存在或名称无效' };
   }
   return { success: true, space };
+});
+
+ipcMain.handle('spaces:delete', async (_, spaceId: string) => {
+  try {
+    const result = deleteSpace(spaceId);
+    const paths = getWorkspacePathsForSpace(String(spaceId || '').trim());
+    await fs.rm(paths.base, { recursive: true, force: true });
+    if (result.deletedActiveSpace) {
+      await ensureWorkspaceStructureFor(getWorkspacePaths());
+      await refreshForSpaceChange();
+    } else {
+      win?.webContents.send('space:changed');
+    }
+    return { success: true, ...result };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 });
 
 ipcMain.handle('spaces:switch', async (_, spaceId: string) => {
@@ -3676,14 +4581,24 @@ ipcMain.handle('redclaw:runner-run-long-cycle-now', async (_, payload: { taskId:
   }
 });
 
-ipcMain.handle('media:list', async (_, { limit }: { limit?: number } = {}) => {
+ipcMain.handle('media:list', async (_, payload: { limit?: number; cursor?: string | number | null } = {}) => {
   try {
-    const assets = await listMediaAssets(limit || 300);
-    const enriched = await Promise.all(assets.map((asset) => enrichMediaAsset(asset)));
-    return { success: true, assets: enriched };
+    const limit = Math.max(1, Math.min(500, Number(payload?.limit || 300) || 300));
+    const cursor = Math.max(0, Number(payload?.cursor || 0) || 0);
+    const assets = await listMediaAssets(5000);
+    const pageAssets = assets.slice(cursor, cursor + limit);
+    const enriched = await Promise.all(pageAssets.map((asset) => enrichMediaAsset(asset)));
+    const nextCursor = cursor + limit < assets.length ? String(cursor + limit) : null;
+    return {
+      success: true,
+      assets: enriched,
+      total: assets.length,
+      nextCursor,
+      hasMore: Boolean(nextCursor),
+    };
   } catch (error) {
     console.error('Failed to list media assets:', error);
-    return { success: false, error: String(error), assets: [] };
+    return { success: false, error: String(error), assets: [], total: 0, nextCursor: null, hasMore: false };
   }
 });
 
@@ -3960,7 +4875,7 @@ ipcMain.handle('videoEditorV2:run-asr', async (_, payload?: {
       return { success: false, error: 'projectId and assetId are required' };
     }
     const project = await getVideoEditorV2Project(projectId);
-    const asset = project?.assets.find((item) => item.id === assetId);
+    const asset = project?.assets.find((item: { id?: string }) => item.id === assetId);
     if (!project || !asset) {
       return { success: false, error: 'Project or asset not found' };
     }
@@ -4343,6 +5258,84 @@ ipcMain.handle('subjects:update', async (_, payload: {
   }
 });
 
+ipcMain.handle('subjects:generate-character-card', async (_, payload?: { id?: string }) => {
+  try {
+    const id = String(payload?.id || '').trim();
+    if (!id) {
+      return { success: false, error: '缺少角色 id' };
+    }
+
+    const subject = await getSubject(id);
+    const categories = await listSubjectCategories();
+    const categoryName = categories.find((item) => item.id === subject.categoryId)?.name || '';
+    if (categoryName !== '角色') {
+      return { success: false, error: '只有角色类目可以生成角色卡' };
+    }
+
+    const referenceImage = Array.isArray(subject.absoluteImagePaths) ? subject.absoluteImagePaths[0] : '';
+    if (!referenceImage) {
+      return { success: false, error: '请先添加角色图片' };
+    }
+
+    const prompt = buildSubjectCharacterCardPrompt({
+      name: subject.name,
+      categoryName,
+      description: subject.description,
+      tags: subject.tags,
+      attributes: subject.attributes,
+    });
+    const { generateImagesToMediaLibrary } = await import('./core/imageGenerationService');
+    const generation = await generateImagesToMediaLibrary({
+      prompt,
+      projectId: subject.id,
+      title: `${subject.name} 角色卡`,
+      generationMode: 'reference-guided',
+      referenceImages: [referenceImage],
+      count: 1,
+      aspectRatio: '16:9',
+      size: '1536x864',
+      quality: 'high',
+    });
+    const generatedAsset = generation.assets[0];
+    if (!generatedAsset) {
+      return { success: false, error: '角色卡生成失败' };
+    }
+
+    const enrichedAsset = await enrichMediaAsset(generatedAsset);
+    const generatedPath = String(enrichedAsset.absolutePath || '').trim();
+    if (!generatedPath) {
+      return { success: false, error: '角色卡生成结果不存在' };
+    }
+    await fs.access(generatedPath);
+
+    const subjectDir = path.join(getSubjectsRootPath(), subject.id);
+    const imagesDir = path.join(subjectDir, 'images');
+    await fs.mkdir(imagesDir, { recursive: true });
+    const extension = extensionForCharacterCard(generatedPath, generatedAsset.mimeType);
+    const relativePath = normalizeRelativePath(path.join('images', `character-card-${Date.now()}.${extension}`));
+    await fs.copyFile(generatedPath, path.join(subjectDir, relativePath));
+
+    const existingImages = (subject.imagePaths || [])
+      .filter((item) => item !== relativePath)
+      .map((item) => ({ relativePath: item }));
+    const updatedSubject = await updateSubject({
+      id: subject.id,
+      images: [{ relativePath }, ...existingImages].slice(0, 5),
+    });
+
+    emitRendererDataChanged('subjects', { action: 'generate-character-card', entityId: subject.id });
+    emitRendererDataChanged('media', { action: 'generate-image', entityId: generatedAsset.id });
+    return {
+      success: true,
+      subject: updatedSubject,
+      asset: enrichedAsset,
+    };
+  } catch (error) {
+    console.error('Failed to generate subject character card:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
 ipcMain.handle('subjects:delete', async (_, { id }: { id: string }) => {
   try {
     if (!id) {
@@ -4538,7 +5531,10 @@ ipcMain.handle('cover:save-template-image', async (_, {
 ipcMain.handle('cover:generate', async (_, {
   templateImage,
   baseImage,
+  referenceImages,
   titles,
+  titleMode,
+  titlePrompt,
   styleHint,
   promptSwitches,
   templateName,
@@ -4550,9 +5546,12 @@ ipcMain.handle('cover:generate', async (_, {
   apiKey,
   quality,
 }: {
-  templateImage: string;
-  baseImage: string;
-  titles: Array<{ type: string; text: string }>;
+  templateImage?: string;
+  baseImage?: string;
+  referenceImages?: string[];
+  titles?: Array<{ type: string; text: string }>;
+  titleMode?: string;
+  titlePrompt?: string;
   styleHint?: string;
   promptSwitches?: {
     learnTypography?: boolean;
@@ -4574,7 +5573,10 @@ ipcMain.handle('cover:generate', async (_, {
     const result = await generateCoverAssets({
       templateImage,
       baseImage,
+      referenceImages,
       titles,
+      titleMode,
+      titlePrompt,
       styleHint,
       promptSwitches,
       templateName,
@@ -4710,7 +5712,11 @@ ipcMain.handle('video-gen:generate', async (_, {
 
 // 获取所有会话
 ipcMain.handle('chat:get-sessions', async () => {
-  return getChatSessions();
+  return getChatSessions()
+    .map((session) => serializeChatSessionForRenderer(session))
+    .filter((session): session is NonNullable<ReturnType<typeof serializeChatSessionForRenderer>> => (
+      Boolean(session && !session.archived)
+    ));
 });
 
 // 删除会话
@@ -4719,6 +5725,70 @@ ipcMain.handle('chat:delete-session', async (_, sessionId: string) => {
   cleanupChatService(sessionId);
   return { success: true };
 });
+
+ipcMain.handle('chat:rename-session', async (_, payload?: { sessionId?: string; title?: string }) => {
+  const sessionId = String(payload?.sessionId || '').trim();
+  const title = String(payload?.title || '').trim();
+  if (!sessionId || !title) {
+    return { success: false, error: 'Missing session id or title' };
+  }
+  updateChatSessionTitle(sessionId, title);
+  const session = getChatSession(sessionId);
+  return {
+    success: true,
+    session: session ? {
+      id: session.id,
+      title: session.title,
+      updatedAt: new Date(session.updated_at).toISOString(),
+    } : null,
+  };
+});
+
+ipcMain.handle('chat:set-session-starred', async (_, payload?: { sessionId?: string; starred?: boolean }) => {
+  const sessionId = String(payload?.sessionId || '').trim();
+  if (!sessionId) {
+    return { success: false, error: 'sessionId is required' };
+  }
+  return updateChatSessionMetadataPatch(sessionId, { starred: Boolean(payload?.starred) });
+});
+
+ipcMain.handle('chat:set-session-unread', async (_, payload?: { sessionId?: string; unread?: boolean }) => {
+  const sessionId = String(payload?.sessionId || '').trim();
+  if (!sessionId) {
+    return { success: false, error: 'sessionId is required' };
+  }
+  return updateChatSessionMetadataPatch(sessionId, { unread: Boolean(payload?.unread) });
+});
+
+ipcMain.handle('chat:archive-session', async (_, payload?: string | { sessionId?: string }) => {
+  const sessionId = String(typeof payload === 'string' ? payload : payload?.sessionId || '').trim();
+  if (!sessionId) {
+    return { success: false, error: 'sessionId is required' };
+  }
+  return updateChatSessionMetadataPatch(sessionId, {
+    archived: true,
+    archivedAt: new Date().toISOString(),
+  });
+});
+
+ipcMain.handle('chat:unarchive-session', async (_, payload?: string | { sessionId?: string }) => {
+  const sessionId = String(typeof payload === 'string' ? payload : payload?.sessionId || '').trim();
+  if (!sessionId) {
+    return { success: false, error: 'sessionId is required' };
+  }
+  return updateChatSessionMetadataPatch(sessionId, {
+    archived: false,
+    archivedAt: null,
+  });
+});
+
+ipcMain.handle('chat:list-archived-sessions', async () => (
+  getChatSessions()
+    .map((session) => serializeChatSessionForRenderer(session))
+    .filter((session): session is NonNullable<ReturnType<typeof serializeChatSessionForRenderer>> => (
+      Boolean(session?.archived)
+    ))
+));
 
 // 获取会话消息
 ipcMain.handle('chat:get-messages', async (_, sessionId: string) => {
@@ -4889,55 +5959,130 @@ ipcMain.handle('chat:pick-attachment', async (_, payload?: { sessionId?: string 
     const uploadsDir = path.join(workspacePaths.redclaw, 'uploads');
     await fs.mkdir(uploadsDir, { recursive: true });
 
-    const ext = extensionFromPath(selectedPath);
     const safeBaseName = path.basename(selectedPath).replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_');
     const targetName = `${Date.now()}_${safeBaseName}`;
     const targetPath = path.join(uploadsDir, targetName);
     await fs.copyFile(selectedPath, targetPath);
 
-    const lowerExt = ext.toLowerCase();
-    const kind = TEXT_ATTACHMENT_EXTENSIONS.has(lowerExt)
-      ? 'text'
-      : IMAGE_ATTACHMENT_EXTENSIONS.has(lowerExt)
-        ? 'image'
-        : VIDEO_ATTACHMENT_EXTENSIONS.has(lowerExt)
-          ? 'video'
-          : AUDIO_ATTACHMENT_EXTENSIONS.has(lowerExt)
-            ? 'audio'
-            : 'binary';
-
-    let summary = '';
-    if (kind === 'text') {
-      try {
-        const preview = await fs.readFile(targetPath, 'utf-8');
-        summary = String(preview || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-      } catch {
-        summary = '';
-      }
-    }
-
     return {
       success: true,
       canceled: false,
-      attachment: {
-        type: 'uploaded-file',
-        name: path.basename(selectedPath),
-        ext: lowerExt,
-        size: Number(fileStat.size || 0),
-        absolutePath: targetPath,
-        originalAbsolutePath: selectedPath,
-        localUrl: toLocalFileUrl(targetPath),
-        kind,
-        mimeType: guessAttachmentMimeType(lowerExt, kind),
-        storageMode: 'staged',
-        directUploadEligible: kind === 'image',
-        processingStrategy: kind === 'image' ? 'direct-image-or-staged' : kind === 'text' ? 'staged-text' : 'staged-file',
-        requiresMultimodal: kind === 'image',
-        summary,
-      },
+      attachment: await buildStagedChatAttachment(targetPath, selectedPath, path.basename(selectedPath)),
     };
   } catch (error) {
     console.error('Failed to pick chat attachment:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('chat:create-path-attachment', async (_event, payload?: {
+  path?: string;
+  sessionId?: string;
+}) => {
+  try {
+    const rawPath = String(payload?.path || '').trim();
+    if (!rawPath) {
+      return { success: false, error: '缺少附件路径' };
+    }
+    const sourcePath = path.resolve(path.normalize(rawPath));
+    const fileStat = await fs.stat(sourcePath);
+    if (!fileStat.isFile()) {
+      return { success: false, error: '只能上传文件' };
+    }
+
+    const workspacePaths = getWorkspacePaths();
+    const uploadsDir = path.join(workspacePaths.redclaw, 'uploads');
+    await fs.mkdir(uploadsDir, { recursive: true });
+
+    const safeBaseName = path.basename(sourcePath).replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_');
+    const targetName = `${Date.now()}_${safeBaseName}`;
+    const targetPath = path.join(uploadsDir, targetName);
+    await fs.copyFile(sourcePath, targetPath);
+
+    return {
+      success: true,
+      attachment: await buildStagedChatAttachment(targetPath, sourcePath, path.basename(sourcePath)),
+    };
+  } catch (error) {
+    console.error('Failed to create path chat attachment:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('chat:create-inline-attachment', async (_event, payload?: {
+  dataUrl?: string;
+  fileName?: string;
+  sessionId?: string;
+}) => {
+  try {
+    const dataUrl = String(payload?.dataUrl || '').trim();
+    const match = dataUrl.match(/^data:([^;,]+)?(?:;[^,]*)?,(.+)$/);
+    if (!match) {
+      return { success: false, error: '无法读取拖入的文件' };
+    }
+
+    const rawFileName = String(payload?.fileName || '').trim() || `attachment_${Date.now()}`;
+    const safeBaseName = rawFileName.replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_');
+    const extension = extensionFromPath(safeBaseName) || extensionFromPath(`.${(match[1] || '').split('/')[1] || ''}`);
+    const targetName = `${Date.now()}_${safeBaseName}${extension && !safeBaseName.toLowerCase().endsWith(`.${extension}`) ? `.${extension}` : ''}`;
+    const workspacePaths = getWorkspacePaths();
+    const uploadsDir = path.join(workspacePaths.redclaw, 'uploads');
+    await fs.mkdir(uploadsDir, { recursive: true });
+
+    const targetPath = path.join(uploadsDir, targetName);
+    await fs.writeFile(targetPath, Buffer.from(match[2], 'base64'));
+
+    return {
+      success: true,
+      attachment: await buildStagedChatAttachment(targetPath, rawFileName, rawFileName),
+    };
+  } catch (error) {
+    console.error('Failed to create inline chat attachment:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('chat:create-video-thumbnail', async (_event, payload?: {
+  path?: string;
+  source?: string;
+  sessionId?: string;
+}) => {
+  const source = String(payload?.source || payload?.path || '').trim();
+  return {
+    success: false,
+    source,
+    error: 'Electron archive uses renderer-side video thumbnail fallback',
+  };
+});
+
+ipcMain.handle('chat:discard-attachments', async (_event, payload?: {
+  attachments?: unknown[];
+}) => {
+  try {
+    const workspacePaths = getWorkspacePaths();
+    const uploadsDir = path.resolve(path.join(workspacePaths.redclaw, 'uploads'));
+    const attachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
+    let removed = 0;
+    for (const attachment of attachments) {
+      if (!attachment || typeof attachment !== 'object') continue;
+      const record = attachment as Record<string, unknown>;
+      const candidatePath = String(record.absolutePath || record.path || '').trim();
+      if (!candidatePath) continue;
+      const resolvedPath = path.resolve(path.normalize(candidatePath));
+      const relativeToUploads = path.relative(uploadsDir, resolvedPath);
+      if (relativeToUploads.startsWith('..') || path.isAbsolute(relativeToUploads)) continue;
+      try {
+        const stat = await fs.stat(resolvedPath);
+        if (!stat.isFile()) continue;
+        await fs.unlink(resolvedPath);
+        removed += 1;
+      } catch {
+        // Ignore stale staged attachments.
+      }
+    }
+    return { success: true, removed };
+  } catch (error) {
+    console.error('Failed to discard chat attachments:', error);
     return { success: false, error: String(error) };
   }
 });
@@ -4989,7 +6134,18 @@ ipcMain.handle('chat:transcribe-audio', async (_event, payload?: {
 });
 
 // 开始聊天（使用 ChatServiceV2）
-ipcMain.on('chat:send-message', async (event, { sessionId, message, displayContent, attachment, modelConfig, taskHints }) => {
+ipcMain.on('chat:send-message', async (event, {
+  sessionId,
+  message,
+  displayContent,
+  attachment,
+  attachments,
+  modelConfig,
+  taskHints,
+  knowledgeReferences,
+  assetReferences,
+  memberMention,
+}) => {
   const resolveRuntimeModeForSession = (value: string): RuntimeMode => {
     const normalized = String(value || '').trim().toLowerCase();
     if (normalized === 'redclaw') return 'redclaw';
@@ -5006,19 +6162,19 @@ ipcMain.on('chat:send-message', async (event, { sessionId, message, displayConte
   const resolvedChatApiKey = String(selectedModelConfig?.apiKey || settings.api_key || '').trim();
   const resolvedChatBaseURL = normalizeApiBaseUrl(String(selectedModelConfig?.baseURL || settings.api_endpoint || '').trim());
   const resolvedModelName = String(selectedModelConfig?.modelName || settings.model_name || 'gpt-4o').trim();
-  const rawAttachment = (attachment && typeof attachment === 'object')
-    ? (attachment as Record<string, unknown>)
-    : null;
+  const rawAttachments = normalizeUploadedChatAttachments(attachment, attachments);
+  const rawAttachment = rawAttachments[0] || ((attachment && typeof attachment === 'object') ? (attachment as Record<string, unknown>) : null);
   let outgoingMessage = String(message || '');
   let attachmentRuntimeInput: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> | null = null;
   console.log('[chat:send-message] incoming', {
     sessionId: sessionId || null,
     messageLength: typeof message === 'string' ? message.length : 0,
-    hasAttachment: Boolean(attachment),
+    hasAttachment: Boolean(rawAttachment),
+    attachmentCount: rawAttachments.length,
     modelFromSettings: settings.model_name || null,
   });
 
-  if (rawAttachment?.type === 'uploaded-file') {
+  if (rawAttachments.length > 0) {
     const sessionMeta = sessionId ? (() => {
       try {
         const session = getChatSession(sessionId);
@@ -5028,12 +6184,13 @@ ipcMain.on('chat:send-message', async (event, { sessionId, message, displayConte
         return {} as Record<string, unknown>;
       }
     })() : {};
-    const attachmentKind = String(rawAttachment.kind || 'file').trim().toLowerCase();
-    const directInputSupported = supportsAttachmentKindDirectInput(resolvedModelName, attachmentKind);
     const modelInputCapabilities = getModelInputCapabilities(resolvedModelName);
-    const requiresMultimodal = Boolean(rawAttachment.requiresMultimodal);
-    if (requiresMultimodal && !directInputSupported) {
-      const kind = String(rawAttachment.kind || 'file');
+    const unsupportedMultimodalAttachment = rawAttachments.find((item) => {
+      const kind = String(item.kind || 'file').trim().toLowerCase();
+      return Boolean(item.requiresMultimodal) && !supportsAttachmentKindDirectInput(resolvedModelName, kind);
+    });
+    if (unsupportedMultimodalAttachment) {
+      const kind = String(unsupportedMultimodalAttachment.kind || 'file');
       const capabilityHint = modelInputCapabilities.length > 0
         ? `当前登记的输入能力: ${modelInputCapabilities.join(', ')}`
         : '当前未登记该模型的输入能力';
@@ -5047,15 +6204,9 @@ ipcMain.on('chat:send-message', async (event, { sessionId, message, displayConte
       return;
     }
 
-    try {
-      attachmentRuntimeInput = await buildAttachmentRuntimeInput(rawAttachment, outgoingMessage, resolvedModelName);
-    } catch (error) {
-      console.warn('[chat:send-message] failed to prepare direct attachment input, falling back to staged prompt', error);
-      attachmentRuntimeInput = null;
-    }
-    if (!attachmentRuntimeInput) {
-      outgoingMessage = `${outgoingMessage}${buildAttachmentPromptSuffix(rawAttachment)}`;
-    }
+    const preparedAttachments = await buildAttachmentsRuntimeInput(rawAttachments, outgoingMessage, resolvedModelName);
+    outgoingMessage = preparedAttachments.outgoingMessage;
+    attachmentRuntimeInput = preparedAttachments.runtimeInput;
   }
 
   // 如果没有 sessionId，创建新会话
@@ -5068,13 +6219,21 @@ ipcMain.on('chat:send-message', async (event, { sessionId, message, displayConte
 
   // 保存用户消息到数据库
   const userMsgId = `msg_${Date.now()}`;
+  const messageMetadata = buildChatMessageMetadata({
+    knowledgeReferences,
+    assetReferences,
+    memberMention,
+    taskHints,
+    attachments: rawAttachments,
+  });
   addChatMessage({
     id: userMsgId,
     session_id: sessionId,
     role: 'user',
     content: outgoingMessage,
     display_content: displayContent || undefined,
-    attachment: attachment ? JSON.stringify(attachment) : undefined,
+    attachment: rawAttachment ? JSON.stringify(rawAttachment) : undefined,
+    metadata: messageMetadata,
   });
 
   try {
@@ -6204,6 +7363,16 @@ ipcMain.handle('advisors:generate-persona', async (_, {
     return { success: false, error: String(error) };
   }
 });
+
+const memberSkillUnavailable = () => ({
+  success: false,
+  error: '成员技能管理后端尚未迁移到 Electron 开源版',
+});
+
+ipcMain.handle('advisors:distill-member-skill', async () => memberSkillUnavailable());
+ipcMain.handle('advisors:promote-member-skill-candidate', async () => memberSkillUnavailable());
+ipcMain.handle('advisors:discard-member-skill-candidate', async () => memberSkillUnavailable());
+ipcMain.handle('advisors:rollback-member-skill-version', async () => memberSkillUnavailable());
 
 // YouTube Import
 ipcMain.handle('youtube:check-ytdlp', async () => {
@@ -9293,7 +10462,7 @@ ipcMain.handle('knowledge:docs:add-obsidian-vault', async () => {
   }
 });
 
-ipcMain.handle('knowledge:docs:delete-source', async (_, sourceId: string) => {
+const deleteDocumentKnowledgeSource = async (sourceId: string) => {
   try {
     const workspacePaths = getWorkspacePaths();
     const sources = await loadDocumentSources(workspacePaths);
@@ -9321,6 +10490,10 @@ ipcMain.handle('knowledge:docs:delete-source', async (_, sourceId: string) => {
     console.error('Failed to delete document source:', error);
     return { success: false, error: String(error) };
   }
+};
+
+ipcMain.handle('knowledge:docs:delete-source', async (_, sourceId: string) => {
+  return deleteDocumentKnowledgeSource(sourceId);
 });
 
 ipcMain.handle('knowledge:get-index-status', async () => {
@@ -9479,6 +10652,7 @@ ipcMain.handle('knowledge:list-page', async (_, payload?: {
 }) => {
   const query = String(payload?.payload?.query || '').trim().toLowerCase();
   const kind = String(payload?.payload?.kind || '').trim();
+  const sort = String(payload?.payload?.sort || 'updated-desc').trim();
   const limit = Math.max(1, Math.min(Number(payload?.payload?.limit || 200) || 200, 500));
   const cursor = Math.max(0, Number(payload?.payload?.cursor || 0) || 0);
 
@@ -9498,8 +10672,18 @@ ipcMain.handle('knowledge:list-page', async (_, payload?: {
     return haystack.includes(query);
   });
 
-  const pageItems = filtered.slice(cursor, cursor + limit);
-  const nextCursor = cursor + limit < filtered.length ? String(cursor + limit) : null;
+  const sorted = [...filtered].sort((left, right) => {
+    if (sort === 'title-asc') {
+      return String(left.title || '').localeCompare(String(right.title || ''), 'zh-Hans-CN');
+    }
+    if (sort === 'created-desc') {
+      return new Date(String(right.createdAt || '')).getTime() - new Date(String(left.createdAt || '')).getTime();
+    }
+    return new Date(String(right.updatedAt || right.createdAt || '')).getTime() - new Date(String(left.updatedAt || left.createdAt || '')).getTime();
+  });
+
+  const pageItems = sorted.slice(cursor, cursor + limit);
+  const nextCursor = cursor + limit < sorted.length ? String(cursor + limit) : null;
   const kindCounts = filtered.reduce<Record<string, number>>((acc, item) => {
     acc[item.kind] = (acc[item.kind] || 0) + 1;
     return acc;
@@ -9526,29 +10710,76 @@ ipcMain.handle('knowledge:get-item-detail', async (_, payload?: {
   }
 
   if (kind === 'redbook-note') {
-    const notes = await (async () => {
-      const list = await listKnowledgeCatalogNotes();
-      return list.map((item) => ({
-        id: item.id,
-        title: item.title,
-        author: item.author,
-        content: item.content,
-        excerpt: item.excerpt,
-        siteName: item.siteName,
-        sourceUrl: item.sourceUrl,
-        images: [],
-        tags: item.tags,
-        cover: item.coverUrl,
-        video: undefined,
-        videoUrl: undefined,
-        transcript: item.hasTranscript ? '' : undefined,
-        transcriptionStatus: item.status || undefined,
-        stats: { likes: 0, collects: 0 },
-        createdAt: item.createdAt,
-        folderPath: item.folderPath,
-      }));
-    })();
-    return notes.find((item) => item.id === itemId) || null;
+    const notes = await listKnowledgeCatalogNotes();
+    const item = notes.find((entry) => entry.id === itemId);
+    if (!item) return null;
+
+    const noteDir = String(item.folderPath || path.join(getKnowledgeRedbookDir(), item.id));
+    const metaPath = path.join(noteDir, 'meta.json');
+    let meta: Record<string, any> = {};
+    try {
+      meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, any>;
+    } catch {
+      meta = {};
+    }
+
+    const toKnowledgeFileUrl = (value: unknown) => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      if (/^(https?|file):/i.test(raw)) return raw;
+      return toLocalFileUrl(path.join(noteDir, raw));
+    };
+
+    const images = Array.isArray(meta.images)
+      ? meta.images
+          .map((image: unknown) => toKnowledgeFileUrl(image))
+          .filter(Boolean)
+      : [];
+    const tags = Array.isArray(meta.tags)
+      ? meta.tags.map((value: unknown) => String(value || '').trim()).filter(Boolean)
+      : item.tags;
+
+    let htmlFileUrl = '';
+    if (typeof meta.htmlFile === 'string' && meta.htmlFile.trim()) {
+      try {
+        await ensureRichHtmlUsesAbsoluteAssetUrls(noteDir, meta.htmlFile);
+      } catch (error) {
+        console.error('Failed to normalize rich html asset URLs:', error);
+      }
+      htmlFileUrl = toKnowledgeFileUrl(meta.htmlFile);
+    }
+
+    return {
+      id: item.id,
+      type: String(meta.type || item.noteType || ''),
+      sourceUrl: String(meta.sourceUrl || item.sourceUrl || ''),
+      title: String(meta.title || item.title || item.id),
+      author: String(meta.author || item.author || '原文链接'),
+      content: String(meta.content || item.content || ''),
+      excerpt: String(meta.excerpt || item.excerpt || ''),
+      siteName: String(meta.siteName || item.siteName || ''),
+      captureKind: String(meta.captureKind || item.captureKind || ''),
+      htmlFile: String(meta.htmlFile || ''),
+      htmlFileUrl,
+      images,
+      tags,
+      cover: toKnowledgeFileUrl(meta.cover) || item.coverUrl,
+      video: toKnowledgeFileUrl(meta.video),
+      videoUrl: String(meta.videoUrl || ''),
+      transcript: String(meta.transcript || ''),
+      transcriptionStatus: meta.transcriptionStatus || item.status || undefined,
+      stats: {
+        likes: Number(meta.stats?.likes || 0),
+        collects: typeof meta.stats?.collects === 'number' ? Number(meta.stats.collects) : undefined,
+        comments: Number(meta.stats?.comments || 0),
+        shares: Number(meta.stats?.shares || 0),
+      },
+      commentsSnapshot: Array.isArray(meta.commentsSnapshot)
+        ? meta.commentsSnapshot.filter((comment: any) => comment && (comment.author || comment.text))
+        : [],
+      createdAt: String(meta.createdAt || item.createdAt || ''),
+      folderPath: noteDir,
+    };
   }
 
   if (kind === 'youtube-video') {
@@ -9688,6 +10919,87 @@ ipcMain.handle('knowledge:delete', async (_, noteId: string) => {
     return { success: false };
   }
 })
+
+type KnowledgeDeleteBatchItem = {
+  id?: unknown;
+  kind?: unknown;
+};
+
+const knowledgeNoteDeleteKinds = new Set([
+  'redbook-note',
+  'link-article',
+  'wechat-article',
+  'zhihu-answer',
+  'zhihu-article',
+]);
+
+const resolveKnowledgeChildPath = (root: string, id: string) => {
+  const normalizedRoot = path.resolve(root);
+  const target = path.resolve(normalizedRoot, id);
+  if (!id || id.includes('\0') || target === normalizedRoot || !target.startsWith(`${normalizedRoot}${path.sep}`)) {
+    throw new Error('Invalid knowledge item id');
+  }
+  return target;
+};
+
+const deleteKnowledgeBatchItem = async (item: KnowledgeDeleteBatchItem) => {
+  const id = String(item?.id || '').trim();
+  const kind = String(item?.kind || 'redbook-note').trim();
+  if (!id) {
+    return { id, kind, success: false, error: 'Missing knowledge item id' };
+  }
+
+  try {
+    if (kind === 'youtube-video') {
+      await fs.rm(resolveKnowledgeChildPath(getKnowledgeYoutubeDir(), id), { recursive: true, force: true });
+      return { id, kind, success: true };
+    }
+    if (kind === 'document-source') {
+      const result = await deleteDocumentKnowledgeSource(id);
+      return { id, kind, success: result.success === true, error: result.success ? undefined : result.error || 'Failed to delete document source' };
+    }
+    if (!knowledgeNoteDeleteKinds.has(kind)) {
+      return { id, kind, success: false, error: `Unsupported knowledge item kind: ${kind}` };
+    }
+    await fs.rm(resolveKnowledgeChildPath(getKnowledgeRedbookDir(), id), { recursive: true, force: true });
+    return { id, kind, success: true };
+  } catch (error) {
+    return { id, kind, success: false, error: String(error) };
+  }
+};
+
+ipcMain.handle('knowledge:delete-batch', async (_, payload?: { items?: KnowledgeDeleteBatchItem[] }) => {
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const results = [];
+  let deleted = 0;
+  let failed = 0;
+  let changedCatalog = false;
+
+  for (const item of items) {
+    const result = await deleteKnowledgeBatchItem(item);
+    results.push(result);
+    if (result.success) {
+      deleted += 1;
+      if (result.kind !== 'document-source') {
+        changedCatalog = true;
+      }
+    } else {
+      failed += 1;
+    }
+  }
+
+  if (changedCatalog) {
+    win?.webContents.send('knowledge:changed');
+    win?.webContents.send('knowledge:catalog-updated');
+  }
+
+  return {
+    success: failed === 0,
+    deleted,
+    failed,
+    results,
+  };
+});
 
 ipcMain.handle('knowledge:transcribe', async (_event, noteId: string) => {
   const fs = require('fs/promises');
@@ -10072,6 +11384,7 @@ const buildWanderDeepAgentPrompt = (params: {
   itemsText: string;
   longTermContextSection: string;
   multiChoice: boolean;
+  guidedTopic?: string;
 }): string => {
   const outputRequirement = params.multiChoice
     ? [
@@ -10092,6 +11405,16 @@ const buildWanderDeepAgentPrompt = (params: {
       '5) content_direction 必须是可直接创作的内容方向说明。',
     ].join('\n');
 
+  const guidedTopic = String(params.guidedTopic || '').trim();
+  const guidedSection = guidedTopic
+    ? [
+      '选题方向约束：',
+      `用户指定的选题方向是「${guidedTopic}」。`,
+      '你仍然必须阅读和分析素材，但最终选题必须优先围绕这个方向收敛；如果素材不完全匹配，请选择最接近、最能落地的角度。',
+      '',
+    ].join('\n')
+    : '';
+
   return [
     '你现在处于 RedBox 的「漫步深度思考」Agent 模式。',
     '你需要自主完成：分析素材 -> 发散选题 -> 收敛方向 -> 产出最终结构化结果。',
@@ -10105,6 +11428,7 @@ const buildWanderDeepAgentPrompt = (params: {
     '',
     outputRequirement,
     '',
+    guidedSection,
     '你收到的随机素材如下：',
     params.itemsText,
     '',
@@ -10117,6 +11441,7 @@ const runWanderDeepThinkWithAgent = async (params: {
   items: any[];
   longTermContextSection: string;
   multiChoice: boolean;
+  guidedTopic?: string;
   reportProgress: (status: string) => void;
 }): Promise<string> => {
   const safeRequestId = params.requestId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || `${Date.now()}`;
@@ -10127,6 +11452,7 @@ const runWanderDeepThinkWithAgent = async (params: {
     itemsText,
     longTermContextSection: params.longTermContextSection,
     multiChoice: params.multiChoice,
+    guidedTopic: params.guidedTopic,
   });
 
   const existingSession = getChatSession(sessionId);
@@ -10539,8 +11865,33 @@ const requestWanderCompletion = async ({
   }
 };
 
-ipcMain.handle('wander:brainstorm', async (event, items: any[], options?: { multiChoice?: boolean; deepThink?: boolean; requestId?: string }) => {
-  const requestId = String(options?.requestId || '').trim() || `wander-${Date.now()}`;
+type WanderBrainstormRequestOptions = {
+  multiChoice?: boolean;
+  deepThink?: boolean;
+  requestId?: string;
+  sourceMode?: string;
+  guidedTopic?: string;
+};
+
+type WanderBrainstormRequestPayload = any[] | {
+  items?: any[];
+  options?: WanderBrainstormRequestOptions;
+};
+
+async function handleWanderBrainstormRequest(
+  event: { sender: WebContents },
+  itemsOrPayload: WanderBrainstormRequestPayload,
+  options?: WanderBrainstormRequestOptions,
+) {
+  const payload = itemsOrPayload && typeof itemsOrPayload === 'object' && !Array.isArray(itemsOrPayload)
+    ? itemsOrPayload
+    : null;
+  const items = Array.isArray(itemsOrPayload)
+    ? itemsOrPayload
+    : (Array.isArray(payload?.items) ? payload.items : []);
+  const effectiveOptions = options || payload?.options || {};
+  const requestId = String(effectiveOptions?.requestId || '').trim() || `wander-${Date.now()}`;
+  const guidedTopic = String(effectiveOptions?.sourceMode === 'guided' ? effectiveOptions?.guidedTopic || '' : '').trim();
   const reportProgress = (status: string) => {
     event.sender.send('wander:progress', {
       requestId,
@@ -10563,16 +11914,17 @@ ipcMain.handle('wander:brainstorm', async (event, items: any[], options?: { mult
 
     const baseURL = normalizeApiBaseUrl(settings.api_endpoint || 'https://api.openai.com/v1', 'https://api.openai.com/v1');
     const model = resolveScopedModelName((settings || {}) as Record<string, unknown>, 'wander', 'gpt-4o');
-    const multiChoice = typeof options?.multiChoice === 'boolean'
-      ? options.multiChoice
-      : typeof options?.deepThink === 'boolean'
-        ? options.deepThink
+    const multiChoice = typeof effectiveOptions?.multiChoice === 'boolean'
+      ? effectiveOptions.multiChoice
+      : typeof effectiveOptions?.deepThink === 'boolean'
+        ? effectiveOptions.deepThink
       : Boolean(settings.wander_deep_think_enabled);
 
     console.log('[wander:brainstorm] mode', {
       runtime: 'agent',
       multiChoice,
       itemCount: Array.isArray(items) ? items.length : 0,
+      sourceMode: guidedTopic ? 'guided' : 'random',
       model,
       baseURL,
     });
@@ -10590,6 +11942,7 @@ ipcMain.handle('wander:brainstorm', async (event, items: any[], options?: { mult
       items,
       longTermContextSection,
       multiChoice,
+      guidedTopic,
       reportProgress,
     });
 
@@ -10612,6 +11965,20 @@ ipcMain.handle('wander:brainstorm', async (event, items: any[], options?: { mult
     reportProgress('漫步失败');
     return { error: String(error) };
   }
+}
+
+ipcMain.handle('wander:brainstorm', async (event, itemsOrPayload: WanderBrainstormRequestPayload, options?: WanderBrainstormRequestOptions) => (
+  handleWanderBrainstormRequest(event, itemsOrPayload, options)
+));
+
+ipcMain.on('wander:brainstorm', async (event, payload: WanderBrainstormRequestPayload) => {
+  const result = await handleWanderBrainstormRequest(event, payload);
+  const requestOptions = !Array.isArray(payload) && payload?.options ? payload.options : {};
+  const requestId = String(requestOptions?.requestId || '').trim();
+  event.sender.send('wander:result', {
+    ...(result && typeof result === 'object' ? result : { error: String(result || 'Unknown wander result') }),
+    requestId,
+  });
 });
 
 // --------- Embedding & Similarity ---------
@@ -10728,9 +12095,9 @@ ipcMain.handle('similarity:get-knowledge-version', async () => {
 });
 
 // --------- Wander History ---------
-ipcMain.handle('wander:list-history', async () => {
+ipcMain.handle('wander:list-history', async (_, options?: { includeAbandoned?: boolean }) => {
   const { listWanderHistory } = await import('./db');
-  return listWanderHistory();
+  return listWanderHistory({ includeAbandoned: Boolean(options?.includeAbandoned) });
 });
 
 ipcMain.handle('wander:get-history', async (_, id: string) => {
@@ -10741,6 +12108,12 @@ ipcMain.handle('wander:get-history', async (_, id: string) => {
 ipcMain.handle('wander:delete-history', async (_, id: string) => {
   const { deleteWanderHistory } = await import('./db');
   deleteWanderHistory(id);
+  return { success: true };
+});
+
+ipcMain.handle('wander:abandon-history', async (_, id: string) => {
+  const { abandonWanderHistory } = await import('./db');
+  abandonWanderHistory(id);
   return { success: true };
 });
 

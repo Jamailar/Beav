@@ -1,11 +1,9 @@
 # `src/components/manuscripts/remotion/`
 
-这里是稿件编辑器内部的 Remotion 预览子域。
+这里是稿件编辑器和 Remotion renderer 共用的 motion composition 子域。
 
 ## Current Files
 
-- `RemotionTransportBar.tsx`
-- `RemotionVideoPreview.tsx`
 - `VideoMotionComposition.tsx`
 - `types.ts`
 

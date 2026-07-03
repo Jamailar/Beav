@@ -3,6 +3,7 @@ import {
     getImageProviderAdapter,
     getImageProviderCapabilities,
     normalizeImageProviderTemplate,
+    type ImageGenerationMode,
     type ImageProviderTemplate,
 } from './imageProviderAdapters';
 import { normalizeApiBaseUrl } from './urlUtils';
@@ -21,9 +22,12 @@ export interface CoverPromptSwitches {
 }
 
 export interface GenerateCoverInput {
-    templateImage: string;
-    baseImage: string;
-    titles: CoverTitleInput[];
+    templateImage?: string;
+    baseImage?: string;
+    referenceImages?: string[];
+    titles?: CoverTitleInput[];
+    titleMode?: string;
+    titlePrompt?: string;
     styleHint?: string;
     promptSwitches?: CoverPromptSwitches;
     templateName?: string;
@@ -113,10 +117,14 @@ function normalizePromptSwitches(raw: CoverPromptSwitches | undefined): Required
 
 function buildCoverPrompt(input: {
     titles: Array<{ type: string; text: string }>;
+    titlePrompt?: string;
     styleHint?: string;
     promptSwitches?: CoverPromptSwitches;
+    referenceMode: 'dual' | 'reference' | 'text';
 }): string {
     const titleLines = input.titles.map((item) => `- ${item.type}: ${item.text}`);
+    const freeformPrompt = String(input.titlePrompt || '').trim();
+    const hasStructuredTitles = titleLines.length > 0;
     const style = String(input.styleHint || '').trim();
     const switches = normalizePromptSwitches(input.promptSwitches);
     const switchPromptBlocks = [
@@ -133,61 +141,129 @@ function buildCoverPrompt(input: {
             ? '- [换背景=开] 在不改变主体身份与姿态前提下，可替换或重绘背景，使其更贴近模板图风格氛围并服务标题可读性。'
             : '- [换背景=关] 不更换背景，仅允许轻微背景清理，不改变场景主体语义。',
     ];
+    const taskIntro = input.referenceMode === 'dual'
+        ? [
+            '任务：基于双图输入，生成可直接发布的小红书封面（3:4 竖版）。',
+            '输入角色：模板图=只负责标题样式/颜色氛围学习；底图=唯一允许被编辑的主体图。',
+            '核心原则：模板图只学习不修改，所有可见改动必须发生在底图之上。',
+            '硬性约束（必须遵守）：',
+            '1) 禁止输出“模板图被修改后的版本”。',
+            '2) 输出必须是“底图改造版封面”，主体身份、主体结构、主体语义来自底图。',
+            '3) 如两图顺序不确定，自动识别：带明显标题排版风格的为模板图；承载主体内容的为底图。',
+            '执行流程（必须遵守）：',
+            '1. 先从模板图提炼“标题蓝图”（仅内部执行，不输出分析）：',
+            '   - 文本区块数量与层级（主标题/副标题/角标/标签）。',
+            '   - 每个区块的相对锚点位置（上中下、左右关系、留白关系）。',
+            '   - 文本容器形态（底条、色块、角标、装饰块）与画面占比/视觉重心。',
+            '2. 将“标题蓝图”迁移到底图：',
+            '   - 保持底图主体身份、动作、服饰、场景逻辑不变。',
+            '   - 标题布局尽量保持与模板图同构（位置关系和层级关系一致），避免遮挡主体关键区域。',
+            '   - 允许为适配底图做微调，但不能改成另一套风格。',
+        ]
+        : input.referenceMode === 'reference'
+            ? [
+                '任务：基于参考图和文字要求，生成可直接发布的小红书封面（3:4 竖版）。',
+                '参考图用于主体、场景、风格或版式参考；保持主体可信，标题清晰可读。',
+                '允许根据封面目标重组画面、优化背景、调整光影和文字区域，但不要添加水印、logo 或无关装饰。',
+            ]
+            : [
+                '任务：根据文字要求，生成可直接发布的小红书封面（3:4 竖版）。',
+                '画面需要有明确主体、清晰标题层级和强点击感；中文文字必须可读，整体适合社媒发布。',
+            ];
+    const titleInstruction = hasStructuredTitles
+        ? [
+            '标题类型映射规则：',
+            '   - main：最大、最强对比、第一视线落点。',
+            '   - subtitle：围绕 main 提供补充信息，层级低于 main。',
+            '   - badge：用于角标或爆点词，面积小但对比强。',
+            '   - tag：短标签，作为辅助信息点缀。',
+            '   - custom：按最相近文本组件样式放置。',
+            '文本约束（强约束）：',
+            '   - 必须逐字使用“标题输入”中的文本，不改写、不扩写、不缩写、不替换同义词。',
+            '   - 中文必须清晰可读，禁止错别字、乱码、异体替换、缺字、多字。',
+            '   - 文本过长时只允许智能换行与字距微调，不得改动文字内容。',
+        ]
+        : [
+            '文案策略：根据“封面意图/提示词”自行决定封面上的主标题、副标题或短标签。',
+            '中文必须清晰可读，避免错别字、乱码和无意义堆词。',
+        ];
     return [
-        '任务：基于双图输入，生成可直接发布的小红书封面（3:4 竖版）。',
-        '输入角色：模板图=只负责标题样式/颜色氛围学习；底图=唯一允许被编辑的主体图。',
-        '核心原则：模板图只学习不修改，所有可见改动必须发生在底图之上。',
-        '硬性约束（必须遵守）：',
-        '1) 禁止输出“模板图被修改后的版本”。',
-        '2) 输出必须是“底图改造版封面”，主体身份、主体结构、主体语义来自底图。',
-        '3) 如两图顺序不确定，自动识别：带明显标题排版风格的为模板图；承载主体内容的为底图。',
-        '执行流程（必须遵守）：',
-        '1. 先从模板图提炼“标题蓝图”（仅内部执行，不输出分析）：',
-        '   - 文本区块数量与层级（主标题/副标题/角标/标签）。',
-        '   - 每个区块的相对锚点位置（上中下、左右关系、留白关系）。',
-        '   - 文本容器形态（底条、色块、角标、装饰块）与画面占比/视觉重心。',
-        '2. 将“标题蓝图”迁移到底图：',
-        '   - 保持底图主体身份、动作、服饰、场景逻辑不变。',
-        '   - 标题布局尽量保持与模板图同构（位置关系和层级关系一致），避免遮挡主体关键区域。',
-        '   - 允许为适配底图做微调，但不能改成另一套风格。',
-        '3. 标题类型映射规则：',
-        '   - main：最大、最强对比、第一视线落点。',
-        '   - subtitle：围绕 main 提供补充信息，层级低于 main。',
-        '   - badge：用于角标或爆点词，面积小但对比强。',
-        '   - tag：短标签，作为辅助信息点缀。',
-        '   - custom：按模板图最相近文本组件样式放置。',
-        '4. 文本约束（强约束）：',
-        '   - 必须逐字使用“标题输入”中的文本，不改写、不扩写、不缩写、不替换同义词。',
-        '   - 中文必须清晰可读，禁止错别字、乱码、异体替换、缺字、多字。',
-        '   - 文本过长时只允许智能换行与字距微调，不得改动文字内容。',
+        ...taskIntro,
+        ...titleInstruction,
         '开关注入（按当前配置执行）：',
         ...switchPromptBlocks,
-        '5. 成片目标：',
-        '   - 一眼看出与模板图同款标题风格与版式语言。',
-        '   - 同时保留底图的真实主体信息和场景可信度。',
+        '成片目标：',
+        input.referenceMode === 'dual'
+            ? '   - 一眼看出与模板图同款标题风格与版式语言。'
+            : '   - 一眼看出主题、受众和点击理由。',
+        input.referenceMode === 'dual'
+            ? '   - 同时保留底图的真实主体信息和场景可信度。'
+            : '   - 画面主体可信，文字区域有清晰层级和足够留白。',
         '   - 画面信息聚焦、点击感强、不过度堆砌元素。',
         '禁止项：',
         '- 不要添加水印、logo、边框贴纸、无关小字。',
-        '- 不要脱离模板图风格另起版式，不要生成与模板无关的排版。',
+        input.referenceMode === 'dual'
+            ? '- 不要脱离模板图风格另起版式，不要生成与模板无关的排版。'
+            : '',
         '- 不要大幅重绘底图主体，不要篡改主体身份或场景叙事。',
         '- 不要输出解释或分析文字，只输出最终封面图。',
-        '标题输入（按顺序使用）：',
-        ...titleLines,
+        hasStructuredTitles ? '标题输入（按顺序使用）：' : '',
+        ...(hasStructuredTitles ? titleLines : []),
+        !hasStructuredTitles && freeformPrompt ? '封面意图/提示词：' : '',
+        !hasStructuredTitles && freeformPrompt ? freeformPrompt : '',
         style ? `补充风格约束：${style}` : '',
-        '最终要求：标题样式与布局高度贴近模板图，主体内容忠于底图，输出高完成度中文封面。',
+        input.referenceMode === 'dual'
+            ? '最终要求：标题样式与布局高度贴近模板图，主体内容忠于底图，输出高完成度中文封面。'
+            : '最终要求：输出高完成度中文封面，视觉重点明确，适合直接发布。',
     ].filter(Boolean).join('\n');
 }
 
-export async function generateCoverAssets(input: GenerateCoverInput): Promise<GenerateCoverResult> {
+function normalizeReferenceImages(input: GenerateCoverInput): { images: string[]; referenceMode: 'dual' | 'reference' | 'text' } {
     const templateImage = String(input.templateImage || '').trim();
     const baseImage = String(input.baseImage || '').trim();
-    if (!templateImage || !baseImage) {
-        throw new Error('封面生成需要模板图和底图。');
+    if (baseImage || templateImage) {
+        return {
+            // Keep base first for editable image APIs; template remains the style reference.
+            images: [baseImage, templateImage].filter(Boolean),
+            referenceMode: baseImage && templateImage ? 'dual' : 'reference',
+        };
     }
+    const images = (Array.isArray(input.referenceImages) ? input.referenceImages : [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 4);
+    return {
+        images,
+        referenceMode: images.length > 0 ? 'reference' : 'text',
+    };
+}
+
+function resolveCoverGenerationMode(
+    capabilities: ReturnType<typeof getImageProviderCapabilities>,
+    referenceCount: number,
+    providerTemplate: ImageProviderTemplate,
+): ImageGenerationMode {
+    if (referenceCount === 0) {
+        if (!capabilities.supportedModes.includes('text-to-image')) {
+            throw new Error(`当前生图模板（${providerTemplate}）不支持文本生图模式，请更换生图模板。`);
+        }
+        return 'text-to-image';
+    }
+    if (!capabilities.supportsReferenceImages || capabilities.maxReferenceImages < referenceCount) {
+        throw new Error(`当前生图模板（${providerTemplate}）不支持 ${referenceCount} 张参考图，请更换生图模板或减少参考图。`);
+    }
+    if (capabilities.supportedModes.includes('reference-guided')) return 'reference-guided';
+    if (capabilities.supportedModes.includes('image-to-image')) return 'image-to-image';
+    throw new Error(`当前生图模板（${providerTemplate}）不支持参考图生成，请更换生图模板。`);
+}
+
+export async function generateCoverAssets(input: GenerateCoverInput): Promise<GenerateCoverResult> {
     const titleItems = normalizeTitleItems(input.titles || []);
-    if (titleItems.length === 0) {
-        throw new Error('请至少填写一条标题内容。');
+    const titlePrompt = String(input.titlePrompt || '').trim();
+    if (titleItems.length === 0 && !titlePrompt) {
+        throw new Error('请填写标题内容或提示词。');
     }
+    const { images: referenceImages, referenceMode } = normalizeReferenceImages(input);
 
     const settings = (getSettings() || {}) as Record<string, unknown>;
     const provider = String(input.provider || settings.image_provider || 'openai-compatible').trim();
@@ -213,7 +289,7 @@ export async function generateCoverAssets(input: GenerateCoverInput): Promise<Ge
     const model = providerTemplate === 'dashscope-wan-native'
         ? DASHSCOPE_LOCKED_IMAGE_MODEL
         : resolvedModel;
-    const quality = String(input.quality || settings.image_quality || 'standard').trim();
+    const quality = String(input.quality || settings.image_quality || 'medium').trim();
     const count = Math.max(1, Math.min(4, Number(input.count) || 1));
     const aspectRatio = '3:4' as const;
     const size = '1024x1536';
@@ -226,21 +302,15 @@ export async function generateCoverAssets(input: GenerateCoverInput): Promise<Ge
     }
 
     const capabilities = getImageProviderCapabilities(providerTemplate, provider);
-    if (!capabilities.supportsReferenceImages || capabilities.maxReferenceImages < 2) {
-        throw new Error(`当前生图模板（${providerTemplate}）不支持“模板图+底图”的双图封面模式，请更换生图模板。`);
-    }
-    if (!capabilities.supportedModes.includes('image-to-image')) {
-        throw new Error(`当前生图模板（${providerTemplate}）不支持图生图模式，请更换生图模板。`);
-    }
+    const generationMode = resolveCoverGenerationMode(capabilities, referenceImages.length, providerTemplate);
 
     const prompt = buildCoverPrompt({
         titles: titleItems,
+        titlePrompt,
         styleHint: input.styleHint,
         promptSwitches: input.promptSwitches,
+        referenceMode,
     });
-    // Important: many image-edit APIs treat the first reference image as the editable base image.
-    // We must keep baseImage first to avoid accidentally editing the style template image.
-    const transportReferenceImages = [baseImage, templateImage];
     const adapter = getImageProviderAdapter(providerTemplate, provider);
     const generated = adapter.supportsMultiCount
         ? await adapter.generate({
@@ -250,8 +320,8 @@ export async function generateCoverAssets(input: GenerateCoverInput): Promise<Ge
             apiKey,
             provider,
             providerTemplate,
-            generationMode: 'image-to-image',
-            referenceImages: transportReferenceImages,
+            generationMode,
+            referenceImages,
             aspectRatio,
             size,
             quality,
@@ -265,8 +335,8 @@ export async function generateCoverAssets(input: GenerateCoverInput): Promise<Ge
                 apiKey,
                 provider,
                 providerTemplate,
-                generationMode: 'image-to-image',
-                referenceImages: transportReferenceImages,
+                generationMode,
+                referenceImages,
                 aspectRatio,
                 size,
                 quality,

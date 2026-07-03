@@ -46,6 +46,51 @@ const truncateText = (value: unknown, limit: number): string => {
   return `${text.slice(0, limit)}...`;
 };
 
+function parseRecordJson(value: unknown): Record<string, unknown> | null {
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function attachmentSummaryText(attachment: Record<string, unknown>): string {
+  const attachmentType = String(attachment.type || 'attachment').trim() || 'attachment';
+  const attachmentName = String(attachment.name || attachment.title || attachment.absolutePath || '').trim();
+  const attachmentSummary = String(attachment.summary || '').trim();
+  const attachmentKind = String(attachment.kind || '').trim();
+  const attachmentPath = String(attachment.toolPath || attachment.workspaceRelativePath || attachment.absolutePath || '').trim();
+  return [
+    attachmentType,
+    attachmentName && `name=${attachmentName}`,
+    attachmentKind && `kind=${attachmentKind}`,
+    attachmentPath && `path=${truncateText(attachmentPath, 120)}`,
+    attachmentSummary && `summary=${truncateText(attachmentSummary, 180)}`,
+  ].filter(Boolean).join(' | ');
+}
+
+function attachmentSummariesFromMessage(message: { attachment?: unknown; metadata?: unknown }): string[] {
+  const metadata = parseRecordJson(message.metadata);
+  const metadataAttachments = Array.isArray(metadata?.uploadedAttachments)
+    ? metadata.uploadedAttachments
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    : [];
+  if (metadataAttachments.length > 0) {
+    return metadataAttachments.map(attachmentSummaryText).filter(Boolean);
+  }
+  if (!message.attachment) return [];
+  const parsedAttachment = parseRecordJson(message.attachment);
+  if (parsedAttachment) {
+    return [attachmentSummaryText(parsedAttachment)].filter(Boolean);
+  }
+  return [truncateText(message.attachment, 180)].filter(Boolean);
+}
+
 const isToolConcurrencySafe = (registry: ToolRegistry, toolName: string, args: Record<string, unknown>): boolean => {
   const tool = registry.getTool(toolName);
   if (!tool) return false;
@@ -951,32 +996,17 @@ export class QueryRuntime {
 
   private getRecentAttachmentSummaries(): string[] {
     const messages = getChatMessages(this.config.sessionId)
-      .filter((message) => message.role === 'user' && (message.attachment || message.display_content))
+      .filter((message) => message.role === 'user' && (attachmentSummariesFromMessage(message).length > 0 || message.display_content))
       .slice(-4);
 
     return messages.map((message) => {
-      let attachmentText = '';
-      if (message.attachment) {
-        try {
-          const parsed = JSON.parse(String(message.attachment)) as Record<string, unknown>;
-          const attachmentType = String(parsed.type || 'attachment').trim() || 'attachment';
-          const attachmentName = String(parsed.name || parsed.title || parsed.absolutePath || '').trim();
-          const attachmentSummary = String(parsed.summary || '').trim();
-          const attachmentKind = String(parsed.kind || '').trim();
-          attachmentText = [
-            attachmentType,
-            attachmentName && `name=${attachmentName}`,
-            attachmentKind && `kind=${attachmentKind}`,
-            attachmentSummary && `summary=${truncateText(attachmentSummary, 180)}`,
-          ].filter(Boolean).join(' | ');
-        } catch {
-          attachmentText = truncateText(message.attachment, 180);
-        }
-      }
+      const attachmentText = attachmentSummariesFromMessage(message)
+        .map((item, index) => `attachment${index + 1}: ${item}`)
+        .join(' ; ');
       const displayText = String(message.display_content || '').trim();
       const contentText = String(message.content || '').trim();
       return [
-        attachmentText && `attachment: ${attachmentText}`,
+        attachmentText,
         displayText && `display: ${truncateText(displayText, 180)}`,
         contentText && `content: ${truncateText(contentText, 180)}`,
       ].filter(Boolean).join(' || ');

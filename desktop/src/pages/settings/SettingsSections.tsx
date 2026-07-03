@@ -1,6 +1,8 @@
 import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
+import { SelectMenu } from '../../components/ui/SelectMenu';
+import { SUPPORTED_LANGUAGES, useI18n, type AppLanguage } from '../../i18n';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
   CliRuntimeEnvironmentRecord,
@@ -227,6 +229,16 @@ type AssistantDaemonStatus = {
         authToken?: string;
         webhookUrl: string;
     };
+    acpGateway?: {
+        enabled: boolean;
+        endpointPath: string;
+        manifestPath: string;
+        guidePath: string;
+        baseUrl: string;
+        manifestUrl: string;
+        guideUrl: string;
+        discoveryPath: string;
+    };
     knowledgeApi: {
         endpointPath: string;
         webhookUrl: string;
@@ -370,6 +382,7 @@ interface GeneralSettingsSectionProps {
     pendingReports: DiagnosticsPendingReport[];
     diagnosticsActionBusy: string | null;
     handleExportDiagnosticBundle: (reportId?: string) => Promise<void>;
+    handleOpenFeedbackReport: () => void;
     handleUploadPendingReport: (reportId: string) => Promise<void>;
     handleDismissPendingReport: (reportId: string) => Promise<void>;
     handleVersionTap: () => void;
@@ -397,20 +410,19 @@ interface RemoteConnectionSettingsSectionProps {
 }
 
 const FILE_INDEX_STATUS_LABELS: Record<string, string> = {
-    done: '已完成',
-    indexing: '索引中',
-    pending: '等待中',
-    partial_failed: '部分失败',
-    disabled: '已禁用',
-    waiting: '排队中',
     idle: '空闲',
-    running: '运行中',
+    done: '完成',
+    indexing: '索引中',
+    pending: '等待',
+    waiting: '等待',
+    partial_failed: '部分失败',
+    disabled: '未启用',
 };
 
 const FILE_INDEX_SCOPE_LABELS: Record<string, string> = {
-    workspace: '工作区',
+    workspace: '全局',
     document_source: '文档源',
-    advisor: '顾问',
+    advisor: '成员',
     member: '成员',
     system: '系统',
 };
@@ -479,6 +491,7 @@ function FileIndexSettingsPanel({
     loading: boolean;
     onRefresh: () => Promise<void>;
 }) {
+    const [isExpanded, setIsExpanded] = useState(false);
     const overall = dashboard?.overall;
     const lanes = dashboard?.lanes || [];
     const scopes = dashboard?.scopes || [];
@@ -490,16 +503,22 @@ function FileIndexSettingsPanel({
     return (
         <div className="rounded-lg border border-border bg-surface-secondary/30 p-4">
             <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
+                <button
+                    type="button"
+                    onClick={() => setIsExpanded((value) => !value)}
+                    className="min-w-0 flex-1 text-left"
+                    aria-expanded={isExpanded}
+                >
                     <h3 className="flex items-center gap-2 text-sm font-medium text-text-primary">
                         <Database className="h-4 w-4" />
                         文件索引
+                        <ChevronDown className={clsx('h-4 w-4 text-text-tertiary transition-transform', isExpanded && 'rotate-180')} />
                     </h3>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
                         <FileIndexStatusBadge status={overall?.status || 'idle'} />
                         <span>{summaryText}</span>
                     </div>
-                </div>
+                </button>
                 <button
                     type="button"
                     onClick={() => void onRefresh()}
@@ -511,56 +530,58 @@ function FileIndexSettingsPanel({
                 </button>
             </div>
 
-            <div className="mt-4 grid gap-4">
-                <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
-                    <div className="grid grid-cols-[minmax(0,1fr)_80px_120px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
-                        <span>索引类型</span>
-                        <span>状态</span>
-                        <span className="text-right">进度</span>
+            {isExpanded && (
+                <div className="mt-4 grid gap-4">
+                    <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
+                        <div className="grid grid-cols-[minmax(0,1fr)_80px_120px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                            <span>索引类型</span>
+                            <span>状态</span>
+                            <span className="text-right">进度</span>
+                        </div>
+                        {lanes.length === 0 ? (
+                            <div className="px-3 py-3 text-xs text-text-tertiary">暂无索引记录</div>
+                        ) : (
+                            lanes.map((lane) => (
+                                <div key={lane.lane} className="grid grid-cols-[minmax(0,1fr)_80px_120px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                                    <span className="truncate text-xs text-text-primary">{lane.label}</span>
+                                    <FileIndexStatusBadge status={lane.status} />
+                                    <span className="text-right">
+                                        <FileIndexProgressText
+                                            done={lane.done}
+                                            total={lane.total}
+                                            failed={lane.failed}
+                                            metadataOnly={lane.metadataOnly || 0}
+                                        />
+                                    </span>
+                                </div>
+                            ))
+                        )}
                     </div>
-                    {lanes.length === 0 ? (
-                        <div className="px-3 py-3 text-xs text-text-tertiary">暂无索引记录</div>
-                    ) : (
-                        lanes.map((lane) => (
-                            <div key={lane.lane} className="grid grid-cols-[minmax(0,1fr)_80px_120px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
-                                <span className="truncate text-xs text-text-primary">{lane.label}</span>
-                                <FileIndexStatusBadge status={lane.status} />
-                                <span className="text-right">
-                                    <FileIndexProgressText
-                                        done={lane.done}
-                                        total={lane.total}
-                                        failed={lane.failed}
-                                        metadataOnly={lane.metadataOnly || 0}
-                                    />
-                                </span>
-                            </div>
-                        ))
-                    )}
-                </div>
 
-                <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
-                    <div className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
-                        <span>知识库</span>
-                        <span>类型</span>
-                        <span className="text-right">文件</span>
-                        <span className="text-right">状态</span>
+                    <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
+                        <div className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                            <span>知识库</span>
+                            <span>类型</span>
+                            <span className="text-right">文件</span>
+                            <span className="text-right">状态</span>
+                        </div>
+                        {scopes.length === 0 ? (
+                            <div className="px-3 py-3 text-xs text-text-tertiary">暂无知识库索引记录</div>
+                        ) : (
+                            scopes.map((scope) => (
+                                <div key={scope.scopeId} className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                                    <span className="truncate text-xs text-text-primary" title={scope.name}>{scope.name}</span>
+                                    <span className="text-[11px] text-text-tertiary">{fileIndexScopeLabel(scope.scopeType)}</span>
+                                    <span className="text-right font-mono text-[11px] text-text-tertiary">{scope.fileCount}</span>
+                                    <span className="text-right">
+                                        <FileIndexStatusBadge status={scope.status} />
+                                    </span>
+                                </div>
+                            ))
+                        )}
                     </div>
-                    {scopes.length === 0 ? (
-                        <div className="px-3 py-3 text-xs text-text-tertiary">暂无知识库索引记录</div>
-                    ) : (
-                        scopes.map((scope) => (
-                            <div key={scope.scopeId} className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
-                                <span className="truncate text-xs text-text-primary" title={scope.name}>{scope.name}</span>
-                                <span className="text-[11px] text-text-tertiary">{fileIndexScopeLabel(scope.scopeType)}</span>
-                                <span className="text-right font-mono text-[11px] text-text-tertiary">{scope.fileCount}</span>
-                                <span className="text-right">
-                                    <FileIndexStatusBadge status={scope.status} />
-                                </span>
-                            </div>
-                        ))
-                    )}
                 </div>
-            </div>
+            )}
         </div>
     );
 }
@@ -587,6 +608,7 @@ function GeneralSettingsSectionInner({
     pendingReports,
     diagnosticsActionBusy,
     handleExportDiagnosticBundle,
+    handleOpenFeedbackReport,
     handleUploadPendingReport,
     handleDismissPendingReport,
     handleVersionTap,
@@ -595,11 +617,28 @@ function GeneralSettingsSectionInner({
     fileIndexLoading,
     handleRefreshFileIndexDashboard,
 }: GeneralSettingsSectionProps) {
+    const { language, setLanguage, t } = useI18n();
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
 
     return (
         <section className="space-y-6">
-            <h2 className="text-lg font-medium text-text-primary mb-6">常规设置</h2>
+            <h2 className="text-lg font-medium text-text-primary mb-6">{t('settings.general.title')}</h2>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
+                <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                        <h3 className="text-sm font-medium text-text-primary">{t('settings.language.title')}</h3>
+                        <p className="mt-1 text-xs text-text-tertiary">{t('settings.language.description')}</p>
+                    </div>
+                    <SelectMenu
+                        value={language}
+                        onChange={(value) => setLanguage(value as AppLanguage)}
+                        options={SUPPORTED_LANGUAGES}
+                        className="w-36 shrink-0"
+                        menuClassName="left-auto right-0 min-w-full"
+                    />
+                </div>
+            </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                 <div className="flex items-start justify-between">
@@ -1055,6 +1094,13 @@ function GeneralSettingsSectionInner({
                     </button>
                     <button
                         type="button"
+                        onClick={handleOpenFeedbackReport}
+                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                    >
+                        反馈问题
+                    </button>
+                    <button
+                        type="button"
                         onClick={() => void handleOpenDebugLogDir()}
                         className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
                     >
@@ -1333,7 +1379,7 @@ interface RemoteChannelCardProps {
     children: ReactNode;
 }
 
-type ApiSectionId = 'overview' | 'daemon' | 'listen' | 'status' | 'logs';
+type ApiSectionId = 'overview' | 'acp' | 'daemon' | 'listen' | 'status' | 'logs';
 
 interface ApiSectionCardProps {
     title: string;
@@ -1486,6 +1532,7 @@ function RemoteConnectionSettingsSectionInner({
     const [expandedChannelId, setExpandedChannelId] = useState<RemoteChannelId | null>('weixin');
     const [expandedApiSections, setExpandedApiSections] = useState<Record<ApiSectionId, boolean>>({
         overview: true,
+        acp: true,
         daemon: true,
         listen: true,
         status: true,
@@ -1495,6 +1542,31 @@ function RemoteConnectionSettingsSectionInner({
         () => (assistantDaemonLogs.length ? assistantDaemonLogs.join('\n') : '暂无 daemon 日志。'),
         [assistantDaemonLogs],
     );
+    const assistantDaemonBaseUrl = useMemo(() => {
+        const host = String(assistantDaemonDraft.host || '').trim() || '127.0.0.1';
+        const port = String(assistantDaemonDraft.port || '').trim() || '31937';
+        return `http://${host}:${port}`;
+    }, [assistantDaemonDraft.host, assistantDaemonDraft.port]);
+    const acpGatewayStatus = assistantDaemonStatus?.acpGateway;
+    const acpBaseUrl = (acpGatewayStatus?.baseUrl || assistantDaemonBaseUrl).replace(/\/+$/, '');
+    const acpManifestUrl = acpGatewayStatus?.manifestUrl || `${assistantDaemonBaseUrl}/.well-known/redbox-agent.json`;
+    const acpGuideUrl = acpGatewayStatus?.guideUrl || `${assistantDaemonBaseUrl}/acp/v1/guide`;
+    const acpEndpointUrl = `${acpBaseUrl}/acp/v1`;
+    const acpDiscoveryPath = acpGatewayStatus?.discoveryPath || '';
+    const acpCopyPrompts = useMemo(() => ([
+        {
+            label: '复制 Codex',
+            text: `Use the local RedBox ACP gateway at ${acpEndpointUrl}. Read ${acpManifestUrl} for the manifest before starting.`,
+        },
+        {
+            label: '复制 Hermes',
+            text: `Connect Hermes to the local RedBox ACP endpoint: ${acpEndpointUrl}. Manifest: ${acpManifestUrl}.`,
+        },
+        {
+            label: '复制 OpenClaw',
+            text: `OpenClaw local agent gateway: ${acpEndpointUrl}. Guide: ${acpGuideUrl}.`,
+        },
+    ]), [acpEndpointUrl, acpGuideUrl, acpManifestUrl]);
     const handleToggleExpandedChannel = (id: RemoteChannelId) => {
         setExpandedChannelId((current) => current === id ? null : id);
     };
@@ -1592,6 +1664,82 @@ function RemoteConnectionSettingsSectionInner({
                             <span className="inline-flex items-center rounded-full border border-border bg-surface-secondary/50 px-2.5 py-1 text-[10px] font-medium text-text-secondary">
                                 监听 {String(assistantDaemonDraft.host || '').trim() || '127.0.0.1'}:{String(assistantDaemonDraft.port || '').trim() || '31937'}
                             </span>
+                        </div>
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="Agent Communication Protocol"
+                        eyebrow="ACP"
+                        description="给 Codex、Hermes、OpenClaw 等外部 Agent 的本地对话入口。"
+                        expanded={expandedApiSections.acp}
+                        onToggle={() => handleToggleApiSection('acp')}
+                    >
+                        <div className="space-y-4">
+                            <div className="flex flex-wrap gap-2">
+                                <span className={clsx(
+                                    'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium',
+                                    (acpGatewayStatus?.enabled ?? assistantDaemonDraft.enabled)
+                                        ? 'border-emerald-300/70 bg-emerald-500/10 text-emerald-700'
+                                        : 'border-border bg-surface-secondary/60 text-text-tertiary',
+                                )}>
+                                    ACP {(acpGatewayStatus?.enabled ?? assistantDaemonDraft.enabled) ? '已开启' : '未开启'}
+                                </span>
+                                <span className={clsx(
+                                    'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium',
+                                    assistantDaemonStatus?.listening
+                                        ? 'border-sky-300/70 bg-sky-500/10 text-sky-700'
+                                        : 'border-border bg-surface-secondary/60 text-text-tertiary',
+                                )}>
+                                    {assistantDaemonStatus?.listening ? '监听中' : '未监听'}
+                                </span>
+                            </div>
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <div className="rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Manifest</div>
+                                            <div className="mt-1.5 break-all text-xs font-medium text-text-primary">{acpManifestUrl}</div>
+                                        </div>
+                                        <DiagnosticCopyButton text={acpManifestUrl} />
+                                    </div>
+                                </div>
+                                <div className="rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Guide</div>
+                                            <div className="mt-1.5 break-all text-xs font-medium text-text-primary">{acpGuideUrl}</div>
+                                        </div>
+                                        <DiagnosticCopyButton text={acpGuideUrl} />
+                                    </div>
+                                </div>
+                                <div className="rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Endpoint</div>
+                                            <div className="mt-1.5 break-all text-xs font-medium text-text-primary">{acpEndpointUrl}</div>
+                                        </div>
+                                        <DiagnosticCopyButton text={acpEndpointUrl} />
+                                    </div>
+                                </div>
+                                {acpDiscoveryPath && (
+                                    <div className="rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">Discovery</div>
+                                                <div className="mt-1.5 break-all text-xs font-medium text-text-primary">{acpDiscoveryPath}</div>
+                                            </div>
+                                            <DiagnosticCopyButton text={acpDiscoveryPath} />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                                {acpCopyPrompts.map((item) => (
+                                    <DiagnosticCopyButton key={item.label} text={item.text} label={item.label} />
+                                ))}
+                            </div>
                         </div>
                     </ApiSectionCard>
 
@@ -2453,6 +2601,7 @@ export function MemorySettingsSection({
 }
 
 interface ToolsSettingsSectionProps {
+    visibleSection?: 'all' | 'tools' | 'mcp';
     cliRuntimeTools: CliRuntimeToolRecord[];
     cliRuntimeDiscoverResults: CliRuntimeToolRecord[];
     cliRuntimeEnvironments: CliRuntimeEnvironmentRecord[];
@@ -2504,6 +2653,7 @@ interface ToolsSettingsSectionProps {
     mcpRuntimeItems: McpServerRuntimeItem[];
     mcpLiveSessions: McpSessionState[];
     handleUpdateMcpServer: (id: string, updater: (item: McpServerConfig) => McpServerConfig) => void;
+    handleToggleMcpServer: (server: McpServerConfig) => Promise<void>;
     handleDeleteMcpServer: (id: string) => Promise<void>;
     handleDisconnectMcpServer: (server: McpServerConfig) => Promise<void>;
     handleDisconnectAllMcpSessions: () => Promise<void>;
@@ -2617,6 +2767,7 @@ interface ToolsSettingsSectionProps {
 }
 
 export function ToolsSettingsSection({
+    visibleSection = 'all',
     cliRuntimeTools,
     cliRuntimeDiscoverResults,
     cliRuntimeEnvironments,
@@ -2649,6 +2800,7 @@ export function ToolsSettingsSection({
     mcpRuntimeItems,
     mcpLiveSessions,
     handleUpdateMcpServer,
+    handleToggleMcpServer,
     handleDeleteMcpServer,
     handleDisconnectMcpServer,
     handleDisconnectAllMcpSessions,
@@ -2729,6 +2881,8 @@ export function ToolsSettingsSection({
     handleCancelBackgroundTask,
 }: ToolsSettingsSectionProps) {
     const [runtimeSessionQuery, setRuntimeSessionQuery] = useState('');
+    const showToolSections = visibleSection !== 'mcp';
+    const showMcpSection = visibleSection !== 'tools';
     const mcpRuntimeMap = useMemo(
         () =>
             Object.fromEntries(
@@ -3062,6 +3216,8 @@ export function ToolsSettingsSection({
 
     return (
         <section className="space-y-6">
+            {showToolSections && (
+            <>
             <h2 className="text-lg font-medium text-text-primary mb-6">外部工具管理</h2>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
@@ -3449,7 +3605,10 @@ export function ToolsSettingsSection({
                     </div>
                 </div>
             </div>
+            </>
+            )}
 
+            {showMcpSection && (
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-3">
                     <div>
@@ -3590,8 +3749,9 @@ export function ToolsSettingsSection({
                                         <label className="inline-flex items-center gap-2 text-xs text-text-secondary">
                                             <input
                                                 type="checkbox"
-                                                checked={server.enabled}
-                                                onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({ ...item, enabled: e.target.checked }))}
+                                                checked={server.enabled !== false}
+                                                disabled={isSyncingMcp}
+                                                onChange={() => void handleToggleMcpServer(server)}
                                             />
                                             启用
                                         </label>
@@ -3694,7 +3854,10 @@ export function ToolsSettingsSection({
                     </div>
                 )}
             </div>
+            )}
 
+            {showToolSections && (
+            <>
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                 <div className="flex items-start justify-between gap-3">
                     <div>
@@ -5072,17 +5235,19 @@ export function ToolsSettingsSection({
                     </div>
                 </div>
             )}
+            </>
+            )}
         </section>
     );
 }
 
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
+    activeTab: 'general' | 'ai' | 'team' | 'platforms' | 'skills' | 'tools' | 'profile' | 'memory' | 'remote' | 'mcp' | 'experimental';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
-    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile' && activeTab !== 'experimental') {
+    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'platforms' && activeTab !== 'profile' && activeTab !== 'experimental') {
         return null;
     }
 

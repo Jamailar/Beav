@@ -118,6 +118,7 @@ const initDb = () => {
       image_size TEXT,
       image_quality TEXT,
       mcp_servers_json TEXT,
+      ecommerce_platforms_json TEXT,
       redclaw_compact_target_tokens INTEGER,
       wander_deep_think_enabled INTEGER,
       debug_log_enabled INTEGER,
@@ -187,11 +188,12 @@ const initDb = () => {
       session_id TEXT NOT NULL,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
-      tool_calls TEXT,
-      tool_call_id TEXT,
-      timestamp INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
-    );
+	      tool_calls TEXT,
+	      tool_call_id TEXT,
+	      metadata TEXT,
+	      timestamp INTEGER NOT NULL,
+	      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+	    );
 
     CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
       ON chat_messages(session_id);
@@ -307,6 +309,58 @@ const initDb = () => {
       ON agent_task_traces(task_id, created_at ASC);
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS acp_runs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      client_json TEXT,
+      prompt TEXT NOT NULL,
+      status TEXT NOT NULL,
+      response TEXT,
+      error TEXT,
+      artifact_ids_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_acp_runs_session_updated
+      ON acp_runs(session_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_acp_runs_status_updated
+      ON acp_runs(status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS acp_run_events (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES acp_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_acp_run_events_run
+      ON acp_run_events(run_id, created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS acp_artifacts (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      artifact_type TEXT NOT NULL,
+      label TEXT NOT NULL,
+      content TEXT,
+      payload_json TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES acp_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_acp_artifacts_run
+      ON acp_artifacts(run_id, created_at ASC);
+  `);
+
   // User Memory tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_memories (
@@ -395,6 +449,9 @@ const initDb = () => {
     db.exec(`ALTER TABLE settings ADD COLUMN mcp_servers_json TEXT;`);
   } catch { /* Column already exists */ }
   try {
+    db.exec(`ALTER TABLE settings ADD COLUMN ecommerce_platforms_json TEXT;`);
+  } catch { /* Column already exists */ }
+  try {
     db.exec(`ALTER TABLE settings ADD COLUMN redclaw_compact_target_tokens INTEGER;`);
   } catch { /* Column already exists */ }
   try {
@@ -454,9 +511,12 @@ const initDb = () => {
   try {
     db.exec(`ALTER TABLE chat_messages ADD COLUMN display_content TEXT;`);
   } catch { /* Column already exists */ }
-  try {
-    db.exec(`ALTER TABLE chat_messages ADD COLUMN attachment TEXT;`);
-  } catch { /* Column already exists */ }
+	  try {
+	    db.exec(`ALTER TABLE chat_messages ADD COLUMN attachment TEXT;`);
+	  } catch { /* Column already exists */ }
+	  try {
+	    db.exec(`ALTER TABLE chat_messages ADD COLUMN metadata TEXT;`);
+	  } catch { /* Column already exists */ }
 
   // Migration: add content_hash column for knowledge_vectors
   try {
@@ -606,6 +666,7 @@ export const saveSettings = (settings: {
   image_size?: string;
   image_quality?: string;
   mcp_servers_json?: string;
+  ecommerce_platforms_json?: string;
   redclaw_compact_target_tokens?: number;
   wander_deep_think_enabled?: boolean;
   debug_log_enabled?: boolean;
@@ -615,8 +676,8 @@ export const saveSettings = (settings: {
   chat_max_tokens_deepseek?: number;
 }) => {
   const stmt = db.prepare(`
-    INSERT INTO settings (id, api_endpoint, api_key, model_name, model_name_wander, model_name_chatroom, model_name_knowledge, model_name_redclaw, search_provider, search_endpoint, search_api_key, proxy_enabled, proxy_url, proxy_bypass, role_mapping, workspace_dir, active_space_id, transcription_model, transcription_endpoint, transcription_key, embedding_endpoint, embedding_key, embedding_model, ai_sources_json, default_ai_source_id, image_provider, image_endpoint, image_api_key, image_model, video_endpoint, video_api_key, video_model, image_provider_template, image_aspect_ratio, image_size, image_quality, mcp_servers_json, redclaw_compact_target_tokens, wander_deep_think_enabled, debug_log_enabled, developer_mode_enabled, developer_mode_unlocked_at, chat_max_tokens_default, chat_max_tokens_deepseek)
-    VALUES (1, @api_endpoint, @api_key, @model_name, @model_name_wander, @model_name_chatroom, @model_name_knowledge, @model_name_redclaw, @search_provider, @search_endpoint, @search_api_key, @proxy_enabled, @proxy_url, @proxy_bypass, @role_mapping, @workspace_dir, @active_space_id, @transcription_model, @transcription_endpoint, @transcription_key, @embedding_endpoint, @embedding_key, @embedding_model, @ai_sources_json, @default_ai_source_id, @image_provider, @image_endpoint, @image_api_key, @image_model, @video_endpoint, @video_api_key, @video_model, @image_provider_template, @image_aspect_ratio, @image_size, @image_quality, @mcp_servers_json, @redclaw_compact_target_tokens, @wander_deep_think_enabled, @debug_log_enabled, @developer_mode_enabled, @developer_mode_unlocked_at, @chat_max_tokens_default, @chat_max_tokens_deepseek)
+    INSERT INTO settings (id, api_endpoint, api_key, model_name, model_name_wander, model_name_chatroom, model_name_knowledge, model_name_redclaw, search_provider, search_endpoint, search_api_key, proxy_enabled, proxy_url, proxy_bypass, role_mapping, workspace_dir, active_space_id, transcription_model, transcription_endpoint, transcription_key, embedding_endpoint, embedding_key, embedding_model, ai_sources_json, default_ai_source_id, image_provider, image_endpoint, image_api_key, image_model, video_endpoint, video_api_key, video_model, image_provider_template, image_aspect_ratio, image_size, image_quality, mcp_servers_json, ecommerce_platforms_json, redclaw_compact_target_tokens, wander_deep_think_enabled, debug_log_enabled, developer_mode_enabled, developer_mode_unlocked_at, chat_max_tokens_default, chat_max_tokens_deepseek)
+    VALUES (1, @api_endpoint, @api_key, @model_name, @model_name_wander, @model_name_chatroom, @model_name_knowledge, @model_name_redclaw, @search_provider, @search_endpoint, @search_api_key, @proxy_enabled, @proxy_url, @proxy_bypass, @role_mapping, @workspace_dir, @active_space_id, @transcription_model, @transcription_endpoint, @transcription_key, @embedding_endpoint, @embedding_key, @embedding_model, @ai_sources_json, @default_ai_source_id, @image_provider, @image_endpoint, @image_api_key, @image_model, @video_endpoint, @video_api_key, @video_model, @image_provider_template, @image_aspect_ratio, @image_size, @image_quality, @mcp_servers_json, @ecommerce_platforms_json, @redclaw_compact_target_tokens, @wander_deep_think_enabled, @debug_log_enabled, @developer_mode_enabled, @developer_mode_unlocked_at, @chat_max_tokens_default, @chat_max_tokens_deepseek)
     ON CONFLICT(id) DO UPDATE SET
       api_endpoint = @api_endpoint,
       api_key = @api_key,
@@ -654,6 +715,7 @@ export const saveSettings = (settings: {
       image_size = @image_size,
       image_quality = @image_quality,
       mcp_servers_json = @mcp_servers_json,
+      ecommerce_platforms_json = @ecommerce_platforms_json,
       redclaw_compact_target_tokens = @redclaw_compact_target_tokens,
       wander_deep_think_enabled = @wander_deep_think_enabled,
       debug_log_enabled = @debug_log_enabled,
@@ -699,6 +761,7 @@ export const saveSettings = (settings: {
     image_size?: string;
     image_quality?: string;
     mcp_servers_json?: string;
+    ecommerce_platforms_json?: string;
     redclaw_compact_target_tokens?: number;
     wander_deep_think_enabled?: boolean;
     debug_log_enabled?: boolean;
@@ -757,6 +820,7 @@ export const saveSettings = (settings: {
     image_size: settings.image_size ?? current?.image_size ?? '',
     image_quality: settings.image_quality ?? current?.image_quality ?? '',
     mcp_servers_json: settings.mcp_servers_json ?? current?.mcp_servers_json ?? '[]',
+    ecommerce_platforms_json: settings.ecommerce_platforms_json ?? current?.ecommerce_platforms_json ?? '',
     redclaw_compact_target_tokens: Number.isFinite(Number(settings.redclaw_compact_target_tokens))
       ? Math.floor(Number(settings.redclaw_compact_target_tokens))
       : Number.isFinite(Number(current?.redclaw_compact_target_tokens))
@@ -824,6 +888,7 @@ export const getSettings = () => {
     image_size?: string;
     image_quality?: string;
     mcp_servers_json?: string;
+    ecommerce_platforms_json?: string;
     redclaw_compact_target_tokens?: number;
     wander_deep_think_enabled?: number;
     debug_log_enabled?: number;
@@ -851,6 +916,9 @@ export const getSettings = () => {
   }
   if (result && !result.mcp_servers_json) {
     result.mcp_servers_json = '[]';
+  }
+  if (result && !result.ecommerce_platforms_json) {
+    result.ecommerce_platforms_json = '';
   }
   if (result && !Number.isFinite(Number(result.redclaw_compact_target_tokens))) {
     result.redclaw_compact_target_tokens = 256000;
@@ -991,6 +1059,29 @@ export const renameSpace = (id: string, name: string): WorkspaceSpace | null => 
   const stmt = db.prepare('UPDATE spaces SET name = ?, updated_at = ? WHERE id = ?');
   stmt.run(trimmedName, now, id);
   return { ...existing, name: trimmedName, updated_at: now };
+};
+
+export const deleteSpace = (id: string): { deletedActiveSpace: boolean; activeSpaceId: string } => {
+  const normalizedId = String(id || '').trim();
+  if (!normalizedId || normalizedId === DEFAULT_SPACE_ID) {
+    throw new Error('默认空间不能删除');
+  }
+
+  const existing = db.prepare('SELECT * FROM spaces WHERE id = ?').get(normalizedId) as WorkspaceSpace | undefined;
+  if (!existing) {
+    throw new Error('空间不存在');
+  }
+
+  const activeSpaceId = getActiveSpaceId();
+  const deletedActiveSpace = activeSpaceId === normalizedId;
+  db.prepare('DELETE FROM spaces WHERE id = ?').run(normalizedId);
+  if (deletedActiveSpace) {
+    setActiveSpace(DEFAULT_SPACE_ID);
+  }
+  return {
+    deletedActiveSpace,
+    activeSpaceId: deletedActiveSpace ? DEFAULT_SPACE_ID : getActiveSpaceId(),
+  };
 };
 
 export const getActiveSpaceId = (): string => {
@@ -1286,11 +1377,12 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool' | 'system';
   content: string;
   tool_calls?: string;
-  tool_call_id?: string;
-  display_content?: string;
-  attachment?: string;
-  timestamp: number;
-}
+	  tool_call_id?: string;
+	  display_content?: string;
+	  attachment?: string;
+	  metadata?: string;
+	  timestamp: number;
+	}
 
 export interface SessionTranscriptRecord {
   id: string;
@@ -1717,11 +1809,11 @@ export const deleteChatSession = (id: string): void => {
 /**
  * 添加聊天消息
  */
-export const addChatMessage = (message: Omit<ChatMessage, 'timestamp'> & { display_content?: string; attachment?: string }): void => {
-  const stmt = db.prepare(`
-    INSERT INTO chat_messages (id, session_id, role, content, tool_calls, tool_call_id, display_content, attachment, timestamp)
-    VALUES (@id, @session_id, @role, @content, @tool_calls, @tool_call_id, @display_content, @attachment, @timestamp)
-  `);
+export const addChatMessage = (message: Omit<ChatMessage, 'timestamp'> & { display_content?: string; attachment?: string; metadata?: string }): void => {
+	  const stmt = db.prepare(`
+	    INSERT INTO chat_messages (id, session_id, role, content, tool_calls, tool_call_id, display_content, attachment, metadata, timestamp)
+	    VALUES (@id, @session_id, @role, @content, @tool_calls, @tool_call_id, @display_content, @attachment, @metadata, @timestamp)
+	  `);
   // 为可选参数提供默认值，避免 "Missing named parameter" 错误
   stmt.run({
     id: message.id,
@@ -1729,11 +1821,12 @@ export const addChatMessage = (message: Omit<ChatMessage, 'timestamp'> & { displ
     role: message.role,
     content: message.content,
     tool_calls: message.tool_calls ?? null,
-    tool_call_id: message.tool_call_id ?? null,
-    display_content: message.display_content ?? null,
-    attachment: message.attachment ?? null,
-    timestamp: Date.now(),
-  });
+	    tool_call_id: message.tool_call_id ?? null,
+	    display_content: message.display_content ?? null,
+	    attachment: message.attachment ?? null,
+	    metadata: message.metadata ?? null,
+	    timestamp: Date.now(),
+	  });
 
   // 更新会话的 updated_at
   const updateSession = db.prepare(`
@@ -1965,10 +2058,11 @@ export const cloneChatSession = (sourceSessionId: string, nextSessionId: string,
       role: message.role,
       content: message.content,
       tool_calls: message.tool_calls,
-      tool_call_id: message.tool_call_id,
-      display_content: message.display_content,
-      attachment: message.attachment,
-    });
+	      tool_call_id: message.tool_call_id,
+	      display_content: message.display_content,
+	      attachment: message.attachment,
+	      metadata: message.metadata,
+	    });
   }
 
   for (const item of transcript) {
@@ -2257,6 +2351,8 @@ export interface WanderHistory {
   items: string; // JSON array of WanderItem
   result: string; // JSON of WanderResult
   created_at: number;
+  status?: string;
+  abandoned_at?: number | null;
 }
 
 // Create wander_history table
@@ -2276,6 +2372,12 @@ try {
 try {
   db.exec(`ALTER TABLE wander_history ADD COLUMN space_id TEXT;`);
 } catch { /* Column already exists */ }
+try {
+  db.exec(`ALTER TABLE wander_history ADD COLUMN status TEXT;`);
+} catch { /* Column already exists */ }
+try {
+  db.exec(`ALTER TABLE wander_history ADD COLUMN abandoned_at INTEGER;`);
+} catch { /* Column already exists */ }
 if (hasColumn('wander_history', 'space_id')) {
   db.exec(`
     UPDATE wander_history
@@ -2287,26 +2389,34 @@ if (hasColumn('wander_history', 'space_id')) {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_wander_history_space_created_at ON wander_history(space_id, created_at);`);
 }
+if (hasColumn('wander_history', 'status')) {
+  db.exec(`UPDATE wander_history SET status = 'active' WHERE status IS NULL OR status = '';`);
+}
 
 export const saveWanderHistory = (id: string, items: any[], result: any): WanderHistory => {
   const now = Date.now();
   const scopedSpaceId = resolveSpaceId();
   const stmt = db.prepare(`
-    INSERT INTO wander_history (id, space_id, items, result, created_at)
-    VALUES (@id, @space_id, @items, @result, @created_at)
+    INSERT INTO wander_history (id, space_id, items, result, created_at, status, abandoned_at)
+    VALUES (@id, @space_id, @items, @result, @created_at, @status, @abandoned_at)
   `);
   stmt.run({
     id,
     space_id: scopedSpaceId,
     items: JSON.stringify(items),
     result: JSON.stringify(result),
-    created_at: now
+    created_at: now,
+    status: 'active',
+    abandoned_at: null,
   });
-  return { id, space_id: scopedSpaceId, items: JSON.stringify(items), result: JSON.stringify(result), created_at: now };
+  return { id, space_id: scopedSpaceId, items: JSON.stringify(items), result: JSON.stringify(result), created_at: now, status: 'active', abandoned_at: null };
 };
 
-export const listWanderHistory = (): WanderHistory[] => {
-  const stmt = db.prepare('SELECT * FROM wander_history WHERE space_id = ? ORDER BY created_at DESC');
+export const listWanderHistory = (options?: { includeAbandoned?: boolean }): WanderHistory[] => {
+  const includeAbandoned = Boolean(options?.includeAbandoned);
+  const stmt = includeAbandoned
+    ? db.prepare('SELECT * FROM wander_history WHERE space_id = ? ORDER BY created_at DESC')
+    : db.prepare("SELECT * FROM wander_history WHERE space_id = ? AND COALESCE(status, 'active') != 'abandoned' ORDER BY created_at DESC");
   return stmt.all(resolveSpaceId()) as WanderHistory[];
 };
 
@@ -2318,6 +2428,15 @@ export const getWanderHistory = (id: string): WanderHistory | null => {
 export const deleteWanderHistory = (id: string): void => {
   const stmt = db.prepare('DELETE FROM wander_history WHERE id = ? AND space_id = ?');
   stmt.run(id, resolveSpaceId());
+};
+
+export const abandonWanderHistory = (id: string): void => {
+  const stmt = db.prepare(`
+    UPDATE wander_history
+    SET status = 'abandoned', abandoned_at = ?
+    WHERE id = ? AND space_id = ?
+  `);
+  stmt.run(Date.now(), id, resolveSpaceId());
 };
 
 // ========== Vector Store Functions ==========

@@ -1,8 +1,9 @@
-import { REDBOX_NAVIGATE_EVENT, type NotificationAction } from './types';
+import { dispatchAppIntent, dispatchAppNavigateDetail } from '../features/app-shell/appIntent';
+import type { NotificationAction } from './types';
 
 export async function runNotificationAction(action: NotificationAction): Promise<void> {
   if (action.action === 'navigate') {
-    window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, { detail: action.payload }));
+    dispatchAppNavigateDetail(action.payload);
     return;
   }
 
@@ -13,9 +14,16 @@ export async function runNotificationAction(action: NotificationAction): Promise
 
   if (action.action === 'retry-generation') {
     await window.ipcRenderer.generation.retryJob(action.payload.jobId);
-    window.dispatchEvent(
-      new CustomEvent(REDBOX_NAVIGATE_EVENT, { detail: { view: 'generation-studio' } }),
-    );
+    dispatchAppIntent({ type: 'view.open', view: 'generation-studio' });
+    return;
+  }
+
+  if (action.action === 'open-feedback-report') {
+    window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+      detail: {
+        sourcePage: 'notifications',
+        operation: action.payload.feedbackId ? `feedback:${action.payload.feedbackId}` : 'feedback',
+      },
+    }));
   }
 }
-

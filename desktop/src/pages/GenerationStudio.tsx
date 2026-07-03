@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+    ArrowLeft,
     ArrowUp,
     ChevronDown,
     Clapperboard,
-    Copy,
     Download,
     FileText,
     FolderOpen,
     Image as ImageIcon,
     ImagePlus,
+    Layers,
     Loader2,
     Music2,
     Paperclip,
@@ -17,18 +18,32 @@ import {
     Plus,
     RotateCcw,
     Sparkles,
+    Trash2,
     X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
-import type { GenerationIntent, PendingChatMessage } from '../App';
+import type { GenerationIntent, PendingChatMessage } from '../features/app-shell/types';
 import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
+import {
+    buildRequestSummary as buildFormalRequestSummary,
+    feedMediaGridClass as formalFeedMediaGridClass,
+    feedMediaHeightClass as formalFeedMediaHeightClass,
+    formatRelativeTime as formatFormalRelativeTime,
+    normalizeAspectRatio as normalizeFormalAspectRatio,
+    normalizeImageQuality as normalizeFormalImageQuality,
+    parseAspectRatio as parseFormalAspectRatio,
+    placeholderAspectRatioForRequest as formalPlaceholderAspectRatioForRequest,
+    placeholderCountForRequest as formalPlaceholderCountForRequest,
+    requestModeLabel as formalRequestModeLabel,
+    requestSupportText as formalRequestSupportText,
+} from '../features/media-generation';
 import { Chat } from './Chat';
 import { resolveAssetUrl } from '../utils/pathManager';
-import { appAlert } from '../utils/appDialogs';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 
 type StudioMode = 'image' | 'video';
 type ImageGenerationMode = 'text-to-image' | 'reference-guided' | 'image-to-image';
@@ -92,6 +107,7 @@ type GeneratedAsset = {
     size?: string;
     quality?: string;
     relativePath?: string;
+    absolutePath?: string;
     updatedAt: string;
 };
 
@@ -105,6 +121,7 @@ type ImageGenerationRequest = {
     aspectRatio: string;
     size: string;
     quality: string;
+    resolution: string;
     generationMode: ImageGenerationMode;
     referenceItems: ReferenceItem[];
 };
@@ -161,6 +178,9 @@ interface GenerationStudioProps {
     pendingIntent?: GenerationIntent | null;
     onIntentConsumed?: () => void;
     onExecutionStateChange?: (active: boolean) => void;
+    onReturnHome?: () => void;
+    onOpenAssets?: () => void;
+    onOpenCoverStudio?: () => void;
 }
 
 const FEED_STORAGE_KEY = 'redbox:generation-studio:feed:v1';
@@ -175,19 +195,13 @@ const IMAGE_ASPECT_RATIO_OPTIONS = [
     { value: '16:9', label: '16:9' },
 ] as const;
 
-const IMAGE_SIZE_OPTIONS = [
-    { value: '', label: '自动' },
-    { value: '1024x1024', label: '1k' },
-    { value: '1024x1536', label: '1k 竖图' },
-    { value: '1536x1024', label: '1k 横图' },
-    { value: 'auto', label: 'Auto' },
+const IMAGE_RESOLUTION_OPTIONS = [
+    { value: '1K', label: '1K' },
+    { value: '2K', label: '2K' },
+    { value: '4K', label: '4K' },
 ] as const;
 
-const IMAGE_QUALITY_OPTIONS = [
-    { value: 'standard', label: '标准' },
-    { value: 'high', label: '高质量' },
-    { value: 'auto', label: 'Auto' },
-] as const;
+const DEFAULT_IMAGE_QUALITY = 'medium';
 
 const IMAGE_COUNT_OPTIONS = [
     { value: '1', label: '1 张' },
@@ -229,11 +243,15 @@ const VIDEO_AUDIO_OPTIONS = [
     { value: 'on', label: '音频开' },
 ] as const;
 
-const SOURCE_LABELS: Record<GenerationIntent['source'], string> = {
+const SOURCE_LABELS: Record<string, string> = {
     standalone: '独立创作',
+    generation_studio: '独立创作',
     'media-library': '媒体库',
     manuscripts: '稿件',
     'cover-studio': '封面',
+    cover_studio: '封面',
+    tool: 'Agent 工具',
+    redclaw: 'RedClaw',
 };
 
 type AssetContextMenuState = {
@@ -283,9 +301,20 @@ function attachmentVisualKind(
     return 'file';
 }
 
+function generatedAssetSourceUrl(asset: Pick<GeneratedAsset, 'previewUrl' | 'relativePath' | 'absolutePath'>): string {
+    return asset.previewUrl || asset.absolutePath || asset.relativePath || '';
+}
+
+function isAudioAsset(asset: Pick<GeneratedAsset, 'mimeType' | 'previewUrl' | 'relativePath' | 'absolutePath'>): boolean {
+    const mimeType = String(asset.mimeType || '').trim().toLowerCase();
+    if (mimeType.startsWith('audio/')) return true;
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i.test(generatedAssetSourceUrl(asset));
+}
+
 function attachmentPreviewSrc(attachment: UploadedFileAttachment | null | undefined): string {
     const preferred = String(
         attachment?.thumbnailDataUrl
+        || attachment?.inlineDataUrl
         || attachment?.localUrl
         || attachment?.absolutePath
         || attachment?.originalAbsolutePath
@@ -469,10 +498,10 @@ function buildGenerationAgentSessionMetadata(
     };
 }
 
-function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
-    const mimeType = String(asset.mimeType || '').toLowerCase();
+function isVideoAsset(asset: Pick<GeneratedAsset, 'mimeType' | 'previewUrl' | 'relativePath' | 'absolutePath'>): boolean {
+    const mimeType = String(asset.mimeType || '').trim().toLowerCase();
     if (mimeType.startsWith('video/')) return true;
-    return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
+    return /\.(mp4|webm|mov)(?:[?#].*)?$/i.test(generatedAssetSourceUrl(asset).trim());
 }
 
 function inferAssetExtension(asset: GeneratedAsset, source: string): string {
@@ -487,19 +516,22 @@ function inferAssetExtension(asset: GeneratedAsset, source: string): string {
         if (subtype === 'quicktime') return 'mov';
         if (subtype) return subtype;
     }
+    if (mimeType.startsWith('audio/')) {
+        const subtype = mimeType.slice('audio/'.length).split(/[+;]/)[0];
+        if (subtype === 'mpeg') return 'mp3';
+        if (subtype) return subtype;
+    }
 
     const match = String(source || '').match(/\.([a-zA-Z0-9]+)(?:[?#].*)?$/);
     const inferred = String(match?.[1] || '').trim().toLowerCase();
     if (inferred) return inferred;
-    return isVideoAsset(asset) ? 'mp4' : 'png';
+    if (isVideoAsset(asset)) return 'mp4';
+    if (isAudioAsset(asset)) return 'mp3';
+    return 'png';
 }
 
 function formatRelativeTime(timestampMs: number): string {
-    const diff = Date.now() - timestampMs;
-    if (diff < 60_000) return '刚刚';
-    if (diff < 3_600_000) return `${Math.max(1, Math.round(diff / 60_000))} 分钟前`;
-    if (diff < 86_400_000) return `${Math.max(1, Math.round(diff / 3_600_000))} 小时前`;
-    return `${Math.max(1, Math.round(diff / 86_400_000))} 天前`;
+    return formatFormalRelativeTime(timestampMs);
 }
 
 function isVideoReference(item: ReferenceItem | null | undefined): boolean {
@@ -520,6 +552,7 @@ function applyIntentPreset(
         setContextIntent: (value: GenerationIntent | null) => void;
     },
 ): void {
+    if (intent.mode === 'cover') return;
     setters.setStudioMode(intent.mode);
     setters.setContextIntent(intent);
     if (intent.bindTarget?.manuscriptPath) {
@@ -545,18 +578,7 @@ function applyIntentPreset(
 }
 
 function buildRequestSummary(request: GenerationRequest): string[] {
-    if (request.type === 'image') {
-        return [
-            request.model || '默认模型',
-            request.aspectRatio || 'Auto',
-            request.size || '自动尺寸',
-        ];
-    }
-    return [
-        request.model || '默认模型',
-        request.aspectRatio,
-        request.resolution,
-    ];
+    return buildFormalRequestSummary(request);
 }
 
 function serializeFeedEntries(entries: FeedEntry[]): string {
@@ -656,7 +678,8 @@ function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
         model: String(record.model || '').trim(),
         aspectRatio: String(record.aspectRatio || '4:3').trim() || '4:3',
         size: String(record.size || '').trim(),
-        quality: String(record.quality || 'auto').trim() || 'auto',
+        quality: normalizeImageQuality(typeof record.quality === 'string' ? record.quality : undefined),
+        resolution: String(record.resolution || '1K').trim() || '1K',
         generationMode: imageMode,
         referenceItems: normalizeReferenceItems(record.referenceItems),
     } satisfies ImageGenerationRequest;
@@ -685,6 +708,7 @@ function normalizeGeneratedAssets(value: unknown): GeneratedAsset[] {
                 size: typeof record.size === 'string' ? record.size : undefined,
                 quality: typeof record.quality === 'string' ? record.quality : undefined,
                 relativePath: typeof record.relativePath === 'string' ? record.relativePath : undefined,
+                absolutePath: typeof record.absolutePath === 'string' ? record.absolutePath : undefined,
                 updatedAt: String(record.updatedAt || ''),
             } satisfies GeneratedAsset;
         })
@@ -763,7 +787,7 @@ function readPersistedFeedEntries(): FeedEntry[] {
 }
 
 function requestModeLabel(request: GenerationRequest): string {
-    return request.type === 'image' ? '图片创作' : '视频创作';
+    return formalRequestModeLabel(request);
 }
 
 function requestLeadingReference(request: GenerationRequest): ReferenceItem | null {
@@ -772,16 +796,23 @@ function requestLeadingReference(request: GenerationRequest): ReferenceItem | nu
     return null;
 }
 
-function requestSupportText(request: GenerationRequest): string {
-    if (request.type === 'image') {
-        if (request.generationMode === 'image-to-image') return '图生图';
-        if (request.generationMode === 'reference-guided') return '参考图引导';
-        return `${request.count} 张`;
+function requestReferenceItems(request: GenerationRequest): ReferenceItem[] {
+    const items = [...request.referenceItems];
+    if (request.type === 'video') {
+        if (request.firstClip) items.push(request.firstClip);
+        if (request.drivingAudio) items.push(request.drivingAudio);
     }
-    if (request.generationMode === 'first-last-frame') return '首尾帧';
-    if (request.generationMode === 'continuation') return '续写';
-    if (request.generationMode === 'reference-guided') return '参考图';
-    return `${request.durationSeconds} 秒`;
+    const seen = new Set<string>();
+    return items.filter((item) => {
+        const key = item.dataUrl || item.name;
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function requestSupportText(request: GenerationRequest): string {
+    return formalRequestSupportText(request);
 }
 
 function isGenerationFeedEntry(entry: FeedEntry): entry is GenerationFeedEntry {
@@ -793,20 +824,15 @@ function isAgentSessionFeedEntry(entry: FeedEntry): entry is AgentSessionFeedEnt
 }
 
 function normalizeAspectRatio(value: string | undefined, fallback: string): string {
-    const raw = String(value || '').trim();
-    if (!raw || raw.toLowerCase() === 'auto') return fallback;
-    if (!/^\d+:\d+$/.test(raw)) return fallback;
-    return raw.replace(':', ' / ');
+    return normalizeFormalAspectRatio(value, fallback);
 }
 
 function parseAspectRatio(value: string | undefined, fallback: string): { width: number; height: number } {
-    const raw = String(value || '').trim();
-    const normalized = !raw || raw.toLowerCase() === 'auto' ? fallback : raw;
-    const match = normalized.match(/^(\d+):(\d+)$/);
-    const fallbackMatch = fallback.match(/^(\d+):(\d+)$/);
-    const width = Number(match?.[1] || fallbackMatch?.[1] || 1);
-    const height = Number(match?.[2] || fallbackMatch?.[2] || 1);
-    return { width, height };
+    return parseFormalAspectRatio(value, fallback);
+}
+
+function normalizeImageQuality(value: string | undefined): string {
+    return normalizeFormalImageQuality(value);
 }
 
 function estimateGenerationProgress(request: GenerationRequest, elapsedMs: number): number {
@@ -862,13 +888,11 @@ function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobProjection
 }
 
 function placeholderCountForRequest(request: GenerationRequest): number {
-    return request.type === 'image' ? Math.max(1, request.count) : 1;
+    return formalPlaceholderCountForRequest(request);
 }
 
 function placeholderAspectRatioForRequest(request: GenerationRequest): string {
-    return request.type === 'image'
-        ? normalizeAspectRatio(request.aspectRatio, '4 / 3')
-        : normalizeAspectRatio(request.aspectRatio, '16 / 9');
+    return formalPlaceholderAspectRatioForRequest(request);
 }
 
 function isPortraitRequest(request: GenerationRequest): boolean {
@@ -879,15 +903,11 @@ function isPortraitRequest(request: GenerationRequest): boolean {
 }
 
 function feedMediaGridClass(request: GenerationRequest, itemCount: number): string {
-    const portrait = isPortraitRequest(request);
-    if (itemCount === 1) {
-        return portrait ? 'max-w-[380px]' : 'max-w-[500px]';
-    }
-    return portrait ? 'max-w-[560px] sm:grid-cols-2' : 'max-w-[700px] sm:grid-cols-2';
+    return formalFeedMediaGridClass(request, itemCount);
 }
 
 function feedMediaHeightClass(request: GenerationRequest): string {
-    return isPortraitRequest(request) ? 'max-h-[440px]' : 'max-h-[520px]';
+    return formalFeedMediaHeightClass(request);
 }
 
 type PickerOption = {
@@ -1200,7 +1220,7 @@ function AssetPreview({
             </div>
         );
     }
-    const src = resolveAssetUrl(asset.previewUrl);
+    const src = resolveAssetUrl(generatedAssetSourceUrl(asset));
     if (isVideoAsset(asset)) {
         return (
             <video
@@ -1208,6 +1228,17 @@ function AssetPreview({
                 controls
                 preload="metadata"
                 className={clsx('w-full rounded-[16px] bg-black object-cover', interactive && 'pointer-events-none', className)}
+                style={style}
+            />
+        );
+    }
+    if (isAudioAsset(asset)) {
+        return (
+            <audio
+                src={src}
+                controls
+                preload="metadata"
+                className={clsx('w-full', className)}
                 style={style}
             />
         );
@@ -1284,6 +1315,42 @@ function ReferenceStack({
     );
 }
 
+function ReferencePreviewStrip({ request }: { request: GenerationRequest }) {
+    const items = requestReferenceItems(request);
+    if (items.length === 0) return null;
+    return (
+        <div className="flex max-w-[680px] items-center gap-2 overflow-x-auto">
+            <div className="shrink-0 text-[11px] text-text-tertiary">参考图</div>
+            <div className="flex min-w-0 items-center gap-2">
+                {items.slice(0, 6).map((item, index) => {
+                    const mimeType = dataUrlMimeType(item.dataUrl);
+                    const isAudio = mimeType.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(item.name);
+                    const isVideo = mimeType.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(item.name);
+                    return (
+                        <div
+                            key={`${item.dataUrl || item.name}-${index}`}
+                            className="h-12 w-12 shrink-0 overflow-hidden rounded-[10px] border border-border bg-surface-secondary"
+                            title={item.name}
+                        >
+                            {isAudio ? (
+                                <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                                    <Music2 className="h-4 w-4" />
+                                </div>
+                            ) : isVideo ? (
+                                <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                                    <Clapperboard className="h-4 w-4" />
+                                </div>
+                            ) : (
+                                <img src={item.dataUrl} alt={item.name} className="h-full w-full object-cover" />
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
 function MetaRow({ request }: { request: GenerationRequest }) {
     const summary = buildRequestSummary(request);
     return (
@@ -1304,16 +1371,22 @@ function MetaRow({ request }: { request: GenerationRequest }) {
     );
 }
 
+function requestDisplayPrompt(request: GenerationRequest): string {
+    return request.prompt.trim();
+}
+
 function FeedEntryMessage({
     entry,
     onRegenerate,
     onEdit,
+    onDelete,
     onPreviewAsset,
     onOpenAssetMenu,
 }: {
     entry: GenerationFeedEntry;
     onRegenerate: (entry: GenerationFeedEntry) => void;
     onEdit: (entry: GenerationFeedEntry) => void;
+    onDelete: (entryId: string) => void;
     onPreviewAsset: (asset: GeneratedAsset) => void;
     onOpenAssetMenu: (event: React.MouseEvent<HTMLElement>, asset: GeneratedAsset, entryId?: string) => void;
 }) {
@@ -1342,7 +1415,7 @@ function FeedEntryMessage({
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-tertiary">
                         <span>{formatRelativeTime(entry.createdAt)}</span>
                         <span>·</span>
-                        <span>{SOURCE_LABELS[entry.source]}</span>
+                        <span>{SOURCE_LABELS[entry.source] || entry.source}</span>
                         {entry.sourceTitle && (
                             <>
                                 <span>·</span>
@@ -1353,13 +1426,28 @@ function FeedEntryMessage({
                 </div>
             </div>
 
-            <div className="max-w-[680px] text-[13px] leading-6 text-text-primary">
-                {entry.request.prompt}
-            </div>
+            {requestDisplayPrompt(entry.request) && (
+                <div className="flex max-w-[680px] items-start gap-2">
+                    <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-6 text-text-primary">
+                        {requestDisplayPrompt(entry.request)}
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => onDelete(entry.id)}
+                        className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-brand-red/10 hover:text-brand-red"
+                        aria-label="删除创作记录"
+                        title="删除创作记录"
+                    >
+                        <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                </div>
+            )}
+
+            <ReferencePreviewStrip request={entry.request} />
 
             {isRunning && (
-                <div className="max-w-[760px] rounded-[16px] border border-border bg-surface-secondary px-4 py-3">
-                    <div className="mb-2.5 flex items-center justify-between gap-4">
+                <div className="max-w-[560px] space-y-2">
+                    <div className="flex items-center justify-between gap-4">
                         <div className="text-[12px] font-medium text-text-secondary">
                             任务创作中 {progress}%...
                         </div>
@@ -1367,7 +1455,7 @@ function FeedEntryMessage({
                             {entry.request.type === 'image' ? '正在生成图片' : '正在生成视频'}
                         </div>
                     </div>
-                    <div className="h-2.5 overflow-hidden rounded-full bg-surface-tertiary">
+                    <div className="h-1.5 overflow-hidden rounded-full bg-surface-tertiary">
                         <div
                             className="h-full rounded-full bg-[linear-gradient(90deg,rgb(var(--color-brand-red)/1)_0%,rgb(var(--color-accent-primary)/1)_100%)] transition-[width] duration-700 ease-out"
                             style={{ width: `${progress}%` }}
@@ -1383,12 +1471,12 @@ function FeedEntryMessage({
             )}
 
             {isRunning && entry.assets.length === 0 && (
-                <div className={clsx('grid gap-4', mediaGridClass)}>
+                <div className={clsx('grid gap-3', mediaGridClass)}>
                     {Array.from({ length: placeholderCount }).map((_, index) => (
                         <div
                             key={`${entry.id}-placeholder-${index}`}
                             className={clsx(
-                                'relative overflow-hidden rounded-[16px] border border-border bg-surface-secondary',
+                                'relative overflow-hidden rounded-[14px] border border-border bg-surface-secondary',
                                 mediaHeightClass,
                             )}
                             style={{ aspectRatio: placeholderAspectRatio }}
@@ -1531,6 +1619,9 @@ export function GenerationStudio({
     pendingIntent = null,
     onIntentConsumed,
     onExecutionStateChange,
+    onReturnHome,
+    onOpenAssets,
+    onOpenCoverStudio,
 }: GenerationStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [contextIntent, setContextIntent] = useState<GenerationIntent | null>(null);
@@ -1552,7 +1643,8 @@ export function GenerationStudio({
     const [imageModel, setImageModel] = useState('');
     const [imageAspectRatio, setImageAspectRatio] = useState('4:3');
     const [imageSize, setImageSize] = useState('');
-    const [imageQuality, setImageQuality] = useState('auto');
+    const [imageQuality, setImageQuality] = useState(DEFAULT_IMAGE_QUALITY);
+    const [imageResolution, setImageResolution] = useState('1K');
     const [imageMode, setImageMode] = useState<ImageGenerationMode>('text-to-image');
     const [imageReferences, setImageReferences] = useState<ReferenceItem[]>([]);
     const [isReadingImageRefs, setIsReadingImageRefs] = useState(false);
@@ -1665,7 +1757,8 @@ export function GenerationStudio({
             setImageModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || 'gpt-image-1') : prev));
             setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '4:3') : prev));
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
-            setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality || 'auto') : prev));
+            setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? normalizeImageQuality(normalizedSettings.image_quality) : prev));
+            setImageResolution((prev) => (overwriteDraftDefaults || !prev.trim() ? '1K' : prev));
         } catch (error) {
             console.error('Failed to load generation studio context:', error);
         }
@@ -1830,7 +1923,7 @@ export function GenerationStudio({
     const imageModelLabel = imageModel.trim() || settings.image_model || 'GPT Image';
     const videoModelLabel = effectiveVideoModel;
     const currentConfigHint = studioMode === 'image'
-        ? `${imageModelLabel} · ${imageAspectRatio || 'Auto'} · ${imageSize || '自动'}`
+        ? `${imageModelLabel} · ${imageAspectRatio || 'Auto'} · ${imageResolution || '1K'}`
         : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
     const activeError = studioMode === 'image' ? imageError : videoError;
     const imageModelOptions = useMemo<PickerOption[]>(() => {
@@ -1889,7 +1982,8 @@ export function GenerationStudio({
                     providerTemplate: settings.image_provider_template || undefined,
                     aspectRatio: request.aspectRatio.trim() || undefined,
                     size: request.size.trim() || undefined,
-                    quality: request.quality.trim() || undefined,
+                    quality: normalizeImageQuality(request.quality),
+                    resolution: request.resolution.trim() || '1K',
                     source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
                 }) as { success?: boolean; error?: string; jobId?: string };
 
@@ -2005,6 +2099,7 @@ export function GenerationStudio({
             aspectRatio: imageAspectRatio,
             size: imageSize,
             quality: imageQuality,
+            resolution: imageResolution,
             generationMode: effectiveImageMode,
             referenceItems: imageReferences,
         });
@@ -2020,6 +2115,7 @@ export function GenerationStudio({
         imageProjectId,
         imageQuality,
         imageReferences,
+        imageResolution,
         imageSize,
         imageTitle,
         runImageRequest,
@@ -2094,6 +2190,7 @@ export function GenerationStudio({
             setImageAspectRatio(entry.request.aspectRatio);
             setImageSize(entry.request.size);
             setImageQuality(entry.request.quality);
+            setImageResolution(entry.request.resolution || '1K');
             setImageMode(entry.request.generationMode);
             setImageReferences(entry.request.referenceItems);
             return;
@@ -2116,28 +2213,24 @@ export function GenerationStudio({
     const handleDeleteEntry = useCallback((entryId: string) => {
         updateFeedEntries((prev) => prev.filter((entry) => entry.id !== entryId));
         setAssetContextMenu((current) => (current?.entryId === entryId ? null : current));
-    }, []);
+    }, [updateFeedEntries]);
 
-    const resolveAssetSource = useCallback((asset: GeneratedAsset) => (
-        asset.previewUrl || asset.relativePath || ''
-    ), []);
+    const handleClearGenerationRecords = useCallback(async () => {
+        if (feedEntries.length === 0) return;
+        const confirmed = await appConfirm('只清空本页生成记录；已经入库的媒体文件会保留。', {
+            title: '清空生成记录',
+            confirmLabel: '清空',
+            tone: 'danger',
+        });
+        if (!confirmed) return;
+        updateFeedEntries([]);
+        setAssetContextMenu(null);
+        setPreviewAsset(null);
+        setAgentPendingMessage(null);
+        setAgentExecutionActive(false);
+    }, [feedEntries.length, updateFeedEntries]);
 
-    const handleCopyAsset = useCallback(async (asset: GeneratedAsset) => {
-        const source = resolveAssetSource(asset);
-        if (!source) return;
-        try {
-            const result = await window.ipcRenderer.files.copyImage({ source }) as {
-                success?: boolean;
-                error?: string;
-            };
-            if (!result?.success) {
-                throw new Error(result?.error || '复制失败');
-            }
-        } catch (error) {
-            console.error('Failed to copy generated asset:', error);
-            void appAlert(error instanceof Error ? error.message : '复制失败');
-        }
-    }, [resolveAssetSource]);
+    const resolveAssetSource = useCallback((asset: GeneratedAsset) => generatedAssetSourceUrl(asset), []);
 
     const handleSaveAsset = useCallback(async (asset: GeneratedAsset) => {
         const source = resolveAssetSource(asset);
@@ -2175,39 +2268,6 @@ export function GenerationStudio({
         } catch (error) {
             console.error('Failed to reveal generated asset:', error);
             void appAlert(error instanceof Error ? error.message : '打开文件夹失败');
-        }
-    }, [resolveAssetSource]);
-
-    const handleEditAsset = useCallback(async (asset: GeneratedAsset) => {
-        if (isVideoAsset(asset)) {
-            void appAlert('当前仅支持把图片加入参考图');
-            return;
-        }
-        const source = resolveAssetSource(asset);
-        if (!source) return;
-        try {
-            const assetUrl = resolveAssetUrl(source);
-            if (!assetUrl) {
-                throw new Error('素材地址无效');
-            }
-            const response = await fetch(assetUrl);
-            if (!response.ok) {
-                throw new Error(`读取素材失败 (${response.status})`);
-            }
-            const blob = await response.blob();
-            const dataUrl = await readBlobAsDataUrl(blob);
-            const extension = inferAssetExtension(asset, source);
-            const name = `${asset.title || `reference-${Date.now()}`}.${extension}`;
-            setStudioMode('image');
-            setImageMode((prev) => (prev === 'text-to-image' ? 'reference-guided' : prev));
-            setImageReferences((prev) => [
-                { name, dataUrl },
-                ...prev,
-            ].slice(0, 4));
-            setImageError('');
-        } catch (error) {
-            console.error('Failed to reuse generated asset as reference:', error);
-            void appAlert(error instanceof Error ? error.message : '添加参考图失败');
         }
     }, [resolveAssetSource]);
 
@@ -2406,32 +2466,42 @@ export function GenerationStudio({
         setAgentAttachment(null);
     }, [agentAttachment, agentExecutionActive, agentSessionId, ensureAgentFeedEntry, imagePrompt, imageReferences, isAgentSessionLoading]);
     const studioToolbar = (
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 overflow-x-auto">
             <button
                 type="button"
                 onClick={() => setStudioMode('image')}
                 className={clsx(
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-4 py-1.5 text-[14px] font-medium',
                     studioMode === 'image'
                         ? 'border-brand-red/50 bg-brand-red text-white'
                         : 'border-border bg-surface-primary text-text-secondary',
                 )}
             >
                 <ImagePlus className="h-4 w-4" />
-                图片创作
+                生图
             </button>
+            {onOpenCoverStudio && (
+                <button
+                    type="button"
+                    onClick={onOpenCoverStudio}
+                    className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-border bg-surface-primary px-4 py-1.5 text-[14px] font-medium text-text-secondary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+                >
+                    <Layers className="h-4 w-4" />
+                    做封面
+                </button>
+            )}
             <button
                 type="button"
                 onClick={() => setStudioMode('video')}
                 className={clsx(
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-4 py-1.5 text-[14px] font-medium',
                     studioMode === 'video'
                         ? 'border-brand-red/50 bg-brand-red text-white'
                         : 'border-border bg-surface-primary text-text-secondary',
                 )}
             >
                 <Clapperboard className="h-4 w-4" />
-                视频创作
+                生视频
             </button>
             {studioMode === 'image' && (
                 <button
@@ -2463,6 +2533,27 @@ export function GenerationStudio({
                     </span>
                 </button>
             )}
+            {onOpenAssets && (
+                <button
+                    type="button"
+                    onClick={onOpenAssets}
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+                >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    资产库
+                </button>
+            )}
+            {feedEntries.length > 0 && (
+                <button
+                    type="button"
+                    onClick={() => void handleClearGenerationRecords()}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-surface-primary text-text-tertiary transition-colors hover:border-brand-red/30 hover:bg-brand-red/10 hover:text-brand-red disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="清空生成记录"
+                    title="清空生成记录"
+                >
+                    <Trash2 className="h-4 w-4" />
+                </button>
+            )}
             <div className="ml-auto hidden text-[12px] text-text-tertiary md:block">{currentHeaderHint}</div>
         </div>
     );
@@ -2470,7 +2561,20 @@ export function GenerationStudio({
     return (
         <div className="h-full min-h-0 bg-background text-text-primary">
             <div className="mx-auto flex h-full min-h-0 max-w-[1180px] flex-col px-6">
-                <main ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto pt-6">
+                {onReturnHome && (
+                    <div className="flex h-12 shrink-0 items-center">
+                        <button
+                            type="button"
+                            onClick={onReturnHome}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-primary text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                            aria-label="返回主页"
+                            title="返回主页"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                        </button>
+                    </div>
+                )}
+                <main ref={feedScrollRef} className={clsx('flex-1 min-h-0 overflow-y-auto', onReturnHome ? 'pt-0' : 'pt-6')}>
                     {feedEntries.length === 0 ? (
                         <div className="min-h-[280px]" />
                     ) : (
@@ -2482,6 +2586,7 @@ export function GenerationStudio({
                                         entry={entry}
                                         onRegenerate={handleRegenerate}
                                         onEdit={handleEditEntry}
+                                        onDelete={handleDeleteEntry}
                                         onPreviewAsset={setPreviewAsset}
                                         onOpenAssetMenu={handleOpenAssetMenu}
                                     />
@@ -2509,7 +2614,7 @@ export function GenerationStudio({
                                         welcomeSubtitle=""
                                         contentLayout="wide"
                                         allowFileUpload={false}
-                                        messageWorkflowPlacement="top"
+                                        messageWorkflowPlacement="bottom"
                                         messageWorkflowVariant="compact"
                                         messageWorkflowEmphasis="thoughts-first"
                                         messageWorkflowDisplayMode="all"
@@ -2624,12 +2729,12 @@ export function GenerationStudio({
                                                         onChange={setImageAspectRatio}
                                                     />
                                                     <PopoverSelect
-                                                        value={imageSize}
-                                                        onChange={setImageSize}
-                                                        options={IMAGE_SIZE_OPTIONS}
+                                                        value={imageResolution}
+                                                        onChange={setImageResolution}
+                                                        options={IMAGE_RESOLUTION_OPTIONS}
                                                         className="min-w-[82px]"
-                                                        title="图片尺寸"
-                                                        panelClassName="w-[248px]"
+                                                        title="清晰度"
+                                                        panelClassName="w-[220px]"
                                                     />
                                                     <PopoverSelect
                                                         value={String(imageCount)}
@@ -2767,15 +2872,28 @@ export function GenerationStudio({
                         </button>
                         {isVideoAsset(previewAsset) ? (
                             <video
-                                src={resolveAssetUrl(previewAsset.previewUrl || '')}
+                                src={resolveAssetUrl(generatedAssetSourceUrl(previewAsset))}
                                 controls
                                 autoPlay
                                 preload="metadata"
                                 className="max-h-[90vh] max-w-[92vw] rounded-2xl bg-black shadow-2xl"
                             />
+                        ) : isAudioAsset(previewAsset) ? (
+                            <div className="w-[min(560px,92vw)] rounded-2xl border border-white/10 bg-surface-primary p-5 shadow-2xl">
+                                <div className="mb-4 flex items-center gap-3 text-text-primary">
+                                    <Music2 className="h-5 w-5 text-brand-red" />
+                                    <div className="min-w-0 flex-1 truncate text-sm font-semibold">{previewAsset.title || '生成音频'}</div>
+                                </div>
+                                <audio
+                                    src={resolveAssetUrl(generatedAssetSourceUrl(previewAsset))}
+                                    controls
+                                    autoPlay
+                                    className="w-full"
+                                />
+                            </div>
                         ) : (
                             <img
-                                src={resolveAssetUrl(previewAsset.previewUrl || '')}
+                                src={resolveAssetUrl(generatedAssetSourceUrl(previewAsset))}
                                 alt={previewAsset.title || previewAsset.id}
                                 className="max-h-[90vh] max-w-[92vw] rounded-2xl border border-white/10 bg-black/10 object-contain shadow-2xl"
                             />
@@ -2796,13 +2914,13 @@ export function GenerationStudio({
                     <button
                         type="button"
                         onClick={() => {
-                            void handleCopyAsset(assetContextMenu.asset);
+                            void handleShowAssetInFolder(assetContextMenu.asset);
                             setAssetContextMenu(null);
                         }}
                         className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
                     >
-                        <Copy className="h-3.5 w-3.5" />
-                        复制
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        在文件夹中打开
                     </button>
                     <button
                         type="button"
@@ -2813,37 +2931,7 @@ export function GenerationStudio({
                         className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
                     >
                         <Download className="h-3.5 w-3.5" />
-                        保存
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            void handleShowAssetInFolder(assetContextMenu.asset);
-                            setAssetContextMenu(null);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
-                    >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        打开文件夹
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            void handleEditAsset(assetContextMenu.asset);
-                            setAssetContextMenu(null);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
-                    >
-                        <PencilLine className="h-3.5 w-3.5" />
-                        编辑
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => assetContextMenu.entryId && handleDeleteEntry(assetContextMenu.entryId)}
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-brand-red transition-colors hover:bg-brand-red/10"
-                    >
-                        <X className="h-3.5 w-3.5" />
-                        删除
+                        另存为
                     </button>
                 </div>
             )}

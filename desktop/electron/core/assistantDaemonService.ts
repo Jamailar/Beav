@@ -9,6 +9,7 @@ import { app } from 'electron';
 import { getWorkspacePaths, getWorkspacePathsForSpace, listSpaces } from '../db';
 import { getBackgroundTaskRegistry } from './backgroundTaskRegistry';
 import { getHeadlessAgentRunner } from './headlessAgentRunner';
+import { getAcpGatewayService } from './acpGatewayService';
 import {
   releaseBackgroundRuntimeLock,
   tryAcquireBackgroundRuntimeLock,
@@ -127,6 +128,16 @@ export type AssistantDaemonStatus = {
   inFlightKeys: string[];
   feishu: FeishuDaemonConfig & { webhookUrl: string; websocketRunning: boolean; websocketReconnectAt?: string | null };
   relay: RelayDaemonConfig & { webhookUrl: string };
+  acpGateway: {
+    enabled: boolean;
+    endpointPath: string;
+    manifestPath: string;
+    guidePath: string;
+    baseUrl: string;
+    manifestUrl: string;
+    guideUrl: string;
+    discoveryPath: string;
+  };
   weixin: WeixinDaemonConfig & {
     webhookUrl: string;
     sidecarRunning: boolean;
@@ -301,6 +312,10 @@ function mergeConfig(base: AssistantDaemonConfig, patch?: AssistantDaemonConfigP
 
 function createWebhookUrl(host: string, port: number, endpointPath: string): string {
   return `http://${host}:${port}${endpointPath}`;
+}
+
+function createBaseUrl(host: string, port: number): string {
+  return `http://${host}:${port}`;
 }
 
 function extractErrorMessage(error: unknown): string {
@@ -796,6 +811,16 @@ export class AssistantDaemonService extends EventEmitter {
         ...this.config.relay,
         webhookUrl: createWebhookUrl(this.config.host, this.config.port, this.config.relay.endpointPath),
       },
+      acpGateway: {
+        enabled: this.config.enabled,
+        endpointPath: '/acp/v1',
+        manifestPath: '/acp/v1/manifest',
+        guidePath: '/acp/v1/guide',
+        baseUrl: createBaseUrl(this.config.host, this.config.port),
+        manifestUrl: createWebhookUrl(this.config.host, this.config.port, '/.well-known/redbox-agent.json'),
+        guideUrl: createWebhookUrl(this.config.host, this.config.port, '/acp/v1/guide'),
+        discoveryPath: getAcpGatewayService().getDiscoveryFilePaths()[0] || '',
+      },
       weixin: {
         ...this.config.weixin,
         webhookUrl: createWebhookUrl(this.config.host, this.config.port, this.config.weixin.endpointPath),
@@ -1256,6 +1281,12 @@ export class AssistantDaemonService extends EventEmitter {
 
     this.listening = true;
     this.lastError = null;
+    await getAcpGatewayService().refreshDiscoveryFile({
+      host: this.config.host,
+      port: this.config.port,
+      enabled: true,
+      listening: true,
+    });
     await this.syncAllSpaceRuntimes();
     this.emitLog('info', 'Assistant daemon listening.', {
       host: this.config.host,
@@ -1278,6 +1309,12 @@ export class AssistantDaemonService extends EventEmitter {
       });
     }
     this.listening = false;
+    await getAcpGatewayService().refreshDiscoveryFile({
+      host: this.config.host,
+      port: this.config.port,
+      enabled: await this.hasAnyEnabledSpace(),
+      listening: false,
+    });
     if (!options?.preserveEnabledState) {
       await this.releaseOwnership();
     }
@@ -1458,6 +1495,11 @@ export class AssistantDaemonService extends EventEmitter {
           ok: true,
           status: this.getStatus(),
         });
+        return;
+      }
+
+      const handledByAcp = await getAcpGatewayService().handleHttpRequest(req, res);
+      if (handledByAcp) {
         return;
       }
 

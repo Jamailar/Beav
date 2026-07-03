@@ -1,5 +1,17 @@
 [
     {
+        "id": "deepseek-v4-family",
+        "vendor": "deepseek",
+        "displayName": "DeepSeek V4 family",
+        "matchers": [
+            "\\bdeepseek[-_ ]?v?4\\b",
+            "\\bdeepseek[-_ ]?chat[-_ ]?v?4\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "DeepSeek V4 multimodal family with image understanding and file-style attachment support."
+    },
+    {
         "id": "openai-gpt-5-family",
         "vendor": "openai",
         "displayName": "OpenAI GPT-5 family",
@@ -99,6 +111,18 @@
         "notes": "Speech-to-text family."
     },
     {
+        "id": "openai-image-family",
+        "vendor": "openai",
+        "displayName": "OpenAI image generation models",
+        "matchers": [
+            "\\bimage-\\d+\\b",
+            "\\bgpt-image-\\d+\\b"
+        ],
+        "capabilities": ["image"],
+        "inputCapabilities": [],
+        "notes": "Image generation family, including image-2 and GPT Image variants."
+    },
+    {
         "id": "anthropic-claude-4-family",
         "vendor": "anthropic",
         "displayName": "Claude 4 family",
@@ -148,8 +172,8 @@
             "\\bgemini\\b"
         ],
         "capabilities": ["chat"],
-        "inputCapabilities": ["image", "audio", "video", "file"],
-        "notes": "Gemini multimodal family with text, image, audio, video, and file/doc inputs."
+        "inputCapabilities": ["image", "file"],
+        "notes": "General Gemini chat family is treated as image/file input only in this app; direct video input requires an omni model name."
     },
     {
         "id": "moonshot-kimi-k2.5-family",
@@ -210,8 +234,8 @@
             "\\bqwen[-_ ]3\\.5\\b"
         ],
         "capabilities": ["chat"],
-        "inputCapabilities": ["image", "video", "file"],
-        "notes": "Per current app policy: supports text/file, image, and video input; audio not enabled."
+        "inputCapabilities": ["image", "file"],
+        "notes": "General Qwen 3.5 chat is treated as image/file input only; direct video input requires an omni model name."
     },
     {
         "id": "qwen-text-family",
@@ -238,19 +262,20 @@
             "\\bqvq\\b"
         ],
         "capabilities": ["chat"],
-        "inputCapabilities": ["image", "video"],
-        "notes": "Visual understanding models for images and video."
+        "inputCapabilities": ["image", "file"],
+        "notes": "Visual understanding family is treated as image/file input only unless the model name is omni."
     },
     {
         "id": "qwen-omni-family",
         "vendor": "qwen",
         "displayName": "Qwen Omni family",
         "matchers": [
-            "\\bqwen-omni\\b"
+            "\\bqwen-omni\\b",
+            "\\bqwen.*omni\\b"
         ],
-        "capabilities": ["chat", "audio"],
-        "inputCapabilities": ["image", "audio", "video"],
-        "notes": "Omni family can reason over text plus one additional modality; file support not assumed."
+        "capabilities": ["audio"],
+        "inputCapabilities": ["image", "audio", "video", "file"],
+        "notes": "Omni family is reserved for multimodal audio/video analysis and must not be exposed in chat model lists."
     },
     {
         "id": "glm-5-family",
@@ -286,8 +311,8 @@
             "\\bglm-4\\.5v\\b"
         ],
         "capabilities": ["chat"],
-        "inputCapabilities": ["image", "video", "file"],
-        "notes": "Vision family with image, video, and document/file understanding."
+        "inputCapabilities": ["image", "file"],
+        "notes": "Vision family with image and document/file understanding; direct video input requires an omni model name."
     },
     {
         "id": "glm-4-voice-family",
