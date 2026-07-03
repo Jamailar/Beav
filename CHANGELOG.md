@@ -4,6 +4,7 @@
 
 ### Skill 市场安装修复
 - 修复 Skill 市场安装 RedSkill / 官方技能时，旧本地缓存里的 `repo` 字段会让桌面端误走 Git 仓库安装器的问题。
+- 修复 Windows 上官方 Skill 市场 ZIP 解压后的 `C:\...` 本地目录会被误判为非法 Git 仓库 source，导致安装失败的问题。
 - 官方 Skill 市场条目现在会优先按 `marketId + packageId` 走 RedBox 受控市场安装协议，避免绕过我们的 install-plan 和 OSS artifact。
 - Skills 页面会净化受控市场条目的缓存与安装 payload，旧缓存不再污染后续安装请求。
 
