@@ -323,10 +323,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     updateNotice,
     hasInstallableUpdate,
     updatePublishedDateLabel,
-    isOpeningReleasePage,
-    installState,
-    isInstallingUpdate,
-    openReleasePage,
     installUpdate,
     closeUpdateNotice,
   } = useAppUpdateNotice(t('layout.openDownloadFailed'));
@@ -744,11 +740,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <AppUpdateNoticeModal
           notice={updateNotice}
           publishedDateLabel={updatePublishedDateLabel}
-          isOpeningReleasePage={isOpeningReleasePage}
-          installState={installState}
-          isInstallingUpdate={isInstallingUpdate}
-          openReleasePage={openReleasePage}
-          installUpdate={installUpdate}
           closeNotice={closeUpdateNotice}
         />
       )}

@@ -51,7 +51,6 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
   const [lastInstallableNotice, setLastInstallableNotice] = useState<AppUpdateNoticePayload | null>(null);
   const [hasInstallableUpdate, setHasInstallableUpdate] = useState(false);
-  const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
   const [installState, setInstallState] = useState<AppUpdateInstallState>(initialInstallState);
 
   useEffect(() => {
@@ -155,22 +154,6 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
     return new Date(ts).toLocaleDateString();
   }, [updateNotice?.publishedAt]);
 
-  const openReleasePage = useCallback(async () => {
-    if (!updateNotice?.htmlUrl || isOpeningReleasePage) return;
-    setIsOpeningReleasePage(true);
-    try {
-      const result = await window.ipcRenderer.openAppReleasePage(updateNotice.htmlUrl);
-      if (!result?.success) {
-        void appAlert(result?.error || openDownloadFailedLabel);
-      }
-    } catch (error) {
-      console.error('Failed to open release page:', error);
-      void appAlert(openDownloadFailedLabel);
-    } finally {
-      setIsOpeningReleasePage(false);
-    }
-  }, [isOpeningReleasePage, openDownloadFailedLabel, updateNotice?.htmlUrl]);
-
   const isInstallingUpdate = ['checking', 'downloading', 'installing'].includes(installState.status);
 
   const checkForUpdateNow = useCallback(async () => {
@@ -239,11 +222,6 @@ export function useAppUpdateNotice(openDownloadFailedLabel: string) {
     updateNotice,
     hasInstallableUpdate,
     updatePublishedDateLabel,
-    isOpeningReleasePage,
-    installState,
-    isInstallingUpdate,
-    checkForUpdateNow,
-    openReleasePage,
     installUpdate,
     closeUpdateNotice,
   };
