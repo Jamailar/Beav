@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo } from 'react';
 import { FileAudio, FileVideo, Image as ImageIcon, Loader2, Plus, X } from 'lucide-react';
 import { CodeMirrorEditor } from './CodeMirrorEditor';
 import { MarkdownItPreview } from './MarkdownItPreview';
+import { APP_BRAND } from '../../config/brand';
 import { inferAssetKind, type MediaAsset } from '../../features/manuscripts/editorModel';
 import { resolveAssetUrl } from '../../utils/pathManager';
 
@@ -330,6 +331,7 @@ export function WritingDraftWorkbench({
                   showClearButton={false}
                   showWelcomeShortcuts={false}
                   showComposerShortcuts={false}
+                  welcomeIconSrc={APP_BRAND.logoSrc}
                   fixedSessionContextIndicatorMode="none"
                   contentLayout="wide"
                   contentWidthPreset="default"
