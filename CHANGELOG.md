@@ -2,15 +2,32 @@
 
 ## v2.6.2 (2026-07-03)
 
+### 版本定位
+- 本次从预发布验证转为正式版本，重点解决 Windows 用户无法从 Skill 市场安装 RedSkill / 官方技能的问题，并补齐自动更新的可安装更新准备流程。
+- 适合正在使用 `2.6.0`、`2.6.1` 或 Windows 测试安装包的用户升级；如果你之前遇到 `invalid repository source; expected owner/repo, a git URL, or a local directory`，这版就是对应修复。
+- GitHub Release 继续作为桌面端自动更新资产的源头真值，本次发布已包含普通安装包、Tauri updater 包和对应 `.sig` 签名。
+
 ### Windows 技能安装修复
 - 修复 Windows 上官方 Skill 市场 ZIP 解压后的 `C:\...` 本地目录会被误判为非法 Git 仓库 source，导致 RedSkill / 官方技能安装失败的问题。
-- Skill 安装器现在支持 Windows 盘符路径、反斜杠路径和 UNC 路径；本地路径会先于 `@ref` / `#ref` 解析，避免用户目录中的特殊字符污染仓库 source 判断。
-- 保留官方 Skill 市场条目按 `marketId + packageId` 走 RedBox 受控市场 install-plan 与 OSS artifact 的安装路径。
+- Skill 安装器现在会先识别本地路径，再解析 Git 仓库的 `@ref` / `#ref`，避免把 Windows 用户目录、临时目录或带 `@` 的路径拆成错误的仓库地址。
+- 新增 Windows 盘符路径、反斜杠绝对路径和 UNC 网络路径识别，覆盖 `C:\Users\...`、`C:/Users/...`、`\Users\...`、`\\server\share\...` 等常见形式。
+- 官方 Skill 市场条目继续按 `marketId + packageId` 走 RedBox 受控市场 install-plan 和 OSS artifact 安装路径，不会绕过市场包校验、解压和安全复制流程。
+- 新增本地路径解析单元测试，覆盖 Windows 路径识别和带 `@` 的本地路径不被当成 Git ref 的情况。
 
 ### 自动更新升级
-- 升级桌面端自动更新体验：后台静默准备可安装更新，减少用户点击更新后的等待时间。
-- 收敛更新安装弹窗路径，避免自动更新流程在准备和安装阶段出现重复 UI 或状态分叉。
-- 发布资产继续同时包含普通安装包、Tauri updater 包及对应 `.sig` 签名，以及浏览器插件 zip。
+- 升级桌面端自动更新体验：应用启动后的更新检查会在后台下载并缓存可安装更新包，用户看到更新入口时，安装阶段可以直接使用已经准备好的包。
+- 更新检查现在会回传 `downloaded` / `readyToInstall` 状态，并通过 `app:update-install-progress` 事件广播 `checking`、`downloading`、`downloaded`、`installing`、`installed`、`failed` 等状态，前端可以更准确地区分“正在准备”和“可以安装”。
+- 安装流程改为复用已下载的 Tauri updater 包调用 `install()`，如果安装失败，会把已下载包放回内存状态，避免一次失败后必须重新下载。
+- 收敛更新入口：标题栏只在确实有可安装更新时显示更新按钮，点击后直接执行安装，不再弹出一条独立的“安装更新”路径。
+- 更新日志弹窗回到单一职责，只负责展示当前版本 / 历史版本 release notes；更新安装不再和阅读更新日志混在同一个弹窗里，减少重复 UI 和状态分叉。
+- Windows 安装完成后保持当前平台需要的返回行为；macOS / Linux 安装完成后继续按 Tauri updater 流程重启应用。
+
+### 分发与验证
+- Windows 已重新打包 x64、arm64、x86 三个 `setup.exe`，并为每个安装包上传同名 `.sig`，用于 Tauri 自动更新校验。
+- macOS 已重新打包 Apple Silicon 与 Intel 两个 `.dmg`，同时上传 `.app.tar.gz` updater 包和 `.sig`；两个 dmg 均通过 Apple notarization 并完成 staple。
+- Linux 已重新打包 amd64 `.deb`，并上传 x86_64 AppImage updater 包和 `.sig`。
+- 浏览器插件同步打包为 `Beav_Browser_Extension_2.6.2.zip`，版本号与桌面端保持一致。
+- 本次验证包含 Rust 格式检查、Windows 本地路径 Skill installer 单元测试、官方市场本地 bundle 安装测试，以及全平台 `release:all` 打包流程。
 
 ## v2.6.1 (2026-07-03)
 
