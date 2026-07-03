@@ -1,7 +1,7 @@
 {
   "name": "redbox",
   "private": true,
-  "version": "2.6.0",
+  "version": "2.6.1",
   "type": "module",
   "scripts": {
     "dev": "node ./scripts/sync-brand.mjs && vite --port 1420",
