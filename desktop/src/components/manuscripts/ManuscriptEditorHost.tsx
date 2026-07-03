@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import {
     AlertTriangle,
     Check,
+    Download,
     Eye,
     FileText,
     FileAudio,
@@ -1329,6 +1330,26 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, [applyPackageState, editorFile, loadAssets, refreshPackageState]);
 
+    const handleDownloadEditorFile = useCallback(async () => {
+        if (!editorFileRef.current || workingId) return;
+        const saved = await ensureLatestEditorContentSaved();
+        if (!saved) return;
+        const snapshotFile = editorFileRef.current;
+        setWorkingId('download:editor');
+        try {
+            const result = await window.ipcRenderer.manuscripts.download({
+                filePath: snapshotFile,
+            }) as { success?: boolean; error?: string; path?: string; format?: string };
+            if (!result?.success) {
+                throw new Error(result?.error || '下载稿件失败');
+            }
+        } catch (downloadError) {
+            void appAlert(downloadError instanceof Error ? downloadError.message : '下载稿件失败');
+        } finally {
+            setWorkingId(null);
+        }
+    }, [ensureLatestEditorContentSaved, workingId]);
+
     const handleGenerateRemotionScene = useCallback(async (instructionsOverride?: string) => {
         if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video') return;
         setIsGeneratingRemotion(true);
@@ -2284,6 +2305,18 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                                 )}
                             >
                                 <Eye className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void handleDownloadEditorFile();
+                                }}
+                                aria-label="下载"
+                                title="下载"
+                                disabled={!editorFile || Boolean(workingId) || isSavingEditorBody}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
+                            >
+                                {workingId === 'download:editor' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                             </button>
                         </div>
                         {(editorBodyDirty || isSavingEditorBody) ? (

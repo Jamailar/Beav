@@ -2407,6 +2407,7 @@ declare global {
         list: <T = unknown>() => Promise<T>;
         read: <T = unknown>(filePath: string) => Promise<T>;
         save: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        download: <T = unknown>(payload: { filePath: string }) => Promise<T>;
         createFile: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         createFolder: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         rename: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
