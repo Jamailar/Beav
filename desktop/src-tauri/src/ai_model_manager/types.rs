@@ -70,24 +70,6 @@ impl AiModelScope {
             _ => AiModelScope::Chat,
         }
     }
-
-    pub(crate) fn legacy_model_key(self) -> &'static str {
-        match self {
-            AiModelScope::Chat => "model_name",
-            AiModelScope::Wander => "model_name_wander",
-            AiModelScope::Team => "model_name_chatroom",
-            AiModelScope::Knowledge => "model_name_knowledge",
-            AiModelScope::Redclaw => "model_name_redclaw",
-            AiModelScope::Transcription => "transcription_model",
-            AiModelScope::Embedding => "embedding_model",
-            AiModelScope::Image => "image_model",
-            AiModelScope::Video => "video_model",
-            AiModelScope::VisualIndex => "visual_index_model",
-            AiModelScope::VideoAnalysis => "video_analysis_model",
-            AiModelScope::VoiceTts => "voice_tts_model",
-            AiModelScope::VoiceClone => "voice_clone_model",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -122,6 +104,8 @@ pub(crate) struct AiResolvedRoute {
     pub source_id: String,
     pub source_name: String,
     pub preset_id: String,
+    pub provider_key: String,
+    pub adapter_key: String,
     pub base_url: String,
     pub api_key: Option<String>,
     pub model_name: String,

@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::{official_ai_api_key_from_settings, payload_string};
 
@@ -26,10 +26,6 @@ fn to_snake_key(key: &str) -> String {
         }
     }
     output
-}
-
-pub(crate) fn normalize_base_url(value: &str) -> String {
-    value.trim().trim_end_matches('/').to_string()
 }
 
 pub(crate) fn is_local_base_url(value: &str) -> bool {
@@ -76,24 +72,6 @@ pub(crate) fn source_preset_id(source: &Value) -> String {
 pub(crate) fn source_is_official(source: &Value) -> bool {
     source_id(source).eq_ignore_ascii_case(OFFICIAL_SOURCE_ID)
         || source_preset_id(source).eq_ignore_ascii_case(OFFICIAL_PRESET_ID)
-}
-
-pub(crate) fn source_without_secrets(source: &Value) -> Value {
-    let mut next = source.clone();
-    if let Some(object) = next.as_object_mut() {
-        object.remove("apiKey");
-        object.remove("api_key");
-        object.remove("key");
-        let id = object
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
-        if !id.is_empty() && !object.contains_key("credentialRef") {
-            object.insert("credentialRef".to_string(), json!(format!("settings:{id}")));
-        }
-    }
-    next
 }
 
 pub(crate) fn official_plaintext_key(settings: &Value) -> Option<String> {

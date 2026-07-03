@@ -967,6 +967,7 @@ export function Settings({
   const [detectedAiProtocol, setDetectedAiProtocol] = useState<AiProtocol>('openai');
   const [aiSourceExpandState, setAiSourceExpandState] = useState<Record<string, boolean>>({});
   const [aiSourceModelExpandState, setAiSourceModelExpandState] = useState<Record<string, boolean>>({});
+  const [aiSourceModelFetchState, setAiSourceModelFetchState] = useState<Record<string, { status: 'idle' | 'loading' | 'success' | 'error'; message?: string }>>({});
   const [sourceModelDrafts, setSourceModelDrafts] = useState<Record<string, string>>({});
   const [sourceModelCapabilityDrafts, setSourceModelCapabilityDrafts] = useState<Record<string, ModelCapability>>({});
   const [addModelModalSourceId, setAddModelModalSourceId] = useState('');
@@ -2468,6 +2469,93 @@ export function Settings({
     setAiSourceModelExpandState((prev) => ({ ...prev, [sourceId]: true }));
     setAddModelModalSourceId('');
   };
+
+  const inferFetchedModelCapabilities = useCallback((modelId: string): ModelCapability[] => {
+    const key = String(modelId || '').trim().toLowerCase();
+    if (!key) return ['chat'];
+    if (key.includes('embedding') || key.includes('embed')) return ['embedding'];
+    if (key.includes('whisper') || key.includes('asr') || key.includes('transcri')) return ['transcription'];
+    if (key.includes('image') || key.includes('dall-e') || key.includes('gpt-image')) return ['image'];
+    if (key.includes('tts') || key.includes('speech')) return ['tts'];
+    return ['chat'];
+  }, []);
+
+  const handleFetchSourceModels = useCallback(async (source: AiSourceConfig) => {
+    const sourceId = canonicalizeOfficialAutoSourceId(source.id);
+    if (!sourceId) return;
+    setActiveAiSourceId(sourceId);
+    setAiSourceModelFetchState((prev) => ({
+      ...prev,
+      [sourceId]: { status: 'loading', message: '刷新中' },
+    }));
+    try {
+      const result = await window.ipcRenderer.aiProviders.fetchModels({
+        sourceId,
+        baseURL: source.baseURL,
+        apiKey: source.apiKey,
+        presetId: source.presetId,
+        protocol: source.protocol || findAiPresetById(source.presetId)?.protocol || 'openai',
+        scope: 'chat',
+      }) as {
+        success?: boolean;
+        models?: Array<{ id?: string; ownedBy?: string | null; owned_by?: string | null }>;
+        resolvedUrl?: string | null;
+        resolved_url?: string | null;
+        error?: string | null;
+      };
+      if (!result?.success) {
+        const message = String(result?.error || '模型列表刷新失败');
+        setAiSourceModelFetchState((prev) => ({
+          ...prev,
+          [sourceId]: { status: 'error', message },
+        }));
+        setTestStatus('error');
+        setTestMsg(message);
+        return;
+      }
+      const fetchedIds = Array.from(new Set((result.models || [])
+        .map((model) => String(model.id || '').trim())
+        .filter(Boolean)));
+      if (!fetchedIds.length) {
+        setAiSourceModelFetchState((prev) => ({
+          ...prev,
+          [sourceId]: { status: 'success', message: '未返回模型' },
+        }));
+        setTestStatus('success');
+        setTestMsg('模型列表为空');
+        return;
+      }
+      updateAiSource(sourceId, (prev) => {
+        const nextModels = normalizeSourceModels([...(prev.models || []), ...fetchedIds]);
+        const nextModelsMeta = normalizeAiModelDescriptors([
+          ...(prev.modelsMeta || []),
+          ...nextModels.map((id) => ({ id })),
+          ...fetchedIds.map((id) => ({ id, capabilities: inferFetchedModelCapabilities(id) })),
+        ]);
+        return {
+          ...prev,
+          models: nextModels,
+          modelsMeta: nextModelsMeta,
+          model: prev.model || fetchedIds[0] || '',
+        };
+      });
+      setAiSourceModelExpandState((prev) => ({ ...prev, [sourceId]: true }));
+      setAiSourceModelFetchState((prev) => ({
+        ...prev,
+        [sourceId]: { status: 'success', message: `${fetchedIds.length} 个模型` },
+      }));
+      setTestStatus('success');
+      setTestMsg(`已刷新 ${fetchedIds.length} 个模型`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '模型列表刷新失败';
+      setAiSourceModelFetchState((prev) => ({
+        ...prev,
+        [sourceId]: { status: 'error', message },
+      }));
+      setTestStatus('error');
+      setTestMsg(message);
+    }
+  }, [inferFetchedModelCapabilities, updateAiSource]);
 
   const closeAddModelModal = useCallback(() => {
     setAddModelModalSourceId('');
@@ -6447,6 +6535,8 @@ export function Settings({
                         const sourceModelsForDisplay = isOfficialSource
                           ? (isOfficialSourceLoggedIn ? sourceModels : [])
                           : sourceModels;
+                        const modelFetchState = aiSourceModelFetchState[source.id] || { status: 'idle' as const };
+                        const isFetchingModels = modelFetchState.status === 'loading';
                         const localGuide = getLocalGuideForSource(source);
                         const allowEmptyKey = isLocalAiSource(source);
 
@@ -6635,6 +6725,17 @@ export function Settings({
                                         已添加模型
                                       </button>
                                       <div className="flex items-center gap-2">
+                                        {!isOfficialSource && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleFetchSourceModels(source)}
+                                            disabled={isFetchingModels || !source.baseURL || (!source.apiKey && !allowEmptyKey)}
+                                            className="p-1.5 border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            title="刷新模型"
+                                          >
+                                            <RefreshCw className={clsx('w-3.5 h-3.5', isFetchingModels && 'animate-spin')} />
+                                          </button>
+                                        )}
                                         <button
                                           type="button"
                                           onClick={() => openAddModelModal(source)}
@@ -6644,6 +6745,19 @@ export function Settings({
                                         </button>
                                       </div>
                                     </div>
+
+                                    {modelFetchState.status !== 'idle' && (
+                                      <div
+                                        className={clsx(
+                                          'text-[11px]',
+                                          modelFetchState.status === 'success' && 'text-status-success',
+                                          modelFetchState.status === 'error' && 'text-status-error',
+                                          modelFetchState.status === 'loading' && 'text-text-tertiary'
+                                        )}
+                                      >
+                                        {modelFetchState.message || (isFetchingModels ? '刷新中' : '')}
+                                      </div>
+                                    )}
 
                                     {isModelListExpanded && (
                                       sourceModelsForDisplay.length ? (

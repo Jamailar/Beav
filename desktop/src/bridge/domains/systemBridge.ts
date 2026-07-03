@@ -106,6 +106,20 @@ export function createSystemBridge(core: BridgeCore) {
 
     saveSettings: (settings: unknown) => core.invokeChannel('db:save-settings', settings),
     getSettings: () => core.invokeChannel('db:get-settings'),
+    aiProviders: {
+      fetchModels: (payload: {
+        sourceId?: string;
+        baseURL?: string;
+        apiKey?: string;
+        presetId?: string;
+        protocol?: string;
+        providerKey?: string;
+        scope?: string;
+        modelsUrl?: string;
+        userAgent?: string;
+        isFullUrl?: boolean;
+      }) => core.invokeChannel('ai-providers:fetch-models', payload),
+    },
     onSettingsUpdated: (listener: Listener) => core.on('settings:updated', listener),
     offSettingsUpdated: (listener: Listener) => core.off('settings:updated', listener),
     onDataChanged: (listener: Listener) => core.on('data:changed', listener),
