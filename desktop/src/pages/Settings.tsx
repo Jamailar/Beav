@@ -2362,8 +2362,6 @@ export function Settings({
       model: nextModel,
     });
     ensureDisplayedAiSourcePersisted(source.id);
-    setActiveAiSourceId(source.id);
-    setAiSourceExpandState((prev) => ({ ...prev, [source.id]: true }));
     setFormData((prev) => ({
       ...prev,
       model_name: nextModel,
