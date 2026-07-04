@@ -9,7 +9,8 @@ use crate::store::{media as media_store, settings as settings_store, spaces as s
 use crate::workspace_loaders::read_json_file;
 use crate::*;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -21,6 +22,7 @@ use url::Url;
 const DEFAULT_KNOWLEDGE_API_BODY_LIMIT: usize = 16 * 1_024 * 1_024;
 const DEFAULT_KNOWLEDGE_BATCH_LIMIT: usize = 64;
 const NOTE_TRANSCRIPTION_MAX_ATTEMPTS: usize = 3;
+const CHAT_KNOWLEDGE_MAX_CHARS: usize = 240_000;
 static ACTIVE_NOTE_TRANSCRIPTION_JOBS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 struct NoteTranscriptionActiveGuard {
@@ -140,6 +142,21 @@ pub(crate) struct KnowledgeEntryIngestRequest {
     pub content: KnowledgeEntryContentInput,
     pub assets: KnowledgeEntryAssetsInput,
     pub options: KnowledgeIngestOptionsInput,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeChatEntryCreateRequest {
+    pub space_id: Option<String>,
+    pub kind: Option<String>,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub text: Option<String>,
+    pub summary: Option<String>,
+    pub tags: Vec<String>,
+    pub source: Option<Value>,
+    pub metadata: Option<Value>,
+    pub allow_update: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -2444,6 +2461,224 @@ pub(crate) fn ingest_entry(
         kind if is_supported_social_entry_kind(kind) => ingest_note_entry(app, state, request),
         other => Err(format!("暂不支持的 knowledge entry kind: {other}")),
     }
+}
+
+pub(crate) fn create_chat_entry(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeChatEntryCreateRequest,
+) -> Result<Value, String> {
+    let content = normalize_string(request.content.clone())
+        .or_else(|| normalize_string(request.text.clone()))
+        .ok_or_else(|| "knowledge.create requires non-empty content".to_string())?;
+    let content = truncate_chat_knowledge_content(&content);
+    let source = normalized_chat_entry_source(request.source.clone());
+    let title = chat_entry_title(request.title.as_deref(), &content);
+    let kind =
+        normalize_string(request.kind.clone()).unwrap_or_else(|| "knowledge-note".to_string());
+    let source_link = chat_entry_source_link(&source);
+    let dedupe_key = format!(
+        "chat-{}",
+        short_sha256_hex(&chat_entry_dedupe_seed(&source, &content), 24)
+    );
+    let external_id = chat_entry_external_id(&source).unwrap_or_else(|| dedupe_key.clone());
+    let metadata = chat_entry_metadata(request.metadata.clone(), &source, &content);
+    let mut tags = normalize_vec(request.tags.clone());
+    if !tags.iter().any(|tag| tag.eq_ignore_ascii_case("chat")) {
+        tags.push("chat".to_string());
+    }
+
+    let ingest_request = KnowledgeEntryIngestRequest {
+        space_id: request.space_id.clone(),
+        kind,
+        source: KnowledgeSourceInput {
+            app_id: Some("redbox-chat".to_string()),
+            plugin_id: None,
+            external_id: Some(external_id),
+            source_domain: Some("chat".to_string()),
+            source_link: source_link.clone(),
+            source_url: source_link,
+            captured_at: Some(now_iso()),
+        },
+        content: KnowledgeEntryContentInput {
+            title: title.clone(),
+            author: Some(chat_entry_author(&source)),
+            text: Some(content.clone()),
+            excerpt: Some(chat_entry_excerpt(&content, 220)),
+            summary: normalize_string(request.summary.clone()),
+            tags,
+            metadata: Some(metadata),
+            ..KnowledgeEntryContentInput::default()
+        },
+        assets: KnowledgeEntryAssetsInput::default(),
+        options: KnowledgeIngestOptionsInput {
+            dedupe_key: Some(dedupe_key),
+            allow_update: request.allow_update.unwrap_or(false),
+            summarize: false,
+            transcribe: false,
+        },
+    };
+
+    let mut result = ingest_entry(app, state, &ingest_request)?;
+    if let Some(object) = result.as_object_mut() {
+        object.insert("title".to_string(), json!(title));
+        object.insert("source".to_string(), source);
+    }
+    Ok(result)
+}
+
+fn normalized_chat_entry_source(source: Option<Value>) -> Value {
+    let mut object = match source {
+        Some(Value::Object(object)) => object,
+        Some(Value::Null) | None => Map::new(),
+        Some(value) => {
+            let mut object = Map::new();
+            object.insert("raw".to_string(), value);
+            object
+        }
+    };
+    object
+        .entry("type".to_string())
+        .or_insert_with(|| json!("chat"));
+    Value::Object(object)
+}
+
+fn chat_entry_source_string(source: &Value, key: &str) -> Option<String> {
+    source
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn chat_entry_message_ids(source: &Value) -> Vec<String> {
+    source
+        .get("messageIds")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn chat_entry_source_link(source: &Value) -> Option<String> {
+    for key in ["sourceLink", "sourceUrl", "url", "href"] {
+        if let Some(value) = chat_entry_source_string(source, key) {
+            return Some(value);
+        }
+    }
+    let session_id = chat_entry_source_string(source, "sessionId")?;
+    let mut link = format!("redbox://chat/{session_id}");
+    if let Some(message_id) = chat_entry_message_ids(source).first() {
+        link.push('#');
+        link.push_str(message_id);
+    }
+    Some(link)
+}
+
+fn chat_entry_external_id(source: &Value) -> Option<String> {
+    if let Some(value) = chat_entry_source_string(source, "externalId") {
+        return Some(value);
+    }
+    let session_id = chat_entry_source_string(source, "sessionId")?;
+    let message_ids = chat_entry_message_ids(source);
+    if message_ids.is_empty() {
+        return Some(format!("chat:{session_id}"));
+    }
+    Some(format!("chat:{session_id}:{}", message_ids.join(",")))
+}
+
+fn chat_entry_author(source: &Value) -> String {
+    match chat_entry_source_string(source, "role")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "user" => "用户对话".to_string(),
+        "assistant" | "ai" => "AI 对话".to_string(),
+        _ => "对话".to_string(),
+    }
+}
+
+fn chat_entry_title(title: Option<&str>, content: &str) -> String {
+    if let Some(title) = title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| chat_entry_excerpt(value, 80))
+    {
+        return title;
+    }
+    content
+        .lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches('#')
+                .trim_start_matches(|ch| matches!(ch, '-' | '*' | '>' | ' '))
+                .trim()
+        })
+        .find(|line| !line.is_empty())
+        .map(|line| chat_entry_excerpt(line, 80))
+        .unwrap_or_else(|| "对话知识".to_string())
+}
+
+fn chat_entry_excerpt(content: &str, max_chars: usize) -> String {
+    let collapsed = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max_chars {
+        return collapsed;
+    }
+    let mut excerpt = collapsed.chars().take(max_chars).collect::<String>();
+    excerpt.push('…');
+    excerpt
+}
+
+fn truncate_chat_knowledge_content(content: &str) -> String {
+    if content.chars().count() <= CHAT_KNOWLEDGE_MAX_CHARS {
+        return content.to_string();
+    }
+    let mut truncated = content
+        .chars()
+        .take(CHAT_KNOWLEDGE_MAX_CHARS)
+        .collect::<String>();
+    truncated.push_str("\n\n[内容过长，已截断保存]");
+    truncated
+}
+
+fn chat_entry_metadata(metadata: Option<Value>, source: &Value, content: &str) -> Value {
+    let mut object = match metadata {
+        Some(Value::Object(object)) => object,
+        Some(Value::Null) | None => Map::new(),
+        Some(value) => {
+            let mut object = Map::new();
+            object.insert("value".to_string(), value);
+            object
+        }
+    };
+    object.insert("createdFrom".to_string(), json!("chat"));
+    object.insert("source".to_string(), source.clone());
+    object.insert(
+        "contentSha256".to_string(),
+        json!(short_sha256_hex(content, 64)),
+    );
+    Value::Object(object)
+}
+
+fn chat_entry_dedupe_seed(source: &Value, content: &str) -> String {
+    let source_text = serde_json::to_string(source).unwrap_or_default();
+    format!("{source_text}\n{content}")
+}
+
+fn short_sha256_hex(value: &str, max_len: usize) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    hash.chars().take(max_len).collect()
 }
 
 pub(crate) fn batch_ingest(

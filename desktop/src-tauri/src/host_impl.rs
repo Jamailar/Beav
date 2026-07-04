@@ -4450,6 +4450,12 @@ pub(crate) fn execute_interactive_tool_call(
                         session_id,
                         &normalized_arguments,
                     ),
+                    "knowledge.create" => {
+                        let request: crate::knowledge::KnowledgeChatEntryCreateRequest =
+                            serde_json::from_value(normalized_arguments.clone())
+                                .map_err(|error| format!("knowledge.create input 无效: {error}"))?;
+                        crate::knowledge::create_chat_entry(Some(app), state, &request)
+                    }
                     "workspace.search" | "search" => {
                         crate::tools::workspace_search::execute_search(
                             state,

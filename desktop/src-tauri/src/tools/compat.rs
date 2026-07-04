@@ -604,6 +604,9 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
     if let Some(call) = normalize_workspace_operate_call(&resource, &operation, &input) {
         return call;
     }
+    if let Some(call) = normalize_knowledge_operate_call(&resource, &operation, &input) {
+        return call;
+    }
     if resource == "runtime" {
         if let Some(action) = action_hint {
             if is_runtime_model_config_get_action(action) {
@@ -2033,6 +2036,57 @@ fn strip_workspace_uri(raw: &str) -> Option<String> {
     Some(rest.trim_start_matches('/').to_string())
 }
 
+fn normalize_knowledge_operate_call(
+    resource: &str,
+    operation: &str,
+    input: &Map<String, Value>,
+) -> Option<NormalizedToolCall> {
+    if !matches!(
+        resource,
+        "knowledge" | "knowledgebase" | "knowledge-base" | "knowledge_base"
+    ) {
+        return None;
+    }
+    let action = match operation {
+        "list" | "ls" => "knowledge.list",
+        "read" | "get" => "knowledge.read",
+        "search" | "grep" => "knowledge.search",
+        "attach" => "knowledge.attach",
+        "create" | "add" | "save" | "write" => "knowledge.create",
+        _ => return None,
+    };
+    let mut payload = input.clone();
+    payload.insert("action".to_string(), json!(action));
+    payload.insert("scope".to_string(), json!("knowledge"));
+    if !payload.contains_key("path") {
+        if let Some(id) = payload.get("id").cloned() {
+            payload.insert("path".to_string(), id);
+        }
+    }
+    normalize_knowledge_uri_path_field(&mut payload, "path");
+    let legacy_command = format!("knowledge.{operation}");
+    if let Some(metadata) =
+        compat_metadata_value(Some("Operate"), Some(&legacy_command), Some(action))
+    {
+        payload.insert("__compat".to_string(), metadata);
+    }
+    Some(NormalizedToolCall {
+        name: "resource",
+        arguments: Value::Object(payload),
+    })
+}
+
+fn normalize_knowledge_uri_path_field(payload: &mut Map<String, Value>, key: &str) {
+    let Some(raw) = payload.get(key).and_then(Value::as_str) else {
+        return;
+    };
+    let (scheme, resource_path) = split_virtual_path(raw);
+    if scheme != "knowledge" {
+        return;
+    }
+    payload.insert(key.to_string(), json!(resource_path));
+}
+
 fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
     let normalized_action = action.trim().replace('_', ".").replace('-', ".");
     let normalized_scope = scope.trim().replace('_', ".").replace('-', ".");
@@ -2049,6 +2103,9 @@ fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
             "workspace.inspectImage".to_string()
         }
         "create.directory" | "createdirectory" | "mkdir" => "workspace.createDirectory".to_string(),
+        "create" | "save" if normalized_scope.eq_ignore_ascii_case("knowledge") => {
+            "knowledge.create".to_string()
+        }
         "write" => "workspace.write".to_string(),
         "patch" => "workspace.patch".to_string(),
         "workspace.create.directory" | "workspace.createdirectory" | "workspace.mkdir" => {
@@ -2062,6 +2119,7 @@ fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
         | "workspace.patch"
         | "workspace.search"
         | "knowledge.list"
+        | "knowledge.create"
         | "knowledge.read"
         | "knowledge.attach"
         | "knowledge.search" => normalized_action,
@@ -2076,6 +2134,7 @@ fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
         | "workspace.patch"
         | "workspace.search"
         | "knowledge.list"
+        | "knowledge.create"
         | "knowledge.read"
         | "knowledge.attach"
         | "knowledge.search" => combined,
@@ -3184,6 +3243,37 @@ mod tests {
             Some(&json!("drafts/beav-script.md"))
         );
         assert_eq!(normalized.arguments.get("content"), Some(&json!("# Beav")));
+    }
+
+    #[test]
+    fn normalizes_operate_knowledge_create_to_resource_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "knowledge",
+                "operation": "create",
+                "input": {
+                    "title": "图像提示词",
+                    "content": "portrait prompt",
+                    "source": {
+                        "type": "chat",
+                        "sessionId": "session-1",
+                        "messageIds": ["msg-1"]
+                    }
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "resource");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("knowledge.create"))
+        );
+        assert_eq!(normalized.arguments.get("scope"), Some(&json!("knowledge")));
+        assert_eq!(
+            normalized.arguments.get("content"),
+            Some(&json!("portrait prompt"))
+        );
     }
 
     #[test]

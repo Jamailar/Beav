@@ -469,6 +469,9 @@ interface MessageItemProps {
   msg: Message;
   copiedMessageId: string | null;
   onCopyMessage: (id: string, content: string) => void;
+  savingKnowledgeMessageId?: string | null;
+  savedKnowledgeMessageId?: string | null;
+  onSaveToKnowledge?: (message: Message, content: string) => void;
   workflowPlacement?: 'top' | 'bottom';
   workflowVariant?: 'default' | 'compact';
   workflowEmphasis?: 'default' | 'thoughts-first';
@@ -980,6 +983,9 @@ export const MessageItem = memo(({
   msg,
   copiedMessageId,
   onCopyMessage,
+  savingKnowledgeMessageId = null,
+  savedKnowledgeMessageId = null,
+  onSaveToKnowledge,
   workflowPlacement = 'bottom',
   workflowVariant = 'default',
   workflowEmphasis = 'default',
@@ -1734,7 +1740,28 @@ export const MessageItem = memo(({
                 ) : null}
                 {showAttachments && (!msg.attachments || msg.attachments.length === 0) && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
                 {userCopyContent && (
-                  <div className="mt-1.5 flex justify-end opacity-0 transition-opacity group-hover/user:opacity-100 focus-within:opacity-100">
+                  <div className="mt-1.5 flex justify-end gap-1 opacity-0 transition-opacity group-hover/user:opacity-100 focus-within:opacity-100">
+                    {onSaveToKnowledge && (
+                      <button
+                        type="button"
+                        onClick={() => onSaveToKnowledge(msg, userCopyContent)}
+                        disabled={savingKnowledgeMessageId === msg.id}
+                        className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-default disabled:opacity-60"
+                        title="存入知识库"
+                      >
+                        {savedKnowledgeMessageId === msg.id ? (
+                          <>
+                            <Check className="h-3.5 w-3.5 text-green-500" />
+                            <span className="text-green-500">已入库</span>
+                          </>
+                        ) : (
+                          <>
+                            <Archive className="h-3.5 w-3.5" />
+                            <span>{savingKnowledgeMessageId === msg.id ? '入库中' : '入库'}</span>
+                          </>
+                        )}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => onCopyMessage(msg.id, userCopyContent)}
@@ -1797,7 +1824,27 @@ export const MessageItem = memo(({
             </div>
             {/* 复制按钮 */}
             {!msg.isStreaming && sanitizedAssistantContent && (
-              <div className="chat-ai-actions opacity-0 transition-opacity group-hover:opacity-100">
+              <div className="chat-ai-actions gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                {onSaveToKnowledge && (
+                  <button
+                    onClick={() => onSaveToKnowledge(msg, sanitizedAssistantContent)}
+                    disabled={savingKnowledgeMessageId === msg.id}
+                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-default disabled:opacity-60"
+                    title="存入知识库"
+                  >
+                    {savedKnowledgeMessageId === msg.id ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-green-500" />
+                        <span className="text-green-500">已入库</span>
+                      </>
+                    ) : (
+                      <>
+                        <Archive className="w-3.5 h-3.5" />
+                        <span>{savingKnowledgeMessageId === msg.id ? '入库中' : '入库'}</span>
+                      </>
+                    )}
+                  </button>
+                )}
                 <button
                   onClick={() => onCopyMessage(msg.id, sanitizedAssistantContent)}
                   className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
@@ -1961,6 +2008,9 @@ export const MessageItem = memo(({
 
   const copyStatusChanged = 
     (prevProps.copiedMessageId === prevProps.msg.id) !== (nextProps.copiedMessageId === nextProps.msg.id);
+  const knowledgeSaveStatusChanged =
+    (prevProps.savingKnowledgeMessageId === prevProps.msg.id) !== (nextProps.savingKnowledgeMessageId === nextProps.msg.id) ||
+    (prevProps.savedKnowledgeMessageId === prevProps.msg.id) !== (nextProps.savedKnowledgeMessageId === nextProps.msg.id);
   const workflowStyleChanged =
     prevProps.workflowPlacement !== nextProps.workflowPlacement ||
     prevProps.workflowVariant !== nextProps.workflowVariant ||
@@ -1970,8 +2020,9 @@ export const MessageItem = memo(({
     prevProps.workflowFailureTone !== nextProps.workflowFailureTone ||
     prevProps.showAttachments !== nextProps.showAttachments ||
     prevProps.linkRenderMode !== nextProps.linkRenderMode ||
+    prevProps.onSaveToKnowledge !== nextProps.onSaveToKnowledge ||
     prevProps.onPreviewLink !== nextProps.onPreviewLink ||
     prevProps.activePreviewHref !== nextProps.activePreviewHref;
 
-  return !msgChanged && !copyStatusChanged && !workflowStyleChanged;
+  return !msgChanged && !copyStatusChanged && !knowledgeSaveStatusChanged && !workflowStyleChanged;
 });

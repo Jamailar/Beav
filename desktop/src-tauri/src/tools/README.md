@@ -76,6 +76,7 @@
   - `workspace.write`
   - `workspace.patch`
   - `workspace.search`
+  - `knowledge.create`
   - `knowledge.list`
   - `knowledge.read`
   - `knowledge.attach`

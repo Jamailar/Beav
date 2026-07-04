@@ -942,6 +942,24 @@ export function clearFixedSessionWarmSnapshot(sessionId: string | null | undefin
   fixedSessionInflightLoads.delete(key);
 }
 
+function deriveKnowledgeTitleFromMessage(content: string): string {
+  const firstLine = String(content || '')
+    .split(/\r?\n/)
+    .map((line) => line
+      .trim()
+      .replace(/^#{1,6}\s*/, '')
+      .replace(/^[-*>\s]+/, '')
+      .trim())
+    .find(Boolean);
+  const collapsed = String(firstLine || content || '对话知识').replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= 72) return collapsed || '对话知识';
+  return `${collapsed.slice(0, 72)}…`;
+}
+
+function knowledgeSourceRoleForMessage(message: Message): string {
+  return message.role === 'ai' ? 'assistant' : 'user';
+}
+
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const STREAM_CHUNK_DEDUPE_WINDOW_MS = 120;
 const STREAM_UPDATE_INTERVAL_MS = 72;
@@ -1821,6 +1839,8 @@ export function Chat({
   const [confirmRequest, setConfirmRequest] = useState<ToolConfirmRequest | null>(null);
   const [cliEscalationRequest, setCliEscalationRequest] = useState<CliEscalationRequestModel | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [savingKnowledgeMessageId, setSavingKnowledgeMessageId] = useState<string | null>(null);
+  const [savedKnowledgeMessageId, setSavedKnowledgeMessageId] = useState<string | null>(null);
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu>({ visible: false, x: 0, y: 0, text: '' });
   const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
@@ -2989,6 +3009,39 @@ export function Chat({
       setTimeout(() => setCopiedMessageId(null), 2000);
     });
   }, []);
+
+  const handleSaveMessageToKnowledge = useCallback(async (message: Message, content: string) => {
+    const normalizedContent = String(content || '').trim();
+    if (!normalizedContent) return;
+    const sessionId = currentSessionIdRef.current || currentSessionId || fixedSessionId || null;
+    setSavingKnowledgeMessageId(message.id);
+    try {
+      await window.ipcRenderer.knowledge.createFromChat({
+        title: deriveKnowledgeTitleFromMessage(normalizedContent),
+        content: normalizedContent,
+        tags: ['chat'],
+        source: {
+          type: 'chat',
+          sessionId,
+          messageIds: [message.id],
+          role: knowledgeSourceRoleForMessage(message),
+        },
+        metadata: {
+          messageRole: message.role,
+          messageType: message.messageType || 'reply',
+        },
+        allowUpdate: false,
+      });
+      setSavedKnowledgeMessageId(message.id);
+      setTimeout(() => {
+        setSavedKnowledgeMessageId((current) => current === message.id ? null : current);
+      }, 2200);
+    } catch (error) {
+      setErrorNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingKnowledgeMessageId((current) => current === message.id ? null : current);
+    }
+  }, [currentSessionId, fixedSessionId]);
 
   const appendAssistantChunk = useCallback((chunk: string, messagePhase = 'final_answer') => {
     if (!chunk) return;
@@ -5226,6 +5279,9 @@ export function Chat({
                                   msg={msg}
                                   copiedMessageId={copiedMessageId}
                                   onCopyMessage={handleCopyMessage}
+                                  savingKnowledgeMessageId={savingKnowledgeMessageId}
+                                  savedKnowledgeMessageId={savedKnowledgeMessageId}
+                                  onSaveToKnowledge={handleSaveMessageToKnowledge}
                                   workflowPlacement={messageWorkflowPlacement}
                                   workflowVariant={messageWorkflowVariant}
                                   workflowEmphasis={messageWorkflowEmphasis}

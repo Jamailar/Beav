@@ -1370,6 +1370,7 @@ pub fn handle_library_channel(
             | "knowledge:rebuild-catalog"
             | "knowledge:open-index-root"
             | "knowledge:health"
+            | "knowledge:create-from-chat"
             | "knowledge:ingest-entry"
             | "knowledge:ingest-zhihu-answer"
             | "knowledge:ingest-zhihu-article"
@@ -1458,6 +1459,13 @@ pub fn handle_library_channel(
                 knowledge::knowledge_http_body_limit(),
                 knowledge::knowledge_http_batch_limit(),
             ),
+            "knowledge:create-from-chat" => {
+                let request: knowledge::KnowledgeChatEntryCreateRequest =
+                    serde_json::from_value(payload.clone()).map_err(|error| {
+                        format!("knowledge create from chat payload 无效: {error}")
+                    })?;
+                knowledge::create_chat_entry(Some(app), state, &request)
+            }
             "knowledge:ingest-entry" => {
                 let request: knowledge::KnowledgeEntryIngestRequest =
                     serde_json::from_value(payload.clone())

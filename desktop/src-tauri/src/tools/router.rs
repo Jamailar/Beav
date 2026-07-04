@@ -827,6 +827,38 @@ mod tests {
     }
 
     #[test]
+    fn router_prepares_knowledge_create_operate_as_resource_tool() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "knowledge",
+                    "operation": "create",
+                    "input": {
+                        "title": "图像提示词",
+                        "content": "portrait prompt"
+                    }
+                }),
+            )
+            .expect("knowledge create should prepare");
+
+        assert_eq!(prepared.name, "resource");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("knowledge.create"))
+        );
+        assert_eq!(
+            prepared.arguments.get("content"),
+            Some(&json!("portrait prompt"))
+        );
+    }
+
+    #[test]
     fn router_prepares_profile_get_operate_with_input_doc_type() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",

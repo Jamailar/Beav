@@ -4362,6 +4362,67 @@ fn fs_knowledge_search_input_schema() -> Value {
     )
 }
 
+fn fs_knowledge_create_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "spaceId",
+                string_schema("Optional target space id. Defaults to the current knowledge scope."),
+            ),
+            (
+                "kind",
+                string_schema("Optional knowledge entry kind. Defaults to knowledge-note."),
+            ),
+            (
+                "title",
+                string_schema("Optional knowledge entry title. If omitted, the title is derived from content."),
+            ),
+            (
+                "content",
+                string_schema("Complete Markdown or plain text content to save into Knowledge."),
+            ),
+            (
+                "summary",
+                string_schema("Optional short summary for the saved knowledge entry."),
+            ),
+            (
+                "tags",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 20,
+                    "description": "Optional tags for later retrieval.",
+                }),
+            ),
+            (
+                "source",
+                json!({
+                    "type": "object",
+                    "description": "Optional structured provenance such as type, sessionId, messageIds, or role.",
+                    "additionalProperties": true,
+                }),
+            ),
+            (
+                "metadata",
+                json!({
+                    "type": "object",
+                    "description": "Optional additional metadata to persist with the entry.",
+                    "additionalProperties": true,
+                }),
+            ),
+            (
+                "allowUpdate",
+                json!({
+                    "type": "boolean",
+                    "description": "When true, an existing matching entry may be updated. Defaults to false.",
+                }),
+            ),
+        ],
+        &["content"],
+        None,
+    )
+}
+
 fn fs_knowledge_read_input_schema() -> Value {
     object_schema(
         &[
@@ -4553,6 +4614,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "generation",
             "media",
             "capture",
+            "knowledge",
             "session",
             "web",
             "task",
@@ -4667,6 +4729,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "generation" => Some("generation"),
         "media" => Some("media"),
         "capture" => Some("capture"),
+        "knowledge" => Some("knowledge"),
         "spaces" => Some("space"),
         "workspace" => Some("workspace"),
         "session" => Some("session"),
@@ -4725,6 +4788,12 @@ fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
         .any(|descriptor| descriptor.action == "capture.collect")
     {
         description.push_str(" For saving, importing, downloading, or collecting platform URLs into Knowledge, use resource=\"capture\", operation=\"collect\", input={\"url\":\"...\",\"platform\":\"auto\",\"target\":\"content\"}; use browser.control only when the user asks to inspect or interact with the web page.");
+    }
+    if descriptors
+        .iter()
+        .any(|descriptor| descriptor.action == "knowledge.create")
+    {
+        description.push_str(" For saving generated or user-provided text into Knowledge, use resource=\"knowledge\", operation=\"create\", input={\"title\":\"...\",\"content\":\"...\"}.");
     }
     let resource_schema = if descriptors.is_empty() {
         redbox_resource_schema()
@@ -4821,7 +4890,7 @@ fn redbox_input_schema() -> Value {
                 }
             },
             "voiceId": { "type": "string", "description": "Platform voice id for speech/TTS, usually read from an asset's voice.voiceId." },
-            "title": { "type": "string", "description": "Optional generated media title." },
+            "title": { "type": "string", "description": "Optional generated media title or saved Knowledge entry title." },
             "responseFormat": { "type": "string", "description": "Optional audio format for speech/TTS, usually mp3 or wav." },
             "languageBoost": { "type": "string", "description": "Optional language boost for speech/TTS, such as zh-CN." },
             "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0, "description": "Optional TTS speed. 1.0 is neutral; use subtle values such as 0.92 or 1.08 unless asked otherwise." },
@@ -6699,6 +6768,17 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "knowledge.create",
+        namespace: "knowledge",
+        description: "Create one text entry in Knowledge from structured content. Use this when content should become a durable Knowledge item instead of a workspace file.",
+        input_schema: fs_knowledge_create_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "knowledge.list",
         namespace: "knowledge",
         description: "List entries inside advisor knowledge, shared knowledge, or a registered document source.",
@@ -7088,7 +7168,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "resource" => Some(ToolDescriptor {
             name: "resource",
-            description: "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            description: "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.create, knowledge.list, knowledge.read, and knowledge.search.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -7344,7 +7424,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
         })),
         "resource" => Some(build_action_tool_schema(
             "resource",
-            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.create, knowledge.list, knowledge.read, and knowledge.search.",
             &action_descriptors_for_tool("resource", runtime_mode, ActionVisibility::Model),
         )),
         "knowledge_glob" => Some(json!({
@@ -7551,7 +7631,7 @@ pub fn schema_for_tool_from_action_descriptors(
         )),
         "resource" => Some(build_action_tool_schema(
             "resource",
-            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.patch, workspace.search, knowledge.create, knowledge.list, knowledge.read, and knowledge.search.",
             descriptors,
         )),
         "editor" => Some(build_action_tool_schema(
@@ -7822,6 +7902,7 @@ mod tests {
         assert!(actions.contains(&"workspace.write"));
         assert!(actions.contains(&"workspace.patch"));
         assert!(actions.contains(&"workspace.search"));
+        assert!(actions.contains(&"knowledge.create"));
         assert!(actions.contains(&"knowledge.list"));
         assert!(actions.contains(&"knowledge.read"));
         assert!(actions.contains(&"knowledge.search"));

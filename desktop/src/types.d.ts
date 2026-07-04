@@ -2162,6 +2162,7 @@ declare global {
         deleteNote: (noteId: string) => Promise<unknown>;
         deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source' }> }) => Promise<unknown>;
         batchIngest: (payload: { entries?: unknown[]; documentSources?: unknown[]; mediaAssets?: unknown[] }) => Promise<unknown>;
+        createFromChat: (payload: { title?: string; content: string; summary?: string; tags?: string[]; source?: Record<string, unknown>; metadata?: Record<string, unknown>; allowUpdate?: boolean }) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;
         deleteYoutube: (videoId: string) => Promise<unknown>;
         retryYoutubeSubtitle: (videoId: string) => Promise<unknown>;
