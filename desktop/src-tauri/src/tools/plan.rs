@@ -545,6 +545,7 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "skills.listResources",
     "skills.readResource",
     "skills.invoke",
+    "skills.manage",
     "image.generate",
     "video.generate",
     "video.analyze",
@@ -1025,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn redclaw_default_keeps_skill_invocation_direct() {
+    fn redclaw_default_keeps_skill_actions_direct() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",
             ..ToolRegistryPlanParams::default()
@@ -1035,11 +1036,12 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("skills.listResources"));
         assert!(plan.has_direct_app_cli_action("skills.readResource"));
         assert!(plan.has_direct_app_cli_action("skills.invoke"));
+        assert!(plan.has_direct_app_cli_action("skills.manage"));
         assert!(!plan.has_deferred_app_cli_action("skills.readResource"));
         assert!(!plan.has_deferred_app_cli_action("skills.invoke"));
         assert!(!plan.has_direct_app_cli_action("skills.installFromRepo"));
         assert!(!plan.has_direct_app_cli_action("skills.uninstall"));
-        assert!(plan.has_deferred_app_cli_action("skills.manage"));
+        assert!(!plan.has_deferred_app_cli_action("skills.manage"));
         assert!(!plan.has_deferred_app_cli_action("skills.installFromRepo"));
         assert!(!plan.has_deferred_app_cli_action("skills.uninstall"));
     }

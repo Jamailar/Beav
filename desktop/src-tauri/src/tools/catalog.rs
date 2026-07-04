@@ -3683,7 +3683,7 @@ fn skills_manage_input_schema() -> Value {
             ),
             (
                 "path",
-                string_schema("Optional repository-relative skill directory or bundle subdirectory."),
+                string_schema("Optional repository-relative skill directory or bundle subdirectory. If source is omitted and this is an explicit local path, it is treated as the local skill/repository source."),
             ),
             (
                 "paths",

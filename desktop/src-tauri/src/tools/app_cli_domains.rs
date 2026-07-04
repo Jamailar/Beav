@@ -2799,23 +2799,33 @@ impl<'a> AppCliExecutor<'a> {
             ),
             "install-from-repo" | "install-from-github" => self.call_channel(
                 "skills:install-from-repo",
-                json!({
-                    "source": args
+                {
+                    let explicit_source = args
                         .string(&["source", "url", "repo"])
                         .or_else(|| args.positionals.first().cloned())
-                        .or_else(|| payload_string_alias(payload, &["source", "url", "repo"]))
-                        .ok_or_else(|| "skills install-from-repo requires --source".to_string())?,
-                    "ref": args
-                        .string(&["ref"])
-                        .or_else(|| payload_string_alias(payload, &["ref", "refName"])),
-                    "path": args
+                        .or_else(|| payload_string_alias(payload, &["source", "url", "repo"]));
+                    let path = args
                         .string(&["path"])
-                        .or_else(|| payload_string_alias(payload, &["path"])),
-                    "paths": payload_field(payload, "paths").cloned().unwrap_or(Value::Null),
-                    "scope": args
-                        .string(&["scope"])
-                        .or_else(|| payload_string_alias(payload, &["scope"])),
-                }),
+                        .or_else(|| payload_string_alias(payload, &["path"]));
+                    let path_as_source = explicit_source.is_none()
+                        && path
+                            .as_deref()
+                            .is_some_and(is_local_install_source_path);
+                    let source = explicit_source
+                        .or_else(|| path_as_source.then(|| path.clone()).flatten())
+                        .ok_or_else(|| "skills install-from-repo requires --source".to_string())?;
+                    json!({
+                        "source": source,
+                        "ref": args
+                            .string(&["ref"])
+                            .or_else(|| payload_string_alias(payload, &["ref", "refName"])),
+                        "path": if path_as_source { None } else { path },
+                        "paths": payload_field(payload, "paths").cloned().unwrap_or(Value::Null),
+                        "scope": args
+                            .string(&["scope"])
+                            .or_else(|| payload_string_alias(payload, &["scope"])),
+                    })
+                },
             ),
             _ => Err(format!("unsupported skills action: {action}")),
         }

@@ -2859,6 +2859,16 @@ fn skill_name_from_args_or_payload(args: &CliArgs, payload: &Value) -> Option<St
         .or_else(|| args.positionals.first().cloned())
 }
 
+fn is_local_install_source_path(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && (Path::new(trimmed).is_absolute()
+            || trimmed == "~"
+            || trimmed.starts_with("~/")
+            || trimmed.starts_with("./")
+            || trimmed.starts_with("../"))
+}
+
 fn storyboard_header_kind(header: &str) -> Option<&'static str> {
     let normalized = header.trim().to_ascii_lowercase();
     if normalized.contains("time") || header.contains("时间") {
@@ -4227,6 +4237,23 @@ mod tests {
             ),
             Some("image-director".to_string())
         );
+    }
+
+    #[test]
+    fn local_install_source_path_requires_explicit_local_path_syntax() {
+        assert!(is_local_install_source_path(
+            "/Users/Jam/LocalDev/GitHub/RedConvert/.codex/skills/high-retention-video-script"
+        ));
+        assert!(is_local_install_source_path(
+            "~/skills/high-retention-video-script"
+        ));
+        assert!(is_local_install_source_path(
+            "./skills/high-retention-video-script"
+        ));
+        assert!(!is_local_install_source_path(
+            "skills/high-retention-video-script"
+        ));
+        assert!(!is_local_install_source_path("openai/skills"));
     }
 
     #[test]
