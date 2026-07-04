@@ -2617,6 +2617,34 @@ impl<'a> AppCliExecutor<'a> {
                         .ok_or_else(|| "skills read requires --name".to_string())?
                 }),
             ),
+            "list-resources" | "resources" => self.call_channel(
+                "skills:list-resources",
+                json!({
+                    "name": skill_name_from_args_or_payload(&args, payload),
+                    "uri": args
+                        .string(&["uri", "path"])
+                        .or_else(|| payload_string_alias(payload, &["uri", "path"])),
+                }),
+            ),
+            "read-resource" | "resource-read" | "get-resource" => {
+                let resource_path = args
+                    .string(&["path", "uri"])
+                    .or_else(|| payload_string_alias(payload, &["path", "uri"]))
+                    .or_else(|| args.positionals.get(1).cloned())
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "skills read-resource requires --path".to_string())?;
+                self.call_channel(
+                    "skills:read-resource",
+                    json!({
+                        "name": skill_name_from_args_or_payload(&args, payload),
+                        "path": resource_path,
+                        "maxChars": args
+                            .i64(&["max-chars", "maxChars", "limit"])
+                            .or_else(|| payload_field(payload, "maxChars").and_then(Value::as_i64))
+                            .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64)),
+                    }),
+                )
+            }
             "invoke" => self.call_channel(
                 "skills:invoke",
                 json!({

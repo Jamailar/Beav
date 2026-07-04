@@ -16,6 +16,8 @@ mod loader;
 mod permissions;
 #[path = "prompt.rs"]
 mod prompt;
+#[path = "resources.rs"]
+mod resources;
 #[path = "runtime.rs"]
 mod runtime;
 #[path = "state.rs"]
@@ -34,6 +36,7 @@ pub use installer::*;
 pub use loader::*;
 pub use permissions::*;
 pub use prompt::*;
+pub use resources::*;
 pub use runtime::*;
 pub use state::*;
 pub use store_sync::*;

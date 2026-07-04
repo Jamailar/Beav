@@ -1154,6 +1154,8 @@ impl<'a> AppCliExecutor<'a> {
         let token = match operation.as_str() {
             "list" => "list",
             "read" | "get" => "read",
+            "listresources" | "resources" | "listresource" => "list-resources",
+            "readresource" | "resource" | "getresource" => "read-resource",
             _ => {
                 return Err(app_cli_error_json(
                     Some("skills.inspect"),
@@ -1739,6 +1741,14 @@ impl<'a> AppCliExecutor<'a> {
             "skillsinspect" => self.handle_skills_inspect(payload),
             "skillsread" | "skillsget" => {
                 let tokens = vec!["read".to_string()];
+                self.handle_skills(&tokens, payload)
+            }
+            "skillslistresources" | "skillsresources" => {
+                let tokens = vec!["list-resources".to_string()];
+                self.handle_skills(&tokens, payload)
+            }
+            "skillsreadresource" | "skillsgetresource" => {
+                let tokens = vec!["read-resource".to_string()];
                 self.handle_skills(&tokens, payload)
             }
             "skillsinvoke" => {

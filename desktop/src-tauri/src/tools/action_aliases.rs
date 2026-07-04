@@ -20,6 +20,8 @@ pub fn canonical_app_cli_action_for_policy<'a>(action: &'a str) -> &'a str {
         | "skillsuninstall"
         | "skillsdelete" => "skills.manage",
         "skillslist" | "skillsread" | "skillsget" => "skills.inspect",
+        "skillslistresources" | "skillsresources" => "skills.listResources",
+        "skillsreadresource" | "skillsgetresource" => "skills.readResource",
         "taskbriefcontext" | "taskbriefgetcontext" | "taskbriefcompactcontext" => {
             "taskBrief.context"
         }
@@ -162,6 +164,8 @@ fn app_cli_action_alias(action: &str) -> Option<(&'static str, Option<&'static s
             Some(("topicCenter.manage", Some("abandon")))
         }
         "topiccenterdelete" | "topiccenterremove" => Some(("topicCenter.manage", Some("delete"))),
+        "skillsresources" | "skillslistresources" => Some(("skills.listResources", None)),
+        "skillsgetresource" | "skillsreadresource" => Some(("skills.readResource", None)),
         _ => None,
     }
 }

@@ -3522,6 +3522,54 @@ fn skills_read_input_schema() -> Value {
     )
 }
 
+fn skills_list_resources_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "name",
+                string_schema("Skill name whose bundled resources should be listed."),
+            ),
+            (
+                "uri",
+                string_schema("Optional skill URI such as skill://writer/references/guide.md."),
+            ),
+        ],
+        &[],
+        Some("List bundled skill resources under references/, scripts/, assets/, and rules/."),
+    )
+}
+
+fn skills_read_resource_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "name",
+                string_schema("Skill name that owns the bundled resource."),
+            ),
+            (
+                "path",
+                string_schema(
+                    "Bundled resource path such as references/guide.md or skill://writer/references/guide.md.",
+                ),
+            ),
+            (
+                "uri",
+                string_schema("Alias for path when passing a skill:// URI."),
+            ),
+            (
+                "maxChars",
+                integer_schema(
+                    "Maximum characters to return. Defaults to the skill resource limit.",
+                    1,
+                    20000,
+                ),
+            ),
+        ],
+        &[],
+        Some("Read a text resource bundled with a skill. This is for skill resources, not workspace files."),
+    )
+}
+
 fn skills_inspect_input_schema() -> Value {
     object_schema(
         &[
@@ -6354,6 +6402,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "skills.listResources",
+        namespace: "skills",
+        description: "List bundled resource files for a skill, including references, scripts, assets, and rules.",
+        input_schema: skills_list_resources_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "skills.readResource",
+        namespace: "skills",
+        description: "Read a text resource bundled with a skill. Use for skill:// paths or references mentioned by SKILL.md.",
+        input_schema: skills_read_resource_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "skills.invoke",
         namespace: "skills",
         description: "Activate one skill in the current session.",
@@ -7568,7 +7638,12 @@ mod tests {
             assert!(actions.contains(&action), "{action}");
         }
         assert!(!actions.contains(&"plugins.list"));
-        for action in ["skills.inspect", "skills.invoke"] {
+        for action in [
+            "skills.inspect",
+            "skills.listResources",
+            "skills.readResource",
+            "skills.invoke",
+        ] {
             assert!(actions.contains(&action), "{action}");
         }
         assert!(actions.contains(&"skills.manage"));
@@ -7903,7 +7978,7 @@ mod tests {
             .count();
 
         assert!(
-            plugin_skill_mcp <= 8,
+            plugin_skill_mcp <= 10,
             "Plugins/Skills/MCP full catalog grew to {plugin_skill_mcp}"
         );
         assert!(

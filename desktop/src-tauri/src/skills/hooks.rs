@@ -1,4 +1,4 @@
-use crate::skills::LoadedSkillRecord;
+use crate::skills::{active_skill_resource_access_note, LoadedSkillRecord};
 
 fn truncate_chars(value: &str, limit: usize) -> String {
     if value.chars().count() <= limit {
@@ -56,8 +56,11 @@ pub fn build_skill_hook_output(active_skills: &[LoadedSkillRecord]) -> SkillHook
             output.skills_section.push_str("\n\n");
         }
         output.skills_section.push_str(&format!(
-            "### {} [{}]\n{}\n",
-            skill.name, hook_mode, section_body
+            "### {} [{}]\n{}\n\n{}\n",
+            skill.name,
+            hook_mode,
+            section_body,
+            active_skill_resource_access_note(&skill.name)
         ));
     }
     output

@@ -9,7 +9,10 @@ use crate::skills::{
     install_skills_from_repo, invoke_skill, preferred_user_skill_root, refresh_skill_store_catalog,
     resolve_skill_file_path, skill_catalog_changed, skills_catalog_list_value,
     write_skill_record_to_path, InstallSkillsFromRepoRequest, SkillInvokeRequest,
-    UninstallSkillRequest,
+    UninstallSkillRequest, DEFAULT_SKILL_RESOURCE_MAX_CHARS,
+};
+use crate::skills::{
+    list_skill_resources_value, parse_skill_resource_uri, read_skill_resource_value,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -22,9 +25,30 @@ use marketplace::{
 };
 
 fn requested_skill_name(payload: &Value) -> String {
-    payload_string(payload, "name")
+    let candidate = payload_string(payload, "name")
         .or_else(|| payload_string(payload, "skill"))
+        .or_else(|| {
+            payload_string(payload, "uri")
+                .or_else(|| payload_string(payload, "path"))
+                .and_then(|value| parse_skill_resource_uri(&value).map(|parsed| parsed.skill_name))
+        })
+        .unwrap_or_default();
+    parse_skill_resource_uri(&candidate)
+        .map(|parsed| parsed.skill_name)
+        .unwrap_or(candidate)
+}
+
+fn requested_skill_resource_path(payload: &Value) -> String {
+    payload_string(payload, "path")
+        .or_else(|| payload_string(payload, "uri"))
         .unwrap_or_default()
+}
+
+fn payload_usize(payload: &Value, key: &str) -> Option<usize> {
+    payload
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
 }
 
 fn payload_string_list(payload: &Value, key: &str) -> Vec<String> {
@@ -53,7 +77,9 @@ pub fn handle_skills_ai_channel(
         && !matches!(
             channel,
             "skills:list"
+                | "skills:list-resources"
                 | "skills:read"
+                | "skills:read-resource"
                 | "skills:invoke"
                 | "skills:create"
                 | "skills:save"
@@ -115,6 +141,24 @@ pub fn handle_skills_ai_channel(
                 }
                 Ok(list)
             }
+            "skills:list-resources" => {
+                let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
+                let _ = refresh_skill_store_catalog(state);
+                let requested_name = requested_skill_name(payload);
+                if requested_name.is_empty() {
+                    return Err("技能名称不能为空".to_string());
+                }
+                let workspace = workspace_root(state).ok();
+                let record = with_store(state, |store| {
+                    Ok(store
+                        .skills
+                        .iter()
+                        .find(|item| item.name.eq_ignore_ascii_case(&requested_name))
+                        .cloned())
+                })?
+                .ok_or_else(|| format!("技能不存在: {requested_name}"))?;
+                list_skill_resources_value(&record, workspace.as_deref())
+            }
             "skills:read" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
                 let _ = refresh_skill_store_catalog(state);
@@ -139,6 +183,38 @@ pub fn handle_skills_ai_channel(
                     "sourceScope": skill.source_scope,
                     "fingerprint": skill.fingerprint,
                 }))
+            }
+            "skills:read-resource" => {
+                let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
+                let _ = refresh_skill_store_catalog(state);
+                let requested_name = requested_skill_name(payload);
+                if requested_name.is_empty() {
+                    return Err("技能名称不能为空".to_string());
+                }
+                let resource_path = requested_skill_resource_path(payload);
+                if resource_path.trim().is_empty() {
+                    return Err("技能资源路径不能为空".to_string());
+                }
+                let workspace = workspace_root(state).ok();
+                let record = with_store(state, |store| {
+                    Ok(store
+                        .skills
+                        .iter()
+                        .find(|item| item.name.eq_ignore_ascii_case(&requested_name))
+                        .cloned())
+                })?
+                .ok_or_else(|| format!("技能不存在: {requested_name}"))?;
+                let max_chars = payload_usize(payload, "maxChars")
+                    .or_else(|| payload_usize(payload, "limit"))
+                    .unwrap_or(DEFAULT_SKILL_RESOURCE_MAX_CHARS)
+                    .clamp(1, DEFAULT_SKILL_RESOURCE_MAX_CHARS);
+                read_skill_resource_value(
+                    &record,
+                    workspace.as_deref(),
+                    &resource_path,
+                    max_chars,
+                    None,
+                )
             }
             "skills:invoke" => {
                 let started_at = now_ms();

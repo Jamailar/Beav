@@ -542,6 +542,8 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "team.control",
     "approval.request",
     "skills.inspect",
+    "skills.listResources",
+    "skills.readResource",
     "skills.invoke",
     "image.generate",
     "video.generate",
@@ -1012,7 +1014,7 @@ mod tests {
                 .collect::<Vec<_>>();
 
             assert!(
-                plugin_skill_mcp.len() <= 9,
+                plugin_skill_mcp.len() <= 11,
                 "{runtime_mode}: {plugin_skill_mcp:?}"
             );
             assert!(
@@ -1030,7 +1032,10 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("skills.inspect"));
+        assert!(plan.has_direct_app_cli_action("skills.listResources"));
+        assert!(plan.has_direct_app_cli_action("skills.readResource"));
         assert!(plan.has_direct_app_cli_action("skills.invoke"));
+        assert!(!plan.has_deferred_app_cli_action("skills.readResource"));
         assert!(!plan.has_deferred_app_cli_action("skills.invoke"));
         assert!(!plan.has_direct_app_cli_action("skills.installFromRepo"));
         assert!(!plan.has_direct_app_cli_action("skills.uninstall"));

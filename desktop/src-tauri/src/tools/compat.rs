@@ -357,6 +357,19 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
             }
         }
         "knowledge" => universal_fs_call("knowledge.read", resource_path, &object, Some("Read")),
+        "skill" | "skills" => {
+            let mut payload = Map::new();
+            payload.insert("path".to_string(), json!(path));
+            payload.insert("uri".to_string(), json!(path));
+            copy_universal_as(&mut payload, &object, "limit", "maxChars");
+            copy_universal_as(&mut payload, &object, "maxChars", "maxChars");
+            app_cli_action_call(
+                "skills.readResource",
+                Value::Object(payload),
+                Some("Read"),
+                Some(path),
+            )
+        }
         "manuscripts" if resource_path == "current" => app_cli_action_call(
             "manuscripts.readCurrent",
             json!({}),
@@ -430,6 +443,12 @@ fn normalize_list_call(arguments: &Value) -> NormalizedToolCall {
         "memory" => app_cli_action_call(
             "memory.search",
             payload_with_mode(json!({}), "list"),
+            Some("List"),
+            Some(path),
+        ),
+        "skill" | "skills" => app_cli_action_call(
+            "skills.listResources",
+            json!({ "uri": path, "path": path }),
             Some("List"),
             Some(path),
         ),
@@ -1186,6 +1205,23 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("skill.list"),
         ),
+        (
+            "skill" | "skills",
+            "listresources" | "list-resources" | "resources" | "resource-list",
+        ) => app_cli_action_call(
+            "skills.listResources",
+            payload,
+            Some("Operate"),
+            Some("skill.listResources"),
+        ),
+        ("skill" | "skills", "readresource" | "read-resource" | "getresource" | "get-resource") => {
+            app_cli_action_call(
+                "skills.readResource",
+                payload,
+                Some("Operate"),
+                Some("skill.readResource"),
+            )
+        }
         ("skill" | "skills", "read" | "get") => {
             let mut map = payload.as_object().cloned().unwrap_or_default();
             if !map.contains_key("name") {
@@ -2130,6 +2166,12 @@ fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         .unwrap_or_default();
     let translated_action = match action {
         "list" | "read" | "get" => Some("skills.inspect"),
+        "list_resources" | "list-resources" | "listResources" | "resources" => {
+            Some("skills.listResources")
+        }
+        "read_resource" | "read-resource" | "readResource" | "get_resource" | "get-resource" => {
+            Some("skills.readResource")
+        }
         "invoke" => Some("skills.invoke"),
         "install" | "install_from_repo" | "install-from-repo" => Some("skills.manage"),
         "marketplace"
@@ -2630,6 +2672,53 @@ mod tests {
         assert_eq!(
             normalized.arguments.get("query"),
             Some(&json!("image-director"))
+        );
+    }
+
+    #[test]
+    fn normalizes_skill_uri_read_to_skill_resource_action() {
+        let normalized = normalize_tool_call(
+            "Read",
+            &json!({ "path": "skill://writer/references/guide.md", "maxChars": 1200 }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("skills.readResource"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/path"),
+            Some(&json!("skill://writer/references/guide.md"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/maxChars"),
+            Some(&json!(1200))
+        );
+    }
+
+    #[test]
+    fn normalizes_operate_skills_read_resource() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "skills",
+                "operation": "readResource",
+                "input": {
+                    "name": "writer",
+                    "path": "references/guide.md"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("skills.readResource"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/path"),
+            Some(&json!("references/guide.md"))
         );
     }
 

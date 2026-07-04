@@ -1,7 +1,7 @@
 use crate::agent::{execute_prepared_wander_turn, PreparedWanderTurn};
 use crate::commands::chat_state::{
     begin_chat_runtime_state, is_chat_runtime_cancel_requested, latest_session_id,
-    update_chat_runtime_state,
+    resolve_runtime_mode_for_session, update_chat_runtime_state,
 };
 use crate::events::{
     emit_runtime_done, emit_runtime_stream_start, emit_runtime_task_checkpoint_saved,
@@ -3261,6 +3261,52 @@ pub(crate) fn workspace_read_directory_response(
     }))
 }
 
+fn active_skill_resource_read_fallback(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    raw_path: &str,
+    max_chars: usize,
+) -> Result<Option<Value>, String> {
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+    if !crate::skills::looks_like_skill_bundle_relative_path(raw_path) {
+        return Ok(None);
+    }
+    let workspace = workspace_root(state).ok();
+    let active_records = with_store(state, |store| {
+        let metadata = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|session| session.metadata.as_ref());
+        let runtime_mode = resolve_runtime_mode_for_session(&store, session_id);
+        let resolved =
+            crate::skills::resolve_skill_set(&store.skills, &runtime_mode, metadata, &[]);
+        let active_names = resolved
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        Ok(store
+            .skills
+            .iter()
+            .filter(|record| active_names.contains(&record.name.to_ascii_lowercase()))
+            .cloned()
+            .collect::<Vec<crate::runtime::SkillRecord>>())
+    })?;
+    match crate::skills::read_unique_active_skill_resource_value(
+        &active_records,
+        workspace.as_deref(),
+        raw_path,
+        max_chars,
+    ) {
+        Some(Ok(value)) => Ok(Some(value)),
+        Some(Err(error)) => Err(error),
+        None => Ok(None),
+    }
+}
+
 pub(crate) fn workspace_inspect_image_response(
     path: &Path,
     include_data_url: bool,
@@ -4396,7 +4442,13 @@ pub(crate) fn execute_interactive_tool_call(
                             let limit = parse_usize_arg(&normalized_arguments, "limit", 20, 50);
                             workspace_read_directory_response(&resolved, limit)
                         } else if !resolved.is_file() {
-                            Err(format!("not a file: {}", resolved.display()))
+                            if let Some(skill_resource) = active_skill_resource_read_fallback(
+                                state, session_id, &raw_path, max_chars,
+                            )? {
+                                Ok(skill_resource)
+                            } else {
+                                Err(format!("not a file: {}", resolved.display()))
+                            }
                         } else {
                             let content =
                                 fs::read_to_string(&resolved).map_err(|error| error.to_string())?;
