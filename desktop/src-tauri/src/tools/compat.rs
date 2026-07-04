@@ -370,6 +370,18 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
                 Some(path),
             )
         }
+        _ if crate::skills::looks_like_skill_bundle_relative_path(path) => {
+            let mut payload = Map::new();
+            payload.insert("path".to_string(), json!(path));
+            copy_universal_as(&mut payload, &object, "limit", "maxChars");
+            copy_universal_as(&mut payload, &object, "maxChars", "maxChars");
+            app_cli_action_call(
+                "skills.readResource",
+                Value::Object(payload),
+                Some("Read"),
+                Some(path),
+            )
+        }
         "manuscripts" if resource_path == "current" => app_cli_action_call(
             "manuscripts.readCurrent",
             json!({}),
@@ -2697,6 +2709,28 @@ mod tests {
         assert_eq!(
             normalized.arguments.pointer("/payload/path"),
             Some(&json!("skill://writer/references/guide.md"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/maxChars"),
+            Some(&json!(1200))
+        );
+    }
+
+    #[test]
+    fn normalizes_active_skill_relative_reference_read_to_skill_resource_action() {
+        let normalized = normalize_tool_call(
+            "Read",
+            &json!({ "path": "references/guide.md", "maxChars": 1200 }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("skills.readResource"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/path"),
+            Some(&json!("references/guide.md"))
         );
         assert_eq!(
             normalized.arguments.pointer("/payload/maxChars"),
