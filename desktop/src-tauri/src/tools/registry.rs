@@ -609,13 +609,27 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(resources.contains(&"web"));
+        assert!(resources.contains(&"workspace"));
         assert!(resources.contains(&"cli_runtime"));
         assert!(resources.contains(&"media"));
         assert!(operations.contains(&"get"));
         assert!(operations.contains(&"run"));
+        assert!(operations.contains(&"write"));
+        assert!(operations.contains(&"patch"));
+        assert!(operations.contains(&"createDirectory"));
         assert!(operations.contains(&"transcribe"));
         assert!(operations.contains(&"verify"));
         assert!(operations.contains(&"search"));
+        for field in ["path", "content", "edits", "argv", "cwd", "executionId"] {
+            assert!(
+                redbox
+                    .pointer(&format!(
+                        "/function/parameters/properties/input/properties/{field}"
+                    ))
+                    .is_some(),
+                "{field} should be exposed in Operate input schema"
+            );
+        }
     }
 
     #[test]

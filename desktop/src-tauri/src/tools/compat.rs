@@ -601,6 +601,9 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
     let action_hint = nested_action
         .as_deref()
         .or_else(|| input.get("id").and_then(Value::as_str));
+    if let Some(call) = normalize_workspace_operate_call(&resource, &operation, &input) {
+        return call;
+    }
     if resource == "runtime" {
         if let Some(action) = action_hint {
             if is_runtime_model_config_get_action(action) {
@@ -1973,6 +1976,63 @@ fn normalize_action_token(value: &str) -> String {
     }
 }
 
+fn normalize_workspace_operate_call(
+    resource: &str,
+    operation: &str,
+    input: &Map<String, Value>,
+) -> Option<NormalizedToolCall> {
+    if !matches!(resource, "workspace" | "workspaces") {
+        return None;
+    }
+    let action = match operation {
+        "list" | "ls" => "workspace.list",
+        "read" | "get" => "workspace.read",
+        "search" | "grep" => "workspace.search",
+        "inspectimage" | "inspect-image" | "imageinfo" | "image-info" => "workspace.inspectImage",
+        "createdirectory" | "create-directory" | "mkdir" => "workspace.createDirectory",
+        "write" | "save" => "workspace.write",
+        "patch" | "edit" => "workspace.patch",
+        _ => return None,
+    };
+    let mut payload = input.clone();
+    payload.insert("action".to_string(), json!(action));
+    if !payload.contains_key("path") {
+        if let Some(id) = payload.get("id").cloned() {
+            payload.insert("path".to_string(), id);
+        }
+    }
+    normalize_workspace_uri_path_field(&mut payload, "path");
+    normalize_workspace_uri_path_field(&mut payload, "toPath");
+    let legacy_command = format!("workspace.{operation}");
+    if let Some(metadata) =
+        compat_metadata_value(Some("Operate"), Some(&legacy_command), Some(action))
+    {
+        payload.insert("__compat".to_string(), metadata);
+    }
+    Some(NormalizedToolCall {
+        name: "resource",
+        arguments: Value::Object(payload),
+    })
+}
+
+fn normalize_workspace_uri_path_field(payload: &mut Map<String, Value>, key: &str) {
+    let Some(raw) = payload.get(key).and_then(Value::as_str) else {
+        return;
+    };
+    let Some(path) = strip_workspace_uri(raw) else {
+        return;
+    };
+    payload.insert(key.to_string(), json!(path));
+}
+
+fn strip_workspace_uri(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let rest = trimmed
+        .strip_prefix("workspace://")
+        .or_else(|| trimmed.strip_prefix("workspace:/"))?;
+    Some(rest.trim_start_matches('/').to_string())
+}
+
 fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
     let normalized_action = action.trim().replace('_', ".").replace('-', ".");
     let normalized_scope = scope.trim().replace('_', ".").replace('-', ".");
@@ -3098,6 +3158,32 @@ mod tests {
             normalized.arguments.get("path"),
             Some(&json!("images/sample.png"))
         );
+    }
+
+    #[test]
+    fn normalizes_operate_workspace_write_to_resource_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "workspace",
+                "operation": "write",
+                "input": {
+                    "path": "workspace://drafts/beav-script.md",
+                    "content": "# Beav"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "resource");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("workspace.write"))
+        );
+        assert_eq!(
+            normalized.arguments.get("path"),
+            Some(&json!("drafts/beav-script.md"))
+        );
+        assert_eq!(normalized.arguments.get("content"), Some(&json!("# Beav")));
     }
 
     #[test]

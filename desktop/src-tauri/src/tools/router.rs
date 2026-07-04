@@ -630,6 +630,38 @@ mod tests {
     }
 
     #[test]
+    fn router_prepares_workspace_write_operate_as_resource_tool() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "workspace",
+                    "operation": "write",
+                    "input": {
+                        "path": "workspace://drafts/beav-script.md",
+                        "content": "# Beav"
+                    }
+                }),
+            )
+            .expect("workspace write should prepare through resource");
+
+        assert_eq!(prepared.name, "resource");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("workspace.write"))
+        );
+        assert_eq!(
+            prepared.arguments.get("path"),
+            Some(&json!("drafts/beav-script.md"))
+        );
+    }
+
+    #[test]
     fn router_recovers_structured_capture_operate_nested_under_workflow_payload() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",

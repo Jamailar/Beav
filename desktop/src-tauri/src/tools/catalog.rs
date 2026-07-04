@@ -4560,6 +4560,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "skill",
             "mcp",
             "plugins",
+            "workspace",
             "runtime",
             "cli_runtime",
         ]
@@ -4611,12 +4612,46 @@ fn redbox_operation_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'
                 seen.insert(operation);
             }
         }
-        seen.into_iter().collect::<Vec<_>>()
+        let mut operations = seen.into_iter().collect::<Vec<_>>();
+        if descriptors
+            .iter()
+            .any(|descriptor| redbox_resource_for_action(descriptor.action) == Some("workspace"))
+        {
+            extend_unique_operations(
+                &mut operations,
+                &[
+                    "list",
+                    "get",
+                    "search",
+                    "write",
+                    "patch",
+                    "createDirectory",
+                    "inspectImage",
+                ],
+            );
+        }
+        if descriptors.iter().any(|descriptor| {
+            matches!(
+                descriptor.namespace,
+                "cli_runtime" | "cli_runtime.execution"
+            )
+        }) {
+            extend_unique_operations(&mut operations, &["run", "get", "verify", "writeStdin"]);
+        }
+        operations
     };
     if operations.is_empty() {
         operations.push("get");
     }
     operations
+}
+
+fn extend_unique_operations(operations: &mut Vec<&'static str>, additional: &[&'static str]) {
+    for operation in additional {
+        if !operations.iter().any(|item| item == operation) {
+            operations.push(operation);
+        }
+    }
 }
 
 fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
@@ -4733,6 +4768,34 @@ fn redbox_input_schema() -> Value {
             "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum items for paged operations such as capture profile/comment requests." },
             "downloadMedia": { "type": "boolean", "description": "For capture.collect, download supported media assets. Defaults to true." },
             "ingestToKnowledge": { "type": "boolean", "description": "For capture.collect, write completed capture entries into the local Knowledge base. Defaults to true." },
+            "path": { "type": "string", "description": "Workspace-relative file or directory path for workspace operations, or a target path used by compatible resource actions." },
+            "toPath": { "type": "string", "description": "Workspace-relative destination path for workspace.patch move/rename operations." },
+            "content": { "type": "string", "description": "Complete UTF-8 content for workspace.write or workspace.patch create operations." },
+            "edits": {
+                "type": "array",
+                "description": "Exact text edits for workspace.patch. Each edit uses oldText/newText and optionally replaceAll.",
+                "items": {
+                    "type": "object",
+                    "required": ["oldText", "newText"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "oldText": { "type": "string" },
+                        "newText": { "type": "string" },
+                        "replaceAll": { "type": "boolean" }
+                    }
+                }
+            },
+            "argv": {
+                "type": "array",
+                "description": "Command argv for cli_runtime.run/execute. Put the executable at index 0; do not pass shell command strings.",
+                "items": { "type": "string" }
+            },
+            "cwd": { "type": "string", "description": "Working directory for cli_runtime command execution." },
+            "env": { "type": "object", "description": "String environment overrides for cli_runtime command execution.", "additionalProperties": { "type": "string" } },
+            "usePty": { "type": "boolean", "description": "Whether cli_runtime should allocate a PTY for interactive command execution." },
+            "executionId": { "type": "string", "description": "CLI execution id returned by cli_runtime.run, used by cli_runtime.get or writeStdin." },
+            "text": { "type": "string", "description": "Text to write to a running CLI execution stdin." },
+            "appendNewline": { "type": "boolean", "description": "Append a newline when writing CLI stdin text." },
             "prompt": { "type": "string", "description": "Generation or operation prompt." },
             "input": { "type": "string", "description": "Literal text input for speech/TTS. If the user asks for any video or 口播视频, start from video-director instead of voice.speech. For CosyVoice, activate cosyvoice-ssml only inside a video-director managed digital-human / VideoRetalk / asset-library talking-head TTS substep after the script, role voiceId, and character video reference are resolved. In that narrow flow, segments may use complete <speak rate pitch volume> SSML input and segment-specific prompt. Outside that flow, keep CosyVoice payloads conservative and do not activate cosyvoice-ssml. For MiniMax expressive narration, invoke tts-director and prefer segments. MiniMax pause markers like <#0.6#> and tone tags like (laughs) are allowed only for MiniMax." },
             "segments": {
@@ -6025,7 +6088,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::CompatOnly,
+        visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "cli_runtime.diagnose",
@@ -6036,7 +6099,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::CompatOnly,
+        visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "cli_runtime.environment.list",
@@ -6074,13 +6137,13 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "cli_runtime.execute",
         namespace: "cli_runtime",
-        description: "Execute one real host CLI command through the managed runtime control plane. Use argv as an array, for example {\"argv\":[\"lark-cli\",\"--version\"]}. Do not use bash for this.",
+        description: "Execute one real host CLI command or script through the managed runtime control plane. Use argv as an array, for example {\"argv\":[\"python3\",\"-c\",\"print(1)\"]} or {\"argv\":[\"node\",\"scripts/build.mjs\"]}. Do not use bash, shell redirects, or here-documents for this.",
         input_schema: cli_runtime_execute_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::CompatOnly,
+        visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "cli_runtime.execution.get",
@@ -6091,7 +6154,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::CompatOnly,
+        visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "cli_runtime.execution.writeStdin",
@@ -6102,7 +6165,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::CompatOnly,
+        visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "cli_runtime.verify",
@@ -7537,7 +7600,11 @@ mod tests {
         assert!(actions.contains(&"taskBrief.goal"));
         assert!(!actions.contains(&"cli_runtime.detect"));
         assert!(!actions.contains(&"cli_runtime.discover"));
-        assert!(!actions.contains(&"cli_runtime.execution.get"));
+        assert!(actions.contains(&"cli_runtime.inspect"));
+        assert!(actions.contains(&"cli_runtime.diagnose"));
+        assert!(actions.contains(&"cli_runtime.execute"));
+        assert!(actions.contains(&"cli_runtime.execution.get"));
+        assert!(actions.contains(&"cli_runtime.execution.writeStdin"));
         assert!(actions.contains(&"mcp.inspect"));
         assert!(actions.contains(&"mcp.manage"));
         assert!(actions.contains(&"runner.manage"));
@@ -8039,12 +8106,13 @@ mod tests {
         for action in [
             "cli_runtime.inspect",
             "cli_runtime.diagnose",
-            "cli_runtime.discover",
-            "cli_runtime.install",
             "cli_runtime.execute",
             "cli_runtime.execution.get",
             "cli_runtime.execution.writeStdin",
         ] {
+            assert!(actions.iter().any(|item| item == action), "{action}");
+        }
+        for action in ["cli_runtime.discover", "cli_runtime.install"] {
             assert!(
                 !actions.iter().any(|item| item == action),
                 "{action} should be hidden"

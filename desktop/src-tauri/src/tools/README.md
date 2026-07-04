@@ -53,8 +53,9 @@
 - 每个 action 必须单一职责，名字直接表达一个结构化能力。
 - schema-first：action 必须有明确输入 schema 和输出 schema。
 - `Read` / `List` / `Search` 使用虚拟路径协议；`Write` 只写当前绑定的作者资源，当前支持 `manuscripts://current` 和 `editor://current/script`，不要用它写 `workspace://` 文件。
-- 普通 workspace 文件写入必须走结构化文件 action `workspace.write`（在当前 runtime 暴露时），而不是 `Write(path="workspace://...")`。
+- 普通 workspace 文件写入必须走结构化文件 action `workspace.write` / `workspace.patch`，或模型层的 `Operate(resource="workspace", operation="write|patch", input={...})` 兼容入口，而不是 `Write(path="workspace://...")`、shell 重定向或 here-doc。
 - `Operate` 使用 `resource + operation + id? + input?` 协议。
+- 本地 CLI / 脚本执行必须走 `cli_runtime.execute`，或模型层 `Operate(resource="cli_runtime", operation="run", input={"argv":[...]})`；`shell` / `bash` 只用于 workspace 内只读检查。
 - `Operate(resource="image", operation="generate")` 的比例、尺寸、质量必须放在 `input.aspectRatio` / `input.size` / `input.quality`，不要只写进自然语言 prompt。支持的 `aspectRatio` 为 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`。
 - `Operate(resource="media", operation="videoRetalk")` 只接收已可远程访问的 `input.video_url` 与 `input.audio_url`，并必须携带计费字段 `durationSeconds` / `resolution`；本地上传、数字人角色资产创建和首页入口由上层产品流负责。
 - 内容采集统一走 canonical action `capture.collect`，不要拆成内容 / 主页 / 评论多个顶层工具。输入用 `platform`（`auto|xhs|douyin|youtube`）、`target`（`auto|content|profile|comments`）和 `url` 表达差异；默认通过现有 capture server contract 下载媒体并入库到 Knowledge。`capture.status` 只负责按 `jobId` 查询或列出最近采集任务。
@@ -73,6 +74,7 @@
   - `workspace.read`
   - `workspace.createDirectory`
   - `workspace.write`
+  - `workspace.patch`
   - `workspace.search`
   - `knowledge.list`
   - `knowledge.read`

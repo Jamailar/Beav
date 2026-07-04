@@ -546,6 +546,11 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "skills.readResource",
     "skills.invoke",
     "skills.manage",
+    "cli_runtime.inspect",
+    "cli_runtime.diagnose",
+    "cli_runtime.execute",
+    "cli_runtime.execution.get",
+    "cli_runtime.execution.writeStdin",
     "image.generate",
     "video.generate",
     "video.analyze",
@@ -1335,18 +1340,26 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("runner.manage"));
         assert!(!plan.has_direct_app_cli_action("memory.diagnostics"));
         assert!(!plan.has_direct_app_cli_action("redclaw.runner.status"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
         assert!(plan.has_direct_app_cli_action("mcp.manage"));
         assert!(plan.direct_app_cli_actions.iter().all(|descriptor| {
             matches!(
                 descriptor.namespace,
-                "memory" | "runtime" | "runtime.tasks" | "redclaw.runner" | "mcp"
+                "memory"
+                    | "runtime"
+                    | "runtime.tasks"
+                    | "cli_runtime"
+                    | "cli_runtime.execution"
+                    | "redclaw.runner"
+                    | "mcp"
             )
         }));
     }
 
     #[test]
-    fn redclaw_runtime_pins_media_and_web_actions_without_cli_runtime() {
+    fn redclaw_runtime_pins_media_web_and_cli_runtime_foundations() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",
             ..ToolRegistryPlanParams::default()
@@ -1358,12 +1371,13 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("team.guide.create"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(plan.has_direct_app_cli_action("web.search"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.install"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.writeStdin"));
         assert!(plan.has_direct_app_cli_action("image.generate"));
     }
 
@@ -1442,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    fn team_runtime_pins_web_and_media_actions_without_cli_runtime() {
+    fn team_runtime_pins_web_media_and_cli_runtime_foundations() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "team",
             ..ToolRegistryPlanParams::default()
@@ -1454,12 +1468,13 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("team.guide.create"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(plan.has_direct_app_cli_action("web.search"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.install"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
-        assert!(!plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.writeStdin"));
     }
 
     #[test]
