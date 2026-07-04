@@ -89,11 +89,9 @@ pub(super) fn sync_transcript_from_bundle(
 ) -> Result<(), String> {
     let existing_entries = load_transcript_entries(state, &bundle.session_id)?;
     let existing_messages = transcript_message_entries(&existing_entries);
-    let visible_bundle_messages = bundle
-        .messages
-        .iter()
+    let visible_bundle_messages = compact_bundle_messages(&bundle.messages)
+        .into_iter()
         .filter(|message| !is_internal_runtime_bundle_message(message))
-        .cloned()
         .collect::<Vec<_>>();
     let prefix_len =
         matched_bundle_message_prefix_len(&existing_messages, &visible_bundle_messages);

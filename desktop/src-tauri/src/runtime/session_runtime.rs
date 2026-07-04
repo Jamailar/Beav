@@ -79,6 +79,7 @@ use reference_resolver::{
     resolve_reference_from_value_tree, resolve_session_file_reference_input_from_store,
 };
 pub use resources::{session_resources_prompt_for_session, session_resources_value_for_session};
+use transcript_api::compact_bundle_messages;
 pub use transcript_api::{
     duplicate_session_bundle, list_transcript_sessions, load_session_bundle_chat_messages,
     load_session_bundle_messages, merge_chat_messages_with_bundle_history, remove_session_bundle,

@@ -131,7 +131,14 @@ pub fn load_session_bundle_chat_messages(
             display_content: None,
             attachment: None,
             metadata: item.get("metadata").cloned(),
-            created_at: format!("{index:013}"),
+            created_at: item
+                .get("created_at")
+                .or_else(|| item.get("createdAt"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("bundle:{index:013}")),
         });
     }
     Ok(restored)
@@ -165,8 +172,64 @@ pub fn merge_chat_messages_with_bundle_history(
 
 fn bundle_message_key(message: &Value) -> Option<(String, String)> {
     let role = message.get("role")?.as_str()?.trim().to_string();
+    if role.is_empty() {
+        return None;
+    }
+    if role == "assistant" {
+        if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+            if !tool_calls.is_empty() {
+                let key = tool_calls
+                    .iter()
+                    .map(|tool_call| {
+                        let call_id = tool_call
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .trim();
+                        let function = tool_call.get("function").unwrap_or(&Value::Null);
+                        let name = function
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .trim();
+                        let arguments = function
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .trim();
+                        format!("{call_id}\u{1f}{name}\u{1f}{arguments}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\u{1e}");
+                if !key.trim().is_empty() {
+                    return Some((role, format!("tool_calls:{key}")));
+                }
+            }
+        }
+    }
+    if role == "tool" {
+        let call_id = message
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let tool_name = message
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let content = message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let key = format!("{call_id}\u{1f}{tool_name}\u{1f}{content}");
+        if !key.trim().is_empty() {
+            return Some((role, key));
+        }
+    }
     let content = message.get("content")?.as_str()?.trim().to_string();
-    if role.is_empty() || content.is_empty() {
+    if content.is_empty() {
         return None;
     }
     Some((role, content))
@@ -181,23 +244,41 @@ fn visible_chat_message_count(messages: &[Value]) -> usize {
                     message.get("role").and_then(Value::as_str),
                     Some("user" | "assistant")
                 )
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .map(|content| !content.is_empty())
+                    .unwrap_or(false)
         })
         .count()
 }
 
-fn append_missing_bundle_messages(base: &mut Vec<Value>, next: &[Value]) {
+fn upsert_bundle_messages(base: &mut Vec<Value>, next: &[Value]) {
     let mut seen = base
         .iter()
-        .filter_map(bundle_message_key)
-        .collect::<std::collections::HashSet<_>>();
+        .enumerate()
+        .filter_map(|(index, message)| bundle_message_key(message).map(|key| (key, index)))
+        .collect::<std::collections::HashMap<_, _>>();
     for message in next {
-        if bundle_message_key(message)
-            .map(|key| seen.insert(key))
-            .unwrap_or(true)
-        {
+        if let Some(key) = bundle_message_key(message) {
+            if let Some(index) = seen.get(&key).copied() {
+                base[index] = message.clone();
+            } else {
+                let index = base.len();
+                base.push(message.clone());
+                seen.insert(key, index);
+            }
+        } else {
             base.push(message.clone());
         }
     }
+}
+
+pub(super) fn compact_bundle_messages(messages: &[Value]) -> Vec<Value> {
+    let mut compacted = Vec::<Value>::new();
+    upsert_bundle_messages(&mut compacted, messages);
+    compacted
 }
 
 fn merge_session_bundle_messages(
@@ -207,21 +288,21 @@ fn merge_session_bundle_messages(
 ) -> Vec<Value> {
     let mut merged = existing
         .filter(|bundle| bundle.messages.len() > next.len())
-        .map(|bundle| bundle.messages.clone())
+        .map(|bundle| compact_bundle_messages(&bundle.messages))
         .unwrap_or_else(|| next.to_vec());
     if let Some(bundle) = existing {
-        append_missing_bundle_messages(&mut merged, &bundle.messages);
+        upsert_bundle_messages(&mut merged, &bundle.messages);
     }
-    append_missing_bundle_messages(&mut merged, next);
+    upsert_bundle_messages(&mut merged, next);
 
     if chat_snapshot.len() > visible_chat_message_count(&merged) {
         let previous = merged;
         merged = chat_snapshot.to_vec();
-        append_missing_bundle_messages(&mut merged, &previous);
+        upsert_bundle_messages(&mut merged, &previous);
     } else {
-        append_missing_bundle_messages(&mut merged, chat_snapshot);
+        upsert_bundle_messages(&mut merged, chat_snapshot);
     }
-    merged
+    compact_bundle_messages(&merged)
 }
 
 #[cfg(test)]
@@ -256,6 +337,46 @@ mod tests {
                 .and_then(Value::as_str),
             Some("http://xhslink.com/o/6ea4DsyOJtR")
         );
+    }
+
+    #[test]
+    fn bundle_save_merge_collapses_duplicate_tool_call_snapshots() {
+        let repeated_tool_call = json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "arguments": "{\"path\":\"references/guide.md\"}"
+                }
+            }]
+        });
+        let next = vec![
+            json!({ "role": "user", "content": "use skill" }),
+            repeated_tool_call.clone(),
+            repeated_tool_call.clone(),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "tool_name": "workflow",
+                "content": "{\"ok\":true}"
+            }),
+        ];
+        let chat_snapshot = vec![
+            json!({ "role": "user", "content": "use skill" }),
+            json!({ "role": "assistant", "content": "done" }),
+        ];
+
+        let merged = merge_session_bundle_messages(None, &next, &chat_snapshot);
+        let tool_call_snapshot_count = merged
+            .iter()
+            .filter(|message| message.get("tool_calls").is_some())
+            .count();
+
+        assert_eq!(tool_call_snapshot_count, 1);
+        assert_eq!(visible_chat_message_count(&merged), 2);
     }
 }
 
@@ -330,9 +451,10 @@ pub fn duplicate_session_bundle(
     bundle.session_id = target_session_id.to_string();
     bundle.created_at = now_iso();
     bundle.updated_at = now_iso();
-    bundle
-        .messages
-        .retain(|message| !is_internal_runtime_bundle_message(message));
+    bundle.messages = compact_bundle_messages(&bundle.messages)
+        .into_iter()
+        .filter(|message| !is_internal_runtime_bundle_message(message))
+        .collect();
     bundle.message_count = bundle.messages.len() as i64;
     persist_session_runtime_bundle(state, &bundle)?;
     let entries = load_transcript_entries(state, source_session_id)?;
