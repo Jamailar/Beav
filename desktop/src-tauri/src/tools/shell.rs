@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::path::Path;
 use tauri::{AppHandle, Runtime, State};
 
 use crate::cli_runtime::{
@@ -42,6 +43,7 @@ pub fn execute_shell<RT: Runtime>(
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .ok_or_else(|| "command is required".to_string())?;
+    enforce_shell_command_policy(raw_command)?;
 
     let cwd = arguments
         .get("cwd")
@@ -230,5 +232,235 @@ fn normalize_execution_mode(value: &str) -> Result<CliExecutionMode, String> {
         "managed" => Ok(CliExecutionMode::Managed),
         "unrestricted" => Ok(CliExecutionMode::Unrestricted),
         other => Err(format!("unsupported executionMode: {other}")),
+    }
+}
+
+fn enforce_shell_command_policy(command: &str) -> Result<(), String> {
+    let tokens = shell_words::split(command).map_err(|error| {
+        shell_policy_error(
+            command,
+            "SHELL_PARSE_ERROR",
+            format!("shell command could not be parsed safely: {error}"),
+        )
+    })?;
+    if tokens.is_empty() {
+        return Err(shell_policy_error(
+            command,
+            "SHELL_EMPTY_COMMAND",
+            "command is empty",
+        ));
+    }
+    if contains_write_shell_syntax(command, &tokens) {
+        return Err(shell_policy_error(
+            command,
+            "SHELL_WRITE_SYNTAX_BLOCKED",
+            "shell is read-only for AI tool calls and cannot create or modify files with redirects, here-documents, or command chaining. Use a structured Write/workspace action when one is exposed.",
+        ));
+    }
+    let program = leading_program(&tokens).ok_or_else(|| {
+        shell_policy_error(
+            command,
+            "SHELL_EMPTY_COMMAND",
+            "command does not contain a program",
+        )
+    })?;
+    let program_name = program_basename(program);
+    if is_real_cli_program(program_name) {
+        return Err(shell_policy_error(
+            command,
+            "SHELL_REAL_CLI_BLOCKED",
+            format!(
+                "shell is limited to read-only workspace inspection. Use Operate(resource=\"cli_runtime\", operation=\"inspect\", input={{\"command\":\"{program_name}\"}}) to diagnose this executable, then Operate(resource=\"cli_runtime\", operation=\"run\", input={{\"argv\":[\"{program_name}\",\"...\"]}}) to run it."
+            ),
+        ));
+    }
+    if !is_read_only_shell_program(program_name) {
+        return Err(shell_policy_error(
+            command,
+            "SHELL_PROGRAM_BLOCKED",
+            format!(
+                "shell only allows read-only inspection commands inside the workspace. unsupported program: {program_name}. Use Read/List/Search for files or cli_runtime for host CLI execution."
+            ),
+        ));
+    }
+    if program_name == "git" {
+        enforce_read_only_git(&tokens[1..], command)?;
+    }
+    Ok(())
+}
+
+fn contains_write_shell_syntax(command: &str, tokens: &[String]) -> bool {
+    if command.contains("<<")
+        || command.contains("&&")
+        || command.contains("||")
+        || command.contains(';')
+        || command.contains("$(")
+        || command.contains('`')
+    {
+        return true;
+    }
+    tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            ">" | ">>" | "1>" | "1>>" | "2>" | "2>>" | "&>" | "&>>" | ">|"
+        ) || token.starts_with('>')
+            || token.starts_with("1>")
+            || token.starts_with("2>")
+            || token.starts_with("&>")
+    })
+}
+
+fn leading_program(tokens: &[String]) -> Option<&str> {
+    tokens
+        .iter()
+        .map(String::as_str)
+        .find(|token| !looks_like_assignment(token))
+}
+
+fn looks_like_assignment(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .next()
+            .map(|ch| ch == '_' || ch.is_ascii_alphabetic())
+            .unwrap_or(false)
+}
+
+fn program_basename(program: &str) -> &str {
+    Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program)
+}
+
+fn is_read_only_shell_program(program: &str) -> bool {
+    matches!(
+        program,
+        "pwd" | "ls" | "find" | "rg" | "cat" | "head" | "tail" | "sed" | "wc" | "jq" | "git"
+    )
+}
+
+fn is_real_cli_program(program: &str) -> bool {
+    matches!(
+        program,
+        "python"
+            | "python3"
+            | "pip"
+            | "pip3"
+            | "uv"
+            | "node"
+            | "npm"
+            | "pnpm"
+            | "npx"
+            | "yarn"
+            | "bun"
+            | "deno"
+            | "tsx"
+            | "ts-node"
+            | "cargo"
+            | "rustc"
+            | "go"
+            | "ruby"
+            | "gem"
+            | "perl"
+            | "php"
+            | "java"
+            | "javac"
+            | "swift"
+            | "xcodebuild"
+            | "xcrun"
+            | "osascript"
+            | "curl"
+            | "wget"
+            | "which"
+            | "type"
+            | "command"
+            | "env"
+            | "sh"
+            | "bash"
+            | "zsh"
+    )
+}
+
+fn enforce_read_only_git(args: &[String], command: &str) -> Result<(), String> {
+    let subcommand = args
+        .iter()
+        .find(|item| !item.starts_with('-'))
+        .map(String::as_str)
+        .unwrap_or("status");
+    if matches!(
+        subcommand,
+        "status" | "diff" | "log" | "show" | "branch" | "rev-parse"
+    ) {
+        Ok(())
+    } else {
+        Err(shell_policy_error(
+            command,
+            "SHELL_GIT_SUBCOMMAND_BLOCKED",
+            format!("git subcommand is not allowed in shell: {subcommand}"),
+        ))
+    }
+}
+
+fn shell_policy_error(command: &str, code: &'static str, message: impl Into<String>) -> String {
+    serde_json::to_string_pretty(&json!({
+        "ok": false,
+        "tool": "shell",
+        "error": {
+            "code": code,
+            "message": message.into(),
+            "retryable": true,
+            "details": {
+                "command": command,
+                "allowedShellPrograms": ["pwd", "ls", "find", "rg", "cat", "head", "tail", "sed", "wc", "jq", "git"],
+                "hostCliTool": "Operate(resource=\"cli_runtime\", operation=\"inspect|run\")"
+            }
+        }
+    }))
+    .unwrap_or_else(|_| format!("shell command blocked: {code}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_policy_rejects_python_script_execution() {
+        let error = enforce_shell_command_policy("python3 -c 'print(1)'")
+            .expect_err("python should route through cli_runtime");
+
+        assert!(error.contains("SHELL_REAL_CLI_BLOCKED"));
+        assert!(error.contains("cli_runtime"));
+        assert!(error.contains("python3"));
+    }
+
+    #[test]
+    fn shell_policy_rejects_here_doc_file_writes() {
+        let error = enforce_shell_command_policy("cat > script.py <<'PY'\nprint(1)\nPY")
+            .expect_err("here-doc writes should be blocked");
+
+        assert!(error.contains("SHELL_WRITE_SYNTAX_BLOCKED"));
+    }
+
+    #[test]
+    fn shell_policy_allows_read_only_inspection() {
+        enforce_shell_command_policy("rg -n \"python\" desktop/src-tauri/src")
+            .expect("rg inspection should be allowed");
+        enforce_shell_command_policy("git status --short")
+            .expect("read-only git status should be allowed");
+    }
+
+    #[test]
+    fn shell_policy_blocks_mutating_git() {
+        let error = enforce_shell_command_policy("git commit -m test")
+            .expect_err("mutating git should be blocked");
+
+        assert!(error.contains("SHELL_GIT_SUBCOMMAND_BLOCKED"));
     }
 }

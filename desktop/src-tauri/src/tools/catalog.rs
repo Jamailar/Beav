@@ -6993,7 +6993,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "shell" => Some(ToolDescriptor {
             name: "shell",
-            description: "Run a real shell command in the user's environment with policy-controlled access. Supports shell syntax such as pipes, redirects, command substitution, glob expansion, and command chaining. Prefer structured Operate actions such as media.edit for supported app workflows; use shell for broad host command work and local tools.",
+            description: "Read-only shell inspection inside currentSpaceRoot. Supports simple pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands. Do not use this for Python/Node/npm or other real host CLI execution, PATH checks, network fetches, shell redirects, here-documents, or file writes; use Operate(resource=\"cli_runtime\", operation=\"inspect|diagnose|run\") for host CLIs and structured Write/workspace actions for file writes.",
             kind: ToolKind::Shell,
             requires_approval: false,
             concurrency_safe: false,
@@ -7183,11 +7183,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "shell",
-                "description": "Run a shell command and return its output or an execution id for polling. Supports shell syntax such as pipes, redirects, command substitution, glob expansion, and command chaining. Prefer structured Operate actions such as media.edit for video/audio editing workflows.",
+                "description": "Read-only shell inspection inside currentSpaceRoot. Supports simple pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands. Do not use this for Python/Node/npm or other real host CLI execution, PATH checks, network fetches, shell redirects, here-documents, or file writes; use Operate(resource=\"cli_runtime\", operation=\"inspect|diagnose|run\") for host CLIs and structured Write/workspace actions for file writes.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": { "type": "string", "description": "Shell command to execute in the user's default shell." },
+                        "command": { "type": "string", "description": "Read-only inspection command. Real CLI execution such as python3/node/npm and file-writing shell syntax are rejected." },
                         "cwd": { "type": "string", "description": "Working directory for the command." },
                         "workdir": { "type": "string", "description": "Codex-style alias for cwd." },
                         "maxChars": { "type": "integer", "minimum": 200, "maximum": 40000, "description": "Maximum output characters." },
@@ -7558,15 +7558,16 @@ mod tests {
     }
 
     #[test]
-    fn shell_schema_exposes_broad_shell_and_stdin_control() {
+    fn shell_schema_exposes_read_only_policy_and_stdin_control() {
         let shell = schema_for_tool_for_runtime_mode("shell", Some("team"))
             .expect("shell schema should exist");
         let description = shell
             .pointer("/function/description")
             .and_then(Value::as_str)
             .expect("shell description");
-        assert!(description.contains("pipes"));
-        assert!(description.contains("media.edit"));
+        assert!(description.contains("Read-only"));
+        assert!(description.contains("cli_runtime"));
+        assert!(description.contains("file writes"));
         assert!(shell
             .pointer("/function/parameters/properties/workdir")
             .is_some());
