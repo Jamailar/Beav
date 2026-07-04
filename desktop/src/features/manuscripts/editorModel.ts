@@ -15,6 +15,7 @@ import {
 export type DraftFilter = 'all' | 'drafts' | 'media' | 'image' | 'video' | 'audio' | 'folders';
 export type DraftLayout = 'gallery' | 'list';
 export type CreateKind = 'folder' | 'longform' | 'html';
+export type ManuscriptDraftType = CreateKind | 'document' | 'unknown';
 export type FileNode = {
     name: string;
     path: string;
@@ -22,7 +23,7 @@ export type FileNode = {
     children?: FileNode[];
     status?: 'writing' | 'completed' | 'abandoned';
     title?: string;
-    draftType?: CreateKind | 'unknown';
+    draftType?: ManuscriptDraftType;
     contentFormat?: ManuscriptFileKind;
     updatedAt?: number;
     summary?: string;
@@ -112,7 +113,7 @@ export type ManuscriptWriteProposal = {
 
 export type FileCardMeta = {
     title: string;
-    draftType: CreateKind | 'unknown';
+    draftType: ManuscriptDraftType;
     contentFormat?: ManuscriptFileKind;
     updatedAt?: number;
     summary: string;
@@ -127,12 +128,12 @@ export type DraftCard = {
     meta?: FileCardMeta;
     title: string;
     summary: string;
-    draftType: CreateKind | 'unknown';
+    draftType: ManuscriptDraftType;
 };
 
 export type EditorDescriptor = {
     title: string;
-    draftType: CreateKind | 'unknown';
+    draftType: ManuscriptDraftType;
 };
 
 export type FolderContextMenuState = {
@@ -228,9 +229,10 @@ export type PackageState = {
 export type ExportVideoResolution = 'source' | '1080p' | '720p';
 
 export const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
-export function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
+export function resolveDraftExtension(kind: ManuscriptDraftType): string {
     if (kind === 'longform') return '';
     if (kind === 'html') return MANUSCRIPT_HTML_EXTENSION;
+    if (kind === 'document') return '';
     return MANUSCRIPT_MARKDOWN_EXTENSION;
 }
 
@@ -268,7 +270,7 @@ export function exportResolutionDimensions(
     };
 }
 
-export function ensureDraftFileName(baseName: string, kind: CreateKind | 'unknown'): string {
+export function ensureDraftFileName(baseName: string, kind: ManuscriptDraftType): string {
     const extension = resolveDraftExtension(kind);
     return extension ? ensureManuscriptFileName(baseName, extension as ManuscriptExtension) : baseName;
 }
@@ -423,12 +425,12 @@ export function buildDraftTemplate(title: string, kind: Exclude<CreateKind, 'fol
     return `---\nid: draft_${ts}\ntitle: ${quotedTitle}\ndraftType: ${kind}\nstatus: writing\ncreatedAt: ${ts}\nupdatedAt: ${ts}\n---\n\n# ${safeTitle}\n\n## ${sectionTitle}\n\n`;
 }
 
-export function shouldHideFrontmatterInEditor(draftType: CreateKind | 'unknown' | null | undefined): boolean {
+export function shouldHideFrontmatterInEditor(draftType: ManuscriptDraftType | null | undefined): boolean {
     if (draftType === 'html') return false;
     return true;
 }
 
-export function splitWritingDraftContent(content: string, draftType: CreateKind | 'unknown' | null | undefined) {
+export function splitWritingDraftContent(content: string, draftType: ManuscriptDraftType | null | undefined) {
     const source = String(content || '');
     if (!shouldHideFrontmatterInEditor(draftType)) {
         return {
@@ -465,8 +467,8 @@ export function pathBasenameSafe(rawPath: string): string {
     return parts[parts.length - 1] || '';
 }
 
-export function manuscriptContentFormatFromPath(filePath: string | null | undefined): ManuscriptFileKind {
-    return getManuscriptFileKind(String(filePath || '')) || 'markdown';
+export function manuscriptContentFormatFromPath(filePath: string | null | undefined): 'markdown' | 'html' {
+    return getManuscriptFileKind(String(filePath || '')) === 'html' ? 'html' : 'markdown';
 }
 
 export function normalizeAssetKindReference(value: string | null | undefined): string {
@@ -596,13 +598,14 @@ export function formatDateLabel(input?: string | number): string {
     return formatTimestampDate(input);
 }
 
-export function resolveDraftTypeLabel(type: CreateKind | 'unknown'): string {
+export function resolveDraftTypeLabel(type: ManuscriptDraftType): string {
     if (type === 'longform') return '长文';
     if (type === 'html') return 'HTML';
+    if (type === 'document') return '文档';
     return '稿件';
 }
 
-export function resolveDraftTypeStyle(type: CreateKind | 'unknown'): { chip: string; tile: string; iconWrap: string } {
+export function resolveDraftTypeStyle(type: ManuscriptDraftType): { chip: string; tile: string; iconWrap: string } {
     void type;
     return {
         chip: 'bg-sky-500/10 text-sky-700 border border-sky-200/90',

@@ -4,6 +4,7 @@ import {
     Check,
     Download,
     Eye,
+    ExternalLink,
     FileText,
     FileAudio,
     FileVideo,
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { DocumentPreviewWorkbench } from './DocumentPreviewWorkbench';
 import { EditorLayoutToggleButton } from './EditorLayoutToggleButton';
 import type { EditorBodyViewMode } from './WritingDraftWorkbench';
 import { MediaAssetPreviewOverlay } from '../../pages/media-library/MediaAssetPreviewOverlay';
@@ -49,6 +51,7 @@ import {
     DraftFilter,
     DraftLayout,
     CreateKind,
+    ManuscriptDraftType,
     FileNode,
     MediaAssetSource,
     MediaAsset,
@@ -303,6 +306,10 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const editorFileContentFormat = editorFile ? fileMetaMap[editorFile]?.contentFormat : undefined;
     const isMediaScope = filter === 'media' || filter === 'image' || filter === 'video' || filter === 'audio';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
+    const editorMetadataContentFormat = String(editorMetadata.contentFormat || '').trim();
+    const editorIsDocument = editorMetadataContentFormat === 'document'
+        || editorFileContentFormat === 'document'
+        || editorDescriptor?.draftType === 'document';
     const currentEditorContent = useMemo(
         () => composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock),
         [editorBody, editorFrontmatterBlock]
@@ -324,6 +331,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     useEffect(() => {
         if (mode !== 'editor' || !editorFile) return;
         const metadataFormat = String(editorMetadata.contentFormat || editorFileContentFormat || '').trim();
+        if (metadataFormat === 'document') return;
         const nextContentFormat = metadataFormat === 'html'
             ? 'html'
             : manuscriptContentFormatFromPath(editorFile);
@@ -618,7 +626,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 setEditorDescriptor((current) => current ? {
                     ...current,
                     title: nextTitle || current.title,
-                    draftType: (nextDraftType as CreateKind | '') || current.draftType,
+                    draftType: (nextDraftType as ManuscriptDraftType | '') || current.draftType,
                 } : current);
             }
             uiDebug('manuscripts', 'editor_body_refreshed', {
@@ -876,7 +884,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 }
                 setEditorDescriptor({
                     title: String(metadata.title || '').trim() || DEFAULT_UNTITLED_DRAFT_TITLE,
-                    draftType: (String(metadata.draftType || '').trim() as CreateKind | '') || 'unknown',
+                    draftType: (String(metadata.draftType || '').trim() as ManuscriptDraftType | '') || 'unknown',
                 });
             } catch {
                 setEditorDescriptor({
@@ -1271,7 +1279,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             }
             setEditorDescriptor({
                 title: String(metadata.title || '').trim() || DEFAULT_UNTITLED_DRAFT_TITLE,
-                draftType: (String(metadata.draftType || '').trim() as CreateKind | '') || 'unknown',
+                draftType: (String(metadata.draftType || '').trim() as ManuscriptDraftType | '') || 'unknown',
             });
         } catch {
             setEditorDescriptor({
@@ -1508,6 +1516,54 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, [ensureLatestEditorContentSaved, workingId]);
 
+    const handleOpenEditorDocument = useCallback(async () => {
+        const snapshotFile = editorFileRef.current;
+        if (!snapshotFile) return;
+        try {
+            const result = await window.ipcRenderer.openPath(`manuscripts://${snapshotFile}`);
+            if (result && result.success === false) {
+                throw new Error(result.error || '打开文件失败');
+            }
+        } catch (openError) {
+            void appAlert(openError instanceof Error ? openError.message : '打开文件失败');
+        }
+    }, []);
+
+    const handleRevealEditorDocument = useCallback(async () => {
+        const snapshotFile = editorFileRef.current;
+        if (!snapshotFile) return;
+        try {
+            const result = await window.ipcRenderer.files.showInFolder({
+                source: `manuscripts://${snapshotFile}`,
+            }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                throw new Error(result?.error || '显示文件失败');
+            }
+        } catch (revealError) {
+            void appAlert(revealError instanceof Error ? revealError.message : '显示文件失败');
+        }
+    }, []);
+
+    const handleSaveAsEditorDocument = useCallback(async () => {
+        const snapshotFile = editorFileRef.current;
+        if (!snapshotFile || workingId) return;
+        setWorkingId('save-as:document');
+        try {
+            const result = await window.ipcRenderer.files.saveAs({
+                source: `manuscripts://${snapshotFile}`,
+                defaultName: pathBasenameSafe(snapshotFile),
+            }) as { success?: boolean; error?: string; canceled?: boolean };
+            if (result?.canceled) return;
+            if (result && result.success === false) {
+                throw new Error(result.error || '另存文件失败');
+            }
+        } catch (saveAsError) {
+            void appAlert(saveAsError instanceof Error ? saveAsError.message : '另存文件失败');
+        } finally {
+            setWorkingId(null);
+        }
+    }, [workingId]);
+
     const handleGenerateRemotionScene = useCallback(async (instructionsOverride?: string) => {
         if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video') return;
         setIsGeneratingRemotion(true);
@@ -1652,7 +1708,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [editorFile]);
 
     useEffect(() => {
-        if (!editorFile) {
+        if (!editorFile || editorIsDocument) {
             setPackageState(null);
             setExportVideoPath('');
             setExportVideoProgress(0);
@@ -1662,7 +1718,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             return;
         }
         void refreshPackageState(editorFile);
-    }, [editorFile, refreshPackageState]);
+    }, [editorFile, editorIsDocument, refreshPackageState]);
 
     const loadEditorWriteProposal = useCallback(async (filePath: string | null) => {
         if (!filePath) {
@@ -1718,13 +1774,13 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [editorDescriptor?.draftType, editorFile, mode]);
 
     useEffect(() => {
-        if (!editorFile || mode !== 'editor') {
+        if (!editorFile || mode !== 'editor' || editorIsDocument) {
             setEditorWriteProposal(null);
             setEditorReviewBody('');
             return;
         }
         void loadEditorWriteProposal(editorFile);
-    }, [editorFile, loadEditorWriteProposal, mode]);
+    }, [editorFile, editorIsDocument, loadEditorWriteProposal, mode]);
 
     useEffect(() => {
         if (!editorWriteProposal) {
@@ -1739,7 +1795,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
 
     useEffect(() => {
         const handleProposalChanged = (_event: unknown, payload?: { filePath?: string; proposal?: ManuscriptWriteProposal | null }) => {
-            if (!editorFile) return;
+            if (!editorFile || editorIsDocument) return;
             if (!isSameDraftRelativePath(payload?.filePath, editorFile)) return;
             const nextProposal = payload?.proposal || null;
             setEditorWriteProposal(nextProposal);
@@ -1756,10 +1812,10 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         return () => {
             window.ipcRenderer.manuscripts.offWriteProposal(handleProposalChanged);
         };
-    }, [editorDescriptor?.draftType, editorFile]);
+    }, [editorDescriptor?.draftType, editorFile, editorIsDocument]);
 
     useEffect(() => {
-        if (!editorFile || mode !== 'editor' || editorBodyDirty) return;
+        if (!editorFile || editorIsDocument || mode !== 'editor' || editorBodyDirty) return;
         const nextScriptBody = packageState?.videoProject?.scriptBody
             ?? packageState?.editorProject?.script?.body;
         if (typeof nextScriptBody !== 'string') return;
@@ -1772,6 +1828,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         editorBody,
         editorBodyDirty,
         editorDescriptor?.draftType,
+        editorIsDocument,
         editorFile,
         editorFrontmatterBlock,
         mode,
@@ -1780,7 +1837,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     ]);
 
     useEffect(() => {
-        if (!editorFile || !editorBodyDirty || isSavingEditorBody) return;
+        if (!editorFile || editorIsDocument || !editorBodyDirty || isSavingEditorBody) return;
         const timer = window.setTimeout(() => {
             const savePromise = runEditorSave({ alertOnError: false }).finally(() => {
                 if (editorSavePromiseRef.current === savePromise) {
@@ -1794,6 +1851,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [
         editorBody,
         editorBodyDirty,
+        editorIsDocument,
         editorFile,
         editorFrontmatterBlock,
         editorMetadata,
@@ -1801,7 +1859,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         runEditorSave,
     ]);
 
-    const editorChatBinding = useMemo(() => buildEditorSessionBinding({
+    const editorChatBinding = useMemo(() => editorIsDocument ? null : buildEditorSessionBinding({
         editorFile,
         draftType: editorDescriptor?.draftType,
         editorTitle: editorDescriptor?.title,
@@ -1814,6 +1872,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         editorBodyDirty,
         editorDescriptor?.draftType,
         editorDescriptor?.title,
+        editorIsDocument,
         editorFile,
         fileMetaMap,
         packageState,
@@ -2271,14 +2330,15 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         };
         const draftType = currentDescriptor.draftType;
         const metaContentFormat = String(editorMetadata.contentFormat || fileMetaMap[editorFile]?.contentFormat || '').trim();
-        const contentFormat = metaContentFormat === 'html'
+        const isDocumentContent = metaContentFormat === 'document' || draftType === 'document';
+        const contentFormat = !isDocumentContent && metaContentFormat === 'html'
             ? 'html'
             : manuscriptContentFormatFromPath(editorFile);
         const fileBaseUrl = String(editorMetadata.fileBaseUrl || '').trim();
         const draftStyle = resolveDraftTypeStyle(draftType);
         const isImmersiveWorkbench = mode === 'editor';
         const isArticlePackage = draftType === 'longform';
-        const canBindMediaAssets = isArticlePackage || contentFormat === 'markdown';
+        const canBindMediaAssets = !isDocumentContent && (isArticlePackage || contentFormat === 'markdown');
         const isScriptConfirmed = (
             packageState?.videoProject?.scriptApproval?.status
             || packageState?.editorProject?.ai?.scriptApproval?.status
@@ -2286,7 +2346,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         const editorWriteProposalBaseDraft = editorWriteProposal
             ? splitWritingDraftContent(editorWriteProposal.baseContent, draftType)
             : null;
-        const editorWriteProposalView = editorWriteProposal && editorWriteProposalBaseDraft ? {
+        const editorWriteProposalView = !isDocumentContent && editorWriteProposal && editorWriteProposalBaseDraft ? {
             id: editorWriteProposal.id,
             baseBody: editorWriteProposalBaseDraft.body,
             isStale: currentEditorContent !== editorWriteProposal.baseContent,
@@ -2438,56 +2498,96 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                         </div>
                     </div>
                     <div className="flex items-center gap-1.5">
-                        <div className={clsx(
-                            'flex shrink-0 items-center gap-0.5 rounded-lg p-0.5',
-                            isImmersiveWorkbench
-                                ? 'border border-border bg-surface-secondary/50'
-                                : 'border border-black/[0.04] bg-black/[0.03]'
-                        )}>
-                            <button
-                                type="button"
-                                onClick={() => setEditorBodyViewMode('edit')}
-                                aria-label="编辑"
-                                title="编辑"
-                                aria-pressed={editorBodyViewMode === 'edit'}
-                                className={clsx(
-                                    'inline-flex h-8 w-8 items-center justify-center rounded-md transition-all active:scale-95',
-                                    editorBodyViewMode === 'edit'
-                                        ? 'bg-accent-primary text-white shadow-sm'
-                                        : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
-                                )}
-                            >
-                                <Pencil className="h-4 w-4" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setEditorBodyViewMode('preview')}
-                                aria-label="预览"
-                                title="预览"
-                                aria-pressed={editorBodyViewMode === 'preview'}
-                                className={clsx(
-                                    'inline-flex h-8 w-8 items-center justify-center rounded-md transition-all active:scale-95',
-                                    editorBodyViewMode === 'preview'
-                                        ? 'bg-accent-primary text-white shadow-sm'
-                                        : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
-                                )}
-                            >
-                                <Eye className="h-4 w-4" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    void handleDownloadEditorFile();
-                                }}
-                                aria-label="下载"
-                                title="下载"
-                                disabled={!editorFile || Boolean(workingId) || isSavingEditorBody}
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
-                            >
-                                {workingId === 'download:editor' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                            </button>
-                        </div>
-                        {(editorBodyDirty || isSavingEditorBody) ? (
+                        {isDocumentContent ? (
+                            <div className={clsx(
+                                'flex shrink-0 items-center gap-0.5 rounded-lg p-0.5',
+                                isImmersiveWorkbench
+                                    ? 'border border-border bg-surface-secondary/50'
+                                    : 'border border-black/[0.04] bg-black/[0.03]'
+                            )}>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleOpenEditorDocument()}
+                                    aria-label="打开"
+                                    title="打开"
+                                    disabled={!editorFile || Boolean(workingId)}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
+                                >
+                                    <ExternalLink className="h-4 w-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleRevealEditorDocument()}
+                                    aria-label="在文件夹中显示"
+                                    title="在文件夹中显示"
+                                    disabled={!editorFile || Boolean(workingId)}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
+                                >
+                                    <FolderOpen className="h-4 w-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleSaveAsEditorDocument()}
+                                    aria-label="下载"
+                                    title="下载"
+                                    disabled={!editorFile || Boolean(workingId)}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
+                                >
+                                    {workingId === 'save-as:document' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                </button>
+                            </div>
+                        ) : (
+                            <div className={clsx(
+                                'flex shrink-0 items-center gap-0.5 rounded-lg p-0.5',
+                                isImmersiveWorkbench
+                                    ? 'border border-border bg-surface-secondary/50'
+                                    : 'border border-black/[0.04] bg-black/[0.03]'
+                            )}>
+                                <button
+                                    type="button"
+                                    onClick={() => setEditorBodyViewMode('edit')}
+                                    aria-label="编辑"
+                                    title="编辑"
+                                    aria-pressed={editorBodyViewMode === 'edit'}
+                                    className={clsx(
+                                        'inline-flex h-8 w-8 items-center justify-center rounded-md transition-all active:scale-95',
+                                        editorBodyViewMode === 'edit'
+                                            ? 'bg-accent-primary text-white shadow-sm'
+                                            : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
+                                    )}
+                                >
+                                    <Pencil className="h-4 w-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setEditorBodyViewMode('preview')}
+                                    aria-label="预览"
+                                    title="预览"
+                                    aria-pressed={editorBodyViewMode === 'preview'}
+                                    className={clsx(
+                                        'inline-flex h-8 w-8 items-center justify-center rounded-md transition-all active:scale-95',
+                                        editorBodyViewMode === 'preview'
+                                            ? 'bg-accent-primary text-white shadow-sm'
+                                            : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
+                                    )}
+                                >
+                                    <Eye className="h-4 w-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        void handleDownloadEditorFile();
+                                    }}
+                                    aria-label="下载"
+                                    title="下载"
+                                    disabled={!editorFile || Boolean(workingId) || isSavingEditorBody}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
+                                >
+                                    {workingId === 'download:editor' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                </button>
+                            </div>
+                        )}
+                        {!isDocumentContent && (editorBodyDirty || isSavingEditorBody) ? (
                             <div className={clsx(
                                 'shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium',
                                 isImmersiveWorkbench
@@ -2558,43 +2658,47 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
 
                     </div>
                 </div>
-                <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">写作工作台加载中...</div>}>
-                    <WritingDraftWorkbench
-                        isActive={isActive}
-                        draftType={draftType === 'longform' || draftType === 'html' ? draftType : 'unknown'}
-                        title={currentDescriptor.title}
-                        filePath={editorFile}
-                        editorBody={editorWriteProposalView ? editorReviewBody : editorBody}
-                        bodyViewMode={editorBodyViewMode}
-                        contentFormat={contentFormat}
-                        fileBaseUrl={fileBaseUrl}
-                        boundAssets={manuscriptBoundAssets}
-                        writeProposal={editorWriteProposalView}
-                        editorChatSessionId={editorChatSessionId}
-                        editorChatReady={editorChatSessionReady}
-                        editorSessionMetadata={editorChatBinding?.metadata ?? null}
-                        onEditorBodyChange={(value) => {
-                            if (editorWriteProposalView) {
-                                editorReviewBodyRef.current = value;
-                                setEditorReviewBody(value);
-                                return;
-                            }
-                            editorBodyRef.current = value;
-                            editorBodyDirtyRef.current = true;
-                            setEditorBody(value);
-                            setEditorBodyDirty(true);
-                        }}
-                        onRequestBindImages={() => {
-                            setBindAssetRole('image');
-                            setIsBindAssetModalOpen(true);
-                        }}
-                        onPreviewAsset={handlePreviewBoundAsset}
-                        onRemoveBoundImage={(asset) => {
-                            void handleUnbindBoundAsset(asset);
-                        }}
-                        onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
-                    />
-                </Suspense>
+                {isDocumentContent ? (
+                    <DocumentPreviewWorkbench filePath={editorFile} title={currentDescriptor.title} />
+                ) : (
+                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">写作工作台加载中...</div>}>
+                        <WritingDraftWorkbench
+                            isActive={isActive}
+                            draftType={draftType === 'longform' || draftType === 'html' ? draftType : 'unknown'}
+                            title={currentDescriptor.title}
+                            filePath={editorFile}
+                            editorBody={editorWriteProposalView ? editorReviewBody : editorBody}
+                            bodyViewMode={editorBodyViewMode}
+                            contentFormat={contentFormat}
+                            fileBaseUrl={fileBaseUrl}
+                            boundAssets={manuscriptBoundAssets}
+                            writeProposal={editorWriteProposalView}
+                            editorChatSessionId={editorChatSessionId}
+                            editorChatReady={editorChatSessionReady}
+                            editorSessionMetadata={editorChatBinding?.metadata ?? null}
+                            onEditorBodyChange={(value) => {
+                                if (editorWriteProposalView) {
+                                    editorReviewBodyRef.current = value;
+                                    setEditorReviewBody(value);
+                                    return;
+                                }
+                                editorBodyRef.current = value;
+                                editorBodyDirtyRef.current = true;
+                                setEditorBody(value);
+                                setEditorBodyDirty(true);
+                            }}
+                            onRequestBindImages={() => {
+                                setBindAssetRole('image');
+                                setIsBindAssetModalOpen(true);
+                            }}
+                            onPreviewAsset={handlePreviewBoundAsset}
+                            onRemoveBoundImage={(asset) => {
+                                void handleUnbindBoundAsset(asset);
+                            }}
+                            onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
+                        />
+                    </Suspense>
+                )}
                 {isBindAssetModalOpen && (
                     <div
                         className="fixed inset-0 z-[9990] flex items-center justify-center bg-black/38 p-6 backdrop-blur-sm"

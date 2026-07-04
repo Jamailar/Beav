@@ -23,7 +23,8 @@ pub(super) fn preview_kind_for_extension(extension: Option<&str>, is_local: bool
         "mp4" | "webm" | "mov" | "m4v" | "mkv" | "avi" | "ogv" => "video",
         "mp3" | "wav" | "m4a" | "flac" | "aac" | "ogg" | "oga" | "opus" => "audio",
         "pdf" => "pdf",
-        "doc" | "docx" | "odt" | "ppt" | "pptx" | "odp" | "xls" | "xlsx" | "ods" => "document",
+        "doc" | "docx" | "docm" | "odt" | "ppt" | "pptx" | "pptm" | "odp" | "xls" | "xlsx"
+        | "xlsm" | "xlsb" | "ods" => "document",
         "html" | "htm" => "html",
         "md" | "markdown" | "txt" | "srt" | "vtt" | "diff" | "patch" | "json" | "csv" | "tsv"
         | "yaml" | "yml" | "toml" | "ini" | "conf" | "config" | "env" | "xml" | "log" | "sql"
@@ -70,12 +71,16 @@ pub(super) fn mime_type_for_extension(extension: Option<&str>) -> Option<&'stati
         "pdf" => "application/pdf",
         "doc" => "application/msword",
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "docm" => "application/vnd.ms-word.document.macroEnabled.12",
         "odt" => "application/vnd.oasis.opendocument.text",
         "ppt" => "application/vnd.ms-powerpoint",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "pptm" => "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
         "odp" => "application/vnd.oasis.opendocument.presentation",
         "xls" => "application/vnd.ms-excel",
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xlsm" => "application/vnd.ms-excel.sheet.macroEnabled.12",
+        "xlsb" => "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
         "ods" => "application/vnd.oasis.opendocument.spreadsheet",
         "html" | "htm" => "text/html",
         "md" | "markdown" => "text/markdown",
@@ -105,13 +110,33 @@ mod tests {
     #[test]
     fn preview_kind_covers_common_document_and_media_extensions() {
         assert_eq!(preview_kind_for_extension(Some("docx"), true), "document");
+        assert_eq!(preview_kind_for_extension(Some("docm"), true), "document");
         assert_eq!(preview_kind_for_extension(Some("pptx"), true), "document");
+        assert_eq!(preview_kind_for_extension(Some("pptm"), true), "document");
         assert_eq!(preview_kind_for_extension(Some("xlsx"), true), "document");
+        assert_eq!(preview_kind_for_extension(Some("xlsm"), true), "document");
+        assert_eq!(preview_kind_for_extension(Some("xlsb"), true), "document");
         assert_eq!(preview_kind_for_extension(Some("diff"), true), "text");
         assert_eq!(preview_kind_for_extension(Some("tiff"), true), "image");
         assert_eq!(
             mime_type_for_extension(Some("docx")),
             Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        );
+        assert_eq!(
+            mime_type_for_extension(Some("docm")),
+            Some("application/vnd.ms-word.document.macroEnabled.12")
+        );
+        assert_eq!(
+            mime_type_for_extension(Some("pptm")),
+            Some("application/vnd.ms-powerpoint.presentation.macroEnabled.12")
+        );
+        assert_eq!(
+            mime_type_for_extension(Some("xlsm")),
+            Some("application/vnd.ms-excel.sheet.macroEnabled.12")
+        );
+        assert_eq!(
+            mime_type_for_extension(Some("xlsb")),
+            Some("application/vnd.ms-excel.sheet.binary.macroEnabled.12")
         );
     }
 }

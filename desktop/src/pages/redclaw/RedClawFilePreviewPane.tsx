@@ -7,6 +7,7 @@ import {
     Copy,
     ExternalLink,
     File,
+    FilePlus,
     FileText,
     FolderOpen,
     Globe,
@@ -16,12 +17,15 @@ import {
     X,
 } from 'lucide-react';
 import type { ChatMessageLinkKind, ChatMessageLinkTarget } from '../../components/MessageItem';
+import { MarkdownItPreview } from '../../components/manuscripts/MarkdownItPreview';
 
 interface RedClawFilePreviewPaneProps {
     target: ChatMessageLinkTarget;
     onClose: () => void;
     onOpenExternal: (target: ChatMessageLinkTarget) => void | Promise<void>;
     onRevealInFolder: (target: ChatMessageLinkTarget) => void | Promise<void>;
+    onImportDocument?: (target: ChatMessageLinkTarget) => void | Promise<void>;
+    importingDocument?: boolean;
     variant?: 'card' | 'sidebar';
 }
 
@@ -81,6 +85,11 @@ const getInspectableSource = (target: ChatMessageLinkTarget): string => (
     target.localPathCandidate || target.href
 );
 
+const isManuscriptSource = (target: ChatMessageLinkTarget): boolean => (
+    /^manuscripts:\/\//i.test(String(target.href || ''))
+    || /^manuscripts:\/\//i.test(String(target.localPathCandidate || ''))
+);
+
 const canCopyPreviewText = (target: ChatMessageLinkTarget): boolean => (
     (target.kind === 'text' || target.kind === 'html' || target.kind === 'manuscript')
     && typeof target.previewText === 'string'
@@ -97,6 +106,8 @@ export function RedClawFilePreviewPane({
     onClose,
     onOpenExternal,
     onRevealInFolder,
+    onImportDocument,
+    importingDocument = false,
     variant = 'card',
 }: RedClawFilePreviewPaneProps) {
     const [loadFailed, setLoadFailed] = useState(false);
@@ -104,16 +115,18 @@ export function RedClawFilePreviewPane({
     const Icon = getKindIcon(target.kind);
     const sourceLabel = getInspectableSource(target);
     const copyLabel = canCopyPreviewText(target) ? '复制全文' : '复制路径';
+    const canImportDocument = target.kind === 'document' && target.isLocal && !isManuscriptSource(target) && typeof onImportDocument === 'function';
     const canInlinePreview = useMemo(() => (
         target.kind === 'image'
         || target.kind === 'video'
         || target.kind === 'audio'
         || target.kind === 'manuscript'
         || target.kind === 'pdf'
+        || (target.kind === 'document' && Boolean(target.resolvedUrl))
         || target.kind === 'html'
         || target.kind === 'text'
         || target.kind === 'web'
-    ), [target.kind]);
+    ), [target.kind, target.resolvedUrl]);
 
     useEffect(() => {
         setLoadFailed(false);
@@ -158,9 +171,14 @@ export function RedClawFilePreviewPane({
         if ((target.kind === 'text' || target.kind === 'html' || target.kind === 'manuscript') && typeof target.previewText === 'string') {
             if (isReadableManuscriptPreview(target)) {
                 return (
-                    <article className="h-full w-full overflow-auto bg-surface-secondary/30 px-6 py-5 text-[16px] leading-7 text-text-secondary whitespace-pre-wrap">
-                        {target.previewText}
-                    </article>
+                    <div className="h-full w-full overflow-auto bg-surface-secondary/30 px-6 py-5">
+                        <MarkdownItPreview
+                            content={target.previewText}
+                            density="compact"
+                            emptyText="暂无内容"
+                            className="text-text-secondary"
+                        />
+                    </div>
                 );
             }
 
@@ -293,6 +311,20 @@ export function RedClawFilePreviewPane({
                             title="在文件夹中显示"
                         >
                             <FolderOpen className="h-4 w-4" />
+                        </button>
+                    )}
+                    {canImportDocument && (
+                        <button
+                            type="button"
+                            onClick={() => void onImportDocument?.(target)}
+                            disabled={importingDocument}
+                            className={clsx(
+                                'inline-flex items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary disabled:opacity-45',
+                                sidebarVariant ? 'h-8 w-8' : 'h-9 w-9'
+                            )}
+                            title="导入文件"
+                        >
+                            <FilePlus className="h-4 w-4" />
                         </button>
                     )}
                     <button

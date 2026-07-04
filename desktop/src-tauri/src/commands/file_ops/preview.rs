@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
+#[path = "office_preview.rs"]
+mod office_preview;
 #[path = "preview_paths.rs"]
 mod preview_paths;
 #[path = "preview_types.rs"]
@@ -19,7 +21,6 @@ use preview_types::{
 };
 
 const PREVIEW_TEXT_MAX_BYTES: u64 = 512 * 1024;
-
 fn read_preview_text(path: &Path, kind: &str) -> Option<String> {
     if kind != "text" && kind != "html" && kind != "manuscript" {
         return None;
@@ -144,13 +145,29 @@ pub(crate) fn resolve_preview_target(
     } else {
         preview_title_for_path(trimmed, &original_path, &path)
     };
+    let preview_file = if exists && !is_directory && kind == "document" {
+        office_preview::office_preview_file_for_path(&path)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     let preview_text = if exists && !is_directory {
         read_preview_text(&path, kind)
     } else {
         None
     };
     let resolved_url = if exists && !is_directory {
-        redbox_asset_url_for_path(&path)
+        preview_file
+            .as_ref()
+            .map(|path| redbox_asset_url_for_path(path))
+            .unwrap_or_else(|| {
+                if kind == "document" {
+                    String::new()
+                } else {
+                    redbox_asset_url_for_path(&path)
+                }
+            })
     } else {
         String::new()
     };

@@ -85,6 +85,48 @@ pub(crate) struct CanonicalDocument {
     pub visual_manifest: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub(crate) struct MarkdownDocument {
+    pub title: Option<String>,
+    pub source_type: String,
+    pub parser_info: ParserInfo,
+    pub block_count: usize,
+    pub markdown: String,
+    pub plain_text: String,
+}
+
+#[allow(dead_code)]
+pub(crate) fn parse_path_to_markdown(path: &Path) -> Result<Option<MarkdownDocument>, String> {
+    let root = path.parent().unwrap_or(path);
+    let Some(document) = parse_path(
+        "document-preview",
+        root,
+        path,
+        &VisualIndexConfig::default(),
+        &ParserProviderConfig::default(),
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(markdown_document_from_canonical(&document)))
+}
+
+#[allow(dead_code)]
+pub(crate) fn markdown_document_from_canonical(document: &CanonicalDocument) -> MarkdownDocument {
+    let markdown = canonical_document_markdown(document);
+    let plain_text = canonical_document_plain_text(document);
+    MarkdownDocument {
+        title: document.title.clone(),
+        source_type: document.source_type.clone(),
+        parser_info: document.parser_info.clone(),
+        block_count: document.blocks.len(),
+        markdown,
+        plain_text,
+    }
+}
+
 pub(crate) fn parse_path(
     source_id: &str,
     root_path: &Path,
@@ -188,6 +230,158 @@ pub(crate) fn parse_path(
     }))
 }
 
+#[allow(dead_code)]
+fn canonical_document_plain_text(document: &CanonicalDocument) -> String {
+    document
+        .blocks
+        .iter()
+        .map(|block| block.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+#[allow(dead_code)]
+fn canonical_document_markdown(document: &CanonicalDocument) -> String {
+    let mut output = String::new();
+    if let Some(title) = document
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        output.push_str("# ");
+        output.push_str(&escape_markdown_heading(title));
+        output.push_str("\n\n");
+    }
+
+    let mut current_key: Option<(String, Vec<String>, Option<i64>)> = None;
+    let mut current_text = Vec::<String>::new();
+
+    let flush_group = |output: &mut String,
+                       key: &Option<(String, Vec<String>, Option<i64>)>,
+                       chunks: &mut Vec<String>| {
+        if chunks.is_empty() {
+            return;
+        }
+        if let Some((block_type, section_path, page)) = key {
+            if let Some(heading) = section_markdown_heading(block_type, section_path, *page) {
+                if !output.trim_end().ends_with(&heading) {
+                    output.push_str("## ");
+                    output.push_str(&escape_markdown_heading(&heading));
+                    output.push_str("\n\n");
+                }
+            }
+            let joined = chunks
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !joined.trim().is_empty() {
+                if block_type == "xlsx-sheet" {
+                    output.push_str(&tabular_text_to_markdown(&joined));
+                } else {
+                    output.push_str(joined.trim());
+                }
+                output.push_str("\n\n");
+            }
+        }
+        chunks.clear();
+    };
+
+    for block in &document.blocks {
+        let next_key = Some((
+            block.block_type.clone(),
+            block.section_path.clone(),
+            block.page,
+        ));
+        if current_key.is_some() && current_key != next_key {
+            flush_group(&mut output, &current_key, &mut current_text);
+        }
+        current_key = next_key;
+        current_text.push(block.text.clone());
+    }
+    flush_group(&mut output, &current_key, &mut current_text);
+
+    output.trim().to_string()
+}
+
+#[allow(dead_code)]
+fn section_markdown_heading(
+    block_type: &str,
+    section_path: &[String],
+    page: Option<i64>,
+) -> Option<String> {
+    match block_type {
+        "ppt-slide" => Some(format!("Slide {}", page.unwrap_or(1))),
+        "xlsx-sheet" => section_path
+            .last()
+            .map(|value| format!("Sheet {value}"))
+            .or_else(|| Some("Sheet".to_string())),
+        "pdf-page" | "ocr-page" => page.map(|value| format!("Page {value}")),
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
+fn escape_markdown_heading(value: &str) -> String {
+    value.replace('\n', " ").trim().to_string()
+}
+
+#[allow(dead_code)]
+fn tabular_text_to_markdown(value: &str) -> String {
+    let rows = value
+        .lines()
+        .map(|line| {
+            line.split('\t')
+                .map(|cell| escape_markdown_table_cell(cell.trim()))
+                .collect::<Vec<_>>()
+        })
+        .filter(|row| row.iter().any(|cell| !cell.trim().is_empty()))
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return String::new();
+    }
+    let width = rows.iter().map(Vec::len).max().unwrap_or(0).max(1);
+    let normalize = |row: &[String]| -> Vec<String> {
+        let mut next = row.to_vec();
+        while next.len() < width {
+            next.push(String::new());
+        }
+        next
+    };
+    let header = normalize(&rows[0]);
+    let mut output = String::new();
+    output.push('|');
+    for cell in &header {
+        output.push(' ');
+        output.push_str(cell);
+        output.push_str(" |");
+    }
+    output.push('\n');
+    output.push('|');
+    for _ in 0..width {
+        output.push_str(" --- |");
+    }
+    output.push('\n');
+    for row in rows.iter().skip(1) {
+        output.push('|');
+        for cell in normalize(row) {
+            output.push(' ');
+            output.push_str(&cell);
+            output.push_str(" |");
+        }
+        output.push('\n');
+    }
+    output
+}
+
+#[allow(dead_code)]
+fn escape_markdown_table_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
+}
+
 fn parse_native_path(
     source_id: &str,
     relative_path: &str,
@@ -214,9 +408,9 @@ fn parse_native_path(
         "pdf" => {
             return parse_pdf_visual_or_native(source_id, relative_path, path, visual_config);
         }
-        "docx" => parse_docx(path)?,
-        "pptx" => parse_pptx(path)?,
-        "xlsx" => parse_xlsx(path)?,
+        "docx" | "docm" => parse_docx(path)?,
+        "pptx" | "pptm" => parse_pptx(path)?,
+        "xlsx" | "xls" | "xlsm" | "xlsb" | "ods" => parse_xlsx(path)?,
         "eml" => parse_eml(path)?,
         "zip" => parse_zip(path)?,
         "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" | "webp" => {
@@ -409,8 +603,14 @@ fn mime_type_for_path(path: &Path) -> &'static str {
     {
         Some("pdf") => "application/pdf",
         Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some("docm") => "application/vnd.ms-word.document.macroEnabled.12",
         Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        Some("pptm") => "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
         Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        Some("xlsm") => "application/vnd.ms-excel.sheet.macroEnabled.12",
+        Some("xlsb") => "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+        Some("xls") => "application/vnd.ms-excel",
+        Some("ods") => "application/vnd.oasis.opendocument.spreadsheet",
         Some("html") | Some("htm") => "text/html",
         Some("csv") => "text/csv",
         Some("txt") | Some("md") | Some("markdown") => "text/plain",
@@ -811,7 +1011,9 @@ fn parse_zip(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
                 | "xml"
                 | "eml"
                 | "docx"
+                | "docm"
                 | "pptx"
+                | "pptm"
         ) {
             continue;
         }
@@ -879,8 +1081,8 @@ fn parse_zip_entry_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSe
             }))
         }
         "eml" => parse_eml_bytes(name, bytes),
-        "docx" => parse_docx_bytes(name, bytes),
-        "pptx" => parse_pptx_bytes(name, bytes),
+        "docx" | "docm" => parse_docx_bytes(name, bytes),
+        "pptx" | "pptm" => parse_pptx_bytes(name, bytes),
         _ => Ok(None),
     }
 }
@@ -1178,6 +1380,23 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn write_minimal_docx(path: &Path, text: &str) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default();
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>"#).unwrap();
+        zip.start_file("word/document.xml", options).unwrap();
+        zip.write_all(
+            format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+
     fn write_minimal_pptx(path: &Path, text: &str) {
         let file = fs::File::create(path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
@@ -1239,6 +1458,49 @@ mod tests {
     }
 
     #[test]
+    fn parse_path_to_markdown_converts_docx_body() {
+        let unique = format!(
+            "redbox-docx-markdown-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("brief.docx");
+        write_minimal_docx(&path, "Hello Word");
+
+        let parsed = parse_path_to_markdown(&path).unwrap().unwrap();
+        assert!(parsed.markdown.contains("# brief"));
+        assert!(parsed.markdown.contains("Hello Word"));
+        assert_eq!(parsed.source_type, "docx");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_path_to_markdown_converts_pptx_slides() {
+        let unique = format!(
+            "redbox-pptx-markdown-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("deck.pptx");
+        write_minimal_pptx(&path, "Hello Slide");
+
+        let parsed = parse_path_to_markdown(&path).unwrap().unwrap();
+        assert!(parsed.markdown.contains("# deck"));
+        assert!(parsed.markdown.contains("## Slide 1"));
+        assert!(parsed.markdown.contains("Hello Slide"));
+        assert_eq!(parsed.source_type, "pptx");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn parses_basic_eml_body() {
         let unique = format!(
             "redbox-eml-test-{}",
@@ -1277,6 +1539,28 @@ mod tests {
 
         let parsed = parse_xlsx(&path).unwrap().unwrap();
         assert!(parsed[0].text.contains("Hello Sheet"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_path_to_markdown_converts_xlsx_sheet_to_table() {
+        let unique = format!(
+            "redbox-xlsx-markdown-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("sheet.xlsx");
+        write_minimal_xlsx(&path, "Hello Sheet");
+
+        let parsed = parse_path_to_markdown(&path).unwrap().unwrap();
+        assert!(parsed.markdown.contains("# sheet"));
+        assert!(parsed.markdown.contains("## Sheet Sheet1"));
+        assert!(parsed.markdown.contains("| Hello Sheet |"));
+        assert_eq!(parsed.source_type, "xlsx");
         let _ = fs::remove_dir_all(root);
     }
 

@@ -598,7 +598,7 @@ const transformMarkdownUrlForPreviewCards: UrlTransform = (url, key, node) => {
 const IMAGE_LINK_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'avif', 'ico', 'tif', 'tiff']);
 const VIDEO_LINK_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv']);
 const AUDIO_LINK_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg', 'oga', 'opus']);
-const DOCUMENT_LINK_EXTENSIONS = new Set(['doc', 'docx', 'odt', 'ppt', 'pptx', 'odp', 'xls', 'xlsx', 'ods']);
+const DOCUMENT_LINK_EXTENSIONS = new Set(['doc', 'docx', 'docm', 'odt', 'ppt', 'pptx', 'pptm', 'odp', 'xls', 'xlsx', 'xlsm', 'xlsb', 'ods']);
 const TEXT_LINK_EXTENSIONS = new Set([
   'md',
   'markdown',
@@ -665,7 +665,7 @@ const TEXT_LINK_EXTENSIONS = new Set([
 ]);
 const ARCHIVE_LINK_EXTENSIONS = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'tgz']);
 const PREVIEW_VIRTUAL_PATH_RE = /^(workspace|knowledge|manuscripts|media|cover|redclaw):\/\/.+/i;
-const PREVIEW_PATH_LINKIFY_EXT_PATTERN = '(?:png|jpe?g|webp|gif|bmp|svg|avif|ico|tiff?|mp4|webm|mov|m4v|mkv|avi|ogv|mp3|wav|m4a|flac|aac|ogg|oga|opus|pdf|docx?|odt|pptx?|odp|xlsx?|ods|html?|md|markdown|thrive|txt|srt|vtt|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|config|env|xml|log|sql|sh|bash|zsh|fish|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|c|cpp|cc|cxx|h|hpp|hh|hxx|css|scss|sass|less|vue|svelte|astro|rb|php|swift|kt|kts|scala|r|lua|pl|pm|dart|dockerfile|lock|zip|rar|7z|tar|gz|tgz)';
+const PREVIEW_PATH_LINKIFY_EXT_PATTERN = '(?:png|jpe?g|webp|gif|bmp|svg|avif|ico|tiff?|mp4|webm|mov|m4v|mkv|avi|ogv|mp3|wav|m4a|flac|aac|ogg|oga|opus|pdf|docx?|docm|odt|pptx?|pptm|odp|xlsx?|xlsm|xlsb|ods|html?|md|markdown|thrive|txt|srt|vtt|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|config|env|xml|log|sql|sh|bash|zsh|fish|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|c|cpp|cc|cxx|h|hpp|hh|hxx|css|scss|sass|less|vue|svelte|astro|rb|php|swift|kt|kts|scala|r|lua|pl|pm|dart|dockerfile|lock|zip|rar|7z|tar|gz|tgz)';
 const PREVIEW_PATH_LINKIFY_RE = new RegExp(
   String.raw`(^|[\s([{])((?:(?:workspace|knowledge|manuscripts|media|cover|redclaw):\/\/|file:\/\/|local-file:\/\/|redbox-asset:\/\/asset\/|[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/]|[A-Za-z0-9._@ -]+[\\/])[^<>"'\n\r]*?\.${PREVIEW_PATH_LINKIFY_EXT_PATTERN})(?=$|[\s)\]},.!?;:'">])`,
   'gi',
@@ -677,7 +677,7 @@ const isPreviewRelativePath = (value: string): boolean => {
   const raw = String(value || '').trim();
   if (!raw || /^https?:/i.test(raw)) return false;
   if (raw.includes('..')) return false;
-  return /\.(png|jpe?g|webp|gif|bmp|svg|avif|ico|tiff?|mp4|webm|mov|m4v|mkv|avi|ogv|mp3|wav|m4a|flac|aac|ogg|oga|opus|pdf|docx?|odt|pptx?|odp|xlsx?|ods|html?|md|markdown|thrive|txt|srt|vtt|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|config|env|xml|log|sql|sh|bash|zsh|fish|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|c|cpp|cc|cxx|h|hpp|hh|hxx|css|scss|sass|less|vue|svelte|astro|rb|php|swift|kt|kts|scala|r|lua|pl|pm|dart|dockerfile|lock|zip|rar|7z|tar|gz|tgz)(?:[?#].*)?$/i.test(raw);
+  return /\.(png|jpe?g|webp|gif|bmp|svg|avif|ico|tiff?|mp4|webm|mov|m4v|mkv|avi|ogv|mp3|wav|m4a|flac|aac|ogg|oga|opus|pdf|docx?|docm|odt|pptx?|pptm|odp|xlsx?|xlsm|xlsb|ods|html?|md|markdown|thrive|txt|srt|vtt|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|config|env|xml|log|sql|sh|bash|zsh|fish|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|c|cpp|cc|cxx|h|hpp|hh|hxx|css|scss|sass|less|vue|svelte|astro|rb|php|swift|kt|kts|scala|r|lua|pl|pm|dart|dockerfile|lock|zip|rar|7z|tar|gz|tgz)(?:[?#].*)?$/i.test(raw);
 };
 
 const escapeMarkdownLinkLabel = (value: string): string => (

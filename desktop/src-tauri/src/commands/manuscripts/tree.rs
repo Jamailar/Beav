@@ -50,7 +50,6 @@ pub(super) fn handle_tree_channel(
                     "metadata": Value::Object(metadata)
                 }));
             }
-            let content = fs::read_to_string(&path).unwrap_or_default();
             let content_format = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -60,6 +59,23 @@ pub(super) fn handle_tree_channel(
                 .file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or("");
+            let base_url = path.parent().map(file_url_for_path).unwrap_or_default();
+            if content_format == "document" {
+                return Ok(json!({
+                    "content": "",
+                    "metadata": {
+                        "id": slug_from_relative_path(&relative),
+                        "title": title_from_relative_path(file_name),
+                        "draftType": "document",
+                        "contentFormat": "document",
+                        "fileName": file_name,
+                        "fileBaseUrl": if base_url.ends_with('/') { base_url } else { format!("{base_url}/") },
+                        "fileUrl": file_url_for_path(&path),
+                        "absolutePath": path.display().to_string(),
+                    }
+                }));
+            }
+            let content = fs::read_to_string(&path).unwrap_or_default();
             let frontmatter = if content_format == "markdown" {
                 parse_markdown_frontmatter(&content).unwrap_or_else(|| json!({}))
             } else {
@@ -76,7 +92,6 @@ pub(super) fn handle_tree_channel(
                         "unknown".to_string()
                     }
                 });
-            let base_url = path.parent().map(file_url_for_path).unwrap_or_default();
             Ok(json!({
                 "content": content,
                 "metadata": {

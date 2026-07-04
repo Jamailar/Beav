@@ -571,8 +571,28 @@ pub(crate) fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
             ("text/plain".to_string(), "text".to_string(), true)
         }
         "pdf" => ("application/pdf".to_string(), "document".to_string(), false),
+        "doc" => (
+            "application/msword".to_string(),
+            "document".to_string(),
+            false,
+        ),
         "docx" => (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "docm" => (
+            "application/vnd.ms-word.document.macroEnabled.12".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "odt" => (
+            "application/vnd.oasis.opendocument.text".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "xls" => (
+            "application/vnd.ms-excel".to_string(),
             "document".to_string(),
             false,
         ),
@@ -581,8 +601,38 @@ pub(crate) fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
             "document".to_string(),
             false,
         ),
+        "xlsm" => (
+            "application/vnd.ms-excel.sheet.macroEnabled.12".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "xlsb" => (
+            "application/vnd.ms-excel.sheet.binary.macroEnabled.12".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "ods" => (
+            "application/vnd.oasis.opendocument.spreadsheet".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "ppt" => (
+            "application/vnd.ms-powerpoint".to_string(),
+            "document".to_string(),
+            false,
+        ),
         "pptx" => (
             "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "pptm" => (
+            "application/vnd.ms-powerpoint.presentation.macroEnabled.12".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "odp" => (
+            "application/vnd.oasis.opendocument.presentation".to_string(),
             "document".to_string(),
             false,
         ),

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Archive, ChevronRight, Clock3, Edit3, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, History, Loader2, MoreHorizontal, Pin, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
+import { Archive, ChevronRight, Clock3, Edit3, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, History, Loader2, MoreHorizontal, Pin, Plus, RefreshCw, Trash2, Upload, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { REDCLAW_DISPLAY_NAME } from './config';
 import { appAlert, appConfirm } from '../../utils/appDialogs';
@@ -233,6 +233,7 @@ export function RedClawHistorySidebarSection({
     const [manuscriptDialogError, setManuscriptDialogError] = useState('');
     const [manuscriptContextMenu, setManuscriptContextMenu] = useState<ManuscriptContextMenuState | null>(null);
     const [isSubmittingManuscriptDialog, setIsSubmittingManuscriptDialog] = useState(false);
+    const [importingDocumentParentPath, setImportingDocumentParentPath] = useState<string | null>(null);
     const [draggedManuscriptPath, setDraggedManuscriptPath] = useState('');
     const [manuscriptDropTargetPath, setManuscriptDropTargetPath] = useState<string | null>(null);
     const [movingManuscriptPath, setMovingManuscriptPath] = useState('');
@@ -511,6 +512,32 @@ export function RedClawHistorySidebarSection({
             setManuscriptDialogError(error instanceof Error ? error.message : '操作失败');
         } finally {
             setIsSubmittingManuscriptDialog(false);
+        }
+    };
+
+    const importDocumentAsManuscript = async (parentPath: string) => {
+        const normalizedParentPath = normalizeManuscriptPath(parentPath);
+        setMenuTarget(null);
+        setManuscriptContextMenu(null);
+        setImportingDocumentParentPath(normalizedParentPath);
+        try {
+            const result = await window.ipcRenderer.manuscripts.importDocument<{
+                success?: boolean;
+                canceled?: boolean;
+                error?: string;
+                path?: string;
+            }>({ parentPath: normalizedParentPath });
+            if (result?.canceled) return;
+            if (!result?.success || !result.path) {
+                throw new Error(result?.error || '导入文件失败');
+            }
+            expandManuscriptPath(normalizedParentPath);
+            await loadManuscripts();
+            onOpenManuscript?.(result.path);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '导入文件失败');
+        } finally {
+            setImportingDocumentParentPath(null);
         }
     };
 
@@ -970,6 +997,16 @@ export function RedClawHistorySidebarSection({
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={() => void importDocumentAsManuscript('')}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                    title="导入 Word、Excel 或 PPT"
+                                    aria-label="导入 Word、Excel 或 PPT"
+                                    disabled={importingDocumentParentPath !== null}
+                                >
+                                    {importingDocumentParentPath === '' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={() => void loadManuscripts()}
                                     className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
                                     title="刷新"
@@ -1363,7 +1400,7 @@ export function RedClawHistorySidebarSection({
                     className={MANUSCRIPT_CONTEXT_MENU_PANEL_CLASS}
                     style={{
                         left: Math.min(manuscriptContextMenu.x, window.innerWidth - 184),
-                        top: Math.min(manuscriptContextMenu.y, window.innerHeight - (manuscriptContextMenu.node ? 188 : 94)),
+                        top: Math.min(manuscriptContextMenu.y, window.innerHeight - (manuscriptContextMenu.node ? 222 : 126)),
                     }}
                     onMouseDown={(event) => event.stopPropagation()}
                     onPointerDown={(event) => event.stopPropagation()}
@@ -1385,6 +1422,19 @@ export function RedClawHistorySidebarSection({
                     >
                         <FolderPlus className="h-3.5 w-3.5" />
                         <span>新建文件夹</span>
+                    </button>
+                    <button
+                        type="button"
+                        onMouseDown={(event) => runManuscriptMenuAction(event, () => {
+                            void importDocumentAsManuscript(manuscriptContextMenu.parentPath);
+                        })}
+                        disabled={importingDocumentParentPath !== null}
+                        className={MANUSCRIPT_CONTEXT_MENU_ITEM_CLASS}
+                    >
+                        {importingDocumentParentPath === manuscriptContextMenu.parentPath
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Upload className="h-3.5 w-3.5" />}
+                        <span>导入文档</span>
                     </button>
                     {manuscriptContextMenu.node ? (
                         <>

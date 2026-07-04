@@ -96,7 +96,9 @@ export function extractLocalAssetPathCandidate(value: string): string {
             const parsed = new URL(parseTarget);
             let pathname = safeDecodeUriComponent(parsed.pathname || '');
             const host = String(parsed.host || '').trim();
-            if (/^\/[a-zA-Z]:/.test(pathname)) {
+            if (isRedboxAssetUrl(raw) && host === REDBOX_ASSET_HOST && pathname.startsWith('//')) {
+                pathname = pathname.slice(1);
+            } else if (/^\/[a-zA-Z]:/.test(pathname)) {
                 pathname = pathname.slice(1);
             } else if (host && host !== REDBOX_ASSET_HOST && !/^localhost$/i.test(host)) {
                 pathname = `//${host}${pathname.startsWith('/') ? '' : '/'}${pathname}`;

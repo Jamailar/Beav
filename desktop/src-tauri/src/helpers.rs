@@ -142,6 +142,8 @@ pub(crate) fn supported_manuscript_extension(value: &str) -> Option<&'static str
         Some(".md")
     } else if normalized.ends_with(".html") {
         Some(".html")
+    } else if let Some(extension) = supported_document_file_extension(&normalized) {
+        Some(extension)
     } else {
         None
     }
@@ -149,7 +151,9 @@ pub(crate) fn supported_manuscript_extension(value: &str) -> Option<&'static str
 
 pub(crate) fn manuscript_content_format_from_name(value: &str) -> &'static str {
     match supported_manuscript_extension(value) {
+        Some(".md") => "markdown",
         Some(".html") => "html",
+        Some(_) => "document",
         _ => "markdown",
     }
 }
@@ -778,9 +782,21 @@ fn supported_manuscript_file_format(file_name: &str) -> Option<&'static str> {
         Some("markdown")
     } else if normalized.ends_with(".html") {
         Some("html")
+    } else if supported_document_file_extension(&normalized).is_some() {
+        Some("document")
     } else {
         None
     }
+}
+
+fn supported_document_file_extension(file_name: &str) -> Option<&'static str> {
+    let normalized = file_name.trim().to_ascii_lowercase();
+    [
+        ".doc", ".docx", ".docm", ".odt", ".ppt", ".pptx", ".pptm", ".odp", ".xls", ".xlsx",
+        ".xlsm", ".xlsb", ".ods",
+    ]
+    .into_iter()
+    .find(|extension| normalized.ends_with(extension))
 }
 
 pub(crate) fn split_markdown_frontmatter(content: &str) -> Option<(String, String)> {
@@ -1028,6 +1044,32 @@ fn file_node_from_html(path: &Path, file_name: &str, relative: String) -> FileNo
     }
 }
 
+fn file_node_from_document(path: &Path, file_name: &str, relative: String) -> FileNode {
+    let updated_at = fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64);
+    FileNode {
+        name: file_name.to_string(),
+        path: relative,
+        is_directory: false,
+        children: None,
+        status: None,
+        title: Some(title_from_relative_path(file_name)),
+        draft_type: Some("document".to_string()),
+        content_format: Some("document".to_string()),
+        updated_at,
+        summary: None,
+        richpost_preview_file: None,
+        richpost_preview_file_url: None,
+        richpost_preview_updated_at: None,
+        richpost_preview_page_file: None,
+        richpost_preview_page_file_url: None,
+        richpost_preview_page_updated_at: None,
+    }
+}
+
 pub(crate) fn resolve_manuscript_path(
     state: &State<'_, AppState>,
     relative: &str,
@@ -1134,6 +1176,8 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
             if let Some(format) = supported_manuscript_file_format(&file_name) {
                 if format == "html" {
                     nodes.push(file_node_from_html(&path, &file_name, relative));
+                } else if format == "document" {
+                    nodes.push(file_node_from_document(&path, &file_name, relative));
                 } else {
                     nodes.push(file_node_from_markdown(&path, &file_name, relative));
                 }
@@ -1410,13 +1454,17 @@ mod tests {
             "<!doctype html><html><head><title>Landing</title></head><body>Preview</body></html>",
         )
         .expect("html should be written");
+        fs::write(root.join("slides.pptx"), "placeholder").expect("pptx should be written");
 
         let nodes = list_tree(&root, &root).expect("tree should load");
-        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes.len(), 3);
         assert_eq!(nodes[0].name, "draft.md");
         assert_eq!(nodes[1].name, "landing.html");
         assert_eq!(nodes[1].draft_type.as_deref(), Some("html"));
         assert_eq!(nodes[1].content_format.as_deref(), Some("html"));
+        assert_eq!(nodes[2].name, "slides.pptx");
+        assert_eq!(nodes[2].draft_type.as_deref(), Some("document"));
+        assert_eq!(nodes[2].content_format.as_deref(), Some("document"));
 
         let _ = fs::remove_dir_all(&root);
     }

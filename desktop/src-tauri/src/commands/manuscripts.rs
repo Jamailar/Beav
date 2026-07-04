@@ -24,6 +24,7 @@ mod assets;
 mod auto_naming;
 mod content_blocks;
 mod content_persistence;
+mod document_import;
 mod download;
 mod editor_ai_commands;
 mod editor_commands;
@@ -134,6 +135,7 @@ pub fn handle_manuscripts_channel(
     }
 
     tree::handle_tree_channel(app, state, channel, payload)
+        .or_else(|| document_import::handle_document_import_channel(app, state, channel, payload))
         .or_else(|| download::handle_download_channel(app, state, channel, payload))
         .or_else(|| package::handle_package_channel(app, state, channel, payload))
         .or_else(|| post::handle_post_channel(app, state, channel, payload))
