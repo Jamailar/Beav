@@ -171,7 +171,25 @@ pub(super) fn load_session_runtime_bundle(
     };
     let bundle = serde_json::from_str::<SessionRuntimeBundle>(&content)
         .map_err(|error| error.to_string())?;
+    let (bundle, repaired) = normalize_loaded_session_runtime_bundle(bundle);
+    if repaired {
+        persist_session_runtime_bundle(state, &bundle)?;
+    }
     Ok(Some(bundle))
+}
+
+fn normalize_loaded_session_runtime_bundle(
+    mut bundle: SessionRuntimeBundle,
+) -> (SessionRuntimeBundle, bool) {
+    let original_len = bundle.messages.len();
+    let compacted = compact_bundle_messages(&bundle.messages);
+    let compacted_len = compacted.len() as i64;
+    let repaired = compacted.len() != original_len || bundle.message_count != compacted_len;
+    if repaired {
+        bundle.messages = compacted;
+        bundle.message_count = compacted_len;
+    }
+    (bundle, repaired)
 }
 
 pub(super) fn persist_session_runtime_bundle(
@@ -193,4 +211,48 @@ pub(super) fn persist_session_runtime_bundle(
         let _ = fs::remove_file(legacy_removed_path);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::normalize_loaded_session_runtime_bundle;
+    use crate::runtime::SessionRuntimeBundle;
+
+    #[test]
+    fn loaded_session_runtime_bundle_repairs_exploded_duplicate_history() {
+        let tool_call = json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "arguments": "{\"path\":\"references/context.md\"}"
+                }
+            }]
+        });
+        let mut messages = vec![json!({ "role": "user", "content": "start" })];
+        for _ in 0..1000 {
+            messages.push(tool_call.clone());
+        }
+        let bundle = SessionRuntimeBundle {
+            session_id: "session-exploded".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "2".to_string(),
+            protocol: "openai".to_string(),
+            runtime_mode: "redclaw".to_string(),
+            model_name: Some("gpt".to_string()),
+            message_count: messages.len() as i64,
+            messages,
+        };
+
+        let (repaired, changed) = normalize_loaded_session_runtime_bundle(bundle);
+
+        assert!(changed);
+        assert_eq!(repaired.messages.len(), 2);
+        assert_eq!(repaired.message_count, 2);
+    }
 }

@@ -93,20 +93,6 @@ pub(super) fn sync_transcript_from_bundle(
         .into_iter()
         .filter(|message| !is_internal_runtime_bundle_message(message))
         .collect::<Vec<_>>();
-    let prefix_len =
-        matched_bundle_message_prefix_len(&existing_messages, &visible_bundle_messages);
-    for message in visible_bundle_messages.iter().skip(prefix_len) {
-        append_transcript_entry(
-            state,
-            &bundle.session_id,
-            &SessionTranscriptFileEntry::Message {
-                entry_id: make_id("entry"),
-                session_id: bundle.session_id.clone(),
-                message: message.clone(),
-                created_at: now_iso(),
-            },
-        )?;
-    }
     let summary = session_bundle_summary_from_messages(&visible_bundle_messages);
     let mut meta = session_transcript_metadata_snapshot(
         state,
@@ -118,6 +104,10 @@ pub(super) fn sync_transcript_from_bundle(
         &bundle.updated_at,
         &summary,
     )?;
+    let has_compaction = existing_entries
+        .iter()
+        .any(|entry| matches!(entry, SessionTranscriptFileEntry::CompactBoundary { .. }));
+    meta.has_compaction = has_compaction;
     let metadata = SessionTranscriptFileEntry::Metadata {
         entry_id: make_id("entry"),
         session_id: bundle.session_id.clone(),
@@ -133,18 +123,80 @@ pub(super) fn sync_transcript_from_bundle(
         model_name: meta.model_name.clone(),
         created_at: now_iso(),
     };
+    if transcript_rewrite_required(existing_messages.len(), visible_bundle_messages.len()) {
+        let mut replacement_entries = Vec::<SessionTranscriptFileEntry>::new();
+        if let Some(boundary) =
+            repaired_compact_boundary_entry(&existing_entries, &bundle.session_id)
+        {
+            replacement_entries.push(boundary);
+        }
+        for message in &visible_bundle_messages {
+            replacement_entries.push(SessionTranscriptFileEntry::Message {
+                entry_id: make_id("entry"),
+                session_id: bundle.session_id.clone(),
+                message: message.clone(),
+                created_at: now_iso(),
+            });
+        }
+        replacement_entries.push(metadata);
+        replace_transcript_entries(state, &bundle.session_id, &replacement_entries)?;
+        return update_session_transcript_index(state, meta);
+    }
+
+    let prefix_len =
+        matched_bundle_message_prefix_len(&existing_messages, &visible_bundle_messages);
+    for message in visible_bundle_messages.iter().skip(prefix_len) {
+        append_transcript_entry(
+            state,
+            &bundle.session_id,
+            &SessionTranscriptFileEntry::Message {
+                entry_id: make_id("entry"),
+                session_id: bundle.session_id.clone(),
+                message: message.clone(),
+                created_at: now_iso(),
+            },
+        )?;
+    }
     append_transcript_entry(state, &bundle.session_id, &metadata)?;
-    meta.has_compaction = existing_entries
-        .iter()
-        .any(|entry| matches!(entry, SessionTranscriptFileEntry::CompactBoundary { .. }));
     update_session_transcript_index(state, meta)
+}
+
+fn transcript_rewrite_required(
+    existing_message_count: usize,
+    canonical_message_count: usize,
+) -> bool {
+    if canonical_message_count == 0 {
+        return false;
+    }
+    let allowed_existing = canonical_message_count.saturating_mul(4).max(1024);
+    existing_message_count > allowed_existing
+}
+
+fn repaired_compact_boundary_entry(
+    entries: &[SessionTranscriptFileEntry],
+    session_id: &str,
+) -> Option<SessionTranscriptFileEntry> {
+    entries.iter().rev().find_map(|entry| {
+        if let SessionTranscriptFileEntry::CompactBoundary { summary, .. } = entry {
+            Some(SessionTranscriptFileEntry::CompactBoundary {
+                entry_id: make_id("entry"),
+                session_id: session_id.to_string(),
+                summary: summary.clone(),
+                preserved_entry_ids: Vec::new(),
+                preserved_message_count: 0,
+                created_at: now_iso(),
+            })
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::matched_bundle_message_prefix_len;
+    use super::{matched_bundle_message_prefix_len, transcript_rewrite_required};
 
     #[test]
     fn bundle_prefix_matching_tolerates_tool_messages_in_transcript() {
@@ -181,5 +233,13 @@ mod tests {
         let bundle = vec![user, assistant];
 
         assert_eq!(matched_bundle_message_prefix_len(&existing, &bundle), 2);
+    }
+
+    #[test]
+    fn transcript_rewrite_detects_exploded_duplicate_history() {
+        assert!(transcript_rewrite_required(600_000, 38));
+        assert!(!transcript_rewrite_required(120, 38));
+        assert!(!transcript_rewrite_required(1_000, 38));
+        assert!(!transcript_rewrite_required(10_000, 0));
     }
 }

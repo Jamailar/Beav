@@ -28,6 +28,25 @@ pub(super) fn append_transcript_entry(
     writeln!(file, "{serialized}").map_err(|error| error.to_string())
 }
 
+pub(super) fn replace_transcript_entries(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    entries: &[SessionTranscriptFileEntry],
+) -> Result<(), String> {
+    let path = session_transcript_path(state, session_id)?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    for entry in entries {
+        let serialized = serde_json::to_string(entry).map_err(|error| error.to_string())?;
+        writeln!(file, "{serialized}").map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 pub(crate) fn load_transcript_entries(
     state: &State<'_, AppState>,
     session_id: &str,

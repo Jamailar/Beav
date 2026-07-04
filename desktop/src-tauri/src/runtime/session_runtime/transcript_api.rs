@@ -278,7 +278,34 @@ fn upsert_bundle_messages(base: &mut Vec<Value>, next: &[Value]) {
 pub(super) fn compact_bundle_messages(messages: &[Value]) -> Vec<Value> {
     let mut compacted = Vec::<Value>::new();
     upsert_bundle_messages(&mut compacted, messages);
-    compacted
+    bound_bundle_messages(compacted)
+}
+
+fn bound_bundle_messages(messages: Vec<Value>) -> Vec<Value> {
+    if messages.len() <= SESSION_RUNTIME_BUNDLE_MAX_MESSAGES {
+        return messages;
+    }
+    let first_visible_user = messages.iter().enumerate().find(|(_, message)| {
+        message.get("role").and_then(Value::as_str) == Some("user")
+            && !is_internal_runtime_bundle_message(message)
+    });
+    let keep_first_user = first_visible_user
+        .filter(|(index, _)| {
+            *index
+                < messages
+                    .len()
+                    .saturating_sub(SESSION_RUNTIME_BUNDLE_MAX_MESSAGES.saturating_sub(1))
+        })
+        .map(|(_, message)| message.clone());
+    let tail_limit = SESSION_RUNTIME_BUNDLE_MAX_MESSAGES
+        .saturating_sub(if keep_first_user.is_some() { 1 } else { 0 });
+    let tail_start = messages.len().saturating_sub(tail_limit);
+    let mut bounded = Vec::with_capacity(SESSION_RUNTIME_BUNDLE_MAX_MESSAGES);
+    if let Some(message) = keep_first_user {
+        bounded.push(message);
+    }
+    bounded.extend(messages.into_iter().skip(tail_start));
+    bounded
 }
 
 fn merge_session_bundle_messages(
@@ -309,7 +336,10 @@ fn merge_session_bundle_messages(
 mod tests {
     use serde_json::{json, Value};
 
-    use super::{merge_session_bundle_messages, visible_chat_message_count};
+    use super::super::SESSION_RUNTIME_BUNDLE_MAX_MESSAGES;
+    use super::{
+        compact_bundle_messages, merge_session_bundle_messages, visible_chat_message_count,
+    };
 
     #[test]
     fn bundle_save_merge_restores_chat_messages_missing_from_provider_snapshot() {
@@ -377,6 +407,64 @@ mod tests {
 
         assert_eq!(tool_call_snapshot_count, 1);
         assert_eq!(visible_chat_message_count(&merged), 2);
+    }
+
+    #[test]
+    fn bundle_compaction_collapses_exploded_duplicate_tool_call_history() {
+        let tool_call = json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call-session-1",
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "arguments": "{\"path\":\"references/clock-theory.md\"}"
+                }
+            }]
+        });
+        let tool_result = json!({
+            "role": "tool",
+            "tool_call_id": "call-session-1",
+            "tool_name": "workflow",
+            "content": "{\"ok\":true}"
+        });
+        let mut messages = vec![json!({ "role": "user", "content": "start" })];
+        for _ in 0..10_000 {
+            messages.push(tool_call.clone());
+            messages.push(tool_result.clone());
+        }
+
+        let compacted = compact_bundle_messages(&messages);
+
+        assert_eq!(compacted.len(), 3);
+    }
+
+    #[test]
+    fn bundle_compaction_caps_unique_runtime_messages() {
+        let mut messages = Vec::new();
+        messages.push(json!({ "role": "user", "content": "original task" }));
+        for index in 0..(SESSION_RUNTIME_BUNDLE_MAX_MESSAGES + 25) {
+            messages.push(json!({ "role": "assistant", "content": format!("step {index}") }));
+        }
+
+        let compacted = compact_bundle_messages(&messages);
+
+        assert_eq!(compacted.len(), SESSION_RUNTIME_BUNDLE_MAX_MESSAGES);
+        assert_eq!(
+            compacted
+                .first()
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_str),
+            Some("original task")
+        );
+        assert_eq!(
+            compacted
+                .last()
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_str),
+            Some("step 4120")
+        );
     }
 }
 

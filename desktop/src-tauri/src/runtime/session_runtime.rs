@@ -20,6 +20,7 @@ pub const DEFAULT_SESSION_COMPACT_TARGET_TOKENS: i64 = 256_000;
 pub const MIN_SESSION_COMPACT_TARGET_TOKENS: i64 = 16_000;
 const SESSION_CONTEXT_SUMMARY_MAX_CHARS: usize = 1200;
 const SESSION_BUNDLE_MAX_SESSIONS: usize = 200;
+const SESSION_RUNTIME_BUNDLE_MAX_MESSAGES: usize = 4096;
 const SESSION_RESOURCE_MAX_DEPTH: usize = 8;
 
 #[path = "session_runtime/bundle_store.rs"]
@@ -90,7 +91,8 @@ pub(crate) use transcript_store::load_transcript_entries;
 use transcript_store::{
     append_transcript_entry, load_session_transcript_file_index,
     persist_session_transcript_file_index, remove_session_transcript_meta,
-    session_transcript_metadata_snapshot, session_transcript_path, update_session_transcript_index,
+    replace_transcript_entries, session_transcript_metadata_snapshot, session_transcript_path,
+    update_session_transcript_index,
 };
 use transcript_sync::{
     rebuild_messages_after_last_compaction, sync_transcript_from_bundle, transcript_message_entries,
