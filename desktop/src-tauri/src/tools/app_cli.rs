@@ -1154,6 +1154,7 @@ impl<'a> AppCliExecutor<'a> {
         let token = match operation.as_str() {
             "list" => "list",
             "read" | "get" => "read",
+            "audit" | "validate" => "audit",
             "listresources" | "resources" | "listresource" => "list-resources",
             "readresource" | "resource" | "getresource" => "read-resource",
             _ => {
@@ -3494,7 +3495,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
             "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|get-events|get-model-config|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
-            "skills list|read|invoke|create|save|enable|disable|market-install",
+            "skills list|read|audit|invoke|create|save|enable|disable|market-install",
             "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
             "ai roles-list|detect-protocol|test-connection",
         ],

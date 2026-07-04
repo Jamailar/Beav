@@ -1205,6 +1205,12 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("skill.list"),
         ),
+        ("skill" | "skills", "audit" | "validate") => app_cli_action_call(
+            "skills.inspect",
+            payload_with_operation(payload, "audit"),
+            Some("Operate"),
+            Some("skill.audit"),
+        ),
         (
             "skill" | "skills",
             "listresources" | "list-resources" | "resources" | "resource-list",
@@ -2165,7 +2171,7 @@ fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let translated_action = match action {
-        "list" | "read" | "get" => Some("skills.inspect"),
+        "list" | "read" | "get" | "audit" | "validate" => Some("skills.inspect"),
         "list_resources" | "list-resources" | "listResources" | "resources" => {
             Some("skills.listResources")
         }
@@ -2205,6 +2211,7 @@ fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         Some("skills.inspect") => {
             let operation = match action {
                 "read" | "get" => "read",
+                "audit" | "validate" => "audit",
                 _ => "list",
             };
             app_cli_action_call(

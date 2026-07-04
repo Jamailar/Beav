@@ -19,7 +19,9 @@ pub fn canonical_app_cli_action_for_policy<'a>(action: &'a str) -> &'a str {
         | "skillsinstallfromgithub"
         | "skillsuninstall"
         | "skillsdelete" => "skills.manage",
-        "skillslist" | "skillsread" | "skillsget" => "skills.inspect",
+        "skillslist" | "skillsread" | "skillsget" | "skillsaudit" | "skillsvalidate" => {
+            "skills.inspect"
+        }
         "skillslistresources" | "skillsresources" => "skills.listResources",
         "skillsreadresource" | "skillsgetresource" => "skills.readResource",
         "taskbriefcontext" | "taskbriefgetcontext" | "taskbriefcompactcontext" => {
@@ -166,6 +168,7 @@ fn app_cli_action_alias(action: &str) -> Option<(&'static str, Option<&'static s
         "topiccenterdelete" | "topiccenterremove" => Some(("topicCenter.manage", Some("delete"))),
         "skillsresources" | "skillslistresources" => Some(("skills.listResources", None)),
         "skillsgetresource" | "skillsreadresource" => Some(("skills.readResource", None)),
+        "skillsaudit" | "skillsvalidate" => Some(("skills.inspect", Some("audit"))),
         _ => None,
     }
 }
@@ -232,5 +235,16 @@ mod tests {
             result.pointer("/__compat/legacyCommand"),
             Some(&json!("spaces.create"))
         );
+    }
+
+    #[test]
+    fn canonicalizes_skills_audit_to_skills_inspect() {
+        let result = canonicalize_app_cli_arguments(&json!({
+            "action": "skills.audit",
+            "payload": {}
+        }));
+
+        assert_eq!(result.get("action"), Some(&json!("skills.inspect")));
+        assert_eq!(result.pointer("/payload/operation"), Some(&json!("audit")));
     }
 }

@@ -12,6 +12,8 @@ mod hooks;
 mod installer;
 #[path = "loader.rs"]
 mod loader;
+#[path = "package.rs"]
+mod package;
 #[path = "permissions.rs"]
 mod permissions;
 #[path = "prompt.rs"]
@@ -34,6 +36,7 @@ pub use executor::*;
 pub use hooks::*;
 pub use installer::*;
 pub use loader::*;
+pub use package::*;
 pub use permissions::*;
 pub use prompt::*;
 pub use resources::*;

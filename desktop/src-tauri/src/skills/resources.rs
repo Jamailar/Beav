@@ -285,15 +285,19 @@ fn truncate_chars(value: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
     fn temp_workspace() -> PathBuf {
+        let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
         let unique = std::time::SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "redbox-skill-resource-test-{}-{unique}",
-            std::process::id()
+            "redbox-skill-resource-test-{}-{id}-{unique}",
+            std::process::id(),
         ));
         let _ = fs::remove_dir_all(&root);
         root

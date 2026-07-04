@@ -5,11 +5,13 @@ mod marketplace;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
-    build_workspace_skill_record, compute_skill_discovery_fingerprint, find_catalog_skill_by_name,
-    install_skills_from_repo, invoke_skill, preferred_user_skill_root, refresh_skill_store_catalog,
-    resolve_skill_file_path, skill_catalog_changed, skills_catalog_list_value,
-    write_skill_record_to_path, InstallSkillsFromRepoRequest, SkillInvokeRequest,
-    UninstallSkillRequest, DEFAULT_SKILL_RESOURCE_MAX_CHARS,
+    audit_skill_packages_value, build_skill_package_records, build_workspace_skill_record,
+    compute_skill_discovery_fingerprint, enrich_skill_list_value_with_packages,
+    find_catalog_skill_by_name, inspect_skill_package_value, install_skills_from_repo,
+    invoke_skill, preferred_user_skill_root, refresh_skill_store_catalog, resolve_skill_file_path,
+    skill_catalog_changed, skills_catalog_list_value, write_skill_record_to_path,
+    InstallSkillsFromRepoRequest, SkillInvokeRequest, UninstallSkillRequest,
+    DEFAULT_SKILL_RESOURCE_MAX_CHARS,
 };
 use crate::skills::{
     list_skill_resources_value, parse_skill_resource_uri, read_skill_resource_value,
@@ -78,6 +80,8 @@ pub fn handle_skills_ai_channel(
             channel,
             "skills:list"
                 | "skills:list-resources"
+                | "skills:inspect"
+                | "skills:audit"
                 | "skills:read"
                 | "skills:read-resource"
                 | "skills:invoke"
@@ -122,6 +126,9 @@ pub fn handle_skills_ai_channel(
                         store.skills.clone(),
                     ))
                 })?;
+                let package_records =
+                    build_skill_package_records(&skill_records, workspace.as_deref());
+                enrich_skill_list_value_with_packages(&mut list, &package_records);
                 enrich_skill_catalog_list_with_market_metadata(
                     &mut list,
                     &skill_records,
@@ -140,6 +147,76 @@ pub fn handle_skills_ai_channel(
                     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 }
                 Ok(list)
+            }
+            "skills:inspect" => {
+                let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
+                let _ = refresh_skill_store_catalog(state);
+                let operation = payload_string(payload, "operation")
+                    .unwrap_or_else(|| {
+                        if requested_skill_name(payload).trim().is_empty() {
+                            "list".to_string()
+                        } else {
+                            "read".to_string()
+                        }
+                    })
+                    .trim()
+                    .to_ascii_lowercase();
+                let workspace = workspace_root(state).ok();
+                match operation.as_str() {
+                    "list" => {
+                        let skill_records = with_store(state, |store| Ok(store.skills.clone()))?;
+                        let packages =
+                            build_skill_package_records(&skill_records, workspace.as_deref());
+                        Ok(json!({
+                            "success": true,
+                            "schemaVersion": 3,
+                            "packages": packages,
+                        }))
+                    }
+                    "read" | "get" => {
+                        let requested_name = requested_skill_name(payload);
+                        if requested_name.is_empty() {
+                            return Err("技能名称不能为空".to_string());
+                        }
+                        let record = with_store(state, |store| {
+                            Ok(store
+                                .skills
+                                .iter()
+                                .find(|item| item.name.eq_ignore_ascii_case(&requested_name))
+                                .cloned())
+                        })?
+                        .ok_or_else(|| format!("技能不存在: {requested_name}"))?;
+                        let include_body = payload
+                            .get("includeBody")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true);
+                        Ok(inspect_skill_package_value(
+                            &record,
+                            workspace.as_deref(),
+                            include_body,
+                        ))
+                    }
+                    "audit" => {
+                        let skill_records = with_store(state, |store| Ok(store.skills.clone()))?;
+                        Ok(audit_skill_packages_value(
+                            &skill_records,
+                            workspace.as_deref(),
+                        ))
+                    }
+                    other => Err(format!(
+                        "unsupported skills inspect operation `{other}`; expected list, read, or audit"
+                    )),
+                }
+            }
+            "skills:audit" => {
+                let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
+                let _ = refresh_skill_store_catalog(state);
+                let workspace = workspace_root(state).ok();
+                let skill_records = with_store(state, |store| Ok(store.skills.clone()))?;
+                Ok(audit_skill_packages_value(
+                    &skill_records,
+                    workspace.as_deref(),
+                ))
             }
             "skills:list-resources" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
@@ -170,6 +247,18 @@ pub fn handle_skills_ai_channel(
                     Ok(find_catalog_skill_by_name(&store.skills, &requested_name))
                 })?
                 .ok_or_else(|| format!("技能不存在: {requested_name}"))?;
+                let record = with_store(state, |store| {
+                    Ok(store
+                        .skills
+                        .iter()
+                        .find(|item| item.name.eq_ignore_ascii_case(&requested_name))
+                        .cloned())
+                })?;
+                let workspace = workspace_root(state).ok();
+                let package = record
+                    .as_ref()
+                    .map(|record| inspect_skill_package_value(record, workspace.as_deref(), false))
+                    .and_then(|value| value.get("package").cloned());
                 Ok(json!({
                     "success": true,
                     "skill": skill.clone(),
@@ -182,6 +271,7 @@ pub fn handle_skills_ai_channel(
                     "isBuiltin": skill.is_builtin,
                     "sourceScope": skill.source_scope,
                     "fingerprint": skill.fingerprint,
+                    "package": package,
                 }))
             }
             "skills:read-resource" => {

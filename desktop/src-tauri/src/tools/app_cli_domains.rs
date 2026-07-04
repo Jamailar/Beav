@@ -2610,6 +2610,7 @@ impl<'a> AppCliExecutor<'a> {
         let args = parse_cli_args(&tokens[1..])?;
         match action {
             "list" => self.call_channel("skills:list", json!({ "includeBody": false })),
+            "audit" => self.call_channel("skills:audit", payload.clone()),
             "read" | "get" => self.call_channel(
                 "skills:read",
                 json!({

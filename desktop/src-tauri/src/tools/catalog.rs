@@ -3577,7 +3577,7 @@ fn skills_inspect_input_schema() -> Value {
                 "operation",
                 json!({
                     "type": "string",
-                    "enum": ["list", "read"],
+                    "enum": ["list", "read", "audit"],
                     "description": "Skill read operation."
                 }),
             ),
@@ -3585,7 +3585,7 @@ fn skills_inspect_input_schema() -> Value {
             ("id", string_schema("Alias for name.")),
         ],
         &["operation"],
-        Some("List visible skills or read one skill's full instructions without activating it."),
+        Some("List visible skills, read one skill's full instructions, or audit installed skill packages without activating them."),
     )
 }
 
@@ -6393,7 +6393,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "skills.inspect",
         namespace: "skills",
-        description: "List visible skills or read one skill's full instructions without activating it.",
+        description: "List visible skills, read one skill's full instructions, or audit installed skill packages without activating them.",
         input_schema: skills_inspect_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
