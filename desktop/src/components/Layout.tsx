@@ -1,5 +1,5 @@
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, Dices, Pencil, ChevronDown, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2, Crown, BadgeCheck, X, Loader2, ExternalLink, RefreshCw, Gift, Monitor, Box, ShieldCheck, Coins, Headphones, Sparkles, Puzzle } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, Dices, Pencil, ChevronDown, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2, Crown, BadgeCheck, X, Loader2, ExternalLink, RefreshCw, Gift, Monitor, Box, ShieldCheck, Coins, Headphones, Sparkles, Puzzle, Copy } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { ImmersiveMode, ViewType } from '../features/app-shell/types';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
@@ -238,6 +238,32 @@ function pointsRecordFromAuthSnapshot(snapshot: unknown): Record<string, unknown
     || asRecord(user?.points)
     || asRecord(data?.points)
     || null;
+}
+
+function inviteCodeFromAuthSnapshot(snapshot: unknown): string {
+  const root = asRecord(snapshot);
+  const session = asRecord(root?.session);
+  const data = asRecord(root?.data);
+  const user = asRecord(root?.user)
+    || asRecord(session?.user)
+    || asRecord(data?.user);
+  const candidates = [
+    root?.inviteCode,
+    root?.invite_code,
+    session?.inviteCode,
+    session?.invite_code,
+    user?.inviteCode,
+    user?.invite_code,
+    user?.invitationCode,
+    user?.invitation_code,
+    user?.referralCode,
+    user?.referral_code,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || '').trim();
+    if (value) return value;
+  }
+  return '';
 }
 
 function pointsBalanceFromRecord(points: Record<string, unknown> | null): number | null {
@@ -772,7 +798,7 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
   const [pointsSnapshot, setPointsSnapshot] = useState<Record<string, unknown> | null>(() => pointsRecordFromAuthSnapshot(officialAuthSnapshot));
   const [pointsLoading, setPointsLoading] = useState(false);
   const [pointsError, setPointsError] = useState('');
-  const [developerWechatOpen, setDeveloperWechatOpen] = useState(false);
+  const [inviteCopyMessage, setInviteCopyMessage] = useState('');
   const benefitCards = [
     { titleKey: 'layout.founderSponsor.benefitLifetimeTitle', descriptionKey: 'layout.founderSponsor.benefitLifetimeDesc', icon: Crown, tone: 'gold' },
     { titleKey: 'layout.founderSponsor.benefitPointsTitle', descriptionKey: 'layout.founderSponsor.benefitPointsDesc', icon: Coins, tone: 'gold' },
@@ -792,10 +818,7 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
   const isWaitingPayment = paymentState === 'waitingPayment';
   const pointsBalance = useMemo(() => pointsBalanceFromRecord(pointsSnapshot), [pointsSnapshot]);
   const pointsBalanceLabel = formatPointsBalance(pointsBalance);
-  const developerWechatQrSrc = APP_BRAND.developerWechatQrSrc.trim();
-  const founderXUrl = APP_BRAND.founderXUrl.trim();
-  const showDeveloperSupport = Boolean(developerWechatQrSrc || founderXUrl);
-
+  const inviteCode = useMemo(() => inviteCodeFromAuthSnapshot(officialAuthSnapshot), [officialAuthSnapshot]);
   const refreshPointsBalance = useCallback(async () => {
     if (!active) return;
     setPointsLoading(true);
@@ -814,6 +837,34 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
       setPointsLoading(false);
     }
   }, [active, t]);
+
+  const copyInviteCode = useCallback(async () => {
+    if (!inviteCode) {
+      setInviteCopyMessage(t('layout.founderSponsor.inviteCodePending'));
+      return;
+    }
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(inviteCode);
+      } else {
+        const result = await window.ipcRenderer.clipboardWriteText(inviteCode);
+        if (!result?.success) {
+          throw new Error(result?.error || t('layout.founderSponsor.inviteCopyFailed'));
+        }
+      }
+      setInviteCopyMessage(t('layout.founderSponsor.inviteCopied'));
+    } catch {
+      try {
+        const result = await window.ipcRenderer.clipboardWriteText(inviteCode);
+        if (!result?.success) {
+          throw new Error(result?.error || t('layout.founderSponsor.inviteCopyFailed'));
+        }
+        setInviteCopyMessage(t('layout.founderSponsor.inviteCopied'));
+      } catch {
+        setInviteCopyMessage(t('layout.founderSponsor.inviteCopyFailed'));
+      }
+    }
+  }, [inviteCode, t]);
 
   useEffect(() => {
     const nextPoints = pointsRecordFromAuthSnapshot(officialAuthSnapshot);
@@ -1003,14 +1054,6 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
     }
   }, [active, onOpenBilling, product, t]);
 
-  const openFounderXProfile = useCallback(async () => {
-    if (!founderXUrl) return;
-    const result = await window.ipcRenderer.openExternalUrl(founderXUrl);
-    if (!result?.success) {
-      console.warn('Failed to open founder X profile:', result?.error);
-    }
-  }, [founderXUrl]);
-
   return (
     <div
       className="app-founder-sponsor-backdrop fixed inset-0 z-[95] flex items-center justify-center p-4"
@@ -1098,80 +1141,42 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
                 <div className="mt-2 text-[12px] font-semibold text-[#8a8178]">
                   {pointsError || t('layout.founderSponsor.pointsBalanceCaption')}
                 </div>
+                <button
+                  type="button"
+                  onClick={onOpenBilling}
+                  className="mt-3 inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#e4d5bd] bg-white/78 px-3 text-[12px] font-bold text-[#5f564d] transition-colors hover:bg-[#fffaf2] hover:text-[#27211b]"
+                >
+                  <Coins className="h-3.5 w-3.5" strokeWidth={1.8} />
+                  {t('layout.founderSponsor.rechargeButton')}
+                </button>
               </div>
             </div>
 
-            <div className="app-founder-sponsor-benefit-heading app-founder-sponsor-benefit-heading--member">
-              <span className="app-founder-sponsor-heading-line" />
-              <span className="app-founder-sponsor-heading-dot" />
-              <h3>{t('layout.founderSponsor.memberBenefits')}</h3>
-              <span className="app-founder-sponsor-heading-dot" />
-              <span className="app-founder-sponsor-heading-line" />
-            </div>
-
-            <div className="app-founder-sponsor-benefit-grid">
-              {benefitCards.map(({ titleKey, descriptionKey, icon: Icon, tone }) => (
-                <div key={titleKey} className="app-founder-sponsor-benefit-tile">
-                  <span className={`app-founder-sponsor-tile-icon app-founder-sponsor-tile-icon--${tone}`}>
-                    <Icon className="h-5 w-5" strokeWidth={1.8} />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="truncate text-[13px] font-bold leading-snug text-[#211c17]">{t(titleKey)}</div>
-                    <div className="mt-0.5 truncate text-[11px] font-medium text-[#80776f]">{t(descriptionKey)}</div>
-                  </div>
+            <div className="mt-4 rounded-xl border border-[#eadcc6] bg-white/66 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-bold text-[#211c17]">{t('layout.founderSponsor.inviteTitle')}</div>
+                  <div className="mt-0.5 truncate text-[11px] font-medium text-[#80776f]">{t('layout.founderSponsor.inviteDesc')}</div>
                 </div>
-              ))}
-            </div>
-
-            {showDeveloperSupport ? (
-              <div className="mt-4 rounded-xl border border-[#eadcc6] bg-white/66 px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-[13px] font-bold text-[#211c17]">{t('layout.founderSponsor.developerSupportTitle')}</div>
-                    <div className="mt-0.5 truncate text-[11px] font-medium text-[#80776f]">{t('layout.founderSponsor.developerSupportDesc')}</div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {developerWechatQrSrc ? (
-                      <button
-                        type="button"
-                        onClick={() => setDeveloperWechatOpen(true)}
-                        className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#e4d5bd] bg-white/80 px-3 text-[12px] font-bold text-[#5f564d] transition-colors hover:bg-[#fffaf2] hover:text-[#27211b]"
-                      >
-                        <MessageSquare className="h-3.5 w-3.5" strokeWidth={1.8} />
-                        {t('layout.founderSponsor.addDeveloper')}
-                      </button>
-                    ) : null}
-                    {founderXUrl ? (
-                      <button
-                        type="button"
-                        onClick={() => void openFounderXProfile()}
-                        className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#e4d5bd] bg-white/80 px-3 text-[12px] font-bold text-[#5f564d] transition-colors hover:bg-[#fffaf2] hover:text-[#27211b]"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.8} />
-                        {t('layout.founderSponsor.followDeveloper')}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
+                <Gift className="h-5 w-5 shrink-0 text-[#b87519]" strokeWidth={1.8} />
               </div>
-            ) : null}
-
-            <div className="mt-5 grid grid-cols-[1fr_96px] gap-3">
-              <button
-                type="button"
-                onClick={onOpenBilling}
-                className="app-founder-sponsor-primary-action inline-flex h-11 items-center justify-center rounded-xl px-4 text-[17px] font-bold text-white transition-all hover:brightness-105 active:scale-[0.99]"
-              >
-                <BadgeCheck className="mr-2 h-4 w-4" strokeWidth={1.8} />
-                {t('layout.founderSponsor.manageButton')}
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                className="inline-flex h-11 items-center justify-center rounded-xl border border-[#e4d5bd] bg-white/78 px-3 text-[15px] font-bold text-[#5f564d] transition-colors hover:bg-[#fffaf2] hover:text-[#27211b]"
-              >
-                {t('app.cancel')}
-              </button>
+              <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                <div className="min-w-0 rounded-lg border border-[#e4d5bd] bg-white/80 px-3 py-2 font-mono text-[16px] font-black tracking-normal text-[#2a2118]">
+                  <span className="block truncate">{inviteCode || t('layout.founderSponsor.inviteCodePending')}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void copyInviteCode()}
+                  disabled={!inviteCode}
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[#e4d5bd] bg-white/80 px-3 text-[12px] font-bold text-[#5f564d] transition-colors hover:bg-[#fffaf2] hover:text-[#27211b] disabled:opacity-55"
+                >
+                  <Copy className="h-3.5 w-3.5" strokeWidth={1.8} />
+                  {t('layout.founderSponsor.inviteCopyButton')}
+                </button>
+              </div>
+              {inviteCopyMessage ? (
+                <div className="mt-2 truncate text-[11px] font-semibold text-[#8a8178]">{inviteCopyMessage}</div>
+              ) : null}
             </div>
           </div>
         ) : (
@@ -1258,7 +1263,7 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
               ) : (
                 <ExternalLink className="mr-2 h-4 w-4" strokeWidth={1.8} />
               )}
-              {active ? t('layout.founderSponsor.manageButton') : purchaseButtonLabel}
+              {purchaseButtonLabel}
             </button>
             <button
               type="button"
@@ -1283,47 +1288,6 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
           </div>
           </div>
         )}
-        {developerWechatOpen && developerWechatQrSrc ? (
-          <div
-            className="fixed inset-0 z-[96] flex items-center justify-center bg-black/35 p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t('layout.founderSponsor.wechatTitle')}
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) {
-                setDeveloperWechatOpen(false);
-              }
-            }}
-          >
-            <div className="w-[min(360px,calc(100vw-32px))] rounded-2xl border border-[#e4d5bd] bg-[#fffdfa] p-5 shadow-[0_24px_80px_rgba(47,35,22,0.24)]">
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h3 className="text-[18px] font-bold leading-tight text-[#201b16]">{t('layout.founderSponsor.wechatTitle')}</h3>
-                  <p className="mt-1 text-[12px] font-medium leading-relaxed text-[#7c746c]">{t('layout.founderSponsor.wechatDesc')}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDeveloperWechatOpen(false)}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#756b60] transition-colors hover:bg-[#f4eadb] hover:text-[#2b241d]"
-                  title={t('layout.close')}
-                  aria-label={t('layout.close')}
-                >
-                  <X className="h-5 w-5" strokeWidth={1.8} />
-                </button>
-              </div>
-              <div className="rounded-2xl border border-[#eadcc6] bg-white p-3">
-                <img
-                  src={developerWechatQrSrc}
-                  alt={t('layout.founderSponsor.wechatQrAlt')}
-                  className="mx-auto max-h-[320px] w-full rounded-xl object-contain"
-                />
-              </div>
-              <div className="mt-3 rounded-xl border border-[#eadcc6] bg-[#fff7e6] px-3 py-2 text-center text-[13px] font-bold text-[#a86618]">
-                {t('layout.founderSponsor.wechatRemark')}
-              </div>
-            </div>
-          </div>
-        ) : null}
       </div>
     </div>
   );
