@@ -1597,8 +1597,15 @@ pub fn handle_library_channel(
                         continue;
                     }
                     let result = match kind.as_str() {
-                        "redbook-note" | "link-article" | "wechat-article" | "zhihu-answer"
-                        | "zhihu-article" => knowledge::delete_note(app, state, &id),
+                        "redbook-note" | "xhs-note" | "xhs-video" | "xhs-blogger"
+                        | "xhs-comments" | "douyin-video" | "douyin-profile" | "link-article"
+                        | "wechat-article" | "zhihu-answer" | "zhihu-article"
+                        | "knowledge-note" | "webpage" | "article" | "text-note"
+                        | "bilibili-video" | "bilibili-profile" | "bilibili-search"
+                        | "bilibili-page" | "kuaishou-video" | "kuaishou-page" | "tiktok-video"
+                        | "tiktok-profile" | "tiktok-page" | "youtube-channel" | "reddit-post"
+                        | "reddit-page" | "x-post" | "x-page" | "instagram-post"
+                        | "instagram-page" => knowledge::delete_note(app, state, &id),
                         "youtube-video" => knowledge::delete_youtube_note(app, state, &id),
                         "document-source" => knowledge::delete_document_source(app, state, &id),
                         _ => Ok(json!({ "success": false, "error": "不支持的知识库条目类型" })),

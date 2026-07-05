@@ -13,8 +13,12 @@ const EMPTY_SNAPSHOT: ClipboardCaptureQueueSnapshot = {
 function kindLabel(kind: ClipboardCaptureKind | string | undefined) {
   if (kind === 'xhs-note') return '小红书笔记';
   if (kind === 'xhs-profile') return '小红书主页';
+  if (kind === 'douyin-profile') return '抖音主页';
   if (kind === 'douyin-video') return '抖音视频';
   if (kind === 'youtube-video') return 'YouTube';
+  if (kind === 'youtube-channel') return 'YouTube 频道';
+  if (kind === 'bilibili-profile') return 'Bilibili 主页';
+  if (kind === 'tiktok-profile') return 'TikTok 主页';
   return '采集任务';
 }
 

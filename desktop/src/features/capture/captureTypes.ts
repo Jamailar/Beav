@@ -1,10 +1,14 @@
-export type ClipboardCapturePlatform = 'youtube' | 'xiaohongshu' | 'douyin';
+export type ClipboardCapturePlatform = 'youtube' | 'xiaohongshu' | 'douyin' | 'bilibili' | 'tiktok';
 
 export type ClipboardCaptureKind =
   | 'youtube-video'
+  | 'youtube-channel'
   | 'xhs-note'
   | 'xhs-profile'
-  | 'douyin-video';
+  | 'douyin-video'
+  | 'douyin-profile'
+  | 'bilibili-profile'
+  | 'tiktok-profile';
 
 export type ClipboardCaptureConfidence = 'exact' | 'probable';
 
@@ -76,6 +80,8 @@ export interface ServerCaptureJobRequest {
     includeComments?: boolean;
     noteType?: string;
     limit?: number;
+    maxPages?: number;
+    maxItems?: number;
   };
 }
 

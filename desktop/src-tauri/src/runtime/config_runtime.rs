@@ -68,11 +68,12 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
         "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
         | "wechat-article" | "zhihu-answer" | "zhihu-article" | "xiaohongshu_note"
         | "xiaohongshu_video" | "youtube_video" | "xhs-note" | "xhs-video" | "xhs-blogger"
-        | "xhs-comments" | "douyin-video" | "redbook-note" | "youtube-video" | "bilibili-video"
-        | "bilibili-profile" | "bilibili-search" | "bilibili-page" | "kuaishou-video"
-        | "kuaishou-page" | "tiktok-video" | "tiktok-page" | "reddit-post" | "reddit-page"
-        | "x-post" | "x-page" | "instagram-post" | "instagram-page" | "document-source"
-        | "copied-file" | "tracked-folder" | "obsidian-vault" => "knowledge",
+        | "xhs-comments" | "douyin-video" | "douyin-profile" | "redbook-note" | "youtube-video"
+        | "youtube-channel" | "bilibili-video" | "bilibili-profile" | "bilibili-search"
+        | "bilibili-page" | "kuaishou-video" | "kuaishou-page" | "tiktok-video"
+        | "tiktok-profile" | "tiktok-page" | "reddit-post" | "reddit-page" | "x-post"
+        | "x-page" | "instagram-post" | "instagram-page" | "document-source" | "copied-file"
+        | "tracked-folder" | "obsidian-vault" => "knowledge",
         "advisor-discussion" => "advisor-discussion",
         "background-maintenance" => "background-maintenance",
         "chatroom" | "chat" | "default" | "team" => "team",

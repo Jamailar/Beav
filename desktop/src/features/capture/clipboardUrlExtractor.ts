@@ -1,5 +1,5 @@
 const TRAILING_URL_PUNCTUATION_RE = /[)\]}>,.!?，。！？、；;：:]+$/g;
-const SUPPORTED_BARE_URL_RE = /(?:^|[\s"'([{<])((?:www\.)?(?:xiaohongshu\.com|rednote\.com|douyin\.com|iesdouyin\.com|youtube\.com)\/[^\s"'<>]+|(?:xhslink\.com|v\.douyin\.com|youtu\.be)\/[^\s"'<>]+)/gi;
+const SUPPORTED_BARE_URL_RE = /(?:^|[\s"'([{<])((?:www\.)?(?:xiaohongshu\.com|rednote\.com|douyin\.com|iesdouyin\.com|youtube\.com|bilibili\.com|tiktok\.com)\/[^\s"'<>]+|(?:xhslink\.com|v\.douyin\.com|youtu\.be|b23\.tv)\/[^\s"'<>]+)/gi;
 
 export function sanitizeClipboardUrl(rawInput: string): string {
   return String(rawInput || '')

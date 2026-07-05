@@ -220,11 +220,13 @@ pub(crate) fn list_page(
 fn ui_type_sql() -> &'static str {
     r#"
     CASE
-        WHEN kind = 'youtube-video' THEN 'youtube'
+        WHEN kind IN ('youtube-video', 'youtube-channel') THEN 'youtube'
         WHEN kind = 'document-source' THEN 'docs'
         WHEN kind IN ('link-article', 'wechat-article', 'zhihu-answer', 'zhihu-article') THEN kind
+        WHEN lower(COALESCE(capture_kind, note_type, kind, '')) LIKE 'youtube-%' THEN 'youtube'
         WHEN lower(COALESCE(capture_kind, note_type, '')) = 'link-article' THEN 'link-article'
         WHEN lower(COALESCE(capture_kind, note_type, '')) = 'wechat-article' THEN 'wechat-article'
+        WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'douyin-%' THEN 'douyin-video'
         WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'bilibili-%' THEN 'bilibili'
         WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'kuaishou-%' THEN 'kuaishou'
         WHEN lower(COALESCE(capture_kind, note_type, '')) LIKE 'tiktok-%' THEN 'tiktok'
@@ -240,7 +242,6 @@ fn ui_type_sql() -> &'static str {
                 WHEN lower(COALESCE(capture_kind, '')) = 'wechat-article' THEN 'wechat-article'
                 ELSE 'link-article'
             END
-        WHEN lower(COALESCE(capture_kind, '')) = 'douyin-video' THEN 'douyin-video'
         WHEN lower(COALESCE(capture_kind, '')) = 'xhs-video' OR has_video != 0 THEN 'xhs-video'
         ELSE 'xhs-image'
     END

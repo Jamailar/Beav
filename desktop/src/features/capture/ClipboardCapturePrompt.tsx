@@ -81,9 +81,9 @@ export function ClipboardCapturePrompt() {
                 {t('app.clipboardCaptureIncludeComments')}
               </label>
             )}
-            {clipboardCapture.candidate.kind === 'xhs-profile' && (
+            {clipboardCapture.isProfileCapture && (
               <label className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-surface-primary px-3 text-sm text-text-secondary">
-                <span>采集篇数</span>
+                <span>采集数量</span>
                 <input
                   type="number"
                   min={clipboardCapture.minProfileLimit}

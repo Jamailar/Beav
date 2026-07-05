@@ -1,6 +1,8 @@
 import type { ClipboardCaptureCandidate, ClipboardCaptureSource } from './captureTypes';
 import { extractClipboardUrls } from './clipboardUrlExtractor';
+import { detectBilibiliClipboardCandidate } from './detectors/bilibili';
 import { detectDouyinClipboardCandidate } from './detectors/douyin';
+import { detectTiktokClipboardCandidate } from './detectors/tiktok';
 import { detectXiaohongshuClipboardCandidate } from './detectors/xiaohongshu';
 import { detectYouTubeClipboardCandidate } from './detectors/youtube';
 
@@ -16,6 +18,8 @@ const DETECTORS: ClipboardDetector[] = [
   detectXiaohongshuClipboardCandidate,
   detectDouyinClipboardCandidate,
   detectYouTubeClipboardCandidate,
+  detectBilibiliClipboardCandidate,
+  detectTiktokClipboardCandidate,
 ];
 
 export function detectClipboardCaptureCandidate(
@@ -44,8 +48,12 @@ export function clipboardCaptureDedupeKey(candidate: ClipboardCaptureCandidate):
 
 export function clipboardCapturePlatformLabel(candidate: ClipboardCaptureCandidate): string {
   if (candidate.kind === 'youtube-video') return 'YouTube';
+  if (candidate.kind === 'youtube-channel') return 'YouTube 频道';
   if (candidate.kind === 'xhs-profile') return '小红书主页';
   if (candidate.kind === 'xhs-note') return '小红书笔记';
+  if (candidate.kind === 'douyin-profile') return '抖音主页';
   if (candidate.kind === 'douyin-video') return '抖音视频';
+  if (candidate.kind === 'bilibili-profile') return 'Bilibili 主页';
+  if (candidate.kind === 'tiktok-profile') return 'TikTok 主页';
   return '链接';
 }

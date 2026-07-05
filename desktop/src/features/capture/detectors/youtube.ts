@@ -29,7 +29,26 @@ export function detectYouTubeClipboardCandidate(
   }
 
   const normalizedVideoId = videoId.trim();
-  if (!normalizedVideoId || !/^[a-zA-Z0-9_-]{6,}$/.test(normalizedVideoId)) return null;
+  if (!normalizedVideoId || !/^[a-zA-Z0-9_-]{6,}$/.test(normalizedVideoId)) {
+    const channelId = pathParts[0] === 'channel' && pathParts[1] ? pathParts[1].trim() : '';
+    const handle = pathParts[0]?.startsWith('@') ? pathParts[0].slice(1).trim() : '';
+    const customPath = ['c', 'user'].includes(pathParts[0] || '') && pathParts[1] ? pathParts[1].trim() : '';
+    const channelKey = channelId || handle || customPath;
+    if (!channelKey) return null;
+    return {
+      id: candidateId('youtube-channel', channelKey),
+      kind: 'youtube-channel',
+      platform: 'youtube',
+      rawText,
+      rawUrl: sanitized,
+      canonicalUrl: sanitized,
+      externalId: channelId || undefined,
+      confidence: channelId ? 'exact' : 'probable',
+      source,
+      detectedAt: new Date().toISOString(),
+      title: channelId ? `YouTube_${channelId}` : `YouTube_${channelKey}`,
+    };
+  }
 
   return {
     id: candidateId('youtube-video', normalizedVideoId),

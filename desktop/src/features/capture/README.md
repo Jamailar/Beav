@@ -6,7 +6,7 @@ Owns lightweight capture entry points initiated from the app shell.
 - `useClipboardCapturePrompt.ts`: prompt state and app-shell wiring for clipboard capture.
 - `clipboardDetector.ts`: detector registry that turns clipboard text into typed capture candidates.
 - `clipboardUrlExtractor.ts`: bounded URL extraction and URL sanitization.
-- `detectors/`: pure platform templates for YouTube, Xiaohongshu, and Douyin URLs.
+- `detectors/`: pure platform templates for YouTube, Xiaohongshu, Douyin, Bilibili, and TikTok URLs.
 - `captureDedupeStore.ts`: short-lived duplicate suppression across paste and poll events.
 - `captureQueue.ts`: local serial queue for confirmed capture tasks.
 - `serverCaptureClient.ts`: server capture API contract boundary for creating, polling, and ingesting capture jobs.

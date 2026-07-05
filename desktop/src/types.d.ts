@@ -1992,7 +1992,7 @@ declare global {
         } | null>;
         createServerJob?: (payload: {
           source: 'clipboard';
-          kind: 'youtube-video' | 'xhs-note' | 'xhs-profile' | 'douyin-video';
+          kind: 'youtube-video' | 'youtube-channel' | 'xhs-note' | 'xhs-profile' | 'douyin-video' | 'douyin-profile' | 'bilibili-profile' | 'tiktok-profile';
           platform: 'youtube' | 'xiaohongshu' | 'douyin';
           url: string;
           canonicalUrl: string;
@@ -2160,7 +2160,7 @@ declare global {
         rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeVisualIndex?: boolean }) => Promise<unknown>;
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;
-        deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source' }> }) => Promise<unknown>;
+        deleteBatch: (payload: { items: Array<{ id: string; kind: string }> }) => Promise<unknown>;
         batchIngest: (payload: { entries?: unknown[]; documentSources?: unknown[]; mediaAssets?: unknown[] }) => Promise<unknown>;
         createFromChat: (payload: { title?: string; content: string; summary?: string; tags?: string[]; source?: Record<string, unknown>; metadata?: Record<string, unknown>; allowUpdate?: boolean }) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;

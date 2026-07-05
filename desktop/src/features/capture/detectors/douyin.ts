@@ -35,6 +35,24 @@ export function detectDouyinClipboardCandidate(
   }
 
   let awemeId = '';
+  if (pathParts[0] === 'user' && pathParts[1]) {
+    const profileId = String(pathParts[1] || '').trim().replace(/[^a-zA-Z0-9_.-]/g, '');
+    if (profileId) {
+      return {
+        id: candidateId('douyin-profile', profileId),
+        kind: 'douyin-profile',
+        platform: 'douyin',
+        rawText,
+        rawUrl: sanitized,
+        canonicalUrl: `https://www.douyin.com/user/${profileId}`,
+        externalId: profileId,
+        confidence: 'exact',
+        source,
+        detectedAt: new Date().toISOString(),
+      };
+    }
+  }
+
   if (pathParts[0] === 'video') {
     awemeId = cleanAwemeId(pathParts[1]);
   } else if (pathParts[0] === 'share' && pathParts[1] === 'video') {

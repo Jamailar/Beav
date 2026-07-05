@@ -107,7 +107,7 @@ export function createKnowledgeBridge(core: BridgeCore) {
         fallbackChannel: 'knowledge:open-index-root',
       }),
       deleteNote: (noteId: string) => core.invokeChannel('knowledge:delete', noteId),
-      deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source' }> }) => core.invokeChannel('knowledge:delete-batch', payload),
+      deleteBatch: (payload: { items: Array<{ id: string; kind: string }> }) => core.invokeChannel('knowledge:delete-batch', payload),
       batchIngest: (payload: { entries?: unknown[]; documentSources?: unknown[]; mediaAssets?: unknown[] }) => core.invokeChannel('knowledge:batch-ingest', payload),
       createFromChat: (payload: { title?: string; content: string; summary?: string; tags?: string[]; source?: Record<string, unknown>; metadata?: Record<string, unknown>; allowUpdate?: boolean }) => core.invokeChannel('knowledge:create-from-chat', payload),
       transcribe: (noteId: string) => core.invokeChannel('knowledge:transcribe', noteId),

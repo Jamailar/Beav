@@ -122,7 +122,36 @@ export type KnowledgeTypeFilter =
     | 'zhihu-article'
     | 'youtube'
     | 'docs';
-export type KnowledgeBackendKind = 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source';
+export type KnowledgeBackendKind =
+    | 'redbook-note'
+    | 'xhs-note'
+    | 'xhs-video'
+    | 'xhs-blogger'
+    | 'xhs-comments'
+    | 'douyin-video'
+    | 'douyin-profile'
+    | 'bilibili-video'
+    | 'bilibili-profile'
+    | 'bilibili-search'
+    | 'bilibili-page'
+    | 'kuaishou-video'
+    | 'kuaishou-page'
+    | 'tiktok-video'
+    | 'tiktok-profile'
+    | 'tiktok-page'
+    | 'reddit-post'
+    | 'reddit-page'
+    | 'x-post'
+    | 'x-page'
+    | 'instagram-post'
+    | 'instagram-page'
+    | 'link-article'
+    | 'wechat-article'
+    | 'zhihu-answer'
+    | 'zhihu-article'
+    | 'youtube-video'
+    | 'youtube-channel'
+    | 'document-source';
 
 export type KnowledgeSortOrder = 'updated-desc' | 'created-desc' | 'title-asc';
 
@@ -246,6 +275,8 @@ export interface KnowledgeCardItem {
 
 export const resolveNoteCardKind = (note: Note): KnowledgeCardItem['kind'] => {
     const captureKind = note.captureKind || note.type || '';
+    if (captureKind.startsWith('youtube-')) return 'youtube';
+    if (captureKind.startsWith('douyin-')) return 'douyin-video';
     if (captureKind === 'link-article') return 'link-article';
     if (captureKind === 'wechat-article') return 'wechat-article';
     if (captureKind.startsWith('bilibili-')) return 'bilibili';
@@ -300,7 +331,7 @@ export const isNativeFilePickerCanceled = (error?: string) => {
 
 export const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     id: item.itemId,
-    knowledgeKind: item.kind,
+    knowledgeKind: item.captureKind || item.kind,
     type: item.noteType,
     sourceUrl: item.sourceUrl,
     title: item.title,
@@ -376,7 +407,7 @@ export const catalogSummaryToDocSource = (item: KnowledgeCatalogSummary): Docume
 });
 
 export function resolveKnowledgeBackendKind(typeFilter: KnowledgeTypeFilter): string | undefined {
-    if (typeFilter === 'youtube') return 'youtube-video';
+    if (typeFilter === 'youtube') return undefined;
     if (typeFilter === 'docs') return 'document-source';
     if (
         typeFilter === 'link-article'

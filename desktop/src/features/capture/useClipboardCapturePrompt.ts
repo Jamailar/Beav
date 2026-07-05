@@ -38,6 +38,14 @@ function clampProfileLimit(value: unknown): number {
   return Math.max(MIN_XHS_PROFILE_LIMIT, Math.min(MAX_XHS_PROFILE_LIMIT, Math.floor(parsed)));
 }
 
+function isProfileCaptureKind(kind: ClipboardCaptureCandidate['kind']): boolean {
+  return kind === 'xhs-profile'
+    || kind === 'douyin-profile'
+    || kind === 'bilibili-profile'
+    || kind === 'youtube-channel'
+    || kind === 'tiktok-profile';
+}
+
 export function useClipboardCapturePrompt() {
   const [candidate, setCandidate] = useState<ClipboardCaptureCandidate | null>(null);
   const [open, setOpen] = useState(false);
@@ -91,7 +99,7 @@ export function useClipboardCapturePrompt() {
       context.appendLog(`创建服务端采集任务：${nextCandidate.canonicalUrl}`);
       const response = await createServerCaptureJob(nextCandidate, {
         includeComments: includeComments && nextCandidate.kind === 'xhs-note',
-        limit: nextCandidate.kind === 'xhs-profile' ? profileLimit : undefined,
+        limit: isProfileCaptureKind(nextCandidate.kind) ? profileLimit : undefined,
       });
       const jobId = response.job?.id || response.jobId;
       if (!response.success || !jobId) {
@@ -332,6 +340,7 @@ export function useClipboardCapturePrompt() {
     setProfileLimit,
     minProfileLimit: MIN_XHS_PROFILE_LIMIT,
     maxProfileLimit: MAX_XHS_PROFILE_LIMIT,
+    isProfileCapture: candidate ? isProfileCaptureKind(candidate.kind) : false,
     close,
     confirm,
   };

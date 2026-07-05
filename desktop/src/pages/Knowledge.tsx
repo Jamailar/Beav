@@ -947,7 +947,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
             { key: 'xhs-blogger' as const, label: '小红书博主', count: counts['xhs-blogger'] },
             { key: 'xhs-comments' as const, label: '小红书评论', count: counts['xhs-comments'] },
-            { key: 'douyin-video' as const, label: '抖音视频', count: counts['douyin-video'] },
+            { key: 'douyin-video' as const, label: '抖音', count: counts['douyin-video'] },
             { key: 'bilibili' as const, label: 'Bilibili', count: counts.bilibili },
             { key: 'kuaishou' as const, label: '快手', count: counts.kuaishou },
             { key: 'tiktok' as const, label: 'TikTok', count: counts.tiktok },
@@ -1213,7 +1213,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         try {
             const deleteItems = selectedKnowledgeItems.map((item) => ({
                 id: item.id,
-                kind: item.kind === 'youtube'
+                kind: item.kind === 'youtube' && item.video
                     ? 'youtube-video' as const
                     : item.kind === 'docs'
                         ? 'document-source' as const
@@ -1514,7 +1514,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             case 'xhs-comments':
                 return '小红书评论';
             case 'douyin-video':
-                return '抖音视频';
+                return '抖音';
             case 'bilibili':
                 return 'Bilibili';
             case 'kuaishou':
