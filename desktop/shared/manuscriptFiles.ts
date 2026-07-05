@@ -1,44 +1,21 @@
 export const MANUSCRIPT_MARKDOWN_EXTENSION = '.md';
 export const MANUSCRIPT_HTML_EXTENSION = '.html';
-const MANUSCRIPT_DOCUMENT_EXTENSIONS = [
-    '.doc',
-    '.docx',
-    '.docm',
-    '.odt',
-    '.ppt',
-    '.pptx',
-    '.pptm',
-    '.odp',
-    '.xls',
-    '.xlsx',
-    '.xlsm',
-    '.xlsb',
-    '.ods',
-] as const;
 
 export type ManuscriptExtension =
     | typeof MANUSCRIPT_MARKDOWN_EXTENSION
-    | typeof MANUSCRIPT_HTML_EXTENSION
-    | typeof MANUSCRIPT_DOCUMENT_EXTENSIONS[number];
-export type ManuscriptFileKind = 'markdown' | 'html' | 'document';
+    | typeof MANUSCRIPT_HTML_EXTENSION;
+export type ManuscriptFileKind = 'markdown' | 'html';
 export type ManuscriptPackageKind = 'post' | 'article' | 'video' | 'audio';
-
-const MANUSCRIPT_DOCUMENT_EXTENSION_KIND = Object.fromEntries(
-    MANUSCRIPT_DOCUMENT_EXTENSIONS.map((extension) => [extension, 'document' as const])
-) as Record<typeof MANUSCRIPT_DOCUMENT_EXTENSIONS[number], 'document'>;
 
 const MANUSCRIPT_EXTENSION_KIND: Record<ManuscriptExtension, ManuscriptFileKind> = {
     [MANUSCRIPT_MARKDOWN_EXTENSION]: 'markdown',
     [MANUSCRIPT_HTML_EXTENSION]: 'html',
-    ...MANUSCRIPT_DOCUMENT_EXTENSION_KIND,
 };
 
 function normalizedManuscriptExtension(fileName: string): ManuscriptExtension | null {
     const normalized = String(fileName || '').trim().toLowerCase();
     if (normalized.endsWith(MANUSCRIPT_MARKDOWN_EXTENSION)) return MANUSCRIPT_MARKDOWN_EXTENSION;
     if (normalized.endsWith(MANUSCRIPT_HTML_EXTENSION)) return MANUSCRIPT_HTML_EXTENSION;
-    const documentExtension = MANUSCRIPT_DOCUMENT_EXTENSIONS.find((extension) => normalized.endsWith(extension));
-    if (documentExtension) return documentExtension;
     return null;
 }
 

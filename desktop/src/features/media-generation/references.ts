@@ -27,7 +27,7 @@ export function attachmentVisualKind(
     if (kind === 'image' || mimeType.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg|avif)$/i.test(name)) return 'image';
     if (kind === 'video' || mimeType.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(name)) return 'video';
     if (kind === 'audio' || mimeType.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(name)) return 'audio';
-    if (kind === 'text' || mimeType.startsWith('text/') || /\.(txt|md|markdown|json|csv|tsv|doc|docx|pdf|rtf|xml|yaml|yml)$/i.test(name)) return 'text';
+    if (kind === 'text' || mimeType.startsWith('text/') || /\.(txt|md|markdown|json|csv|tsv|pdf|rtf|xml|yaml|yml)$/i.test(name)) return 'text';
     return 'file';
 }
 

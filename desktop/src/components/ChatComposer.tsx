@@ -223,8 +223,8 @@ export interface ChatComposerProps {
 const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
 const VIDEO_ATTACHMENT_EXT_RE = /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i;
 const AUDIO_ATTACHMENT_EXT_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i;
-const TEXT_ATTACHMENT_EXT_RE = /\.(txt|md|markdown|json|csv|tsv|doc|docx|docm|pdf|rtf|xml|yaml|yml|ts|tsx|js|jsx|py|rs|java|go|c|cpp|h|hpp)(?:[?#].*)?$/i;
-const DOCUMENT_ATTACHMENT_EXT_RE = /\.(pdf|docx?|docm|xlsx?|xlsm|xlsb|pptx?|pptm|rtf)(?:[?#].*)?$/i;
+const TEXT_ATTACHMENT_EXT_RE = /\.(txt|md|markdown|json|csv|tsv|pdf|rtf|xml|yaml|yml|ts|tsx|js|jsx|py|rs|java|go|c|cpp|h|hpp)(?:[?#].*)?$/i;
+const DOCUMENT_ATTACHMENT_EXT_RE = /\.(pdf|rtf)(?:[?#].*)?$/i;
 
 function logComposerThumbnailDebug(event: string, fields: Record<string, unknown>) {
   console.info('[chat-thumbnail]', event, fields);

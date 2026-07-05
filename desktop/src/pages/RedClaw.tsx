@@ -568,7 +568,6 @@ export function RedClaw({
     const [previewTarget, setPreviewTarget] = useState<ChatMessageLinkTarget | null>(null);
     const [previewSidebarCollapsed, setPreviewSidebarCollapsed] = useState(false);
     const [isPreviewSidebarClosing, setIsPreviewSidebarClosing] = useState(false);
-    const [previewDocumentImporting, setPreviewDocumentImporting] = useState(false);
     const [activeAiSurface, setActiveAiSurface] = useState<RedClawAiSurface>(readInitialRedClawAiSurface);
     const [teamRooms, setTeamRooms] = useState<RedClawTeamRoom[]>([]);
     const [advisors, setAdvisors] = useState<AdvisorProfile[]>([]);
@@ -2223,31 +2222,6 @@ export function RedClaw({
         }
     }, []);
 
-    const handleImportPreviewDocument = useCallback(async (target: ChatMessageLinkTarget) => {
-        const source = String(target.localPathCandidate || target.href || '').trim();
-        if (!source || target.kind !== 'document') return;
-        setPreviewDocumentImporting(true);
-        try {
-            const result = await window.ipcRenderer.manuscripts.importDocument<{
-                success?: boolean;
-                canceled?: boolean;
-                error?: string;
-                path?: string;
-            }>({ source });
-            if (result?.canceled) return;
-            if (!result?.success || !result.path) {
-                throw new Error(result?.error || '导入文件失败');
-            }
-            setChatActionMessage('已导入文件');
-            handleOpenManuscript(result.path);
-        } catch (error) {
-            console.error('Failed to import RedClaw preview document:', error);
-            setChatActionMessage(error instanceof Error ? error.message : '导入文件失败');
-        } finally {
-            setPreviewDocumentImporting(false);
-        }
-    }, [handleOpenManuscript]);
-
     const handleRevealPreviewInFolder = useCallback(async (target: ChatMessageLinkTarget) => {
         const source = String(target.localPathCandidate || target.href || '').trim();
         if (!source || !target.isLocal) return;
@@ -2542,8 +2516,6 @@ export function RedClaw({
                         onClose={handleClosePreview}
                         onOpenExternal={handleOpenPreviewExternal}
                         onRevealInFolder={handleRevealPreviewInFolder}
-                        onImportDocument={handleImportPreviewDocument}
-                        importingDocument={previewDocumentImporting}
                         variant="sidebar"
                     />
                 </aside>

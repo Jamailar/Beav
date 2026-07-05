@@ -4,7 +4,6 @@ import {
     Check,
     Download,
     Eye,
-    ExternalLink,
     FileText,
     FileAudio,
     FileVideo,
@@ -26,7 +25,6 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { ConfirmDialog } from '../ConfirmDialog';
-import { DocumentPreviewWorkbench } from './DocumentPreviewWorkbench';
 import { EditorLayoutToggleButton } from './EditorLayoutToggleButton';
 import type { EditorBodyViewMode } from './WritingDraftWorkbench';
 import { MediaAssetPreviewOverlay } from '../../pages/media-library/MediaAssetPreviewOverlay';
@@ -308,7 +306,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
     const editorMetadataContentFormat = String(editorMetadata.contentFormat || '').trim();
     const editorIsDocument = editorMetadataContentFormat === 'document'
-        || editorFileContentFormat === 'document'
+        || String(editorFileContentFormat || '').trim() === 'document'
         || editorDescriptor?.draftType === 'document';
     const currentEditorContent = useMemo(
         () => composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock),
@@ -1516,54 +1514,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, [ensureLatestEditorContentSaved, workingId]);
 
-    const handleOpenEditorDocument = useCallback(async () => {
-        const snapshotFile = editorFileRef.current;
-        if (!snapshotFile) return;
-        try {
-            const result = await window.ipcRenderer.openPath(`manuscripts://${snapshotFile}`);
-            if (result && result.success === false) {
-                throw new Error(result.error || '打开文件失败');
-            }
-        } catch (openError) {
-            void appAlert(openError instanceof Error ? openError.message : '打开文件失败');
-        }
-    }, []);
-
-    const handleRevealEditorDocument = useCallback(async () => {
-        const snapshotFile = editorFileRef.current;
-        if (!snapshotFile) return;
-        try {
-            const result = await window.ipcRenderer.files.showInFolder({
-                source: `manuscripts://${snapshotFile}`,
-            }) as { success?: boolean; error?: string };
-            if (!result?.success) {
-                throw new Error(result?.error || '显示文件失败');
-            }
-        } catch (revealError) {
-            void appAlert(revealError instanceof Error ? revealError.message : '显示文件失败');
-        }
-    }, []);
-
-    const handleSaveAsEditorDocument = useCallback(async () => {
-        const snapshotFile = editorFileRef.current;
-        if (!snapshotFile || workingId) return;
-        setWorkingId('save-as:document');
-        try {
-            const result = await window.ipcRenderer.files.saveAs({
-                source: `manuscripts://${snapshotFile}`,
-                defaultName: pathBasenameSafe(snapshotFile),
-            }) as { success?: boolean; error?: string; canceled?: boolean };
-            if (result?.canceled) return;
-            if (result && result.success === false) {
-                throw new Error(result.error || '另存文件失败');
-            }
-        } catch (saveAsError) {
-            void appAlert(saveAsError instanceof Error ? saveAsError.message : '另存文件失败');
-        } finally {
-            setWorkingId(null);
-        }
-    }, [workingId]);
-
     const handleGenerateRemotionScene = useCallback(async (instructionsOverride?: string) => {
         if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video') return;
         setIsGeneratingRemotion(true);
@@ -2498,45 +2448,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                         </div>
                     </div>
                     <div className="flex items-center gap-1.5">
-                        {isDocumentContent ? (
-                            <div className={clsx(
-                                'flex shrink-0 items-center gap-0.5 rounded-lg p-0.5',
-                                isImmersiveWorkbench
-                                    ? 'border border-border bg-surface-secondary/50'
-                                    : 'border border-black/[0.04] bg-black/[0.03]'
-                            )}>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleOpenEditorDocument()}
-                                    aria-label="打开"
-                                    title="打开"
-                                    disabled={!editorFile || Boolean(workingId)}
-                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
-                                >
-                                    <ExternalLink className="h-4 w-4" />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleRevealEditorDocument()}
-                                    aria-label="在文件夹中显示"
-                                    title="在文件夹中显示"
-                                    disabled={!editorFile || Boolean(workingId)}
-                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
-                                >
-                                    <FolderOpen className="h-4 w-4" />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleSaveAsEditorDocument()}
-                                    aria-label="下载"
-                                    title="下载"
-                                    disabled={!editorFile || Boolean(workingId)}
-                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
-                                >
-                                    {workingId === 'save-as:document' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                                </button>
-                            </div>
-                        ) : (
+                        {!isDocumentContent ? (
                             <div className={clsx(
                                 'flex shrink-0 items-center gap-0.5 rounded-lg p-0.5',
                                 isImmersiveWorkbench
@@ -2586,7 +2498,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                                     {workingId === 'download:editor' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                                 </button>
                             </div>
-                        )}
+                        ) : null}
                         {!isDocumentContent && (editorBodyDirty || isSavingEditorBody) ? (
                             <div className={clsx(
                                 'shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium',
@@ -2659,7 +2571,17 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                     </div>
                 </div>
                 {isDocumentContent ? (
-                    <DocumentPreviewWorkbench filePath={editorFile} title={currentDescriptor.title} />
+                    <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-surface-secondary/20 p-6">
+                        <div className="flex flex-col items-center gap-3 text-center">
+                            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-surface-primary text-text-tertiary">
+                                <FileText className="h-6 w-6" />
+                            </div>
+                            <div className="max-w-[360px] truncate text-sm font-semibold text-text-primary">
+                                {currentDescriptor.title}
+                            </div>
+                            <div className="text-xs text-text-tertiary">暂不支持预览此文件</div>
+                        </div>
+                    </div>
                 ) : (
                     <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">写作工作台加载中...</div>}>
                         <WritingDraftWorkbench

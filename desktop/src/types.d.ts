@@ -2419,7 +2419,6 @@ declare global {
         save: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         download: <T = unknown>(payload: { filePath: string }) => Promise<T>;
         createFile: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
-        importDocument: <T = unknown>(payload: { source?: string; sources?: string[]; parentPath?: string }) => Promise<T>;
         createFolder: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         rename: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         move: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
