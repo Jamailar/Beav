@@ -17,6 +17,7 @@ pub(super) struct RuntimeSlots {
 
 pub struct MediaGenerationRuntime {
     pub stop: Arc<AtomicBool>,
+    pub dispatcher_active: Arc<AtomicBool>,
     pub dispatcher_join: Option<JoinHandle<()>>,
 }
 

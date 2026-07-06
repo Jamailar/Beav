@@ -78,7 +78,12 @@ pub fn handle_media_jobs_channel(
             let runtime_running = state
                 .media_generation_runtime
                 .lock()
-                .map(|guard| guard.is_some())
+                .map(|guard| {
+                    guard
+                        .as_ref()
+                        .map(media_runtime::media_generation_runtime_is_active)
+                        .unwrap_or(false)
+                })
                 .unwrap_or(false);
             let pressure = media_runtime::media_runtime_pressure_snapshot(state).ok();
             Ok(json!({

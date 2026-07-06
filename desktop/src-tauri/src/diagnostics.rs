@@ -626,7 +626,12 @@ pub fn build_background_worker_summary(state: &State<'_, AppState>) -> Value {
     let media_runtime_running = state
         .media_generation_runtime
         .lock()
-        .map(|runtime| runtime.is_some())
+        .map(|runtime| {
+            runtime
+                .as_ref()
+                .map(crate::media_runtime::media_generation_runtime_is_active)
+                .unwrap_or(false)
+        })
         .unwrap_or(false);
     let redclaw_runtime_running = state
         .redclaw_runtime

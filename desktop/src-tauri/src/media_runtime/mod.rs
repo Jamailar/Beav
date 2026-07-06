@@ -5584,12 +5584,27 @@ fn dispatch_stage(
     Ok(())
 }
 
+struct DispatcherActiveGuard {
+    active: Arc<AtomicBool>,
+}
+
+impl Drop for DispatcherActiveGuard {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Relaxed);
+    }
+}
+
 fn run_media_generation_dispatcher(
     app: AppHandle,
     stop: Arc<AtomicBool>,
     slots: Arc<Mutex<RuntimeSlots>>,
+    dispatcher_active: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
+    dispatcher_active.store(true, Ordering::Relaxed);
     tauri::async_runtime::spawn(async move {
+        let _active_guard = DispatcherActiveGuard {
+            active: dispatcher_active,
+        };
         let mut interval = tokio::time::interval(Duration::from_millis(DISPATCH_TICK_MS));
         while !stop.load(Ordering::Relaxed) {
             interval.tick().await;
@@ -5682,30 +5697,58 @@ fn run_media_generation_dispatcher(
     })
 }
 
+pub(crate) fn media_generation_runtime_is_active(runtime: &MediaGenerationRuntime) -> bool {
+    !runtime.stop.load(Ordering::Relaxed)
+        && runtime.dispatcher_active.load(Ordering::Relaxed)
+        && runtime.dispatcher_join.is_some()
+}
+
 pub(crate) fn ensure_media_generation_runtime_running(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<bool, String> {
     ensure_media_runtime_ready(state)?;
-    let mut guard = state
-        .media_generation_runtime
-        .lock()
-        .map_err(|_| "media generation runtime lock is poisoned".to_string())?;
-    if guard.is_some() {
-        return Ok(false);
+    let restarted_stale_runtime = {
+        let mut guard = state
+            .media_generation_runtime
+            .lock()
+            .map_err(|_| "media generation runtime lock is poisoned".to_string())?;
+        if let Some(runtime) = guard.as_ref() {
+            if media_generation_runtime_is_active(runtime) {
+                return Ok(false);
+            }
+        }
+        let restarted_stale_runtime = guard.is_some();
+        if let Some(mut runtime) = guard.take() {
+            stop_media_generation_runtime(&mut runtime);
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let dispatcher_active = Arc::new(AtomicBool::new(false));
+        let slots = Arc::new(Mutex::new(RuntimeSlots::default()));
+        let dispatcher_join = run_media_generation_dispatcher(
+            app.clone(),
+            stop.clone(),
+            slots,
+            dispatcher_active.clone(),
+        );
+        *guard = Some(MediaGenerationRuntime {
+            stop,
+            dispatcher_active,
+            dispatcher_join: Some(dispatcher_join),
+        });
+        restarted_stale_runtime
+    };
+    if restarted_stale_runtime {
+        crate::append_debug_trace_global(
+            "[media-runtime] restarted stopped media generation dispatcher",
+        );
     }
-    let stop = Arc::new(AtomicBool::new(false));
-    let slots = Arc::new(Mutex::new(RuntimeSlots::default()));
-    let dispatcher_join = run_media_generation_dispatcher(app.clone(), stop.clone(), slots);
-    *guard = Some(MediaGenerationRuntime {
-        stop,
-        dispatcher_join: Some(dispatcher_join),
-    });
     Ok(true)
 }
 
 pub(crate) fn stop_media_generation_runtime(runtime: &mut MediaGenerationRuntime) {
     runtime.stop.store(true, Ordering::Relaxed);
+    runtime.dispatcher_active.store(false, Ordering::Relaxed);
     if let Some(join) = runtime.dispatcher_join.take() {
         join.abort();
     }
@@ -5758,6 +5801,28 @@ mod tests {
                 updated_at: now_iso(),
             },
         }
+    }
+
+    #[test]
+    fn media_generation_runtime_without_dispatcher_is_inactive() {
+        let runtime = MediaGenerationRuntime {
+            stop: Arc::new(AtomicBool::new(false)),
+            dispatcher_active: Arc::new(AtomicBool::new(false)),
+            dispatcher_join: None,
+        };
+
+        assert!(!media_generation_runtime_is_active(&runtime));
+    }
+
+    #[test]
+    fn stopped_media_generation_runtime_is_inactive() {
+        let runtime = MediaGenerationRuntime {
+            stop: Arc::new(AtomicBool::new(true)),
+            dispatcher_active: Arc::new(AtomicBool::new(false)),
+            dispatcher_join: None,
+        };
+
+        assert!(!media_generation_runtime_is_active(&runtime));
     }
 
     #[test]
