@@ -13,6 +13,8 @@ use super::visual_manifest::{
     metadata_only_manifest, normalize_manifest, VisualSourceUnit, DEFAULT_PROMPT_VERSION,
 };
 
+const VISUAL_PROMPT_CACHE_MIN_CHARS: usize = 1200;
+
 #[derive(Debug, Clone)]
 pub(crate) struct VisualIndexConfig {
     pub enabled: bool,
@@ -250,6 +252,7 @@ pub(super) fn analyze_visual_source(
             }
         ]
     });
+    let body = visual_prompt_cache_body(&endpoint_url, model, body);
     let response = crate::run_curl_json_response(
         "POST",
         &endpoint_url,
@@ -348,6 +351,69 @@ pub(super) fn analyze_visual_source(
             .unwrap_or(0)
     ));
     Ok(stamp_manifest_config(manifest, config, Some(model)))
+}
+
+fn visual_prompt_cache_body(endpoint_url: &str, model: &str, body: Value) -> Value {
+    if !is_qwen_visual_prompt_cache_candidate(endpoint_url, model)
+        || value_contains_cache_control(&body)
+    {
+        return body;
+    }
+    let Some(messages) = body.get("messages").and_then(Value::as_array) else {
+        return body;
+    };
+    let Some(system_index) = messages
+        .iter()
+        .position(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+    else {
+        return body;
+    };
+    let Some(system_text) = messages[system_index]
+        .get("content")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    else {
+        return body;
+    };
+    if system_text.chars().count() < VISUAL_PROMPT_CACHE_MIN_CHARS {
+        return body;
+    }
+
+    let mut next = body;
+    if let Some(message) = next
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .and_then(|items| items.get_mut(system_index))
+    {
+        message["content"] = json!([{
+            "type": "text",
+            "text": system_text,
+            "cache_control": { "type": "ephemeral" }
+        }]);
+        visual_index_log(format!(
+            "prompt_cache_marked model={} endpointHash={} chars={}",
+            model,
+            stable_hash(endpoint_url),
+            system_text.chars().count()
+        ));
+    }
+    next
+}
+
+fn is_qwen_visual_prompt_cache_candidate(endpoint_url: &str, model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    let endpoint = endpoint_url.trim().to_ascii_lowercase();
+    model.contains("qwen") || endpoint.contains("dashscope") || endpoint.contains("aliyuncs.com")
+}
+
+fn value_contains_cache_control(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.contains_key("cache_control") || map.values().any(value_contains_cache_control)
+        }
+        Value::Array(items) => items.iter().any(value_contains_cache_control),
+        _ => false,
+    }
 }
 
 fn stamp_manifest_config(
@@ -644,6 +710,58 @@ mod tests {
                 .and_then(Value::as_str),
             Some("visual index endpoint is not configured")
         );
+    }
+
+    #[test]
+    fn qwen_visual_prompt_cache_marks_stable_system_prompt() {
+        let stable_prompt = "稳定视觉索引提示词。".repeat(160);
+        let body = json!({
+            "model": "qwen3.5-flash",
+            "messages": [
+                { "role": "system", "content": stable_prompt },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "metadata" },
+                        { "type": "image_url", "image_url": { "url": "data:image/png;base64,abc" } }
+                    ]
+                }
+            ]
+        });
+
+        let cached = visual_prompt_cache_body(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "qwen3.5-flash",
+            body,
+        );
+
+        assert_eq!(
+            cached["messages"][0]["content"][0]["cache_control"]["type"],
+            json!("ephemeral")
+        );
+        assert!(cached["messages"][1]["content"][1]["image_url"]["url"]
+            .as_str()
+            .is_some());
+        assert!(!value_contains_cache_control(&cached["messages"][1]));
+    }
+
+    #[test]
+    fn non_qwen_visual_prompt_cache_leaves_body_unchanged() {
+        let body = json!({
+            "model": "vision-small",
+            "messages": [
+                { "role": "system", "content": "稳定视觉索引提示词。".repeat(160) },
+                { "role": "user", "content": [{ "type": "text", "text": "metadata" }] }
+            ]
+        });
+
+        let cached = visual_prompt_cache_body(
+            "https://api.example.com/v1/chat/completions",
+            "vision-small",
+            body,
+        );
+
+        assert!(!value_contains_cache_control(&cached));
     }
 
     #[test]
