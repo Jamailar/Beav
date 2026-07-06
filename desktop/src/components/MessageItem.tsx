@@ -196,6 +196,7 @@ const INTERNAL_PROTOCOL_BLOCKS = [
   /<redclaw_bootstrap[\s\S]*?<\/redclaw_bootstrap>/gi,
 
   // --- Bracket 风格协议块（有闭合）---
+  /\[GenerationAgentContext\][\s\S]*?\[\/GenerationAgentContext\]/gi,
   /\[KnowledgeReferences\][\s\S]*?\[\/KnowledgeReferences\]/gi,
   /\[AssetReferences\][\s\S]*?\[\/AssetReferences\]/gi,
 
