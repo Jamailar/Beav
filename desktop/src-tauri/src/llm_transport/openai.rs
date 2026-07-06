@@ -2,6 +2,7 @@ use futures_util::StreamExt;
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_TYPE};
 use reqwest::Client;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Mutex, OnceLock};
@@ -26,8 +27,13 @@ static OPENAI_TRANSPORT_CLIENT_AUTO: OnceLock<Client> = OnceLock::new();
 static OPENAI_TRANSPORT_CLIENT_HTTP11: OnceLock<Client> = OnceLock::new();
 static OPENAI_TRANSPORT_PREFERENCES: OnceLock<Mutex<HashMap<String, TransportMode>>> =
     OnceLock::new();
+static QWEN_PROMPT_CACHE_REGISTRY: OnceLock<Mutex<HashMap<String, QwenPromptCacheEntry>>> =
+    OnceLock::new();
 const OPENAI_JSON_MAX_ATTEMPTS: usize = 3;
 const OPENAI_STREAM_MAX_ATTEMPTS: usize = 3;
+const QWEN_PROMPT_CACHE_TTL_MS: u128 = 5 * 60 * 1000;
+const QWEN_PROMPT_CACHE_GC_GRACE_MS: u128 = 10 * 60 * 1000;
+const PROMPT_CACHE_STABLE_PREFIX_MIN_CHARS: usize = 1200;
 
 struct OpenaiStreamAttemptError {
     error: LlmTransportError,
@@ -41,6 +47,430 @@ impl OpenaiStreamAttemptError {
             had_visible_output,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+struct QwenPromptCacheEntry {
+    marker_count: usize,
+    cacheable_chars: usize,
+    created_at_ms: u128,
+    last_seen_at_ms: u128,
+    expires_at_ms: u128,
+}
+
+#[derive(Clone, Debug, Default)]
+struct QwenPromptCachePlan {
+    marker_count: usize,
+    system_marked: bool,
+    rolling_user_marked: bool,
+    cacheable_chars: usize,
+    scope_hash: String,
+}
+
+fn qwen_prompt_cache_registry() -> &'static Mutex<HashMap<String, QwenPromptCacheEntry>> {
+    QWEN_PROMPT_CACHE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn short_sha256_hex(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    let mut output = String::with_capacity(16);
+    for byte in digest.iter().take(8) {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+
+fn qwen_prompt_cache_enabled(config: &ResolvedChatConfig) -> bool {
+    config.wire_api == crate::runtime::ProviderWireApi::ChatCompat
+        && config
+            .model_name
+            .trim()
+            .to_ascii_lowercase()
+            .contains("qwen")
+}
+
+fn official_openai_chat_prompt_cache_enabled(config: &ResolvedChatConfig) -> bool {
+    if config.wire_api != crate::runtime::ProviderWireApi::ChatCompat {
+        return false;
+    }
+    let base_url = normalize_base_url(&config.base_url).to_ascii_lowercase();
+    base_url.contains("api.openai.com")
+        && !base_url.contains("azure")
+        && !base_url.contains("openrouter")
+        && !base_url.contains("deepseek")
+}
+
+fn value_contains_cache_control(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.contains_key("cache_control") || map.values().any(value_contains_cache_control)
+        }
+        Value::Array(items) => items.iter().any(value_contains_cache_control),
+        _ => false,
+    }
+}
+
+fn message_text_char_count(message: &Value) -> usize {
+    match message.get("content") {
+        Some(Value::String(text)) => text.chars().count(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .map(|text| text.chars().count())
+            .sum(),
+        _ => 0,
+    }
+}
+
+fn mark_string_content_for_prompt_cache(message: &mut Value) -> Option<usize> {
+    let text = message.get("content")?.as_str()?.to_string();
+    let chars = text.chars().count();
+    message["content"] = json!([{
+        "type": "text",
+        "text": text,
+        "cache_control": { "type": "ephemeral" }
+    }]);
+    Some(chars)
+}
+
+fn mark_text_array_content_for_prompt_cache(message: &mut Value) -> Option<usize> {
+    let items = message.get_mut("content")?.as_array_mut()?;
+    if items.iter().any(value_contains_cache_control) {
+        return None;
+    }
+    let text_indexes = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let item_type = item.get("type").and_then(Value::as_str).unwrap_or("text");
+            let has_text = item.get("text").and_then(Value::as_str).is_some();
+            (item_type == "text" && has_text).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if text_indexes.is_empty() || text_indexes.len() != items.len() {
+        return None;
+    }
+    let last_index = *text_indexes.last()?;
+    let chars = items
+        .iter()
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .map(|text| text.chars().count())
+        .sum();
+    if let Some(object) = items.get_mut(last_index).and_then(Value::as_object_mut) {
+        object.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
+        return Some(chars);
+    }
+    None
+}
+
+fn mark_message_for_prompt_cache(message: &mut Value) -> Option<usize> {
+    if value_contains_cache_control(message) {
+        return None;
+    }
+    mark_string_content_for_prompt_cache(message)
+        .or_else(|| mark_text_array_content_for_prompt_cache(message))
+}
+
+fn qwen_prompt_cache_scope_hash(config: &ResolvedChatConfig, body: &Value) -> String {
+    let mut seed = format!(
+        "{}\n{}\n{}",
+        normalize_base_url(&config.base_url).to_ascii_lowercase(),
+        config.model_name.trim().to_ascii_lowercase(),
+        config.wire_api.as_str()
+    );
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        if let Some(system) = messages
+            .iter()
+            .find(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        {
+            seed.push_str("\nsystem:");
+            seed.push_str(&message_text_char_count(system).to_string());
+            seed.push(':');
+            seed.push_str(
+                &system
+                    .get("content")
+                    .cloned()
+                    .unwrap_or(Value::Null)
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(tools) = body.get("tools") {
+        seed.push_str("\ntools:");
+        seed.push_str(&tools.to_string());
+    }
+    short_sha256_hex(&seed)
+}
+
+fn prompt_cache_prefix_char_count(body: &Value) -> usize {
+    let mut chars = 0;
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        if let Some(system) = messages
+            .iter()
+            .find(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        {
+            chars += message_text_char_count(system);
+        }
+    }
+    if let Some(tools) = body.get("tools") {
+        chars += tools.to_string().chars().count();
+    }
+    chars
+}
+
+fn qwen_prompt_cache_body(
+    config: &ResolvedChatConfig,
+    body: &Value,
+) -> Option<(Value, QwenPromptCachePlan)> {
+    if !qwen_prompt_cache_enabled(config) || value_contains_cache_control(body) {
+        return None;
+    }
+    let messages = body.get("messages").and_then(Value::as_array)?;
+    if messages.is_empty() {
+        return None;
+    }
+
+    let mut next = body.clone();
+    let Some(next_messages) = next.get_mut("messages").and_then(Value::as_array_mut) else {
+        return None;
+    };
+
+    let mut plan = QwenPromptCachePlan {
+        scope_hash: qwen_prompt_cache_scope_hash(config, body),
+        ..QwenPromptCachePlan::default()
+    };
+
+    if let Some(system_index) = next_messages
+        .iter()
+        .position(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+    {
+        if let Some(chars) = mark_message_for_prompt_cache(&mut next_messages[system_index]) {
+            plan.marker_count += 1;
+            plan.system_marked = true;
+            plan.cacheable_chars += chars;
+        }
+    }
+
+    if plan.marker_count < 4 {
+        if let Some(user_index) = next_messages
+            .iter()
+            .rposition(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        {
+            if let Some(chars) = mark_message_for_prompt_cache(&mut next_messages[user_index]) {
+                plan.marker_count += 1;
+                plan.rolling_user_marked = true;
+                plan.cacheable_chars += chars;
+            }
+        }
+    }
+
+    (plan.marker_count > 0).then_some((next, plan))
+}
+
+fn openai_prompt_cache_body(config: &ResolvedChatConfig, body: &Value) -> Option<Value> {
+    if !official_openai_chat_prompt_cache_enabled(config)
+        || body.get("prompt_cache_key").is_some()
+        || body.get("prompt_cache_retention").is_some()
+        || prompt_cache_prefix_char_count(body) < PROMPT_CACHE_STABLE_PREFIX_MIN_CHARS
+    {
+        return None;
+    }
+    let scope_hash = qwen_prompt_cache_scope_hash(config, body);
+    let mut next = body.clone();
+    let object = next.as_object_mut()?;
+    object.insert(
+        "prompt_cache_key".to_string(),
+        json!(format!("app:redconvert:{scope_hash}")),
+    );
+    object.insert("prompt_cache_retention".to_string(), json!("in_memory"));
+    Some(next)
+}
+
+fn remember_qwen_prompt_cache_plan(
+    state: &State<'_, AppState>,
+    trace_label: &str,
+    config: &ResolvedChatConfig,
+    plan: &QwenPromptCachePlan,
+) {
+    let now = now_ms();
+    let expires_at = now.saturating_add(QWEN_PROMPT_CACHE_TTL_MS);
+    if let Ok(mut registry) = qwen_prompt_cache_registry().lock() {
+        registry.retain(|_, entry| {
+            now <= entry
+                .expires_at_ms
+                .saturating_add(QWEN_PROMPT_CACHE_GC_GRACE_MS)
+        });
+        registry
+            .entry(plan.scope_hash.clone())
+            .and_modify(|entry| {
+                entry.marker_count = plan.marker_count;
+                entry.cacheable_chars = plan.cacheable_chars;
+                entry.last_seen_at_ms = now;
+                entry.expires_at_ms = expires_at;
+            })
+            .or_insert(QwenPromptCacheEntry {
+                marker_count: plan.marker_count,
+                cacheable_chars: plan.cacheable_chars,
+                created_at_ms: now,
+                last_seen_at_ms: now,
+                expires_at_ms: expires_at,
+            });
+        let scope_age_ms = registry
+            .get(&plan.scope_hash)
+            .map(|entry| now.saturating_sub(entry.created_at_ms))
+            .unwrap_or(0);
+        append_debug_trace_state(
+            state,
+            format!(
+                "[runtime][prompt-cache][qwen][{}] markers={} system={} rollingUser={} chars={} scope={} activeScopes={} ageMs={} ttlMs={} model={}",
+                trace_label,
+                plan.marker_count,
+                plan.system_marked,
+                plan.rolling_user_marked,
+                plan.cacheable_chars,
+                plan.scope_hash,
+                registry.len(),
+                scope_age_ms,
+                QWEN_PROMPT_CACHE_TTL_MS,
+                config.model_name,
+            ),
+        );
+    }
+}
+
+fn prompt_cache_chat_body<'a>(
+    state: &State<'_, AppState>,
+    trace_label: &str,
+    config: &ResolvedChatConfig,
+    body: &'a Value,
+) -> std::borrow::Cow<'a, Value> {
+    if let Some((next, plan)) = qwen_prompt_cache_body(config, body) {
+        remember_qwen_prompt_cache_plan(state, trace_label, config, &plan);
+        std::borrow::Cow::Owned(next)
+    } else if let Some(next) = openai_prompt_cache_body(config, body) {
+        append_debug_trace_state(
+            state,
+            format!(
+                "[runtime][prompt-cache][openai][{}] prefixChars={} model={}",
+                trace_label,
+                prompt_cache_prefix_char_count(body),
+                config.model_name,
+            ),
+        );
+        std::borrow::Cow::Owned(next)
+    } else {
+        std::borrow::Cow::Borrowed(body)
+    }
+}
+
+fn qwen_usage_integer(value: &Value, paths: &[&[&str]]) -> u64 {
+    paths
+        .iter()
+        .find_map(|path| {
+            let mut current = value;
+            for segment in *path {
+                current = current.get(*segment)?;
+            }
+            current.as_u64()
+        })
+        .unwrap_or(0)
+}
+
+fn record_qwen_prompt_cache_usage(
+    state: &State<'_, AppState>,
+    trace_label: &str,
+    config: &ResolvedChatConfig,
+    response: &Value,
+) {
+    if !qwen_prompt_cache_enabled(config) {
+        return;
+    }
+    let Some(usage) = response.get("usage") else {
+        return;
+    };
+    let cached_tokens = qwen_usage_integer(
+        usage,
+        &[
+            &["prompt_tokens_details", "cached_tokens"],
+            &["input_tokens_details", "cached_tokens"],
+        ],
+    );
+    let created_tokens = qwen_usage_integer(
+        usage,
+        &[
+            &[
+                "prompt_tokens_details",
+                "cache_creation",
+                "cache_creation_input_tokens",
+            ],
+            &[
+                "prompt_tokens_details",
+                "cache_creation",
+                "ephemeral_5m_input_tokens",
+            ],
+            &["prompt_tokens_details", "cache_creation_input_tokens"],
+            &[
+                "input_tokens_details",
+                "cache_creation",
+                "cache_creation_input_tokens",
+            ],
+        ],
+    );
+    if cached_tokens == 0 && created_tokens == 0 {
+        return;
+    }
+    append_debug_trace_state(
+        state,
+        format!(
+            "[runtime][prompt-cache][qwen][{}] usage createdTokens={} cachedTokens={} promptTokens={} model={}",
+            trace_label,
+            created_tokens,
+            cached_tokens,
+            usage.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0),
+            config.model_name,
+        ),
+    );
+}
+
+fn record_openai_prompt_cache_usage(
+    state: &State<'_, AppState>,
+    trace_label: &str,
+    config: &ResolvedChatConfig,
+    response: &Value,
+) {
+    if !official_openai_chat_prompt_cache_enabled(config) {
+        return;
+    }
+    let Some(usage) = response.get("usage") else {
+        return;
+    };
+    let cached_tokens = qwen_usage_integer(usage, &[&["prompt_tokens_details", "cached_tokens"]]);
+    if cached_tokens == 0 {
+        return;
+    }
+    append_debug_trace_state(
+        state,
+        format!(
+            "[runtime][prompt-cache][openai][{}] cachedTokens={} promptTokens={} model={}",
+            trace_label,
+            cached_tokens,
+            usage
+                .get("prompt_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            config.model_name,
+        ),
+    );
+}
+
+fn record_prompt_cache_usage(
+    state: &State<'_, AppState>,
+    trace_label: &str,
+    config: &ResolvedChatConfig,
+    response: &Value,
+) {
+    record_qwen_prompt_cache_usage(state, trace_label, config, response);
+    record_openai_prompt_cache_usage(state, trace_label, config, response);
 }
 
 fn openai_client(mode: TransportMode) -> Result<&'static Client, String> {
@@ -1008,6 +1438,8 @@ pub(crate) fn run_openai_streaming_chat_completion_transport(
     allow_official_reauth_retry: bool,
 ) -> Result<StreamingChatCompletion, LlmTransportError> {
     let trace_session_id = session_id.unwrap_or("no-session");
+    let body = prompt_cache_chat_body(state, trace_session_id, config, body);
+    let body = body.as_ref();
     let attempt_once = |mode| {
         run_transport_future(run_stream_attempt(
             app,
@@ -1419,6 +1851,8 @@ pub(crate) fn run_openai_json_chat_completion_transport(
     max_time_seconds: Option<u64>,
     allow_official_reauth_retry: bool,
 ) -> Result<Value, LlmTransportError> {
+    let body = prompt_cache_chat_body(state, "json", config, body);
+    let body = body.as_ref();
     let provider_profile = openai_provider_profile(config);
     if provider_profile.prefers_curl_json_transport() {
         return run_openai_json_attempt_via_curl(state, config, body, max_time_seconds);
@@ -1441,6 +1875,7 @@ pub(crate) fn run_openai_json_chat_completion_transport(
             if preferred_mode == TransportMode::Http11 {
                 remember_transport_mode(config, TransportMode::Http11);
             }
+            record_prompt_cache_usage(state, "json", config, &value);
             Ok(value)
         }
         Err(error) if error.should_retry_with_http1() && preferred_mode == TransportMode::Auto => {
@@ -1459,6 +1894,7 @@ pub(crate) fn run_openai_json_chat_completion_transport(
                 )
             })?;
             remember_transport_mode(config, TransportMode::Http11);
+            record_prompt_cache_usage(state, "json", config, &value);
             Ok(value)
         }
         Err(error) => Err(error),
@@ -1468,8 +1904,9 @@ pub(crate) fn run_openai_json_chat_completion_transport(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_retryable_json_error, openai_chat_body_to_responses_body, openai_provider_profile,
-        openai_reasoning_fragments, preferred_transport_mode,
+        is_retryable_json_error, openai_chat_body_to_responses_body, openai_prompt_cache_body,
+        openai_provider_profile, openai_reasoning_fragments, preferred_transport_mode,
+        qwen_prompt_cache_body, value_contains_cache_control,
     };
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
     use crate::provider_compat::ProviderFamily;
@@ -1491,6 +1928,153 @@ mod tests {
             openai_provider_profile(&config).provider_family,
             ProviderFamily::MiniMax
         );
+    }
+
+    fn qwen_chat_config() -> ResolvedChatConfig {
+        ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
+            base_url: "https://api.ziz.hk/thrive/v1".to_string(),
+            api_key: None,
+            model_name: "qwen3.7-plus".to_string(),
+            reasoning_effort: None,
+        }
+    }
+
+    fn official_openai_chat_config() -> ResolvedChatConfig {
+        ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            wire_api: crate::runtime::ProviderWireApi::ChatCompat,
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+            model_name: "gpt-5".to_string(),
+            reasoning_effort: None,
+        }
+    }
+
+    #[test]
+    fn qwen_prompt_cache_marks_system_and_latest_user_messages() {
+        let body = json!({
+            "model": "qwen3.7-plus",
+            "messages": [
+                { "role": "system", "content": "stable runtime prompt" },
+                { "role": "user", "content": "first request" },
+                { "role": "assistant", "content": "ok" },
+                { "role": "user", "content": "next request" }
+            ],
+            "stream": true
+        });
+
+        let (cached_body, plan) =
+            qwen_prompt_cache_body(&qwen_chat_config(), &body).expect("qwen body should be marked");
+
+        assert_eq!(plan.marker_count, 2);
+        assert!(plan.system_marked);
+        assert!(plan.rolling_user_marked);
+        assert!(value_contains_cache_control(
+            &cached_body["messages"][0]["content"]
+        ));
+        assert!(value_contains_cache_control(
+            &cached_body["messages"][3]["content"]
+        ));
+        assert!(!value_contains_cache_control(
+            &cached_body["messages"][1]["content"]
+        ));
+    }
+
+    #[test]
+    fn qwen_prompt_cache_does_not_double_mark_existing_cache_control() {
+        let body = json!({
+            "model": "qwen3.7-plus",
+            "messages": [{
+                "role": "system",
+                "content": [{
+                    "type": "text",
+                    "text": "already marked",
+                    "cache_control": { "type": "ephemeral" }
+                }]
+            }]
+        });
+
+        assert!(qwen_prompt_cache_body(&qwen_chat_config(), &body).is_none());
+    }
+
+    #[test]
+    fn openai_prompt_cache_adds_app_scoped_cache_key_for_stable_prefix() {
+        let stable_prompt = "stable app prompt ".repeat(90);
+        let body = json!({
+            "model": "gpt-5",
+            "messages": [
+                { "role": "system", "content": stable_prompt },
+                { "role": "user", "content": "next request" }
+            ]
+        });
+
+        let cached_body = openai_prompt_cache_body(&official_openai_chat_config(), &body)
+            .expect("official OpenAI body should get prompt cache key");
+
+        assert!(cached_body["prompt_cache_key"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("app:redconvert:"));
+        assert_eq!(cached_body["prompt_cache_retention"], json!("in_memory"));
+    }
+
+    #[test]
+    fn openai_prompt_cache_skips_non_official_compatible_sources() {
+        let mut config = official_openai_chat_config();
+        config.base_url = "https://openrouter.ai/api/v1".to_string();
+        let body = json!({
+            "model": "gpt-5",
+            "messages": [
+                { "role": "system", "content": "stable app prompt ".repeat(90) },
+                { "role": "user", "content": "next request" }
+            ]
+        });
+
+        assert!(openai_prompt_cache_body(&config, &body).is_none());
+    }
+
+    #[test]
+    fn non_qwen_prompt_cache_body_is_unchanged() {
+        let mut config = qwen_chat_config();
+        config.model_name = "gpt-5".to_string();
+        let body = json!({
+            "model": "gpt-5",
+            "messages": [{ "role": "system", "content": "stable" }]
+        });
+
+        assert!(qwen_prompt_cache_body(&config, &body).is_none());
+    }
+
+    #[test]
+    fn qwen_prompt_cache_skips_multimodal_user_array_marker() {
+        let body = json!({
+            "model": "qwen3.7-plus",
+            "messages": [
+                { "role": "system", "content": "stable runtime prompt" },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "describe this image" },
+                        { "type": "image_url", "image_url": { "url": "data:image/png;base64,abc" } }
+                    ]
+                }
+            ]
+        });
+
+        let (cached_body, plan) =
+            qwen_prompt_cache_body(&qwen_chat_config(), &body).expect("system should be marked");
+
+        assert_eq!(plan.marker_count, 1);
+        assert!(plan.system_marked);
+        assert!(!plan.rolling_user_marked);
+        assert!(value_contains_cache_control(
+            &cached_body["messages"][0]["content"]
+        ));
+        assert!(!value_contains_cache_control(
+            &cached_body["messages"][1]["content"]
+        ));
     }
 
     #[test]
