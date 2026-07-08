@@ -38,11 +38,6 @@ pub(crate) fn handle_channel(
         return result;
     }
     if let Some(result) =
-        commands::space_init::handle_space_init_channel(app, state, channel, &payload)
-    {
-        return result;
-    }
-    if let Some(result) =
         commands::embeddings::handle_embeddings_channel(app, state, channel, &payload)
     {
         return result;

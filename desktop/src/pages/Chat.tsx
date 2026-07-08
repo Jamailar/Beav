@@ -2489,7 +2489,7 @@ export function Chat({
   const dispatchChatSend = useCallback((payload: {
     sessionId?: string;
     message: string;
-    displayContent?: string;
+    displayContent: string;
     attachment?: Message['attachment'];
     attachments?: UploadedFileAttachment[];
     memberMention?: {
@@ -2508,7 +2508,6 @@ export function Chat({
       presetId?: string;
     };
     taskHints?: unknown;
-    hiddenUserMessage?: boolean;
   }) => {
     debugUi('dispatch_send:queued', {
       sessionId: payload.sessionId || null,
@@ -2664,7 +2663,6 @@ export function Chat({
         pendingMessage.content,
         pendingKnowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${pendingKnowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
       ].filter(Boolean).join('');
-      const shouldHideUserMessage = pendingMessage.deliveryMode === 'send-hidden';
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
@@ -2694,22 +2692,20 @@ export function Chat({
         processingStartedAt,
       };
 
-      const nextLocalMessages = shouldHideUserMessage ? [aiPlaceholder] : [userMsg, aiPlaceholder];
-
       if (shouldAppendToCurrentSession) {
         localMessageMutationRef.current += 1;
         setMessages(prev => {
-          const nextMessages = [...prev, ...nextLocalMessages];
+          const nextMessages = [...prev, userMsg, aiPlaceholder];
           writeFixedSessionWarmSnapshot(sessionId, { messages: nextMessages });
           return nextMessages;
         });
       } else {
         if (fixedSessionId) {
           skipNextFixedSessionLoadRef.current = fixedSessionId;
-          writeFixedSessionWarmSnapshot(sessionId, { messages: nextLocalMessages });
+          writeFixedSessionWarmSnapshot(sessionId, { messages: [userMsg, aiPlaceholder] });
         }
         localMessageMutationRef.current += 1;
-        setMessages(nextLocalMessages);
+        setMessages([userMsg, aiPlaceholder]);
       }
       setIsProcessing(true);
       shouldAutoScrollRef.current = true;
@@ -2719,7 +2715,6 @@ export function Chat({
         sessionId: sessionId,
         message: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
-        hiddenUserMessage: shouldHideUserMessage,
         attachment: stripTransientMessageAttachmentPreview(resolvedAttachment),
         attachments: committedAttachments.map((attachment) => stripTransientAttachmentPreview(attachment) as UploadedFileAttachment),
         knowledgeReferences: pendingKnowledgeReferences,
@@ -5271,17 +5266,13 @@ export function Chat({
                     <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx(hasInlineSidePanel ? 'min-w-0' : 'flex-1', 'overflow-y-auto py-4 md:py-5', paneOuterPaddingClass)}>
                       <div className={clsx('mx-auto min-w-0', messageContentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
                         {dockedEmptyState ? (
-                          <div className={clsx(
-                            'py-10',
-                            messageListHeader ? 'w-full space-y-6 text-left' : 'text-center space-y-6',
-                          )}>
-                            {messageListHeader || welcomeHeaderBlock}
+                          <div className="text-center space-y-6 py-10">
+                            {welcomeHeaderBlock}
                             {welcomeActionsBlock}
                             {welcomeShortcutsBlock}
                           </div>
                         ) : (
                           <>
-                            {messageListHeader}
                             {visibleMessages.map((msg) => (
                               <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
                                 <MessageItem
@@ -5304,6 +5295,7 @@ export function Chat({
                                 />
                               </ErrorBoundary>
                             ))}
+                            {messageListHeader}
                             <div ref={messagesEndRef} />
                           </>
                         )}

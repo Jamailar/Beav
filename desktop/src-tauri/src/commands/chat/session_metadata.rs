@@ -162,7 +162,6 @@ pub(super) fn merge_task_hints_into_session_metadata(
                 metadata.insert("initialContext".to_string(), value.clone());
             }
         }
-        session.metadata = Some(Value::Object(metadata.clone()));
         if !requested_skills.is_empty() {
             let active_skills = merge_requested_skills_into_session(
                 session,
@@ -170,11 +169,6 @@ pub(super) fn merge_task_hints_into_session_metadata(
                 SkillActivationSource::TaskHints,
                 "chat.task_hints",
             );
-            metadata = session
-                .metadata
-                .clone()
-                .and_then(|value| value.as_object().cloned())
-                .unwrap_or(metadata);
             metadata.insert("activeSkills".to_string(), json!(active_skills));
         }
         session.metadata = Some(Value::Object(metadata));

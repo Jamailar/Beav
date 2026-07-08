@@ -91,7 +91,7 @@ export interface PendingChatMessage {
   content: string;
   displayContent?: string;
   sessionRouting?: 'current' | 'new';
-  deliveryMode?: 'send' | 'draft' | 'send-hidden';
+  deliveryMode?: 'send' | 'draft';
   taskHints?: AuthoringTaskHints;
   skillMentions?: PendingChatSkillMention[];
   knowledgeReferences?: Array<{

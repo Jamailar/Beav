@@ -28,7 +28,6 @@ pub mod runtime;
 pub mod runtime_orchestration;
 pub mod runtime_routing;
 pub mod skills_ai;
-pub mod space_init;
 pub mod spaces;
 pub mod subjects;
 pub mod system;

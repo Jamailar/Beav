@@ -27,9 +27,9 @@ function platformIcon(candidate: ClipboardCaptureCandidate) {
   return <Link2 className="h-5 w-5" />;
 }
 
-export function ClipboardCapturePrompt({ disabled = false }: { disabled?: boolean }) {
+export function ClipboardCapturePrompt() {
   const { t } = useI18n();
-  const clipboardCapture = useClipboardCapturePrompt({ disabled });
+  const clipboardCapture = useClipboardCapturePrompt();
 
   if (!clipboardCapture.open || !clipboardCapture.candidate) {
     return null;
