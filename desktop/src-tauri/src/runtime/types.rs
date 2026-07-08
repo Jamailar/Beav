@@ -791,6 +791,7 @@ pub struct RuntimeSubagentRoleSpec {
 pub struct RuntimeWarmEntry {
     pub mode: String,
     pub system_prompt: String,
+    pub context_messages: Vec<Value>,
     pub model_config: Option<Value>,
     pub long_term_context: Option<String>,
     pub context_bundle: RuntimeContextBundleSummary,

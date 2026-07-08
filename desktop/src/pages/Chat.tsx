@@ -1476,6 +1476,12 @@ const INTERNAL_RUNTIME_STATUS_PREFIXES = [
 
 function isInternalRuntimeStatusText(value: unknown): boolean {
   const content = String(value || '').trim();
+  if (
+    (content.startsWith('<skill>') && content.includes('</skill>'))
+    || (content.startsWith('<skills_instructions>') && content.includes('</skills_instructions>'))
+  ) {
+    return true;
+  }
   return INTERNAL_RUNTIME_STATUS_PREFIXES.some((prefix) => content.startsWith(prefix));
 }
 

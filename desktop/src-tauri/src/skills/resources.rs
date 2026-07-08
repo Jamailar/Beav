@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::runtime::SkillRecord;
-use crate::skills::resolve_skill_file_path;
+use crate::skills::{resolve_skill_file_path, SkillResourceMeta};
 
 pub const DEFAULT_SKILL_RESOURCE_MAX_CHARS: usize = 20_000;
 
@@ -40,6 +40,7 @@ pub fn looks_like_skill_bundle_relative_path(raw: &str) -> bool {
         .any(|root| normalized == *root || normalized.starts_with(&format!("{root}/")))
 }
 
+#[allow(dead_code)]
 pub fn active_skill_resource_access_note(skill_name: &str) -> String {
     format!(
         "Bundled skill files under references/, scripts/, assets/, rules/, or templates/ are not workspace files. Read them with Read(path=\"skill://{skill_name}/<relative-path>\") or workflow action skills.readResource."
@@ -80,6 +81,26 @@ pub fn list_skill_resources_value(
         "rootKinds": RESOURCE_ROOTS,
         "resources": resources
     }))
+}
+
+pub fn list_skill_resources_value_from_index(
+    record: &SkillRecord,
+    resources: &[SkillResourceMeta],
+) -> Value {
+    json!({
+        "success": true,
+        "name": record.name,
+        "uri": format!("skill://{}", record.name),
+        "rootKinds": RESOURCE_ROOTS,
+        "resources": resources
+            .iter()
+            .map(|resource| json!({
+                "path": resource.path,
+                "kind": resource.kind,
+                "byteSize": resource.byte_size
+            }))
+            .collect::<Vec<_>>()
+    })
 }
 
 pub fn read_skill_resource_value(

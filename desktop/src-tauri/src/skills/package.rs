@@ -124,6 +124,13 @@ pub struct SkillResourceMeta {
     pub modified_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillAuthorityRecord {
+    pub kind: String,
+    pub id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SkillPackageProvenance {
@@ -168,6 +175,9 @@ pub struct SkillValidationWarning {
 pub struct SkillPackageRecord {
     pub id: String,
     pub identifier: String,
+    pub authority: SkillAuthorityRecord,
+    pub main_resource: String,
+    pub display_path: Option<String>,
     pub name: String,
     pub description: String,
     pub location: String,
@@ -260,6 +270,7 @@ pub fn build_skill_package_record(
     }
 
     let identifier = package_identifier(record, provenance.as_ref(), &source_kind);
+    let authority = skill_authority(record, provenance.as_ref(), &source_kind);
     let package_hash = package_hash(
         record,
         &manifest,
@@ -272,6 +283,9 @@ pub fn build_skill_package_record(
     SkillPackageRecord {
         id,
         identifier,
+        authority,
+        main_resource: "SKILL.md".to_string(),
+        display_path: skill_file.as_ref().map(|path| path.display().to_string()),
         name: record.name.clone(),
         description: record.description.clone(),
         location: record.location.clone(),
@@ -305,6 +319,16 @@ pub fn enrich_skill_list_value_with_packages(list: &mut Value, packages: &[Skill
             continue;
         };
         item["identifier"] = json!(package.identifier);
+        item["authority"] = json!(package.authority);
+        item["skillPackage"] = json!(package.identifier);
+        item["mainResource"] = json!(package.main_resource);
+        item["displayPath"] = json!(package.display_path);
+        item["codex"] = json!({
+            "authority": package.authority,
+            "package": package.identifier,
+            "mainResource": package.main_resource,
+            "displayPath": package.display_path,
+        });
         item["sourceKind"] = json!(package.source_kind);
         item["packageHash"] = json!(package.package_hash);
         item["manifest"] = json!(package.manifest);
@@ -724,6 +748,31 @@ fn normalized_scope(record: &SkillRecord) -> String {
         other => other,
     }
     .to_string()
+}
+
+fn skill_authority(
+    record: &SkillRecord,
+    provenance: Option<&SkillPackageProvenance>,
+    source_kind: &str,
+) -> SkillAuthorityRecord {
+    let kind = if record.is_builtin.unwrap_or(false)
+        || record.source_scope.as_deref() == Some("builtin")
+        || matches!(
+            source_kind,
+            "builtin" | "official" | "user" | "workspace" | "github" | "market" | "redskill"
+        ) {
+        "host"
+    } else {
+        "custom"
+    };
+    let id = provenance
+        .and_then(|item| item.market_id.as_deref())
+        .and_then(non_empty)
+        .unwrap_or_else(|| source_kind.to_string());
+    SkillAuthorityRecord {
+        kind: kind.to_string(),
+        id,
+    }
 }
 
 fn duplicate_name_warnings(records: &[SkillRecord]) -> Vec<SkillValidationWarning> {

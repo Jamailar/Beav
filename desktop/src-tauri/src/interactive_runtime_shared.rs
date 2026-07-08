@@ -32,8 +32,9 @@ pub(crate) fn interactive_runtime_context_bundle(
         if let Ok(runtime_warm) = state.runtime_warm.lock() {
             if let Some(entry) = runtime_warm.entries.get(runtime_mode) {
                 if !entry.system_prompt.trim().is_empty() {
-                    return RuntimeContextBundle::new(
+                    return RuntimeContextBundle::with_context_messages(
                         entry.system_prompt.clone(),
+                        entry.context_messages.clone(),
                         entry.context_bundle.clone(),
                     );
                 }
@@ -45,6 +46,7 @@ pub(crate) fn interactive_runtime_context_bundle(
         active_skill_count,
         project_context,
         skills_section,
+        skill_context_messages,
         prompt_prefix,
         prompt_suffix,
         active_speaker_section,
@@ -105,6 +107,7 @@ pub(crate) fn interactive_runtime_context_bundle(
             resolved_skills.active_skills.len(),
             project_context,
             skill_prompt.skills_section,
+            skill_prompt.context_messages,
             skill_prompt.prompt_prefix,
             skill_prompt.prompt_suffix,
             active_speaker_prompt_section(metadata, &store.advisors),
@@ -127,6 +130,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 compact_host_runtime_context(&host_context)
             ),
             String::new(),
+            Vec::new(),
             String::new(),
             String::new(),
             String::new(),
@@ -209,8 +213,9 @@ pub(crate) fn interactive_runtime_context_bundle(
             sections.push(prompt_suffix.trim().to_string());
         }
         let final_prompt = sections.join("\n\n");
-        return RuntimeContextBundle::new(
+        return RuntimeContextBundle::with_context_messages(
             final_prompt.clone(),
+            skill_context_messages.clone(),
             build_runtime_context_bundle_summary(
                 runtime_mode,
                 &available_tools,
@@ -273,8 +278,9 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str("\n\n");
                 rendered.push_str(team_creation_intent_section.trim());
             }
-            return RuntimeContextBundle::new(
+            return RuntimeContextBundle::with_context_messages(
                 rendered.clone(),
+                skill_context_messages.clone(),
                 build_runtime_context_bundle_summary(
                     runtime_mode,
                     &available_tools,
@@ -464,8 +470,9 @@ pub(crate) fn interactive_runtime_context_bundle(
             rendered.push_str("\n\n");
             rendered.push_str(team_creation_intent_section.trim());
         }
-        return RuntimeContextBundle::new(
+        return RuntimeContextBundle::with_context_messages(
             rendered.clone(),
+            skill_context_messages.clone(),
             build_runtime_context_bundle_summary(
                 runtime_mode,
                 &available_tools,
@@ -541,8 +548,9 @@ Host runtime context: {}\n{}",
         fallback.push_str("\n\n");
         fallback.push_str(active_media_task_section.trim());
     }
-    RuntimeContextBundle::new(
+    RuntimeContextBundle::with_context_messages(
         fallback.clone(),
+        skill_context_messages,
         build_runtime_context_bundle_summary(
             runtime_mode,
             &active_speaker_section,

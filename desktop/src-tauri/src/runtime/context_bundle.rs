@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 const DEFAULT_RUNTIME_CONTEXT_TOKEN_BUDGET: i64 = 32_000;
 
@@ -26,13 +27,19 @@ pub struct RuntimeContextBundleSummary {
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeContextBundle {
     pub system_prompt: String,
+    pub context_messages: Vec<Value>,
     pub summary: RuntimeContextBundleSummary,
 }
 
 impl RuntimeContextBundle {
-    pub fn new(system_prompt: String, summary: RuntimeContextBundleSummary) -> Self {
+    pub fn with_context_messages(
+        system_prompt: String,
+        context_messages: Vec<Value>,
+        summary: RuntimeContextBundleSummary,
+    ) -> Self {
         Self {
             system_prompt,
+            context_messages,
             summary,
         }
     }

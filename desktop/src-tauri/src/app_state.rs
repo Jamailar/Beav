@@ -41,6 +41,7 @@ pub(crate) struct AppState {
     pub(crate) runtime_warm: Mutex<RuntimeWarmState>,
     pub(crate) approval_runtime: Mutex<ApprovalRuntimeState>,
     pub(crate) skill_watch: Mutex<skills::SkillWatcherSnapshot>,
+    pub(crate) skill_performance_cache: Mutex<skills::SkillPerformanceCache>,
     pub(crate) diagnostics: Mutex<DiagnosticsState>,
     pub(crate) knowledge_index_state: Mutex<knowledge_index::KnowledgeIndexRuntimeState>,
 }

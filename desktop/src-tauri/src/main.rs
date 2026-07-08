@@ -171,6 +171,7 @@ fn main() {
             runtime_warm: Mutex::new(RuntimeWarmState::default()),
             approval_runtime: Mutex::new(ApprovalRuntimeState::default()),
             skill_watch: Mutex::new(skills::SkillWatcherSnapshot::default()),
+            skill_performance_cache: Mutex::new(skills::SkillPerformanceCache::default()),
             diagnostics: Mutex::new(DiagnosticsState::default()),
             knowledge_index_state: Mutex::new(
                 knowledge_index::KnowledgeIndexRuntimeState::default(),

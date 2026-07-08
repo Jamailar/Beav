@@ -191,6 +191,7 @@ pub(crate) fn refresh_runtime_warm_state(
         let entry = RuntimeWarmEntry {
             mode: (*mode).to_string(),
             system_prompt: bundle.system_prompt,
+            context_messages: bundle.context_messages,
             model_config: if *mode == "wander" {
                 Some(resolve_wander_model_config(&settings_snapshot))
             } else {
@@ -808,7 +809,8 @@ mod tests {
         looks_like_authoring_status_summary, manuscript_save_result_path,
         message_is_successful_manuscript_write_tool_result, metadata_requires_voice_speech,
         normalized_structured_payload_arguments, now_ms, persist_subjects_workspace,
-        redbox_fs_profile_read_completed, resolve_local_path, sanitize_copy_file_name,
+        redbox_fs_profile_read_completed, remove_pre_persisted_current_user_message,
+        resolve_local_path, sanitize_copy_file_name,
         standalone_draft_save_error_correction_instruction, structured_tool_error_code,
         validate_runtime_tool_message_sequence, workspace_inspect_image_response,
         workspace_read_directory_response, GeneratedMediaPreview, InteractiveExecutionContract,
@@ -866,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn append_interactive_skill_instruction_messages_injects_codex_skill_block_once() {
+    fn append_interactive_skill_instruction_messages_skips_legacy_skill_block_injection() {
         let injection = crate::skills::SkillInstructionInjection {
             name: "demo".to_string(),
             path: "/tmp/demo/SKILL.md".to_string(),
@@ -888,21 +890,12 @@ mod tests {
             &[injection.clone()],
         );
 
-        assert_eq!(appended, vec![injection.clone()]);
-        assert_eq!(prompt_messages.len(), 2);
-        assert_eq!(canonical_messages.len(), 2);
-        assert!(prompt_messages[1]
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("<skill>\n<name>demo</name>"));
-        assert_eq!(
-            canonical_messages[1]
-                .get("metadata")
-                .and_then(|value| value.get("redboxContextType"))
-                .and_then(Value::as_str),
-            Some("skillInstructions")
-        );
+        assert!(appended.is_empty());
+        assert_eq!(prompt_messages.len(), 1);
+        assert_eq!(canonical_messages.len(), 1);
+        assert!(prompt_messages
+            .iter()
+            .all(|message| !crate::skills::is_skill_instruction_message(message)));
 
         let appended_again = append_interactive_skill_instruction_messages(
             &mut prompt_messages,
@@ -911,13 +904,12 @@ mod tests {
         );
 
         assert!(appended_again.is_empty());
-        assert_eq!(prompt_messages.len(), 2);
-        assert_eq!(canonical_messages.len(), 2);
+        assert_eq!(prompt_messages.len(), 1);
+        assert_eq!(canonical_messages.len(), 1);
     }
 
     #[test]
-    fn append_interactive_skill_instruction_messages_keeps_prompt_injected_when_history_has_skill()
-    {
+    fn append_interactive_skill_instruction_messages_removes_legacy_history_skill_block() {
         let injection = crate::skills::SkillInstructionInjection {
             name: "demo".to_string(),
             path: "/tmp/demo/SKILL.md".to_string(),
@@ -949,14 +941,59 @@ mod tests {
             &[injection.clone()],
         );
 
-        assert_eq!(appended, vec![injection]);
-        assert_eq!(prompt_messages.len(), 2);
-        assert_eq!(canonical_messages.len(), 3);
-        assert!(prompt_messages[1]
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("<skill>\n<name>demo</name>"));
+        assert!(appended.is_empty());
+        assert_eq!(prompt_messages.len(), 1);
+        assert_eq!(canonical_messages.len(), 2);
+        assert!(canonical_messages
+            .iter()
+            .all(|message| { !crate::skills::is_skill_instruction_message(message) }));
+        assert!(prompt_messages
+            .iter()
+            .all(|message| { !crate::skills::is_skill_instruction_message(message) }));
+    }
+
+    #[test]
+    fn remove_pre_persisted_current_user_message_drops_trailing_duplicate() {
+        let mut messages = vec![
+            json!({
+                "role": "assistant",
+                "content": "上一轮回复"
+            }),
+            json!({
+                "role": "user",
+                "content": "你好"
+            }),
+        ];
+
+        remove_pre_persisted_current_user_message(&mut messages, "你好");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].get("role").and_then(Value::as_str),
+            Some("assistant")
+        );
+    }
+
+    #[test]
+    fn remove_pre_persisted_current_user_message_keeps_completed_history() {
+        let mut messages = vec![
+            json!({
+                "role": "user",
+                "content": "你好"
+            }),
+            json!({
+                "role": "assistant",
+                "content": "你好，有什么可以帮你？"
+            }),
+        ];
+
+        remove_pre_persisted_current_user_message(&mut messages, "你好");
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[1].get("role").and_then(Value::as_str),
+            Some("assistant")
+        );
     }
 
     #[test]
@@ -3273,14 +3310,6 @@ pub(crate) fn write_placeholder_svg(
     fs::write(path, svg).map_err(|error| error.to_string())
 }
 
-pub(crate) fn interactive_runtime_system_prompt(
-    state: &State<'_, AppState>,
-    runtime_mode: &str,
-    session_id: Option<&str>,
-) -> String {
-    interactive_runtime_shared::interactive_runtime_system_prompt(state, runtime_mode, session_id)
-}
-
 pub(crate) fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {
     interactive_runtime_shared::parse_usize_arg(arguments, key, default, max)
 }
@@ -5318,6 +5347,12 @@ pub(crate) fn build_interactive_user_turn_messages(
     ))
 }
 
+pub(crate) struct InteractiveRuntimeMessageBundle {
+    pub prompt_messages: Vec<Value>,
+    pub canonical_messages: Vec<Value>,
+    pub base_system_prompt: String,
+}
+
 pub(crate) fn interactive_runtime_message_bundle(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -5326,25 +5361,62 @@ pub(crate) fn interactive_runtime_message_bundle(
     protocol: &str,
     model_name: &str,
     runtime_mode: &str,
-) -> Result<(Vec<Value>, Vec<Value>), String> {
-    let history_messages = load_runtime_history_messages(state, session_id)?;
+) -> Result<InteractiveRuntimeMessageBundle, String> {
+    let runtime_context = interactive_runtime_shared::interactive_runtime_context_bundle(
+        state,
+        runtime_mode,
+        session_id,
+    );
+    let mut base_system_prompt = runtime_context.system_prompt;
+    append_context_messages_to_system_prompt(
+        &mut base_system_prompt,
+        &runtime_context.context_messages,
+    );
+    let mut history_messages = load_runtime_history_messages(state, session_id)?;
     let mut prompt_messages = collect_recent_chat_messages(state, session_id, 10);
     let (prompt_user_message, history_user_message) =
         build_interactive_user_turn_messages(message, attachment, protocol, model_name)?;
+    remove_pre_persisted_current_user_message(&mut history_messages, message);
+    remove_pre_persisted_current_user_message(&mut prompt_messages, message);
     prompt_messages.push(prompt_user_message);
     let mut full_history_messages = history_messages;
     full_history_messages.push(history_user_message);
-    let injections =
-        interactive_runtime_skill_instruction_injections(state, session_id, runtime_mode)?;
-    let appended = append_interactive_skill_instruction_messages(
-        &mut prompt_messages,
-        &mut full_history_messages,
-        &injections,
-    );
-    append_interactive_skill_instruction_transcripts(state, session_id, &appended)?;
-    Ok((prompt_messages, full_history_messages))
+    strip_interactive_skill_instruction_messages(&mut prompt_messages, &mut full_history_messages);
+    Ok(InteractiveRuntimeMessageBundle {
+        prompt_messages,
+        canonical_messages: full_history_messages,
+        base_system_prompt,
+    })
 }
 
+fn remove_pre_persisted_current_user_message(messages: &mut Vec<Value>, current_message: &str) {
+    let current = current_message.trim();
+    if current.is_empty() {
+        return;
+    }
+    let Some(last) = messages.last() else {
+        return;
+    };
+    if last.get("role").and_then(Value::as_str) != Some("user") {
+        return;
+    }
+    let Some(content) = last.get("content").and_then(Value::as_str).map(str::trim) else {
+        return;
+    };
+    if content == current
+        || content
+            .strip_prefix(current)
+            .is_some_and(is_current_user_context_tail)
+    {
+        messages.pop();
+    }
+}
+
+fn is_current_user_context_tail(value: &str) -> bool {
+    value.starts_with("\n\nReferenced assets from this user message:")
+}
+
+#[allow(dead_code)]
 pub(crate) fn interactive_runtime_skill_instruction_injections(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -5388,72 +5460,37 @@ pub(crate) fn interactive_runtime_skill_instruction_injections(
         .collect())
 }
 
+#[allow(dead_code)]
 pub(crate) fn append_interactive_skill_instruction_messages(
     prompt_messages: &mut Vec<Value>,
     canonical_messages: &mut Vec<Value>,
     injections: &[SkillInstructionInjection],
 ) -> Vec<SkillInstructionInjection> {
-    let mut appended = Vec::<SkillInstructionInjection>::new();
-    for injection in injections {
-        let prompt_already_has = prompt_messages
-            .iter()
-            .any(|message| crate::skills::message_contains_skill_instruction(message, injection));
-        let canonical_already_has = canonical_messages
-            .iter()
-            .any(|message| crate::skills::message_contains_skill_instruction(message, injection));
-        if prompt_already_has && canonical_already_has {
-            continue;
-        }
-        let message = crate::skills::skill_instruction_message(injection);
-        if !prompt_already_has {
-            prompt_messages.push(message.clone());
-            appended.push(injection.clone());
-        }
-        if !canonical_already_has {
-            canonical_messages.push(message);
-        }
+    strip_interactive_skill_instruction_messages(prompt_messages, canonical_messages);
+    if !injections.is_empty() {
+        tracing::debug!(
+            injection_count = injections.len(),
+            "legacy skill instruction injection skipped; use skills.read/invoke instead"
+        );
     }
-    appended
+    Vec::new()
 }
 
-pub(crate) fn append_interactive_skill_instruction_transcripts(
-    state: &State<'_, AppState>,
-    session_id: Option<&str>,
-    injections: &[SkillInstructionInjection],
-) -> Result<(), String> {
-    let Some(session_id) = session_id else {
-        return Ok(());
-    };
-    if injections.is_empty() {
-        return Ok(());
-    }
-    with_store_mut(state, |store| {
-        for injection in injections {
-            append_session_transcript(
-                store,
-                session_id,
-                "skill.instruction",
-                "user",
-                injection.content.clone(),
-                Some(json!({
-                    "redboxContextType": "skillInstructions",
-                    "skillName": injection.name,
-                    "skillPath": injection.path,
-                    "skillFingerprint": injection.fingerprint,
-                    "sourceScope": injection.source_scope,
-                })),
-            );
-        }
-        Ok(())
-    })
+pub(crate) fn strip_interactive_skill_instruction_messages(
+    prompt_messages: &mut Vec<Value>,
+    canonical_messages: &mut Vec<Value>,
+) {
+    prompt_messages.retain(|message| !crate::skills::is_skill_instruction_message(message));
+    canonical_messages.retain(|message| !crate::skills::is_skill_instruction_message(message));
 }
 
 pub(crate) fn interactive_runtime_turn_system_prompt(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
     runtime_mode: &str,
+    base_system_prompt: &str,
 ) -> String {
-    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
+    let mut system_prompt = base_system_prompt.to_string();
     system_prompt.push_str(&editor_session_prompt_context(
         state,
         session_id,
@@ -5472,6 +5509,20 @@ pub(crate) fn interactive_runtime_turn_system_prompt(
         }
     }
     system_prompt
+}
+
+fn append_context_messages_to_system_prompt(system_prompt: &mut String, messages: &[Value]) {
+    let fragments = messages
+        .iter()
+        .filter_map(|message| message.get("content").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>();
+    if fragments.is_empty() {
+        return;
+    }
+    system_prompt.push_str("\n\nContextual developer instructions:\n");
+    system_prompt.push_str(&fragments.join("\n\n"));
 }
 
 pub(crate) fn load_runtime_history_messages(
@@ -7712,7 +7763,11 @@ pub(crate) fn run_anthropic_interactive_chat_runtime(
     if let Some(current_session_id) = session_id {
         let _ = begin_chat_runtime_state(state, current_session_id);
     }
-    let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
+    let InteractiveRuntimeMessageBundle {
+        mut prompt_messages,
+        mut canonical_messages,
+        base_system_prompt,
+    } = interactive_runtime_message_bundle(
         state,
         session_id,
         message,
@@ -7776,7 +7831,12 @@ pub(crate) fn run_anthropic_interactive_chat_runtime(
         } else {
             anthropic_tools_for_session(state, runtime_mode, session_id)
         };
-        let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        let system_prompt = interactive_runtime_turn_system_prompt(
+            state,
+            session_id,
+            runtime_mode,
+            &base_system_prompt,
+        );
         validate_runtime_tool_message_sequence(&prompt_messages)?;
         let messages = canonical_messages_to_anthropic_messages(&prompt_messages);
 
@@ -8366,7 +8426,11 @@ pub(crate) fn run_gemini_interactive_chat_runtime(
     if let Some(current_session_id) = session_id {
         let _ = begin_chat_runtime_state(state, current_session_id);
     }
-    let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
+    let InteractiveRuntimeMessageBundle {
+        mut prompt_messages,
+        mut canonical_messages,
+        base_system_prompt,
+    } = interactive_runtime_message_bundle(
         state,
         session_id,
         message,
@@ -8430,7 +8494,12 @@ pub(crate) fn run_gemini_interactive_chat_runtime(
         } else {
             gemini_tools_for_session(state, runtime_mode, session_id)
         };
-        let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        let system_prompt = interactive_runtime_turn_system_prompt(
+            state,
+            session_id,
+            runtime_mode,
+            &base_system_prompt,
+        );
         validate_runtime_tool_message_sequence(&prompt_messages)?;
         let contents = canonical_messages_to_gemini_contents(&prompt_messages);
 
@@ -9001,7 +9070,11 @@ pub(crate) fn run_openai_interactive_chat_runtime(
     if let Some(current_session_id) = session_id {
         let _ = begin_chat_runtime_state(state, current_session_id);
     }
-    let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
+    let InteractiveRuntimeMessageBundle {
+        mut prompt_messages,
+        mut canonical_messages,
+        base_system_prompt,
+    } = interactive_runtime_message_bundle(
         state,
         session_id,
         message,
@@ -9090,7 +9163,12 @@ pub(crate) fn run_openai_interactive_chat_runtime(
                 TOOL_BUDGET_EXHAUSTED_MESSAGE.to_string(),
             );
         }
-        let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        let system_prompt = interactive_runtime_turn_system_prompt(
+            state,
+            session_id,
+            runtime_mode,
+            &base_system_prompt,
+        );
         validate_runtime_tool_message_sequence(&prompt_messages)?;
         let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
         messages.insert(

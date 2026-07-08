@@ -1,5 +1,7 @@
 use super::*;
-use crate::skills::{InstallSkillsFromRepoOutcome, InstalledRepoSkill};
+use crate::skills::{
+    invalidate_skill_performance_cache, InstallSkillsFromRepoOutcome, InstalledRepoSkill,
+};
 use crate::store::settings as settings_store;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -858,6 +860,7 @@ fn uninstall_skill_marketplace_package(
         },
         &preferred_user_skill_root(),
     )?;
+    invalidate_skill_performance_cache(&state.skill_performance_cache);
     let _ = refresh_skill_store_catalog(state);
     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
     Ok(json!({
@@ -892,6 +895,7 @@ fn install_market_item_from_repo(
         let provenance = enrich_market_install_provenance(provenance, &outcome);
         write_market_provenance_for_installed(&outcome.installed, &provenance)?;
     }
+    invalidate_skill_performance_cache(&state.skill_performance_cache);
     refresh_skill_store_catalog(state)?;
     enable_installed_market_skills(state, &outcome.installed)?;
     let verified = verify_installed_market_skills(state, &outcome.installed)?;
@@ -975,7 +979,9 @@ fn enable_installed_market_skills(
             }
         }
         Ok(())
-    })
+    })?;
+    invalidate_skill_performance_cache(&state.skill_performance_cache);
+    Ok(())
 }
 
 fn verify_installed_market_skills(
@@ -2670,6 +2676,7 @@ fn install_redskill_market_identifier(
             output.status, stdout, stderr
         ));
     }
+    invalidate_skill_performance_cache(&state.skill_performance_cache);
     refresh_skill_store_catalog(state)?;
     let candidate_files =
         redskill_candidate_skill_files(&install_root, &before_skill_files, started_at, identifier);

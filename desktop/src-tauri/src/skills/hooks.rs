@@ -1,11 +1,4 @@
-use crate::skills::{active_skill_resource_access_note, LoadedSkillRecord};
-
-fn truncate_chars(value: &str, limit: usize) -> String {
-    if value.chars().count() <= limit {
-        return value.to_string();
-    }
-    value.chars().take(limit).collect::<String>()
-}
+use crate::skills::LoadedSkillRecord;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SkillHookOutput {
@@ -44,24 +37,8 @@ pub fn build_skill_hook_output(active_skills: &[LoadedSkillRecord]) -> SkillHook
                 output.context_note.push_str(note.trim());
             }
         }
-        let section_body = truncate_chars(
-            skill.body.trim(),
-            skill.metadata.max_prompt_chars.unwrap_or(3200),
-        );
-        if section_body.is_empty() {
-            continue;
-        }
-        let hook_mode = skill.metadata.hook_mode.as_deref().unwrap_or("inline");
-        if !output.skills_section.is_empty() {
-            output.skills_section.push_str("\n\n");
-        }
-        output.skills_section.push_str(&format!(
-            "### {} [{}]\n{}\n\n{}\n",
-            skill.name,
-            hook_mode,
-            section_body,
-            active_skill_resource_access_note(&skill.name)
-        ));
+        // Skill bodies are intentionally not pre-rendered into runtime prompts.
+        // They are fetched on demand through skills.read / skills.readResource.
     }
     output
 }
@@ -94,6 +71,6 @@ mod tests {
         assert_eq!(output.prompt_prefix, "prefix");
         assert_eq!(output.prompt_suffix, "suffix");
         assert_eq!(output.context_note, "note");
-        assert!(output.skills_section.contains("writer [forked]"));
+        assert!(output.skills_section.trim().is_empty());
     }
 }

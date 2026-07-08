@@ -7,17 +7,16 @@ mod marketplace;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
-    audit_skill_packages_value, build_skill_package_records, build_workspace_skill_record,
-    compute_skill_discovery_fingerprint, enrich_skill_list_value_with_packages,
+    audit_skill_packages_value, build_workspace_skill_record, cached_read_skill_resource_value,
+    cached_skill_package_records, enrich_skill_list_value_with_packages,
     find_catalog_skill_by_name, inspect_skill_package_value, install_skills_from_repo,
-    invoke_skill, preferred_user_skill_root, refresh_skill_store_catalog, resolve_skill_file_path,
-    skill_catalog_changed, skills_catalog_list_value, write_skill_record_to_path,
-    InstallSkillsFromRepoRequest, SkillInvokeRequest, UninstallSkillRequest,
-    DEFAULT_SKILL_RESOURCE_MAX_CHARS,
+    invalidate_skill_performance_cache, invoke_skill, list_skill_resources_value_from_index,
+    preferred_user_skill_root, refresh_skill_store_catalog, refresh_skill_store_catalog_cached,
+    resolve_skill_file_path, skill_catalog_changed, skills_catalog_list_value,
+    write_skill_record_to_path, InstallSkillsFromRepoRequest, SkillInvokeRequest,
+    SkillPackageRecord, UninstallSkillRequest, DEFAULT_SKILL_RESOURCE_MAX_CHARS,
 };
-use crate::skills::{
-    list_skill_resources_value, parse_skill_resource_uri, read_skill_resource_value,
-};
+use crate::skills::{list_skill_resources_value, parse_skill_resource_uri};
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
@@ -42,10 +41,128 @@ fn requested_skill_name(payload: &Value) -> String {
         .unwrap_or(candidate)
 }
 
+fn requested_skill_package(payload: &Value) -> String {
+    payload_string(payload, "package")
+        .or_else(|| payload_string(payload, "skillPackage"))
+        .or_else(|| payload_string(payload, "packageId"))
+        .unwrap_or_default()
+}
+
+fn requested_skill_authority(payload: &Value) -> Option<Value> {
+    payload.get("authority").cloned()
+}
+
+fn requested_skill_resource(payload: &Value) -> String {
+    payload_string(payload, "resource")
+        .or_else(|| payload_string(payload, "mainResource"))
+        .or_else(|| payload_string(payload, "path"))
+        .or_else(|| payload_string(payload, "uri"))
+        .unwrap_or_default()
+}
+
 fn requested_skill_resource_path(payload: &Value) -> String {
     payload_string(payload, "path")
         .or_else(|| payload_string(payload, "uri"))
         .unwrap_or_default()
+}
+
+fn find_skill_record_for_payload(
+    records: &[crate::runtime::SkillRecord],
+    packages: &[SkillPackageRecord],
+    payload: &Value,
+) -> Option<crate::runtime::SkillRecord> {
+    let requested_name = requested_skill_name(payload);
+    if !requested_name.trim().is_empty() {
+        if let Some(record) = records
+            .iter()
+            .find(|item| item.name.eq_ignore_ascii_case(&requested_name))
+        {
+            return Some(record.clone());
+        }
+    }
+
+    let package_id = requested_skill_package(payload);
+    if package_id.trim().is_empty() {
+        return None;
+    }
+    let requested_authority = requested_skill_authority(payload);
+    packages.iter().find_map(|package| {
+        let package_matches = package.identifier == package_id
+            || package.id == package_id
+            || package.name.eq_ignore_ascii_case(&package_id);
+        if !package_matches {
+            return None;
+        }
+        if let Some(authority) = requested_authority.as_ref() {
+            let authority_matches = authority
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(|kind| kind == package.authority.kind)
+                .unwrap_or(true)
+                && authority
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| id == package.authority.id)
+                    .unwrap_or(true);
+            if !authority_matches {
+                return None;
+            }
+        }
+        records
+            .iter()
+            .find(|record| record.name.eq_ignore_ascii_case(&package.name))
+            .cloned()
+    })
+}
+
+fn package_for_record<'a>(
+    packages: &'a [SkillPackageRecord],
+    record: &crate::runtime::SkillRecord,
+) -> Option<&'a SkillPackageRecord> {
+    packages
+        .iter()
+        .find(|package| package.name.eq_ignore_ascii_case(&record.name))
+}
+
+fn skill_records_and_cached_packages(
+    state: &State<'_, AppState>,
+    workspace: Option<&std::path::Path>,
+    discovery_fingerprint: &str,
+) -> Result<(Vec<crate::runtime::SkillRecord>, Vec<SkillPackageRecord>), String> {
+    let skill_records = with_store(state, |store| Ok(store.skills.clone()))?;
+    let packages = cached_skill_package_records(
+        &state.skill_performance_cache,
+        &skill_records,
+        workspace,
+        discovery_fingerprint,
+    );
+    Ok((skill_records, packages))
+}
+
+fn filter_skill_list_by_authority(list: &mut Value, authority: Option<&Value>) {
+    let Some(authority) = authority else {
+        return;
+    };
+    let kind = authority.get("kind").and_then(Value::as_str);
+    let id = authority.get("id").and_then(Value::as_str);
+    if kind.is_none() && id.is_none() {
+        return;
+    }
+    let Some(items) = list.as_array_mut() else {
+        return;
+    };
+    items.retain(|item| {
+        let Some(item_authority) = item.get("authority") else {
+            return false;
+        };
+        let kind_matches = kind
+            .map(|value| item_authority.get("kind").and_then(Value::as_str) == Some(value))
+            .unwrap_or(true);
+        let id_matches = id
+            .map(|value| item_authority.get("id").and_then(Value::as_str) == Some(value))
+            .unwrap_or(true);
+        kind_matches && id_matches
+    });
 }
 
 fn payload_usize(payload: &Value, key: &str) -> Option<usize> {
@@ -128,6 +245,8 @@ fn referenced_skill_resource_paths(body: &str) -> Vec<String> {
 fn skill_context_pack_value(
     record: &crate::runtime::SkillRecord,
     workspace: Option<&std::path::Path>,
+    package_hash: &str,
+    state: &State<'_, AppState>,
 ) -> Value {
     let (body, body_truncated, body_char_count) =
         truncate_chars_for_context(&record.body, DEFAULT_SKILL_RESOURCE_MAX_CHARS);
@@ -140,12 +259,14 @@ fn skill_context_pack_value(
     let mut resource_errors = Vec::<Value>::new();
 
     for path in &referenced_paths {
-        match read_skill_resource_value(
+        match cached_read_skill_resource_value(
+            &state.skill_performance_cache,
             record,
             workspace,
             path,
             DEFAULT_SKILL_RESOURCE_MAX_CHARS,
             Some("skills.invoke.hydration"),
+            package_hash,
         ) {
             Ok(resource) => referenced_resources.push(resource),
             Err(error) => resource_errors.push(json!({
@@ -228,14 +349,13 @@ pub fn handle_skills_ai_channel(
         match channel {
             "skills:list" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
-                let _ = refresh_skill_store_catalog(state);
+                let (store_catalog_changed, discovery_fingerprint) =
+                    refresh_skill_store_catalog_cached(state)?;
                 let include_body = payload
                     .get("includeBody")
                     .and_then(Value::as_bool)
-                    .unwrap_or(true);
+                    .unwrap_or(false);
                 let workspace = workspace_root(state).ok();
-                let discovery_fingerprint =
-                    compute_skill_discovery_fingerprint(workspace.as_deref());
                 let ((mut list, watcher_snapshot), skill_records) = with_store(state, |store| {
                     Ok((
                         skills_catalog_list_value(
@@ -246,14 +366,19 @@ pub fn handle_skills_ai_channel(
                         store.skills.clone(),
                     ))
                 })?;
-                let package_records =
-                    build_skill_package_records(&skill_records, workspace.as_deref());
+                let package_records = cached_skill_package_records(
+                    &state.skill_performance_cache,
+                    &skill_records,
+                    workspace.as_deref(),
+                    &discovery_fingerprint,
+                );
                 enrich_skill_list_value_with_packages(&mut list, &package_records);
                 enrich_skill_catalog_list_with_market_metadata(
                     &mut list,
                     &skill_records,
                     workspace.as_deref(),
                 );
+                filter_skill_list_by_authority(&mut list, payload.get("authority"));
                 let changed = {
                     let mut guard = state
                         .skill_watch
@@ -263,14 +388,14 @@ pub fn handle_skills_ai_channel(
                     *guard = watcher_snapshot;
                     changed
                 };
-                if changed {
+                if changed || store_catalog_changed {
                     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 }
                 Ok(list)
             }
             "skills:inspect" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
-                let _ = refresh_skill_store_catalog(state);
+                let (_, discovery_fingerprint) = refresh_skill_store_catalog_cached(state)?;
                 let operation = payload_string(payload, "operation")
                     .unwrap_or_else(|| {
                         if requested_skill_name(payload).trim().is_empty() {
@@ -284,9 +409,11 @@ pub fn handle_skills_ai_channel(
                 let workspace = workspace_root(state).ok();
                 match operation.as_str() {
                     "list" => {
-                        let skill_records = with_store(state, |store| Ok(store.skills.clone()))?;
-                        let packages =
-                            build_skill_package_records(&skill_records, workspace.as_deref());
+                        let (_, packages) = skill_records_and_cached_packages(
+                            state,
+                            workspace.as_deref(),
+                            &discovery_fingerprint,
+                        )?;
                         Ok(json!({
                             "success": true,
                             "schemaVersion": 3,
@@ -330,7 +457,7 @@ pub fn handle_skills_ai_channel(
             }
             "skills:audit" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
-                let _ = refresh_skill_store_catalog(state);
+                let _ = refresh_skill_store_catalog_cached(state)?;
                 let workspace = workspace_root(state).ok();
                 let skill_records = with_store(state, |store| Ok(store.skills.clone()))?;
                 Ok(audit_skill_packages_value(
@@ -340,47 +467,91 @@ pub fn handle_skills_ai_channel(
             }
             "skills:list-resources" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
-                let _ = refresh_skill_store_catalog(state);
-                let requested_name = requested_skill_name(payload);
-                if requested_name.is_empty() {
-                    return Err("技能名称不能为空".to_string());
-                }
+                let (_, discovery_fingerprint) = refresh_skill_store_catalog_cached(state)?;
                 let workspace = workspace_root(state).ok();
-                let record = with_store(state, |store| {
-                    Ok(store
-                        .skills
-                        .iter()
-                        .find(|item| item.name.eq_ignore_ascii_case(&requested_name))
-                        .cloned())
-                })?
-                .ok_or_else(|| format!("技能不存在: {requested_name}"))?;
+                let (skill_records, package_records) = skill_records_and_cached_packages(
+                    state,
+                    workspace.as_deref(),
+                    &discovery_fingerprint,
+                )?;
+                let Some(record) =
+                    find_skill_record_for_payload(&skill_records, &package_records, payload)
+                else {
+                    return Err("技能名称不能为空".to_string());
+                };
+                if let Some(package) = package_for_record(&package_records, &record) {
+                    return Ok(list_skill_resources_value_from_index(
+                        &record,
+                        &package.resources,
+                    ));
+                }
                 list_skill_resources_value(&record, workspace.as_deref())
             }
             "skills:read" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
-                let _ = refresh_skill_store_catalog(state);
-                let requested_name = requested_skill_name(payload);
-                if requested_name.is_empty() {
-                    return Err("技能名称不能为空".to_string());
-                }
-                let skill = with_store(state, |store| {
-                    Ok(find_catalog_skill_by_name(&store.skills, &requested_name))
-                })?
-                .ok_or_else(|| format!("技能不存在: {requested_name}"))?;
-                let record = with_store(state, |store| {
-                    Ok(store
-                        .skills
-                        .iter()
-                        .find(|item| item.name.eq_ignore_ascii_case(&requested_name))
-                        .cloned())
-                })?;
+                let (_, discovery_fingerprint) = refresh_skill_store_catalog_cached(state)?;
                 let workspace = workspace_root(state).ok();
-                let package = record
-                    .as_ref()
-                    .map(|record| inspect_skill_package_value(record, workspace.as_deref(), false))
-                    .and_then(|value| value.get("package").cloned());
+                let (skill_records, package_records) = skill_records_and_cached_packages(
+                    state,
+                    workspace.as_deref(),
+                    &discovery_fingerprint,
+                )?;
+                let Some(record) =
+                    find_skill_record_for_payload(&skill_records, &package_records, payload)
+                else {
+                    return Err("技能名称不能为空".to_string());
+                };
+                let skill = find_catalog_skill_by_name(&skill_records, &record.name)
+                    .ok_or_else(|| format!("技能不存在: {}", record.name))?;
+                let resource = requested_skill_resource(payload);
+                if !resource.trim().is_empty() && resource.trim() != "SKILL.md" {
+                    let max_chars = payload_usize(payload, "maxChars")
+                        .or_else(|| payload_usize(payload, "limit"))
+                        .unwrap_or(DEFAULT_SKILL_RESOURCE_MAX_CHARS)
+                        .clamp(1, DEFAULT_SKILL_RESOURCE_MAX_CHARS);
+                    let package_record = package_for_record(&package_records, &record);
+                    let resource_value = cached_read_skill_resource_value(
+                        &state.skill_performance_cache,
+                        &record,
+                        workspace.as_deref(),
+                        &resource,
+                        max_chars,
+                        Some("skills.read"),
+                        package_record
+                            .map(|package| package.package_hash.as_str())
+                            .unwrap_or(skill.fingerprint.as_str()),
+                    )?;
+                    let package = package_record
+                        .cloned()
+                        .and_then(|package| serde_json::to_value(package).ok())
+                        .or_else(|| {
+                            inspect_skill_package_value(&record, workspace.as_deref(), false)
+                                .get("package")
+                                .cloned()
+                        });
+                    return Ok(json!({
+                        "success": true,
+                        "authority": package.as_ref().and_then(|value| value.get("authority")).cloned(),
+                        "package": package.as_ref().and_then(|value| value.get("identifier")).cloned(),
+                        "skillPackage": package.as_ref().and_then(|value| value.get("identifier")).cloned(),
+                        "name": record.name,
+                        "resource": resource,
+                        "resourceResult": resource_value,
+                    }));
+                }
+                let package = package_for_record(&package_records, &record)
+                    .cloned()
+                    .and_then(|package| serde_json::to_value(package).ok())
+                    .or_else(|| {
+                        inspect_skill_package_value(&record, workspace.as_deref(), false)
+                            .get("package")
+                            .cloned()
+                    });
                 Ok(json!({
                     "success": true,
+                    "authority": package.as_ref().and_then(|value| value.get("authority")).cloned(),
+                    "skillPackage": package.as_ref().and_then(|value| value.get("identifier")).cloned(),
+                    "mainResource": package.as_ref().and_then(|value| value.get("mainResource")).cloned().unwrap_or_else(|| json!("SKILL.md")),
                     "skill": skill.clone(),
                     "name": skill.name,
                     "description": skill.description,
@@ -396,34 +567,42 @@ pub fn handle_skills_ai_channel(
             }
             "skills:read-resource" => {
                 let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
-                let _ = refresh_skill_store_catalog(state);
-                let requested_name = requested_skill_name(payload);
-                if requested_name.is_empty() {
+                let (_, discovery_fingerprint) = refresh_skill_store_catalog_cached(state)?;
+                let workspace = workspace_root(state).ok();
+                let (skill_records, package_records) = skill_records_and_cached_packages(
+                    state,
+                    workspace.as_deref(),
+                    &discovery_fingerprint,
+                )?;
+                let Some(record) =
+                    find_skill_record_for_payload(&skill_records, &package_records, payload)
+                else {
                     return Err("技能名称不能为空".to_string());
-                }
-                let resource_path = requested_skill_resource_path(payload);
+                };
+                let raw_resource_path = requested_skill_resource_path(payload);
+                let resource_path = raw_resource_path
+                    .trim()
+                    .strip_prefix("SKILL.md/")
+                    .unwrap_or_else(|| raw_resource_path.trim())
+                    .to_string();
                 if resource_path.trim().is_empty() {
                     return Err("技能资源路径不能为空".to_string());
                 }
-                let workspace = workspace_root(state).ok();
-                let record = with_store(state, |store| {
-                    Ok(store
-                        .skills
-                        .iter()
-                        .find(|item| item.name.eq_ignore_ascii_case(&requested_name))
-                        .cloned())
-                })?
-                .ok_or_else(|| format!("技能不存在: {requested_name}"))?;
                 let max_chars = payload_usize(payload, "maxChars")
                     .or_else(|| payload_usize(payload, "limit"))
                     .unwrap_or(DEFAULT_SKILL_RESOURCE_MAX_CHARS)
                     .clamp(1, DEFAULT_SKILL_RESOURCE_MAX_CHARS);
-                read_skill_resource_value(
+                let package_hash = package_for_record(&package_records, &record)
+                    .map(|package| package.package_hash.as_str())
+                    .unwrap_or("");
+                cached_read_skill_resource_value(
+                    &state.skill_performance_cache,
                     &record,
                     workspace.as_deref(),
                     &resource_path,
                     max_chars,
                     None,
+                    package_hash,
                 )
             }
             "skills:invoke" => {
@@ -451,7 +630,19 @@ pub fn handle_skills_ai_channel(
                         .cloned())
                 })?
                 .ok_or_else(|| format!("技能不存在: {}", outcome.skill_name))?;
-                let skill_context_pack = skill_context_pack_value(&record, workspace.as_deref());
+                let (_, discovery_fingerprint) = refresh_skill_store_catalog_cached(state)?;
+                let skill_records = with_store(state, |store| Ok(store.skills.clone()))?;
+                let package_records = cached_skill_package_records(
+                    &state.skill_performance_cache,
+                    &skill_records,
+                    workspace.as_deref(),
+                    &discovery_fingerprint,
+                );
+                let package_hash = package_for_record(&package_records, &record)
+                    .map(|package| package.package_hash.as_str())
+                    .unwrap_or("");
+                let skill_context_pack =
+                    skill_context_pack_value(&record, workspace.as_deref(), package_hash, state);
                 let referenced_resource_count = skill_context_pack
                     .get("referencedResources")
                     .and_then(Value::as_array)
@@ -531,6 +722,7 @@ pub fn handle_skills_ai_channel(
                     return Ok(json!({ "success": false, "error": "无法解析技能文件路径" }));
                 };
                 write_skill_record_to_path(&created, &path)?;
+                invalidate_skill_performance_cache(&state.skill_performance_cache);
                 let _ = refresh_skill_store_catalog(state);
                 let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 Ok(json!({
@@ -558,6 +750,7 @@ pub fn handle_skills_ai_channel(
                     return Ok(json!({ "success": false, "error": "无法解析技能文件路径" }));
                 };
                 write_skill_record_to_path(&skill, &path)?;
+                invalidate_skill_performance_cache(&state.skill_performance_cache);
                 let _ = refresh_skill_store_catalog(state);
                 let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 Ok(json!({ "success": true, "path": path.display().to_string() }))
@@ -579,6 +772,7 @@ pub fn handle_skills_ai_channel(
                     Ok(json!({ "success": true }))
                 })
                 .map(|value| {
+                    invalidate_skill_performance_cache(&state.skill_performance_cache);
                     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                     value
                 })
@@ -613,6 +807,7 @@ pub fn handle_skills_ai_channel(
                     },
                     &preferred_user_skill_root(),
                 )?;
+                invalidate_skill_performance_cache(&state.skill_performance_cache);
                 let _ = refresh_skill_store_catalog(state);
                 let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 Ok(json!({
@@ -655,6 +850,7 @@ pub fn handle_skills_ai_channel(
                     },
                     &preferred_user_skill_root(),
                 )?;
+                invalidate_skill_performance_cache(&state.skill_performance_cache);
                 let _ = refresh_skill_store_catalog(state);
                 let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 Ok(json!({

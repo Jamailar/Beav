@@ -7,7 +7,8 @@ use tauri::State;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    build_user_skill_record, canonical_skill_name, discover_builtin_skill_records,
+    build_user_skill_record, cached_discovery_fingerprint, canonical_skill_name,
+    compute_skill_discovery_fingerprint, discover_builtin_skill_records,
     discover_skill_records_from_root,
 };
 use crate::{redbox_builtin_skills_root, slug_from_relative_path, workspace_root, AppState};
@@ -126,6 +127,21 @@ pub fn refresh_skill_store_catalog(state: &State<'_, AppState>) -> Result<bool, 
         Ok(())
     })?;
     Ok(true)
+}
+
+pub fn refresh_skill_store_catalog_cached(
+    state: &State<'_, AppState>,
+) -> Result<(bool, String), String> {
+    let workspace = workspace_root(state).ok();
+    let (discovery_fingerprint, from_cache) =
+        cached_discovery_fingerprint(&state.skill_performance_cache, || {
+            compute_skill_discovery_fingerprint(workspace.as_deref())
+        });
+    if from_cache {
+        return Ok((false, discovery_fingerprint));
+    }
+    let changed = refresh_skill_store_catalog(state)?;
+    Ok((changed, discovery_fingerprint))
 }
 
 fn skill_file_path_for_root(root: &Path, skill_name: &str) -> PathBuf {

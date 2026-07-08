@@ -759,6 +759,7 @@ mod tests {
             vec![RuntimeWarmEntry {
                 mode: "redclaw".to_string(),
                 system_prompt: "system prompt".to_string(),
+                context_messages: Vec::new(),
                 model_config: Some(json!({ "model": "gpt" })),
                 long_term_context: Some("long-term".to_string()),
                 context_bundle: RuntimeContextBundleSummary {

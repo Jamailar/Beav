@@ -175,8 +175,9 @@ mod tests {
         assert_eq!(state.allowed_tools, vec!["workflow".to_string()]);
         assert!(state
             .skills_section
-            .contains("the host injects its SKILL.md as a model-visible <skill> context block"));
+            .contains("SKILL.md bodies are not preloaded"));
         assert!(state.skills_section.contains("xhs-title [forked]"));
+        assert!(!state.skills_section.contains("# Title"));
     }
 
     #[test]
@@ -222,9 +223,13 @@ mod tests {
                 "mcp".to_string(),
             ],
         );
-        assert!(state.skills_section.contains("redclaw-guide: desc"));
-        assert!(state.skills_section.contains("xhs-title: desc"));
-        assert!(!state.skills_section.contains("editor-runtime"));
+        assert!(state
+            .catalog
+            .iter()
+            .any(|skill| skill.name == "redclaw-guide"));
+        assert!(state.catalog.iter().any(|skill| skill.name == "xhs-title"));
+        assert!(state.active_skills.is_empty());
+        assert!(state.skills_section.trim().is_empty());
     }
 
     #[test]
@@ -244,7 +249,11 @@ mod tests {
             &["resource".to_string()],
         );
         assert!(!state.skills_section.contains("Compatibility fallback"));
-        assert!(state.skills_section.contains("- writing-style: desc"));
+        assert!(state.skills_section.trim().is_empty());
+        assert!(state
+            .catalog
+            .iter()
+            .any(|skill| skill.name == "writing-style"));
     }
 
     #[test]
@@ -284,10 +293,11 @@ mod tests {
             &["workflow".to_string()],
         );
         assert!(state.active_skills.is_empty());
-        assert!(state.skills_section.contains("image-director: image desc"));
         assert!(state
-            .skills_section
-            .contains("the host injects its SKILL.md as a model-visible <skill> context block"));
+            .catalog
+            .iter()
+            .any(|skill| skill.name == "image-director"));
+        assert!(state.skills_section.trim().is_empty());
 
         let redclaw_state = build_skill_runtime_state(
             &[SkillRecord {
@@ -305,8 +315,9 @@ mod tests {
         );
         assert!(redclaw_state.active_skills.is_empty());
         assert!(redclaw_state
-            .skills_section
-            .contains("image-director: image desc"));
+            .catalog
+            .iter()
+            .any(|skill| skill.name == "image-director"));
     }
 
     #[test]
@@ -328,7 +339,9 @@ mod tests {
             &["workflow".to_string()],
         );
         assert!(generation_state
-            .skills_section
-            .contains("tts-director: tts desc"));
+            .catalog
+            .iter()
+            .any(|skill| skill.name == "tts-director"));
+        assert!(generation_state.skills_section.trim().is_empty());
     }
 }

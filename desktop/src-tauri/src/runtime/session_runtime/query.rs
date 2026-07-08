@@ -8,10 +8,17 @@ pub fn trace_for_session(store: &AppStore, session_id: &str) -> Vec<SessionTrans
         .session_transcript_records
         .iter()
         .filter(|item| item.session_id == session_id)
+        .filter(|item| !is_internal_transcript_record(item))
         .cloned()
         .collect();
     items.sort_by_key(|item| item.created_at);
     items
+}
+
+fn is_internal_transcript_record(item: &SessionTranscriptRecord) -> bool {
+    item.record_type == "skill.instruction"
+        || (item.role == "user"
+            && super::is_internal_runtime_history_user_message(item.content.trim()))
 }
 
 fn take_recent_items<T>(mut items: Vec<T>, limit: Option<usize>) -> Vec<T> {

@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::skills::{skill_source_roots, LoadedSkillRecord};
 
+const FINGERPRINT_RESOURCE_ROOTS: &[&str] =
+    &["references", "scripts", "assets", "rules", "templates"];
+const MAX_FINGERPRINT_FILES_PER_DIR: usize = 256;
+const MAX_FINGERPRINT_DEPTH: usize = 6;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SkillWatcherSnapshot {
@@ -61,23 +66,32 @@ fn skill_source_file_list(workspace_root: Option<&Path>) -> Vec<String> {
             if skill_file.is_file() {
                 paths.push(skill_file.display().to_string());
             }
-            for folder_name in ["references", "scripts"] {
+            for folder_name in FINGERPRINT_RESOURCE_ROOTS {
                 let folder = skill_dir.join(folder_name);
-                let Ok(items) = fs::read_dir(folder) else {
-                    continue;
-                };
-                for item in items.flatten().take(256) {
-                    let path = item.path();
-                    if path.is_file() {
-                        paths.push(path.display().to_string());
-                    }
-                }
+                collect_fingerprint_files(&folder, 0, &mut paths);
             }
         }
     }
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn collect_fingerprint_files(dir: &Path, depth: usize, paths: &mut Vec<String>) {
+    if depth > MAX_FINGERPRINT_DEPTH {
+        return;
+    }
+    let Ok(items) = fs::read_dir(dir) else {
+        return;
+    };
+    for item in items.flatten().take(MAX_FINGERPRINT_FILES_PER_DIR) {
+        let path = item.path();
+        if path.is_dir() {
+            collect_fingerprint_files(&path, depth + 1, paths);
+        } else if path.is_file() {
+            paths.push(path.display().to_string());
+        }
+    }
 }
 
 pub fn compute_skill_discovery_fingerprint(workspace_root: Option<&Path>) -> String {

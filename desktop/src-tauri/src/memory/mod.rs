@@ -502,6 +502,7 @@ mod tests {
                 runtime_warm: Mutex::new(RuntimeWarmState::default()),
                 approval_runtime: Mutex::new(ApprovalRuntimeState::default()),
                 skill_watch: Mutex::new(crate::skills::SkillWatcherSnapshot::default()),
+                skill_performance_cache: Mutex::new(crate::skills::SkillPerformanceCache::default()),
                 diagnostics: Mutex::new(DiagnosticsState::default()),
                 knowledge_index_state: Mutex::new(
                     crate::knowledge_index::KnowledgeIndexRuntimeState::default(),

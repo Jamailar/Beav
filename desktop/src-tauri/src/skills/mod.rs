@@ -2,6 +2,8 @@
 mod activation;
 #[path = "bundled.rs"]
 mod bundled;
+#[path = "cache.rs"]
+mod cache;
 #[path = "catalog.rs"]
 mod catalog;
 #[path = "executor.rs"]
@@ -33,6 +35,7 @@ mod watcher;
 
 pub use activation::*;
 pub use bundled::*;
+pub use cache::*;
 pub use catalog::*;
 pub use executor::*;
 pub use hooks::*;

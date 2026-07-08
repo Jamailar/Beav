@@ -3516,9 +3516,39 @@ fn skills_invoke_input_schema() -> Value {
 
 fn skills_read_input_schema() -> Value {
     object_schema(
-        &[("name", string_schema("Skill name to read."))],
-        &["name"],
-        Some("Read one skill's full instructions and metadata without activating it."),
+        &[
+            ("name", string_schema("Skill name to read.")),
+            (
+                "authority",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Optional Codex-style skill authority returned by skills.list.",
+                }),
+            ),
+            (
+                "package",
+                string_schema("Optional Codex-style opaque package handle returned by skills.list."),
+            ),
+            (
+                "skillPackage",
+                string_schema("Alias for package."),
+            ),
+            (
+                "resource",
+                string_schema("Optional resource handle. Use SKILL.md for the main instructions or a bundled resource path."),
+            ),
+            (
+                "maxChars",
+                integer_schema(
+                    "Maximum characters to return when reading a bundled resource.",
+                    1,
+                    20000,
+                ),
+            ),
+        ],
+        &[],
+        Some("Read one skill's full instructions or a bundled skill resource without activating it. Prefer package/resource handles returned by skills.list when available."),
     )
 }
 
@@ -3733,7 +3763,27 @@ fn skills_manage_input_schema() -> Value {
 }
 
 fn skills_list_input_schema() -> Value {
-    no_payload_schema()
+    object_schema(
+        &[
+            (
+                "includeBody",
+                json!({
+                    "type": "boolean",
+                    "description": "Whether to include full SKILL.md bodies. Defaults to false for progressive disclosure.",
+                }),
+            ),
+            (
+                "authority",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Optional authority filter. Host skills are returned by default.",
+                }),
+            ),
+        ],
+        &[],
+        Some("List visible skills in the current runtime using lightweight Codex-style authority/package/resource handles."),
+    )
 }
 
 fn image_generate_input_schema() -> Value {

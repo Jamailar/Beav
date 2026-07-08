@@ -6,6 +6,7 @@ use crate::runtime::SkillRecord;
 use crate::skills::{resolve_skill_file_path, LoadedSkillRecord};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub struct SkillInstructionInjection {
     pub name: String,
     pub path: String,
@@ -14,6 +15,7 @@ pub struct SkillInstructionInjection {
     pub content: String,
 }
 
+#[allow(dead_code)]
 fn escape_xml_text(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -21,6 +23,7 @@ fn escape_xml_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+#[allow(dead_code)]
 pub fn render_skill_instruction_content(name: &str, path: &str, body: &str) -> String {
     format!(
         "<skill>\n<name>{}</name>\n<path>{}</path>\n{}\n</skill>",
@@ -30,6 +33,7 @@ pub fn render_skill_instruction_content(name: &str, path: &str, body: &str) -> S
     )
 }
 
+#[allow(dead_code)]
 pub fn build_skill_instruction_injection(
     record: &SkillRecord,
     loaded: &LoadedSkillRecord,
@@ -48,6 +52,7 @@ pub fn build_skill_instruction_injection(
     }
 }
 
+#[allow(dead_code)]
 pub fn skill_instruction_message(injection: &SkillInstructionInjection) -> Value {
     json!({
         "role": "user",
@@ -62,6 +67,34 @@ pub fn skill_instruction_message(injection: &SkillInstructionInjection) -> Value
     })
 }
 
+pub fn is_skill_instruction_content(content: &str) -> bool {
+    let text = content.trim();
+    text.starts_with("<skill>\n") && text.contains("</skill>")
+}
+
+pub fn is_available_skills_instruction_content(content: &str) -> bool {
+    let text = content.trim();
+    text.starts_with("<skills_instructions>\n") && text.contains("</skills_instructions>")
+}
+
+pub fn is_skill_instruction_message(message: &Value) -> bool {
+    message
+        .get("metadata")
+        .and_then(|value| value.get("redboxContextType"))
+        .and_then(Value::as_str)
+        .map(|value| value == "skillInstructions" || value == "availableSkillsInstructions")
+        .unwrap_or(false)
+        || message
+            .get("content")
+            .and_then(Value::as_str)
+            .map(|content| {
+                is_skill_instruction_content(content)
+                    || is_available_skills_instruction_content(content)
+            })
+            .unwrap_or(false)
+}
+
+#[allow(dead_code)]
 pub fn message_contains_skill_instruction(
     message: &Value,
     injection: &SkillInstructionInjection,
@@ -131,5 +164,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("skillInstructions")
         );
+        assert!(is_skill_instruction_message(&message));
     }
 }
