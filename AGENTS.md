@@ -53,6 +53,7 @@
 - 最低验证矩阵：
   - 改 renderer 页面：验证页面切换、已有数据保留、刷新态。
   - 普通 renderer 页面改动不要默认启动浏览器 / Playwright / 模拟 Web 环境做检查；除非用户明确要求，优先用类型检查、静态检查和真实桌面端路径验证，避免把 Tauri 宿主环境缺失误判成页面问题。
+  - 不要每次改动都默认跑 `cargo check`；纯 TS/TSX/UI/CSS 文案改动优先跑 TypeScript / lint / diff 静态检查。即使触到 Rust，也只有在改动涉及实质编译风险或行为风险（新增/修改 Tauri command、IPC 契约、workspace/持久化、AI runtime/tool、跨 async/thread 生命周期、共享状态/锁）时才跑完整 `cargo check`；一行事件转发、接线补充、注释/文案、显然可人工确认的小改，不默认跑。若边界不确定或只是想加一道保险，先向用户说明成本并征求同意。
   - 改 bridge / IPC / Tauri command：至少走一次真实 renderer 调用。
   - 改 AI runtime / tool / prompt：至少跑一轮真实任务，检查事件流、工具调用、权限确认、最终摘要。
   - 改 `Plugin/`：验证 popup、background、注入页或右键入口。

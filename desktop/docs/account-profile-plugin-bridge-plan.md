@@ -75,9 +75,12 @@ workspace/
         writing-style-skill/
           SKILL.md
         posts/
-          note-{platformPostId}.json
-        comments/
-          note-{platformPostId}.comments.json
+          {platformPostId}/
+            meta.json
+            content.md
+            content.html
+            comments.json
+            comments.md
         media/
           media-{mediaId}.json
     douyin/
@@ -271,7 +274,10 @@ desktop/src/components/accounts/LearningSummary.tsx
 - `archive_profiles`: 轻量档案索引、用户编辑字段、精选样本入口。
 - `archive_samples`: 精选历史样本、人工标注样本、代表作。
 - `accounts/{platform}/{accountId}/profile.json`: 插件导入的完整账号事实。
-- `accounts/{platform}/{accountId}/posts/*.json`: 全量历史内容。
+- `accounts/{platform}/{accountId}/posts/{postId}/meta.json`: 作品结构化元数据。
+- `accounts/{platform}/{accountId}/posts/{postId}/content.md`: 作品正文，给 AI 和人类复查读取。
+- `accounts/{platform}/{accountId}/posts/{postId}/comments.json`: 当前作品评论区结构化数据。
+- `accounts/{platform}/{accountId}/posts/{postId}/comments.md`: 面向搜索、摘要和 AI 上下文的评论区 Markdown 投影。
 - `accounts/{platform}/{accountId}/distillation/evidence-pack.json`: 标准证据包，承载历史内容、TOP 内容、观点句候选和证据引用。
 - `accounts/{platform}/{accountId}/distillation/stats.json`: 确定性统计，包括标题模式、开头模式、CTA、标签、价值词。
 - `accounts/{platform}/{accountId}/distillation/data-draft.md`: 给 AI 和人类复查的蒸馏底稿。
@@ -754,7 +760,7 @@ accounts/{platform}/{accountId}/CreatorProfile.md
 导入完成后 App 不把帖子全文塞进 prompt，而是后台投影到检索层：
 
 ```text
-accounts/posts/*.json
+accounts/{platform}/{accountId}/posts/{postId}/meta.json + content.md
   -> knowledge_index blocks
       scope = account-profile
       owner_type = account_profile

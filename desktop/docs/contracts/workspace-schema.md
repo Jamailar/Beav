@@ -15,7 +15,7 @@ Status: Current
 ## Workspace Areas
 
 - `subjects/`: 主体与素材主体数据
-- `accounts/`: 当前空间的运营账号档案、批量导入历史内容、导入状态、`profile_learning` 蒸馏证据包和学习摘要
+- `accounts/`: 当前空间的运营账号档案。根目录有 `catalog.json`，按 `accounts/{platform}/{accountId}/` 存账号信息、作品内容和评论区；每个作品使用 `posts/{postId}/meta.json`、`content.md`、`comments.json`、`comments.md` 双轨保存，`profile_learning` 在同账号目录下输出蒸馏证据包和学习摘要。
 - `advisors/`: 顾问与成员资料
 - `media/`: 媒体资源
 - `cover/`: 封面资源

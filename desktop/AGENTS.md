@@ -31,13 +31,15 @@
 - `pnpm tauri:dev`
 - `pnpm tauri:build`
 - `pnpm ipc:inventory`
-- `cd src-tauri && cargo fmt --check && cargo check`
+- `cd src-tauri && cargo fmt --check && cargo check` 只在改动有实质编译风险或行为风险时使用，例如新增/修改 Tauri command、IPC 契约、workspace/持久化、AI runtime/tool、跨 async/thread 生命周期、共享状态/锁。不要把它作为每次改动的默认验证；一行事件转发、接线补充、注释/文案、显然可人工确认的小 Rust 改动，不默认跑完整 `cargo check`。若边界不确定或只是想加一道保险，先向用户说明成本并征求同意。
 - agent 流程复盘、tool 调用排查、会话状态异常分析时，默认先对照 `~/Library/Application Support/RedBox/` 下 transcript、bundle 和状态库，还原真实执行链路；不要只看渲染层现象或单点日志。
 
 最低验证要求：
 
 - 改页面：验证切换时首屏可立即渲染、旧数据保留、刷新失败不清空。
 - 普通页面改动不要默认启动浏览器 / Playwright / 模拟 Web 环境做检查；除非用户明确要求，优先用类型检查、静态检查和真实 Tauri 桌面端路径验证，避免把缺少宿主 IPC 的模拟环境当成产品问题。
+- 纯 TS/TSX/UI/CSS/文案改动不要默认跑 `cargo check`；优先跑 TypeScript / lint / diff 静态检查，并按实际风险补充局部验证。
+- 小范围 Rust 接线或事件同步不默认跑完整 `cargo check`；优先用 `cargo fmt` / diff / 局部静态阅读确认，除非存在明确编译或生命周期风险。
 - 改 bridge / IPC / host command：至少从真实页面走一遍调用。
 - 改 runtime / streaming / tool / prompt：至少跑一轮真实任务并检查事件流。
 - 改 workspace / manuscripts / media / knowledge：验证当前工作区行为和持久化重载行为。
