@@ -70,18 +70,19 @@ fn append_image_generation_event(
             project_id,
             Some(event_payload.clone()),
         );
-        crate::analytics::observe_media_generation_event(
-            state,
-            "image",
-            event_type,
-            &event_payload,
-        );
         Ok(())
     });
     if let Err(error) = result {
         emit_image_generation_log(
             state,
             format!("[image-gen] runtime-event:write-error error={error}"),
+        );
+    } else {
+        crate::analytics::observe_media_generation_event(
+            state,
+            "image",
+            event_type,
+            &event_payload,
         );
     }
 }

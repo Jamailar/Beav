@@ -2681,15 +2681,15 @@ fn requested_image_generation_count(payload: &Value, image_plan_len: usize) -> u
 fn image_generation_delivery_mode(
     session_id: Option<&str>,
     payload: &Value,
-    requested_count: usize,
+    _requested_count: usize,
 ) -> ImageGenerationDeliveryMode {
     let explicit_wait_for_completion = payload_field(payload, "waitForCompletion")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if session_id.is_some() && requested_count > 1 {
+    if session_id.is_some() {
         return ImageGenerationDeliveryMode::BackgroundFollowup;
     }
-    if explicit_wait_for_completion || (session_id.is_some() && requested_count == 1) {
+    if explicit_wait_for_completion {
         return ImageGenerationDeliveryMode::InlineWait;
     }
     ImageGenerationDeliveryMode::AsyncSubmit
@@ -4127,13 +4127,21 @@ mod tests {
     }
 
     #[test]
-    fn image_generation_delivery_mode_defaults_to_inline_wait_for_single_session_image() {
+    fn image_generation_delivery_mode_uses_background_followup_inside_session() {
         assert_eq!(
             image_generation_delivery_mode(Some("session-1"), &json!({}), 1),
-            ImageGenerationDeliveryMode::InlineWait
+            ImageGenerationDeliveryMode::BackgroundFollowup
         );
         assert_eq!(
             image_generation_delivery_mode(Some("session-1"), &json!({}), 6),
+            ImageGenerationDeliveryMode::BackgroundFollowup
+        );
+        assert_eq!(
+            image_generation_delivery_mode(
+                Some("session-1"),
+                &json!({ "waitForCompletion": true }),
+                1
+            ),
             ImageGenerationDeliveryMode::BackgroundFollowup
         );
         assert_eq!(

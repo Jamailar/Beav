@@ -56,16 +56,17 @@ fn append_video_generation_event(
             project_id,
             Some(event_payload.clone()),
         );
+        Ok(())
+    });
+    if let Err(error) = result {
+        eprintln!("[video-gen] runtime-event:write-error error={error}");
+    } else {
         crate::analytics::observe_media_generation_event(
             state,
             "video",
             event_type,
             &event_payload,
         );
-        Ok(())
-    });
-    if let Err(error) = result {
-        eprintln!("[video-gen] runtime-event:write-error error={error}");
     }
 }
 
