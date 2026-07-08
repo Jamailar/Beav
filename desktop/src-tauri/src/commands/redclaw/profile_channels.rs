@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 use crate::store::spaces as spaces_store;
 use crate::{
     complete_redclaw_mvp_onboarding, complete_redclaw_style_definition_from_interview,
-    handle_redclaw_onboarding_turn, load_redclaw_onboarding_state,
+    emit_space_changed, handle_redclaw_onboarding_turn, load_redclaw_onboarding_state,
     load_redclaw_profile_prompt_bundle, load_redclaw_style_profile,
     mark_redclaw_style_definition_started, payload_field, payload_string,
     save_redclaw_mvp_onboarding_progress, update_redclaw_profile_doc, AppState,
@@ -26,9 +26,7 @@ pub(super) fn handle_redclaw_profile_channel(
         }
         "redclaw:profile:complete-initialization" => complete_initialization(app, state, payload),
         "redclaw:profile:start-style-definition" => start_style_definition(state, payload),
-        "redclaw:profile:complete-style-definition" => {
-            complete_redclaw_style_definition_from_interview(state, payload)
-        }
+        "redclaw:profile:complete-style-definition" => complete_style_definition(app, state, payload),
         _ => return None,
     };
     Some(result)
@@ -147,4 +145,23 @@ fn start_style_definition(state: &State<'_, AppState>, payload: &Value) -> Resul
         "success": true,
         "state": onboarding_state
     }))
+}
+
+fn complete_style_definition(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let mut result = complete_redclaw_style_definition_from_interview(state, payload)?;
+    if let Some(space_init_state) =
+        crate::commands::space_init::complete_space_init_after_profile_definition(state, &result)?
+    {
+        let active_space_id =
+            crate::with_store(state, |store| Ok(spaces_store::active_space_id(&store)))?;
+        emit_space_changed(app, &active_space_id);
+        if let Some(object) = result.as_object_mut() {
+            object.insert("spaceInitialization".to_string(), space_init_state);
+        }
+    }
+    Ok(result)
 }

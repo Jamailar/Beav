@@ -127,11 +127,30 @@ export function useLayoutSpaces(sidebarVisualCollapsed: boolean, options: UseLay
       openMembershipModal?.();
       return;
     }
-    setSpaceDialogMode('create');
-    setSpaceDialogTargetId(null);
-    setSpaceDialogName('');
-    setIsSpaceDialogOpen(true);
-  }, [canCreateSpace, openMembershipModal]);
+    setIsSwitchingSpace(true);
+    void (async () => {
+      try {
+        const result = await window.ipcRenderer.spaces.create({ name: t('layout.initializingSpaceName') }) as {
+          success?: boolean;
+          activeSpaceId?: string;
+          error?: string;
+        } | null;
+        if (!result?.success) {
+          void appAlert(result?.error || t('layout.createSpaceFailed'));
+          return;
+        }
+        if (result.activeSpaceId) {
+          setActiveSpaceId(result.activeSpaceId);
+        }
+        await loadSpaces();
+      } catch (error) {
+        console.error('Failed to create space:', error);
+        void appAlert(t('layout.createSpaceFailedRetry'));
+      } finally {
+        setIsSwitchingSpace(false);
+      }
+    })();
+  }, [canCreateSpace, loadSpaces, openMembershipModal, t]);
 
   const handleDeleteSpace = useCallback(async (space: WorkspaceSpace) => {
     if (!space.id || space.id === 'default' || deletingSpaceId) return;

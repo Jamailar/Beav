@@ -117,6 +117,7 @@ pub fn handle_spaces_channel(
                             .and_then(|value| value.as_str())
                             .unwrap_or(active_space_id);
                         emit_space_renamed(app, active_space_id, space_name);
+                        emit_space_changed(app, active_space_id);
                     }
                 }
                 Ok(result)

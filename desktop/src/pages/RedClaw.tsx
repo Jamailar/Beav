@@ -220,6 +220,7 @@ interface RedClawProps {
     onOpenManuscriptEditor?: (filePath: string) => void;
     activeManuscriptPath?: string | null;
     titleBarActive?: boolean;
+    messageListHeader?: ReactNode | null;
 }
 
 interface RedClawSpaceListPayload {
@@ -548,6 +549,7 @@ export function RedClaw({
     onOpenManuscriptEditor,
     activeManuscriptPath = null,
     titleBarActive = false,
+    messageListHeader,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -2405,7 +2407,12 @@ export function RedClaw({
                                             surface: 'redclaw',
                                             runtimeMode: activeAiSurface,
                                         }}
-                                        messageListHeader={<RedClawImageGenerationProgressPanel jobs={activeAiSurface === 'redclaw' ? visibleImageJobs : []} />}
+                                        messageListHeader={(
+                                            <>
+                                                {messageListHeader}
+                                                <RedClawImageGenerationProgressPanel jobs={activeAiSurface === 'redclaw' ? visibleImageJobs : []} />
+                                            </>
+                                        )}
                                     />
                                 )}
                             </div>

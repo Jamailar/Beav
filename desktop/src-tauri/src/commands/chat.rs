@@ -29,6 +29,10 @@ use session_metadata::{
     merge_task_hints_into_session_metadata, restore_chat_turn_session_metadata,
 };
 
+fn payload_bool(payload: &Value, key: &str) -> bool {
+    payload.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
 pub fn handle_send_channel(
     app: &AppHandle,
     channel: &str,
@@ -63,6 +67,7 @@ pub fn handle_send_channel(
             let message = payload_string(&payload, "message").unwrap_or_default();
             let display_content =
                 payload_string(&payload, "displayContent").unwrap_or_else(|| message.clone());
+            let hidden_user_message = payload_bool(&payload, "hiddenUserMessage");
             let title_hint = if requested_session_id.is_none() {
                 Some(session_title_from_message(&display_content))
             } else {
@@ -191,7 +196,8 @@ pub fn handle_send_channel(
                 })
                 .cloned()
                 .or_else(|| payload_field(&payload, "attachment").cloned());
-            if let Some(active_session_id) = session_id.as_deref() {
+            if let Some(active_session_id) = session_id.as_deref().filter(|_| !hidden_user_message)
+            {
                 persist_chat_user_message_before_run(
                     state,
                     active_session_id,

@@ -46,7 +46,7 @@ function isProfileCaptureKind(kind: ClipboardCaptureCandidate['kind']): boolean 
     || kind === 'tiktok-profile';
 }
 
-export function useClipboardCapturePrompt() {
+export function useClipboardCapturePrompt({ disabled = false }: { disabled?: boolean } = {}) {
   const [candidate, setCandidate] = useState<ClipboardCaptureCandidate | null>(null);
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<ClipboardCaptureStatus>('idle');
@@ -60,6 +60,7 @@ export function useClipboardCapturePrompt() {
   const promptOpenRef = useRef(false);
   const statusRef = useRef<ClipboardCaptureStatus>('idle');
   const candidateRef = useRef<ClipboardCaptureCandidate | null>(null);
+  const disabledRef = useRef(disabled);
 
   useEffect(() => {
     promptOpenRef.current = open;
@@ -72,6 +73,18 @@ export function useClipboardCapturePrompt() {
   useEffect(() => {
     candidateRef.current = candidate;
   }, [candidate]);
+
+  useEffect(() => {
+    disabledRef.current = disabled;
+    if (!disabled) return;
+    setOpen(false);
+    setCandidate(null);
+    setActiveTask(null);
+    setStatus('idle');
+    setMessage('');
+    setIncludeComments(false);
+    setProfileLimitState(DEFAULT_XHS_PROFILE_LIMIT);
+  }, [disabled]);
 
   useEffect(() => clipboardCaptureQueue.subscribe((snapshot) => {
     const currentCandidate = candidateRef.current;
@@ -233,6 +246,7 @@ export function useClipboardCapturePrompt() {
 
     const shouldReadClipboard = () => (
       !disposed
+      && !disabledRef.current
       && !pollingRef.current
       && !promptOpenRef.current
       && statusRef.current !== 'saving'
@@ -243,6 +257,7 @@ export function useClipboardCapturePrompt() {
 
     const applyClipboardText = (text: string, source: ClipboardCaptureSource): boolean => {
       const normalizedText = String(text || '').trim();
+      if (disabledRef.current) return false;
       if (!normalizedText || normalizedText === lastClipboardTextRef.current) {
         return false;
       }
@@ -296,6 +311,7 @@ export function useClipboardCapturePrompt() {
     }, CLIPBOARD_POLL_BOOT_DELAY_MS);
 
     const handleFocus = () => {
+      if (disabledRef.current) return;
       nextPollDelayMs = CLIPBOARD_POLL_MIN_INTERVAL_MS;
       schedulePoll(CLIPBOARD_POLL_FOCUS_DELAY_MS);
     };
@@ -307,6 +323,7 @@ export function useClipboardCapturePrompt() {
       }
     };
     const handlePaste = (event: ClipboardEvent) => {
+      if (disabledRef.current) return;
       if (promptOpenRef.current || statusRef.current === 'saving') return;
       if (applyClipboardText(event.clipboardData?.getData('text') || '', 'paste')) {
         nextPollDelayMs = CLIPBOARD_POLL_IDLE_INTERVAL_MS;
@@ -326,7 +343,7 @@ export function useClipboardCapturePrompt() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('paste', handlePaste);
     };
-  }, []);
+  }, [disabled]);
 
   return {
     candidate,
