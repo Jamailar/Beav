@@ -238,6 +238,20 @@
         "notes": "General Qwen 3.5 chat is treated as image/file input only; direct video input requires an omni model name."
     },
     {
+        "id": "qwen-3.7-chat-multimodal",
+        "vendor": "qwen",
+        "displayName": "Qwen 3.7 multimodal chat",
+        "matchers": [
+            "\\bqwen3\\.7\\b",
+            "\\bqwen3\\.7-plus\\b",
+            "\\bqwen-3\\.7\\b",
+            "\\bqwen[-_ ]3\\.7\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "General Qwen 3.7 chat is treated as image/file input only; direct video input requires an omni model name."
+    },
+    {
         "id": "qwen-text-family",
         "vendor": "qwen",
         "displayName": "Qwen text family",

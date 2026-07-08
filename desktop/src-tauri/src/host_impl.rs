@@ -990,6 +990,16 @@ mod tests {
     }
 
     #[test]
+    fn interactive_model_supports_qwen37_image_direct_input() {
+        assert!(interactive_model_supports_direct_attachment(
+            "openai",
+            "qwen3.7-plus",
+            "image",
+            "image/png"
+        ));
+    }
+
+    #[test]
     fn video_tool_read_attachment_prompt_names_required_operate_call() {
         let attachment = json!({
             "type": "uploaded-file",
@@ -5000,6 +5010,8 @@ pub(crate) fn interactive_model_supports_direct_attachment(
                     || model.contains("-vl")
                     || model.contains("qwen3.5")
                     || model.contains("qwen-3.5")
+                    || model.contains("qwen3.7")
+                    || model.contains("qwen-3.7")
                     || model.contains("qwen-vl")
                     || model.contains("omni"))
         }
