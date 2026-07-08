@@ -148,7 +148,7 @@ pub(super) fn refresh_official_auth_session_in_settings(
         }
     }
     if let Some(app_slug) = session_refresh_token_app_slug(settings) {
-        if app_slug != app_brand_slug() {
+        if !official_refresh_token_app_slug_is_compatible(&app_slug) {
             return Err(format!(
                 "旧账号体系登录态不可用于 {}，请重新登录。tokenAppSlug={app_slug}",
                 app_brand_display_name()
@@ -225,6 +225,14 @@ pub(super) fn refresh_official_auth_session_in_settings(
     }
 
     Err(last_error.unwrap_or_else(|| "刷新登录态失败".to_string()))
+}
+
+fn official_refresh_token_app_slug_is_compatible(app_slug: &str) -> bool {
+    let normalized = app_slug.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+    normalized == app_brand_slug() || matches!(normalized.as_str(), "redbox" | "beav" | "thrive")
 }
 
 fn should_force_reauth_after_exhausted_refresh(error: &str) -> bool {
@@ -364,7 +372,9 @@ pub(super) fn refresh_official_auth_session_with_lock(
 
 #[cfg(test)]
 mod tests {
-    use super::should_force_reauth_after_exhausted_refresh;
+    use super::{
+        official_refresh_token_app_slug_is_compatible, should_force_reauth_after_exhausted_refresh,
+    };
 
     #[test]
     fn exhausted_refresh_missing_access_token_requires_reauth() {
@@ -376,6 +386,16 @@ mod tests {
         ));
         assert!(!should_force_reauth_after_exhausted_refresh(
             "network timeout while refreshing token"
+        ));
+    }
+
+    #[test]
+    fn official_refresh_token_app_slug_accepts_shared_account_slugs() {
+        assert!(official_refresh_token_app_slug_is_compatible("redbox"));
+        assert!(official_refresh_token_app_slug_is_compatible("beav"));
+        assert!(official_refresh_token_app_slug_is_compatible("thrive"));
+        assert!(!official_refresh_token_app_slug_is_compatible(
+            "unknown-app"
         ));
     }
 }

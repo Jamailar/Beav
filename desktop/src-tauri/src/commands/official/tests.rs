@@ -441,14 +441,10 @@ fn switch_official_realm_requires_logout() {
 }
 
 #[test]
-fn refresh_official_auth_rejects_legacy_redbox_refresh_token_before_http() {
+fn refresh_official_auth_rejects_unknown_refresh_token_app_slug_before_http() {
     use base64::Engine;
 
-    let incompatible_slug = if app_brand_slug() == "redbox" {
-        "thrive"
-    } else {
-        "redbox"
-    };
+    let incompatible_slug = "unknown-app";
     let token_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
         r#"{{"appSlug":"{incompatible_slug}","type":"refresh"}}"#
     ));
@@ -462,7 +458,7 @@ fn refresh_official_auth_rejects_legacy_redbox_refresh_token_before_http() {
     });
 
     let error = refresh_official_auth_session_in_settings(&mut settings)
-        .expect_err("legacy token should be rejected locally");
+        .expect_err("unknown token app slug should be rejected locally");
     assert!(error.contains(&format!(
         "旧账号体系登录态不可用于 {}",
         app_brand_display_name()
