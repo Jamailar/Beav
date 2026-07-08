@@ -4844,6 +4844,288 @@ function buildXhsNotePayloadFromFeed(feedResult, fallback = {}) {
   };
 }
 
+async function fetchAccountsJson(path, init = {}) {
+  const knowledgeEndpoint = await resolveKnowledgeApiEndpoint(false);
+  const endpoint = {
+    baseUrl: knowledgeEndpoint.baseUrl,
+    endpointPath: '/api/accounts',
+  };
+  const url = `${endpoint.baseUrl}${endpoint.endpointPath}${path}`;
+  const headers = new Headers(init.headers || {});
+  const method = String(init.method || 'GET').toUpperCase();
+  if (!headers.has('Content-Type') && init.method && init.method !== 'GET') {
+    headers.set('Content-Type', 'application/json');
+  }
+  pluginLog('accounts-http-request', { method, url });
+  let response;
+  try {
+    response = await fetch(url, { ...init, headers });
+  } catch (error) {
+    pluginError('accounts-http-network-failed', {
+      method,
+      url,
+      error: describeError(error),
+    });
+    throw new Error(`账号档案请求失败: ${method} ${url} -> ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+  if (!response.ok || data?.success === false) {
+    pluginError('accounts-http-response-failed', {
+      method,
+      url,
+      status: response.status,
+      body: data,
+    });
+    throw new Error(data?.error || `账号档案 API HTTP ${response.status}`);
+  }
+  return data;
+}
+
+async function createAccountImportSessionFromXhs(payload, options = {}) {
+  const userId = normalizeText(payload?.userId);
+  const source = normalizeText(payload?.source);
+  const nickname = normalizeText(payload?.nickname) || normalizeText(payload?.name) || userId || '小红书账号';
+  if (!userId && !source) {
+    throw new Error('当前页面未识别到可绑定的账号主页');
+  }
+  const response = await fetchAccountsJson('/import-sessions', {
+    method: 'POST',
+    body: JSON.stringify({
+      platform: 'xiaohongshu',
+      homepageUrl: source,
+      platformUserId: userId,
+      username: nickname,
+      avatarUrl: normalizeText(payload?.avatar) || '',
+      bio: normalizeText(payload?.description) || normalizeText(payload?.desc) || '',
+      profile: payload || {},
+      options: {
+        postLimit: normalizePositiveInteger(options?.limit, 0) || undefined,
+        includeComments: Boolean(options?.includeComments),
+        includeMedia: Boolean(options?.includeMedia),
+      },
+    }),
+  });
+  xhsAccountImportSession = {
+    platform: 'xiaohongshu',
+    userId,
+    source,
+    accountId: normalizeText(response?.account?.id),
+    sessionId: normalizeText(response?.session?.id),
+    username: nickname,
+  };
+  return response;
+}
+
+async function createAccountImportSessionFromSocialPayload(payload, options = {}) {
+  const profile = buildAccountProfileFromSocialPayload(payload, options?.platform);
+  if (!profile.platform || !profile.homepageUrl) {
+    throw new Error('当前页面未识别到可绑定的账号主页');
+  }
+  const response = await fetchAccountsJson('/import-sessions', {
+    method: 'POST',
+    body: JSON.stringify({
+      platform: profile.platform,
+      homepageUrl: profile.homepageUrl,
+      platformUserId: profile.platformUserId,
+      username: profile.username,
+      avatarUrl: profile.avatarUrl,
+      bio: profile.bio,
+      profile: profile.profile,
+      options: {
+        postLimit: 1,
+        includeComments: Boolean(options?.includeComments),
+        includeMedia: Boolean(options?.includeMedia),
+      },
+    }),
+  });
+  return {
+    response,
+    accountSession: {
+      platform: profile.platform,
+      userId: profile.platformUserId,
+      source: profile.homepageUrl,
+      accountId: normalizeText(response?.account?.id),
+      sessionId: normalizeText(response?.session?.id),
+      username: profile.username,
+    },
+  };
+}
+
+async function ensureXhsAccountImportSession(payload, options = {}) {
+  const userId = normalizeText(payload?.userId);
+  const source = normalizeText(payload?.source);
+  if (
+    xhsAccountImportSession?.accountId &&
+    xhsAccountImportSession?.sessionId &&
+    (
+      (userId && xhsAccountImportSession.userId === userId) ||
+      (source && xhsAccountImportSession.source === source)
+    )
+  ) {
+    return xhsAccountImportSession;
+  }
+  const response = await createAccountImportSessionFromXhs(payload, options);
+  return {
+    platform: 'xiaohongshu',
+    userId,
+    source,
+    accountId: normalizeText(response?.account?.id),
+    sessionId: normalizeText(response?.session?.id),
+    username: normalizeText(response?.account?.username),
+  };
+}
+
+async function bindCurrentPlatformAccountFromTab(tabId, platformHint = '', options = {}) {
+  const platform = normalizeAccountPlatform(platformHint);
+  let payload = null;
+  if (platform === 'douyin') {
+    payload = await runExtraction(tabId, extractDouyinVideoPayload, { world: 'MAIN' }).catch(async () => (
+      await runExtraction(tabId, extractSocialPlatformPayload, { world: 'MAIN', args: ['douyin'] })
+    ));
+  } else {
+    payload = await runExtraction(tabId, extractSocialPlatformPayload, {
+      world: 'MAIN',
+      args: [platform],
+    });
+  }
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('当前页面内容提取失败，请刷新页面后重试');
+  }
+  const { response, accountSession } = await createAccountImportSessionFromSocialPayload(payload, {
+    ...options,
+    platform,
+    includeComments: true,
+    includeMedia: true,
+  });
+  const post = buildAccountPostFromSocialPayload(payload, accountSession.platform);
+  const knowledgeResponse = await saveAccountBindingPayloadToKnowledge(accountSession.platform, payload).catch((error) => {
+    pluginWarn('account-bind-knowledge-ingest-failed', {
+      platform: accountSession.platform,
+      error: describeError(error),
+    });
+    return null;
+  });
+  if (knowledgeResponse?.entryId) {
+    post.knowledgeEntryId = normalizeText(knowledgeResponse.entryId);
+  }
+  if (post.media?.some((item) => normalizeText(item?.kind).includes('video'))) {
+    post.transcriptionStatus = knowledgeResponse?.entryId ? 'processing' : 'waiting';
+  }
+  let batchResponse = null;
+  if (post.title || post.content || post.url) {
+    batchResponse = await postAccountPostsBatch(accountSession, [post]);
+  }
+  const mediaItems = buildAccountMediaFromPost(post);
+  const mediaResponse = await postAccountMediaBatch(accountSession, mediaItems).catch((error) => {
+    pluginWarn('account-bind-media-batch-failed', {
+      platform: accountSession.platform,
+      error: describeError(error),
+    });
+    return null;
+  });
+  const comments = buildAccountCommentsFromPayload(payload, post.platformPostId || post.id, accountSession.platform);
+  const commentsResponse = await postAccountCommentsBatch(accountSession, post.platformPostId || post.id, comments).catch((error) => {
+    pluginWarn('account-bind-comments-batch-failed', {
+      platform: accountSession.platform,
+      error: describeError(error),
+    });
+    return null;
+  });
+  const completeResponse = await completeAccountImportSession(accountSession, {
+    importedPostCount: Number(batchResponse?.postCount || (post.title || post.content || post.url ? 1 : 0)),
+    failedPostCount: 0,
+  });
+  return {
+    success: true,
+    mode: 'account-bind-current-platform',
+    platform: accountSession.platform,
+    account: response?.account || {
+      id: accountSession.accountId,
+      platform: accountSession.platform,
+      username: accountSession.username,
+    },
+    postCount: Number(batchResponse?.postCount || 0),
+    mediaCount: Number(mediaResponse?.mediaCount || 0),
+    commentCount: Number(commentsResponse?.commentCount || 0),
+    syncedMemoryCount: Number(completeResponse?.syncedMemoryCount || batchResponse?.syncedMemoryCount || 0),
+    summary: `${accountSession.username || '当前账号'} 已绑定${batchResponse ? '，当前内容已加入账号档案' : ''}`,
+  };
+}
+
+async function saveAccountBindingPayloadToKnowledge(platform, payload) {
+  if (platform === 'douyin') {
+    return await postKnowledgeEntry(buildDouyinEntry(payload));
+  }
+  return await postKnowledgeEntry(buildSocialPlatformEntry({
+    ...payload,
+    platform,
+  }));
+}
+
+async function postAccountPostsBatch(accountSession, posts) {
+  const accountId = normalizeText(accountSession?.accountId);
+  if (!accountId || !Array.isArray(posts) || posts.length === 0) {
+    return null;
+  }
+  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/posts/batch`, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId: normalizeText(accountSession?.sessionId) || undefined,
+      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
+      posts,
+    }),
+  });
+}
+
+async function postAccountCommentsBatch(accountSession, postId, comments) {
+  const accountId = normalizeText(accountSession?.accountId);
+  if (!accountId || !Array.isArray(comments) || comments.length === 0) {
+    return null;
+  }
+  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/comments/batch`, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId: normalizeText(accountSession?.sessionId) || undefined,
+      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
+      postId: normalizeText(postId) || undefined,
+      comments,
+    }),
+  });
+}
+
+async function postAccountMediaBatch(accountSession, media) {
+  const accountId = normalizeText(accountSession?.accountId);
+  if (!accountId || !Array.isArray(media) || media.length === 0) {
+    return null;
+  }
+  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/media/batch`, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId: normalizeText(accountSession?.sessionId) || undefined,
+      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
+      media,
+    }),
+  });
+}
+
+async function completeAccountImportSession(accountSession, summary = {}) {
+  const sessionId = normalizeText(accountSession?.sessionId);
+  if (!sessionId) return null;
+  return await fetchAccountsJson(`/import-sessions/${encodeURIComponent(sessionId)}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({
+      status: summary.status || 'completed',
+      importedPostCount: Number(summary.importedPostCount || 0),
+      failedPostCount: Number(summary.failedPostCount || 0),
+      lastError: summary.lastError || null,
+    }),
+  });
+}
 async function collectXhsBloggerNotesFromTab(tabId, options = {}) {
   pluginLog('xhs-blogger-notes-dispatch', {
     tabId,
@@ -8128,291 +8410,8 @@ async function extractXhsNoteFeedByUrlFromCurrentPage(targetUrlInput, noteIdInpu
       const noteCard = data?.items?.[0]?.note_card;
       const currentId = normalizeText(noteCard?.note_id || noteCard?.noteId);
       if (currentId && currentId === noteId) {
-  return data;
-}
-
-async function fetchAccountsJson(path, init = {}) {
-  const knowledgeEndpoint = await resolveKnowledgeApiEndpoint(false);
-  const endpoint = {
-    baseUrl: knowledgeEndpoint.baseUrl,
-    endpointPath: '/api/accounts',
-  };
-  const url = `${endpoint.baseUrl}${endpoint.endpointPath}${path}`;
-  const headers = new Headers(init.headers || {});
-  const method = String(init.method || 'GET').toUpperCase();
-  if (!headers.has('Content-Type') && init.method && init.method !== 'GET') {
-    headers.set('Content-Type', 'application/json');
-  }
-  pluginLog('accounts-http-request', { method, url });
-  let response;
-  try {
-    response = await fetch(url, { ...init, headers });
-  } catch (error) {
-    pluginError('accounts-http-network-failed', {
-      method,
-      url,
-      error: describeError(error),
-    });
-    throw new Error(`账号档案请求失败: ${method} ${url} -> ${error instanceof Error ? error.message : String(error)}`);
-  }
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
-  }
-  if (!response.ok || data?.success === false) {
-    pluginError('accounts-http-response-failed', {
-      method,
-      url,
-      status: response.status,
-      body: data,
-    });
-    throw new Error(data?.error || `账号档案 API HTTP ${response.status}`);
-  }
-  return data;
-}
-
-async function createAccountImportSessionFromXhs(payload, options = {}) {
-  const userId = normalizeText(payload?.userId);
-  const source = normalizeText(payload?.source);
-  const nickname = normalizeText(payload?.nickname) || normalizeText(payload?.name) || userId || '小红书账号';
-  if (!userId && !source) {
-    throw new Error('当前页面未识别到可绑定的账号主页');
-  }
-  const response = await fetchAccountsJson('/import-sessions', {
-    method: 'POST',
-    body: JSON.stringify({
-      platform: 'xiaohongshu',
-      homepageUrl: source,
-      platformUserId: userId,
-      username: nickname,
-      avatarUrl: normalizeText(payload?.avatar) || '',
-      bio: normalizeText(payload?.description) || normalizeText(payload?.desc) || '',
-      profile: payload || {},
-      options: {
-        postLimit: normalizePositiveInteger(options?.limit, 0) || undefined,
-        includeComments: Boolean(options?.includeComments),
-        includeMedia: Boolean(options?.includeMedia),
-      },
-    }),
-  });
-  xhsAccountImportSession = {
-    platform: 'xiaohongshu',
-    userId,
-    source,
-    accountId: normalizeText(response?.account?.id),
-    sessionId: normalizeText(response?.session?.id),
-    username: nickname,
-  };
-  return response;
-}
-
-async function createAccountImportSessionFromSocialPayload(payload, options = {}) {
-  const profile = buildAccountProfileFromSocialPayload(payload, options?.platform);
-  if (!profile.platform || !profile.homepageUrl) {
-    throw new Error('当前页面未识别到可绑定的账号主页');
-  }
-  const response = await fetchAccountsJson('/import-sessions', {
-    method: 'POST',
-    body: JSON.stringify({
-      platform: profile.platform,
-      homepageUrl: profile.homepageUrl,
-      platformUserId: profile.platformUserId,
-      username: profile.username,
-      avatarUrl: profile.avatarUrl,
-      bio: profile.bio,
-      profile: profile.profile,
-      options: {
-        postLimit: 1,
-        includeComments: Boolean(options?.includeComments),
-        includeMedia: Boolean(options?.includeMedia),
-      },
-    }),
-  });
-  return {
-    response,
-    accountSession: {
-      platform: profile.platform,
-      userId: profile.platformUserId,
-      source: profile.homepageUrl,
-      accountId: normalizeText(response?.account?.id),
-      sessionId: normalizeText(response?.session?.id),
-      username: profile.username,
-    },
-  };
-}
-
-async function ensureXhsAccountImportSession(payload, options = {}) {
-  const userId = normalizeText(payload?.userId);
-  const source = normalizeText(payload?.source);
-  if (
-    xhsAccountImportSession?.accountId &&
-    xhsAccountImportSession?.sessionId &&
-    (
-      (userId && xhsAccountImportSession.userId === userId) ||
-      (source && xhsAccountImportSession.source === source)
-    )
-  ) {
-    return xhsAccountImportSession;
-  }
-  const response = await createAccountImportSessionFromXhs(payload, options);
-  return {
-    platform: 'xiaohongshu',
-    userId,
-    source,
-    accountId: normalizeText(response?.account?.id),
-    sessionId: normalizeText(response?.session?.id),
-    username: normalizeText(response?.account?.username),
-  };
-}
-
-async function bindCurrentPlatformAccountFromTab(tabId, platformHint = '', options = {}) {
-  const platform = normalizeAccountPlatform(platformHint);
-  let payload = null;
-  if (platform === 'douyin') {
-    payload = await runExtraction(tabId, extractDouyinVideoPayload, { world: 'MAIN' }).catch(async () => (
-      await runExtraction(tabId, extractSocialPlatformPayload, { world: 'MAIN', args: ['douyin'] })
-    ));
-  } else {
-    payload = await runExtraction(tabId, extractSocialPlatformPayload, {
-      world: 'MAIN',
-      args: [platform],
-    });
-  }
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('当前页面内容提取失败，请刷新页面后重试');
-  }
-  const { response, accountSession } = await createAccountImportSessionFromSocialPayload(payload, {
-    ...options,
-    platform,
-    includeComments: true,
-    includeMedia: true,
-  });
-  const post = buildAccountPostFromSocialPayload(payload, accountSession.platform);
-  const knowledgeResponse = await saveAccountBindingPayloadToKnowledge(accountSession.platform, payload).catch((error) => {
-    pluginWarn('account-bind-knowledge-ingest-failed', {
-      platform: accountSession.platform,
-      error: describeError(error),
-    });
-    return null;
-  });
-  if (knowledgeResponse?.entryId) {
-    post.knowledgeEntryId = normalizeText(knowledgeResponse.entryId);
-  }
-  if (post.media?.some((item) => normalizeText(item?.kind).includes('video'))) {
-    post.transcriptionStatus = knowledgeResponse?.entryId ? 'processing' : 'waiting';
-  }
-  let batchResponse = null;
-  if (post.title || post.content || post.url) {
-    batchResponse = await postAccountPostsBatch(accountSession, [post]);
-  }
-  const mediaItems = buildAccountMediaFromPost(post);
-  const mediaResponse = await postAccountMediaBatch(accountSession, mediaItems).catch((error) => {
-    pluginWarn('account-bind-media-batch-failed', {
-      platform: accountSession.platform,
-      error: describeError(error),
-    });
-    return null;
-  });
-  const comments = buildAccountCommentsFromPayload(payload, post.platformPostId || post.id, accountSession.platform);
-  const commentsResponse = await postAccountCommentsBatch(accountSession, post.platformPostId || post.id, comments).catch((error) => {
-    pluginWarn('account-bind-comments-batch-failed', {
-      platform: accountSession.platform,
-      error: describeError(error),
-    });
-    return null;
-  });
-  const completeResponse = await completeAccountImportSession(accountSession, {
-    importedPostCount: Number(batchResponse?.postCount || (post.title || post.content || post.url ? 1 : 0)),
-    failedPostCount: 0,
-  });
-  return {
-    success: true,
-    mode: 'account-bind-current-platform',
-    platform: accountSession.platform,
-    account: response?.account || {
-      id: accountSession.accountId,
-      platform: accountSession.platform,
-      username: accountSession.username,
-    },
-    postCount: Number(batchResponse?.postCount || 0),
-    mediaCount: Number(mediaResponse?.mediaCount || 0),
-    commentCount: Number(commentsResponse?.commentCount || 0),
-    syncedMemoryCount: Number(completeResponse?.syncedMemoryCount || batchResponse?.syncedMemoryCount || 0),
-    summary: `${accountSession.username || '当前账号'} 已绑定${batchResponse ? '，当前内容已加入账号档案' : ''}`,
-  };
-}
-
-async function saveAccountBindingPayloadToKnowledge(platform, payload) {
-  if (platform === 'douyin') {
-    return await postKnowledgeEntry(buildDouyinEntry(payload));
-  }
-  return await postKnowledgeEntry(buildSocialPlatformEntry({
-    ...payload,
-    platform,
-  }));
-}
-
-async function postAccountPostsBatch(accountSession, posts) {
-  const accountId = normalizeText(accountSession?.accountId);
-  if (!accountId || !Array.isArray(posts) || posts.length === 0) {
-    return null;
-  }
-  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/posts/batch`, {
-    method: 'POST',
-    body: JSON.stringify({
-      sessionId: normalizeText(accountSession?.sessionId) || undefined,
-      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
-      posts,
-    }),
-  });
-}
-
-async function postAccountCommentsBatch(accountSession, postId, comments) {
-  const accountId = normalizeText(accountSession?.accountId);
-  if (!accountId || !Array.isArray(comments) || comments.length === 0) {
-    return null;
-  }
-  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/comments/batch`, {
-    method: 'POST',
-    body: JSON.stringify({
-      sessionId: normalizeText(accountSession?.sessionId) || undefined,
-      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
-      postId: normalizeText(postId) || undefined,
-      comments,
-    }),
-  });
-}
-
-async function postAccountMediaBatch(accountSession, media) {
-  const accountId = normalizeText(accountSession?.accountId);
-  if (!accountId || !Array.isArray(media) || media.length === 0) {
-    return null;
-  }
-  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/media/batch`, {
-    method: 'POST',
-    body: JSON.stringify({
-      sessionId: normalizeText(accountSession?.sessionId) || undefined,
-      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
-      media,
-    }),
-  });
-}
-
-async function completeAccountImportSession(accountSession, summary = {}) {
-  const sessionId = normalizeText(accountSession?.sessionId);
-  if (!sessionId) return null;
-  return await fetchAccountsJson(`/import-sessions/${encodeURIComponent(sessionId)}/complete`, {
-    method: 'POST',
-    body: JSON.stringify({
-      status: summary.status || 'completed',
-      importedPostCount: Number(summary.importedPostCount || 0),
-      failedPostCount: Number(summary.failedPostCount || 0),
-      lastError: summary.lastError || null,
-    }),
-  });
-}
+        return data;
+      }
     }
     return null;
   }
