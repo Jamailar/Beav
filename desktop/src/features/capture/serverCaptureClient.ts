@@ -10,6 +10,10 @@ import { clipboardCaptureDedupeKey } from './clipboardDetector';
 interface ServerCaptureOptions {
   includeComments?: boolean;
   limit?: number;
+  maxItems?: number;
+  collectionMode?: 'recent' | 'top_liked' | string;
+  sortBy?: 'published_at' | 'likes' | string;
+  clientRequestIdSuffix?: string;
 }
 
 const CAPTURE_JOB_POLL_INTERVAL_MS = 1500;
@@ -37,11 +41,16 @@ export function buildServerCaptureJobRequest(
     canonicalUrl: candidate.canonicalUrl,
     externalId: candidate.externalId,
     includeComments: options.includeComments === true,
-    clientRequestId: clipboardCaptureDedupeKey(candidate),
+    clientRequestId: options.clientRequestIdSuffix
+      ? `${clipboardCaptureDedupeKey(candidate)}:${options.clientRequestIdSuffix}`
+      : clipboardCaptureDedupeKey(candidate),
     options: {
       downloadMedia: true,
       includeComments: options.includeComments === true,
       limit: options.limit,
+      maxItems: options.maxItems,
+      collectionMode: options.collectionMode,
+      sortBy: options.sortBy,
     },
   };
 }
@@ -51,7 +60,7 @@ export async function createServerCaptureJob(
   options: ServerCaptureOptions = {},
 ): Promise<ServerCaptureJobResponse> {
   const payload = buildServerCaptureJobRequest(candidate, options);
-  const captureBridge = window.ipcRenderer.capture as typeof window.ipcRenderer.capture & {
+  const captureBridge = window.ipcRenderer.capture as unknown as {
     createServerJob?: (payload: ServerCaptureJobRequest) => Promise<ServerCaptureJobResponse>;
   };
 
@@ -67,7 +76,7 @@ export async function createServerCaptureJob(
 }
 
 export async function getServerCaptureJob(jobId: string): Promise<ServerCaptureJobResponse> {
-  const captureBridge = window.ipcRenderer.capture as typeof window.ipcRenderer.capture & {
+  const captureBridge = window.ipcRenderer.capture as unknown as {
     getServerJob?: (payload: { jobId: string }) => Promise<ServerCaptureJobResponse>;
   };
   if (typeof captureBridge.getServerJob !== 'function') {
@@ -77,7 +86,7 @@ export async function getServerCaptureJob(jobId: string): Promise<ServerCaptureJ
 }
 
 export async function listServerCaptureJobs(limit = 20): Promise<ServerCaptureJobListResponse> {
-  const captureBridge = window.ipcRenderer.capture as typeof window.ipcRenderer.capture & {
+  const captureBridge = window.ipcRenderer.capture as unknown as {
     listServerJobs?: (payload: { limit: number }) => Promise<ServerCaptureJobListResponse>;
   };
   if (typeof captureBridge.listServerJobs !== 'function') {
@@ -88,7 +97,7 @@ export async function listServerCaptureJobs(limit = 20): Promise<ServerCaptureJo
 
 export async function pollServerCaptureJob(
   jobId: string,
-  onJob?: (job: ServerCaptureJob) => void,
+  onJob?: (job: ServerCaptureJob) => void | Promise<void>,
 ): Promise<ServerCaptureJob> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < CAPTURE_JOB_POLL_TIMEOUT_MS) {
@@ -96,7 +105,7 @@ export async function pollServerCaptureJob(
     if (!response.success || !response.job) {
       throw captureResponseError(response, '采集任务状态读取失败');
     }
-    onJob?.(response.job);
+    await onJob?.(response.job);
     if (response.job.status === 'completed') return response.job;
     if (response.job.status === 'failed') {
       throw new ClipboardCaptureError(
@@ -110,11 +119,53 @@ export async function pollServerCaptureJob(
 }
 
 export async function ingestServerCaptureJobResult(job: ServerCaptureJob): Promise<{ success: boolean; count?: number; error?: string }> {
-  const entries = Array.isArray(job.result?.entries)
-    ? job.result.entries.map(normalizeServerCaptureEntry)
-    : [];
+  return ingestServerCaptureJobEntries(job);
+}
+
+export function serverCaptureEntryCount(job?: ServerCaptureJob | null): number {
+  const entries = job?.result?.entries;
+  return Array.isArray(entries) ? entries.length : 0;
+}
+
+export function serverCaptureEntryKey(job: ServerCaptureJob, rawEntry: unknown, index: number): string {
+  const entry = normalizeServerCaptureEntry(rawEntry);
+  if (!isObject(entry)) return `${job.id || job.canonicalUrl || job.url}:entry:${index}`;
+  const source = isObject(entry.source) ? entry.source : {};
+  const content = isObject(entry.content) ? entry.content : {};
+  const candidates = [
+    source.externalId,
+    source.sourceLink,
+    source.sourceUrl,
+    content.platformPostId,
+    content.noteId,
+    content.id,
+    content.url,
+  ].map(stringValue).filter(Boolean);
+  return candidates[0] || `${job.id || job.canonicalUrl || job.url}:entry:${index}`;
+}
+
+export function collectNewServerCaptureEntries(
+  job: ServerCaptureJob,
+  seenEntryKeys?: Set<string>,
+): Array<{ key: string; entry: unknown }> {
+  const entries = Array.isArray(job.result?.entries) ? job.result.entries : [];
+  const collected: Array<{ key: string; entry: unknown }> = [];
+  entries.forEach((rawEntry, index) => {
+    const key = serverCaptureEntryKey(job, rawEntry, index);
+    if (seenEntryKeys?.has(key)) return;
+    collected.push({ key, entry: normalizeServerCaptureEntry(rawEntry) });
+  });
+  return collected;
+}
+
+export async function ingestServerCaptureJobEntries(
+  job: ServerCaptureJob,
+  options: { seenEntryKeys?: Set<string> } = {},
+): Promise<{ success: boolean; count?: number; totalEntries?: number; importedEntryKeys?: string[]; error?: string }> {
+  const collected = collectNewServerCaptureEntries(job, options.seenEntryKeys);
+  const entries = collected.map((item) => item.entry);
   if (entries.length === 0) {
-    return { success: true, count: 0 };
+    return { success: true, count: 0, totalEntries: serverCaptureEntryCount(job), importedEntryKeys: [] };
   }
   const result = await window.ipcRenderer.knowledge.batchIngest({
     entries,
@@ -124,12 +175,19 @@ export async function ingestServerCaptureJobResult(job: ServerCaptureJob): Promi
   if (!result?.success) {
     throw new Error(result?.error || '采集结果入库失败');
   }
-  return { success: true, count: result.count || entries.length };
+  const importedEntryKeys = collected.map((item) => item.key);
+  importedEntryKeys.forEach((key) => options.seenEntryKeys?.add(key));
+  return {
+    success: true,
+    count: result.count || entries.length,
+    totalEntries: serverCaptureEntryCount(job),
+    importedEntryKeys,
+  };
 }
 
 type CaptureObject = Record<string, unknown>;
 
-function normalizeServerCaptureEntry(entry: unknown): unknown {
+export function normalizeServerCaptureEntry(entry: unknown): unknown {
   if (!isObject(entry)) return entry;
   const kind = stringValue(entry.kind);
   const source = isObject(entry.source) ? { ...entry.source } : {};

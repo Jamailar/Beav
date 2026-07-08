@@ -16,6 +16,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::thread;
 use tauri::{AppHandle, Emitter, State};
 use url::Url;
 
@@ -494,16 +495,58 @@ fn materialize_note_image_assets(
     entry_dir: &Path,
     sources: &[String],
 ) -> Result<Vec<String>, String> {
-    let mut saved = Vec::new();
-    for (index, source) in sources.iter().enumerate() {
-        saved.push(materialize_note_asset_source(
-            entry_dir,
-            source,
-            "images",
-            &format!("image-{}", index + 1),
-            "image",
-        )?);
+    if sources.len() <= 1 {
+        return sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                materialize_note_asset_source(
+                    entry_dir,
+                    source,
+                    "images",
+                    &format!("image-{}", index + 1),
+                    "image",
+                )
+            })
+            .collect();
     }
+
+    let mut saved = Vec::new();
+    thread::scope(|scope| {
+        let handles = sources
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, source)| {
+                let entry_dir = entry_dir.to_path_buf();
+                scope.spawn(move || {
+                    (
+                        index,
+                        materialize_note_asset_source(
+                            &entry_dir,
+                            &source,
+                            "images",
+                            &format!("image-{}", index + 1),
+                            "image",
+                        ),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            results.push(
+                handle
+                    .join()
+                    .map_err(|_| "图片下载任务异常退出".to_string())?,
+            );
+        }
+        results.sort_by_key(|(index, _)| *index);
+        for (_, result) in results {
+            saved.push(result?);
+        }
+        Ok::<(), String>(())
+    })?;
     Ok(saved)
 }
 
@@ -1931,10 +1974,11 @@ fn ingest_youtube_entry(
     }))
 }
 
-fn ingest_note_entry(
+fn ingest_note_entry_inner(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
     request: &KnowledgeEntryIngestRequest,
+    refresh_projection: bool,
 ) -> Result<Value, String> {
     ensure_supported_space(state, request.space_id.as_deref())?;
     let _ = ensure_store_hydrated_for_knowledge(state);
@@ -2095,18 +2139,20 @@ fn ingest_note_entry(
         "updatedAt": now_iso(),
     });
     write_json_value(&entry_dir.join("meta.json"), &meta)?;
-    refresh_knowledge_projection_and_emit(
-        app,
-        state,
-        Some((
-            "knowledge:note-updated",
-            json!({
-                "noteId": entry_id,
-                "kind": normalized_kind,
-                "hasTranscript": normalize_string(request.content.transcript.clone()).is_some(),
-            }),
-        )),
-    )?;
+    if refresh_projection {
+        refresh_knowledge_projection_and_emit(
+            app,
+            state,
+            Some((
+                "knowledge:note-updated",
+                json!({
+                    "noteId": entry_id,
+                    "kind": normalized_kind,
+                    "hasTranscript": normalize_string(request.content.transcript.clone()).is_some(),
+                }),
+            )),
+        )?;
+    }
     if should_process_transcription {
         if let Some(app) = app {
             if let Some(media_source) = transcription_media_source {
@@ -2448,6 +2494,23 @@ pub(crate) fn ingest_entry(
     state: &State<'_, AppState>,
     request: &KnowledgeEntryIngestRequest,
 ) -> Result<Value, String> {
+    ingest_entry_inner(app, state, request, true)
+}
+
+fn ingest_entry_for_batch(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeEntryIngestRequest,
+) -> Result<Value, String> {
+    ingest_entry_inner(app, state, request, false)
+}
+
+fn ingest_entry_inner(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeEntryIngestRequest,
+    refresh_projection: bool,
+) -> Result<Value, String> {
     let normalized_kind = normalize_entry_kind(&request.kind);
     let kind = normalized_kind.as_str();
     if kind.is_empty() {
@@ -2457,8 +2520,12 @@ pub(crate) fn ingest_entry(
         "youtube-video" => ingest_youtube_entry(app, state, request),
         "xhs-note" | "xhs-video" | "douyin-video" | "link-article" | "wechat-article"
         | "zhihu-answer" | "zhihu-article" | "xhs-blogger" | "xhs-comments" | "knowledge-note"
-        | "webpage" | "article" | "text-note" => ingest_note_entry(app, state, request),
-        kind if is_supported_social_entry_kind(kind) => ingest_note_entry(app, state, request),
+        | "webpage" | "article" | "text-note" => {
+            ingest_note_entry_inner(app, state, request, refresh_projection)
+        }
+        kind if is_supported_social_entry_kind(kind) => {
+            ingest_note_entry_inner(app, state, request, refresh_projection)
+        }
         other => Err(format!("暂不支持的 knowledge entry kind: {other}")),
     }
 }
@@ -2697,11 +2764,13 @@ pub(crate) fn batch_ingest(
         ));
     }
     let mut results = Vec::new();
+    let mut ingested_entries = 0usize;
     for entry in &request.entries {
         results.push(json!({
             "type": "entry",
-            "result": ingest_entry(app, state, entry)?,
+            "result": ingest_entry_for_batch(app, state, entry)?,
         }));
+        ingested_entries += 1;
     }
     for document_source in &request.document_sources {
         results.push(json!({
@@ -2714,6 +2783,9 @@ pub(crate) fn batch_ingest(
             "type": "media-assets",
             "result": ingest_media_assets(app, state, media_assets)?,
         }));
+    }
+    if ingested_entries > 0 {
+        refresh_knowledge_projection_and_emit(app, state, None)?;
     }
     Ok(json!({
         "success": true,

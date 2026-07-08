@@ -2004,6 +2004,9 @@ declare global {
             includeComments?: boolean;
             noteType?: string;
             limit?: number;
+            maxItems?: number;
+            collectionMode?: string;
+            sortBy?: string;
           };
         }) => Promise<{
           success: boolean;
@@ -2122,6 +2125,37 @@ declare global {
         create: (payload: { name: string }) => Promise<unknown>;
         rename: (payload: { id: string; name: string }) => Promise<unknown>;
         delete: (spaceId: string) => Promise<unknown>;
+        init: {
+          get: <T = {
+            schemaVersion?: number;
+            status?: 'not_started' | 'running' | 'completed' | 'failed';
+            phase?: 'branch' | 'input' | 'capture' | 'positioning' | 'completed' | string | null;
+            homepageUrl?: string | null;
+            platform?: string | null;
+            accountId?: string | null;
+            progress?: Record<string, unknown> | null;
+            startedAt?: string | null;
+            completedAt?: string | null;
+            lastError?: string | null;
+            updatedAt?: string | null;
+          }>() => Promise<T>;
+          start: <T = unknown>(payload: { homepageUrl: string; platform?: string; accountId?: string; phase?: string; progress?: Record<string, unknown> }) => Promise<T>;
+          progress: <T = unknown>(payload: {
+            phase?: string;
+            homepageUrl?: string;
+            platform?: string;
+            accountId?: string;
+            progress?: Record<string, unknown>;
+          }) => Promise<T>;
+          complete: <T = unknown>(payload: {
+            homepageUrl: string;
+            platform?: string;
+            accountId?: string;
+            account?: Record<string, unknown> | null;
+            progress?: Record<string, unknown>;
+          }) => Promise<T>;
+          fail: <T = unknown>(payload: { error: string }) => Promise<T>;
+        };
         onChanged: (listener: (...args: unknown[]) => void) => void;
         offChanged: (listener: (...args: unknown[]) => void) => void;
       };
@@ -2379,6 +2413,12 @@ declare global {
       accounts: {
         list: <T = unknown>() => Promise<T>;
         get: <T = unknown>(payload: { accountId: string }) => Promise<T>;
+        createFromHomepage: <T = unknown>(payload: { homepageUrl: string; limit?: number }) => Promise<T>;
+        postsBatch: <T = unknown>(payload: { accountId: string; sessionId?: string; platform?: string; profile?: unknown; posts: unknown[] }) => Promise<T>;
+        commentsBatch: <T = unknown>(payload: { accountId: string; sessionId?: string; platform?: string; postId?: string; comments: unknown[] }) => Promise<T>;
+        mediaBatch: <T = unknown>(payload: { accountId: string; sessionId?: string; platform?: string; media: unknown[] }) => Promise<T>;
+        completeImportSession: <T = unknown>(payload: { sessionId: string; status?: string; importedPostCount?: number; failedPostCount?: number; lastError?: string }) => Promise<T>;
+        delete: <T = unknown>(payload: { accountId: string }) => Promise<T>;
       };
       archives: {
         list: <T = unknown>() => Promise<T>;

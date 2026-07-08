@@ -16,6 +16,7 @@ import {
 } from '../config/aiSources';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { AdvisorModal, AdvisorSettingsPanel, type Advisor } from './Advisors';
+import { CreatorProfilesPanel } from './CreatorProfiles';
 import { subscribeSettingsUpdated } from '../bridge/appEvents';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import {
@@ -7558,6 +7559,10 @@ export function Settings({
                       className="min-h-[360px] w-full rounded-lg border border-border bg-surface-primary px-4 py-3 font-mono text-sm leading-6 text-text-primary focus:border-accent-primary focus:outline-none"
                     />
                   </div>
+                </section>
+
+                <section className="space-y-4">
+                  <CreatorProfilesPanel isActive={activeTab === 'profile'} embedded />
                 </section>
               </div>
             )}

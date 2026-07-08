@@ -4,15 +4,17 @@ use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tauri::State;
+use url::Url;
 
 use crate::json_util::{json_string, read_json_value, write_json_pretty};
-use crate::persistence::with_store;
 use crate::store::spaces as spaces_store;
 use crate::{now_iso, storage_safe_file_stem, workspace_root, AppState};
 
 const ACCOUNT_SCHEMA_VERSION: i64 = 1;
 const ACCOUNTS_BATCH_LIMIT: usize = 64;
+const ACCOUNT_MEDIA_DOWNLOAD_LIMIT_BYTES: usize = 200 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -31,6 +33,9 @@ struct AccountSummary {
     homepage_url: Option<String>,
     avatar_url: Option<String>,
     bound_space_id: Option<String>,
+    follower_count: Option<i64>,
+    total_post_count: Option<i64>,
+    total_like_count: Option<i64>,
     post_count: i64,
     comment_count: i64,
     media_count: i64,
@@ -58,6 +63,7 @@ pub(crate) struct AccountImportSessionRequest {
 struct AccountPostBatchRequest {
     session_id: Option<String>,
     platform: Option<String>,
+    profile: Value,
     posts: Vec<Value>,
 }
 
@@ -85,6 +91,19 @@ struct AccountImportCompleteRequest {
     imported_post_count: Option<i64>,
     failed_post_count: Option<i64>,
     last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct AccountCreateFromHomepageRequest {
+    homepage_url: String,
+    limit: Option<i64>,
+}
+
+struct InferredHomepageAccount {
+    platform: String,
+    platform_user_id: Option<String>,
+    username: Option<String>,
 }
 
 pub(crate) fn handle_accounts_http_request(
@@ -172,7 +191,15 @@ pub(crate) fn handle_accounts_channel(
 ) -> Option<Result<Value, String>> {
     if !matches!(
         channel,
-        "accounts:health" | "accounts:list" | "accounts:get"
+        "accounts:health"
+            | "accounts:list"
+            | "accounts:get"
+            | "accounts:create-from-homepage"
+            | "accounts:posts-batch"
+            | "accounts:comments-batch"
+            | "accounts:media-batch"
+            | "accounts:complete-import-session"
+            | "accounts:delete"
     ) {
         return None;
     }
@@ -183,6 +210,56 @@ pub(crate) fn handle_accounts_channel(
             catalog.map(|catalog| json!({ "success": true, "accounts": catalog.accounts }))
         }
         "accounts:get" => account_detail(state, payload),
+        "accounts:create-from-homepage" => create_account_from_homepage(state, payload),
+        "accounts:posts-batch" => (|| -> Result<Value, String> {
+            let account_id = payload
+                .get("accountId")
+                .or_else(|| payload.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "accountId 不能为空".to_string())?;
+            let request: AccountPostBatchRequest =
+                serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
+            upsert_posts_batch(state, account_id, request)
+        })(),
+        "accounts:comments-batch" => (|| -> Result<Value, String> {
+            let account_id = payload
+                .get("accountId")
+                .or_else(|| payload.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "accountId 不能为空".to_string())?;
+            let request: AccountCommentBatchRequest =
+                serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
+            upsert_comments_batch(state, account_id, request)
+        })(),
+        "accounts:media-batch" => (|| -> Result<Value, String> {
+            let account_id = payload
+                .get("accountId")
+                .or_else(|| payload.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "accountId 不能为空".to_string())?;
+            let request: AccountMediaBatchRequest =
+                serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
+            upsert_media_batch(state, account_id, request)
+        })(),
+        "accounts:complete-import-session" => (|| -> Result<Value, String> {
+            let session_id = payload
+                .get("sessionId")
+                .or_else(|| payload.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "sessionId 不能为空".to_string())?;
+            let request: AccountImportCompleteRequest =
+                serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
+            complete_import_session(state, session_id, request)
+        })(),
+        "accounts:delete" => delete_account(state, payload),
         _ => unreachable!(),
     })
 }
@@ -193,61 +270,8 @@ pub(crate) fn platform_accounts_for_active_space(state: &State<'_, AppState>) ->
 }
 
 pub(crate) fn build_account_prompt_section(state: &State<'_, AppState>) -> Option<String> {
-    let catalog = load_catalog_for_state(state).ok()?;
-    let account = catalog
-        .accounts
-        .iter()
-        .filter(|item| item.bound_space_id.is_some())
-        .max_by(|left, right| left.updated_at.cmp(&right.updated_at))
-        .or_else(|| {
-            catalog
-                .accounts
-                .iter()
-                .max_by(|left, right| left.updated_at.cmp(&right.updated_at))
-        })?;
-    let root = account_root(state, &account.platform, &account.id).ok()?;
-    let creator_profile = fs::read_to_string(root.join("CreatorProfile.md")).unwrap_or_default();
-    let style_skill =
-        fs::read_to_string(root.join("writing-style-skill").join("SKILL.md")).unwrap_or_default();
-    let memory_candidates =
-        fs::read_to_string(root.join("memory-candidates.json")).unwrap_or_default();
-    if creator_profile.trim().is_empty() && style_skill.trim().is_empty() {
-        return None;
-    }
-    let mut lines = Vec::new();
-    lines.push("## 当前空间运营账号上下文".to_string());
-    lines.push(format!(
-        "- 平台: {}\n- 账号: {}\n- 账号 ID: {}\n- 已导入历史内容: {} 条",
-        account.platform,
-        account.username,
-        account.platform_user_id.clone().unwrap_or_default(),
-        account.post_count,
-    ));
-    lines.push("使用规则：".to_string());
-    lines.push(
-        "- 当前空间绑定该账号时，选题、写稿、改稿、视频脚本和 RedClaw 运营默认遵守账号写作风格。"
-            .to_string(),
-    );
-    lines.push(
-        "- 不要把账号历史内容全文塞进回答；只引用与当前任务有关的风格、禁区和证据。".to_string(),
-    );
-    lines.push("- 长期记忆只代表从账号历史中抽取的稳定偏好；如果用户现场表达了更新要求，以用户最新要求为准。".to_string());
-    if !creator_profile.trim().is_empty() {
-        lines.push("<account_creator_profile_md>".to_string());
-        lines.push(truncate_for_prompt(&creator_profile, 9000));
-        lines.push("</account_creator_profile_md>".to_string());
-    }
-    if !style_skill.trim().is_empty() {
-        lines.push("<account_writing_style_skill_md>".to_string());
-        lines.push(truncate_for_prompt(&style_skill, 8000));
-        lines.push("</account_writing_style_skill_md>".to_string());
-    }
-    if !memory_candidates.trim().is_empty() {
-        lines.push("<account_memory_candidates_json>".to_string());
-        lines.push(truncate_for_prompt(&memory_candidates, 4000));
-        lines.push("</account_memory_candidates_json>".to_string());
-    }
-    Some(lines.join("\n"))
+    let _ = state;
+    None
 }
 
 pub(crate) fn sync_completed_transcript_from_knowledge(
@@ -294,7 +318,6 @@ fn create_import_session(
     let now = now_iso();
     let root = account_root(state, &platform, &account_id)?;
     fs::create_dir_all(root.join("posts")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(root.join("comments")).map_err(|error| error.to_string())?;
     fs::create_dir_all(root.join("media")).map_err(|error| error.to_string())?;
 
     let username =
@@ -315,7 +338,6 @@ fn create_import_session(
         "contentPillars": [],
         "toneTags": [],
         "forbiddenTopics": [],
-        "learningSummaryPath": "learning-summary.md",
         "raw": request.profile,
         "createdAt": now,
         "updatedAt": now,
@@ -344,8 +366,6 @@ fn create_import_session(
         }]
     });
     write_json_pretty(&root.join("import-state.json"), &import_state)?;
-    refresh_account_learning_artifacts(&root, state)?;
-    let synced_memory_count = sync_account_memory_candidates(state, &root).unwrap_or(0);
 
     let mut catalog = load_catalog_for_state(state).unwrap_or_default();
     let summary = AccountSummary {
@@ -356,6 +376,9 @@ fn create_import_session(
         homepage_url: normalized_string(request.homepage_url),
         avatar_url: normalized_string(request.avatar_url),
         bound_space_id: active_space_id(state).ok(),
+        follower_count: follower_count_from_profile(&profile),
+        total_post_count: total_post_count_from_profile(&profile),
+        total_like_count: total_like_count_from_profile(&profile),
         post_count: existing_post_count(&root),
         comment_count: 0,
         media_count: 0,
@@ -379,8 +402,77 @@ fn create_import_session(
             "id": session_id,
             "status": "running",
         },
-        "syncedMemoryCount": synced_memory_count
+        "syncedMemoryCount": 0
     }))
+}
+
+fn create_account_from_homepage(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let request: AccountCreateFromHomepageRequest =
+        serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
+    let homepage_url = normalize_homepage_url(&request.homepage_url)?;
+    let inferred = infer_homepage_account(&homepage_url)?;
+    let limit = request.limit.unwrap_or(20).clamp(1, 200);
+    let response = create_import_session(
+        state,
+        AccountImportSessionRequest {
+            platform: inferred.platform.clone(),
+            homepage_url: Some(homepage_url.clone()),
+            platform_user_id: inferred.platform_user_id.clone(),
+            username: inferred.username.clone(),
+            avatar_url: None,
+            bio: None,
+            profile: json!({
+                "source": "settings-homepage-url",
+                "homepageUrl": homepage_url,
+                "platform": inferred.platform.clone(),
+                "platformUserId": inferred.platform_user_id.clone(),
+                "username": inferred.username.clone(),
+            }),
+            options: json!({
+                "postLimit": limit,
+                "includeComments": true,
+                "includeMedia": true,
+                "source": "settings-homepage-url",
+            }),
+        },
+    )?;
+    Ok(json!({
+        "success": true,
+        "account": response.get("account").cloned().unwrap_or_else(|| json!({})),
+        "session": response.get("session").cloned().unwrap_or_else(|| json!({})),
+        "homepageUrl": homepage_url,
+        "platform": inferred.platform,
+        "limit": limit,
+        "nextAction": Value::Null
+    }))
+}
+
+fn delete_account(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    let account_id = payload
+        .get("accountId")
+        .or_else(|| payload.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "accountId 不能为空".to_string())?;
+    let mut catalog = load_catalog_for_state(state).unwrap_or_default();
+    let Some(index) = catalog
+        .accounts
+        .iter()
+        .position(|item| item.id == account_id)
+    else {
+        return Ok(json!({ "success": true, "deleted": false }));
+    };
+    let account = catalog.accounts.remove(index);
+    let root = account_root(state, &account.platform, &account.id)?;
+    if root.exists() {
+        fs::remove_dir_all(&root).map_err(|error| error.to_string())?;
+    }
+    save_catalog_for_state(state, &catalog)?;
+    Ok(json!({ "success": true, "deleted": true, "accountId": account_id }))
 }
 
 fn upsert_posts_batch(
@@ -410,6 +502,20 @@ fn upsert_posts_batch(
     let root = account_root(state, &account.platform, account_id)?;
     let posts_root = root.join("posts");
     fs::create_dir_all(&posts_root).map_err(|error| error.to_string())?;
+    let imported_author = first_post_string(&request.posts, &["author", "nickname", "username"]);
+    let imported_avatar = first_post_string(&request.posts, &["authorAvatarUrl", "avatarUrl"]);
+    let imported_author_id = first_post_string(&request.posts, &["authorId", "platformUserId"]);
+    let profile_follower_count = follower_count_from_profile(&request.profile);
+    let profile_total_post_count = total_post_count_from_profile(&request.profile);
+    let profile_total_like_count = total_like_count_from_profile(&request.profile);
+    patch_account_profile_from_import(
+        &root,
+        &account,
+        imported_author.as_deref(),
+        imported_avatar.as_deref(),
+        imported_author_id.as_deref(),
+        Some(&request.profile),
+    )?;
 
     let mut inserted = 0_i64;
     let mut updated = 0_i64;
@@ -421,13 +527,24 @@ fn upsert_posts_batch(
             failed.push(json!({ "error": "missing post id" }));
             continue;
         }
-        let path = posts_root.join(format!("note-{}.json", storage_safe_file_stem(&post_id)));
+        let path = post_meta_path(&root, &post_id);
         let existed = path.exists();
         let mut payload = post;
         if let Some(object) = payload.as_object_mut() {
             object.insert("schemaVersion".to_string(), json!(ACCOUNT_SCHEMA_VERSION));
             object.insert("accountId".to_string(), json!(account_id));
             object.insert("platform".to_string(), json!(account.platform));
+            object.insert("id".to_string(), json!(post_id));
+            object.insert(
+                "files".to_string(),
+                json!({
+                    "meta": "meta.json",
+                    "content": "content.md",
+                    "html": "content.html",
+                    "comments": "comments.json",
+                    "commentsMarkdown": "comments.md",
+                }),
+            );
             if post_has_video_media(&Value::Object(object.clone())) {
                 object.insert("requiresTranscript".to_string(), json!(true));
                 if !post_has_transcript(&Value::Object(object.clone())) {
@@ -441,7 +558,7 @@ fn upsert_posts_batch(
                 .or_insert_with(|| json!(now));
             object.insert("updatedAt".to_string(), json!(now));
         }
-        match write_json_pretty(&path, &payload) {
+        match write_post_document(&root, &post_id, &payload) {
             Ok(()) if existed => updated += 1,
             Ok(()) => inserted += 1,
             Err(error) => failed.push(json!({ "postId": post_id, "error": error })),
@@ -454,6 +571,46 @@ fn upsert_posts_batch(
         .iter_mut()
         .find(|item| item.id == account_id)
     {
+        if let Some(username) = imported_author.clone() {
+            if should_replace_catalog_username(item) {
+                item.username = username;
+            }
+        }
+        if let Some(avatar_url) = imported_avatar.clone() {
+            if item
+                .avatar_url
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+            {
+                item.avatar_url = Some(avatar_url);
+            }
+        }
+        if let Some(platform_user_id) = imported_author_id.clone() {
+            if item
+                .platform_user_id
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+            {
+                item.platform_user_id = Some(platform_user_id);
+            }
+        }
+        if let Some(follower_count) = profile_follower_count {
+            item.follower_count = Some(follower_count);
+        }
+        if let Some(total_post_count) = profile_total_post_count {
+            item.total_post_count = Some(total_post_count);
+        } else if item.total_post_count.unwrap_or_default() <= 0 {
+            item.total_post_count = Some(post_count);
+        }
+        if let Some(total_like_count) = profile_total_like_count {
+            item.total_like_count = Some(total_like_count);
+        } else if item.total_like_count.unwrap_or_default() <= 0 {
+            item.total_like_count = Some(existing_post_like_count(&root));
+        }
         item.post_count = post_count;
         item.last_imported_at = Some(now.clone());
         item.updated_at = now.clone();
@@ -504,9 +661,6 @@ fn upsert_comments_batch(
     validate_request_platform(request.platform.as_deref(), &account.platform)?;
 
     let root = account_root(state, &account.platform, account_id)?;
-    let comments_root = root.join("comments");
-    fs::create_dir_all(&comments_root).map_err(|error| error.to_string())?;
-
     let fallback_post_id =
         normalized_string(request.post_id).unwrap_or_else(|| "unknown".to_string());
     let mut grouped: BTreeMap<String, Vec<Value>> = BTreeMap::new();
@@ -520,10 +674,10 @@ fn upsert_comments_batch(
     let mut failed = Vec::new();
     let now = now_iso();
     for (post_id, comments) in grouped {
-        let path = comments_root.join(format!(
-            "note-{}.comments.json",
-            storage_safe_file_stem(&post_id)
-        ));
+        let path = post_comments_path(&root, &post_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
         let mut document = read_json_value(&path).unwrap_or_else(|| {
             json!({
                 "schemaVersion": ACCOUNT_SCHEMA_VERSION,
@@ -574,10 +728,16 @@ fn upsert_comments_batch(
             object.insert("platform".to_string(), json!(account.platform));
             object.insert("postId".to_string(), json!(post_id));
             object.insert("updatedAt".to_string(), json!(now));
+            object.insert("commentsMarkdown".to_string(), json!("comments.md"));
         }
         if let Err(error) = write_json_pretty(&path, &document) {
             failed.push(json!({ "postId": post_id, "error": error }));
+            continue;
         }
+        if let Err(error) = write_comments_markdown(&root, &post_id, &document) {
+            failed.push(json!({ "postId": post_id, "error": error }));
+        }
+        let _ = patch_post_comment_files(&root, &post_id, &now);
     }
 
     let comment_count = existing_comment_count(&root);
@@ -645,10 +805,23 @@ fn upsert_media_batch(
         }
         let path = media_root.join(format!("media-{}.json", storage_safe_file_stem(&media_id)));
         let existed = path.exists();
+        let mut media = media;
+        if let Err(error) = materialize_account_media(state, &root, &mut media, true) {
+            if let Some(object) = media.as_object_mut() {
+                object.insert("localizeError".to_string(), json!(error.clone()));
+            }
+            failed.push(json!({ "mediaId": media_id, "error": error }));
+        }
         let payload = normalize_media_payload(media, account_id, &account.platform, &now);
         match write_json_pretty(&path, &payload) {
-            Ok(()) if existed => updated += 1,
-            Ok(()) => inserted += 1,
+            Ok(()) if existed => {
+                patch_post_media_local_path(&root, &payload, &now)?;
+                updated += 1;
+            }
+            Ok(()) => {
+                patch_post_media_local_path(&root, &payload, &now)?;
+                inserted += 1;
+            }
             Err(error) => failed.push(json!({ "mediaId": media_id, "error": error })),
         }
     }
@@ -763,8 +936,7 @@ fn account_detail(state: &State<'_, AppState>, payload: &Value) -> Result<Value,
         .cloned()
         .ok_or_else(|| "账号档案不存在".to_string())?;
     let root = account_root(state, &account.platform, &account.id)?;
-    let memory_candidates = read_json_value(&root.join("memory-candidates.json"))
-        .unwrap_or_else(|| json!({ "candidates": [] }));
+    let _ = backfill_account_media_files_from_knowledge(state, &root);
     Ok(json!({
         "success": true,
         "account": account,
@@ -772,18 +944,11 @@ fn account_detail(state: &State<'_, AppState>, payload: &Value) -> Result<Value,
         "posts": account_post_summaries(&root),
         "media": account_media_summaries(&root),
         "comments": account_comment_summaries(&root),
+        "captureRequest": read_json_value(&root.join("capture-request.json")).unwrap_or_else(|| json!({})),
         "learningState": read_json_value(&root.join("learning-state.json")).unwrap_or_else(|| json!({})),
-        "creatorProfile": read_text_if_exists(&root.join("CreatorProfile.md")),
-        "writingStyleSkill": read_text_if_exists(&root.join("writing-style-skill").join("SKILL.md")),
-        "learningSummary": read_text_if_exists(&root.join("learning-summary.md")),
-        "memoryCandidates": memory_candidates,
         "artifactPaths": {
             "root": root.to_string_lossy().to_string(),
             "profile": root.join("profile.json").to_string_lossy().to_string(),
-            "creatorProfile": root.join("CreatorProfile.md").to_string_lossy().to_string(),
-            "writingStyleSkill": root.join("writing-style-skill").join("SKILL.md").to_string_lossy().to_string(),
-            "learningSummary": root.join("learning-summary.md").to_string_lossy().to_string(),
-            "memoryCandidates": root.join("memory-candidates.json").to_string_lossy().to_string(),
         }
     }))
 }
@@ -823,7 +988,7 @@ fn sync_knowledge_transcription_to_accounts(
         let root = account_root(state, &account.platform, &account.id)?;
         let posts_root = root.join("posts");
         let mut account_changed = false;
-        for path in json_files_in_dir(&posts_root) {
+        for path in account_post_json_paths(&posts_root) {
             let Some(mut post) = read_json_value(&path) else {
                 continue;
             };
@@ -908,11 +1073,17 @@ fn account_post_matches_transcription_candidates(
 }
 
 fn account_post_summaries(root: &Path) -> Vec<Value> {
-    let mut items = json_files_in_dir(&root.join("posts"))
+    let mut items = account_post_json_paths(&root.join("posts"))
         .into_iter()
         .filter_map(|path| {
             let value = read_json_value(&path)?;
             let post_id = post_identifier(&value);
+            let post_dir = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| root.join("posts"));
+            let content = json_string(&value, "content")
+                .unwrap_or_else(|| read_text_if_exists(&post_dir.join("content.md")));
             let media = value
                 .get("media")
                 .and_then(Value::as_array)
@@ -921,7 +1092,7 @@ fn account_post_summaries(root: &Path) -> Vec<Value> {
             Some(json!({
                 "id": if post_id.is_empty() { path.file_stem().and_then(|value| value.to_str()).unwrap_or_default().to_string() } else { post_id },
                 "title": json_string(&value, "title").unwrap_or_else(|| "未命名内容".to_string()),
-                "content": json_string(&value, "content").unwrap_or_default(),
+                "content": content,
                 "url": json_string(&value, "url").unwrap_or_default(),
                 "publishedAt": json_string(&value, "publishedAt").unwrap_or_default(),
                 "capturedAt": json_string(&value, "capturedAt").unwrap_or_default(),
@@ -931,6 +1102,7 @@ fn account_post_summaries(root: &Path) -> Vec<Value> {
                 "stats": value.get("stats").cloned().unwrap_or_else(|| json!({})),
                 "tags": value.get("tags").cloned().unwrap_or_else(|| json!([])),
                 "media": media,
+                "files": value.get("files").cloned().unwrap_or_else(|| json!({})),
             }))
         })
         .collect::<Vec<_>>();
@@ -969,7 +1141,7 @@ fn account_media_summaries(root: &Path) -> Vec<Value> {
 
 fn account_comment_summaries(root: &Path) -> Vec<Value> {
     let mut items = Vec::new();
-    for path in json_files_in_dir(&root.join("comments")) {
+    for path in account_comment_json_paths(root) {
         let Some(value) = read_json_value(&path) else {
             continue;
         };
@@ -982,10 +1154,10 @@ fn account_comment_summaries(root: &Path) -> Vec<Value> {
                     "id": if comment_id.is_empty() { short_hash(&comment.to_string()) } else { comment_id },
                     "postId": json_string(comment, "postId").unwrap_or_else(|| post_id.clone()),
                     "platform": json_string(comment, "platform").unwrap_or_else(|| platform.clone()),
-                    "author": json_string(comment, "author").unwrap_or_default(),
-                    "text": json_string(comment, "text").unwrap_or_default(),
-                    "likes": comment.get("likes").cloned().unwrap_or_else(|| json!(0)),
-                    "replies": comment.get("replies").cloned().unwrap_or_else(|| json!(0)),
+                    "author": comment_author_text(comment),
+                    "text": comment_body_text(comment),
+                    "likes": comment.get("likes").cloned().or_else(|| comment.get("metrics").and_then(|metrics| metrics.get("likes")).cloned()).unwrap_or_else(|| json!(0)),
+                    "replies": comment.get("replies").cloned().or_else(|| comment.get("metrics").and_then(|metrics| metrics.get("replies")).cloned()).unwrap_or_else(|| json!(0)),
                     "createdAt": json_string(comment, "createdAt").unwrap_or_default(),
                     "capturedAt": json_string(comment, "capturedAt").unwrap_or_default(),
                     "updatedAt": json_string(comment, "updatedAt").unwrap_or_default(),
@@ -1007,6 +1179,200 @@ fn json_files_in_dir(root: &Path) -> Vec<PathBuf> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn post_directory(root: &Path, post_id: &str) -> PathBuf {
+    root.join("posts").join(storage_safe_file_stem(post_id))
+}
+
+fn post_meta_path(root: &Path, post_id: &str) -> PathBuf {
+    post_directory(root, post_id).join("meta.json")
+}
+
+fn post_comments_path(root: &Path, post_id: &str) -> PathBuf {
+    post_directory(root, post_id).join("comments.json")
+}
+
+fn write_post_document(root: &Path, post_id: &str, post: &Value) -> Result<(), String> {
+    let dir = post_directory(root, post_id);
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    write_json_pretty(&dir.join("meta.json"), post)?;
+    let markdown = post_content_markdown(post);
+    if !markdown.trim().is_empty() {
+        fs::write(dir.join("content.md"), markdown).map_err(|error| error.to_string())?;
+    }
+    if let Some(html) = json_string(post, "html").or_else(|| json_string(post, "contentHtml")) {
+        if !html.trim().is_empty() {
+            fs::write(dir.join("content.html"), html).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn post_content_markdown(post: &Value) -> String {
+    let title = json_string(post, "title").unwrap_or_default();
+    let content = json_string(post, "content")
+        .or_else(|| json_string(post, "text"))
+        .or_else(|| json_string(post, "description"))
+        .unwrap_or_default();
+    let transcript = json_string(post, "transcript")
+        .or_else(|| json_string(post, "transcriptText"))
+        .unwrap_or_default();
+    let source_url = json_string(post, "url")
+        .or_else(|| json_string(post, "sourceUrl"))
+        .unwrap_or_default();
+    let mut lines = Vec::new();
+    if !title.trim().is_empty() {
+        lines.push(format!("# {}", title.trim()));
+        lines.push(String::new());
+    }
+    if !source_url.trim().is_empty() {
+        lines.push(format!("来源：{}", source_url.trim()));
+        lines.push(String::new());
+    }
+    if !content.trim().is_empty() {
+        lines.push(content.trim().to_string());
+    }
+    if !transcript.trim().is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("## 视频转录".to_string());
+        lines.push(String::new());
+        lines.push(transcript.trim().to_string());
+    }
+    lines.join("\n")
+}
+
+fn patch_post_comment_files(root: &Path, post_id: &str, now: &str) -> Result<(), String> {
+    let path = post_meta_path(root, post_id);
+    if !path.exists() {
+        return Ok(());
+    }
+    let Some(mut post) = read_json_value(&path) else {
+        return Ok(());
+    };
+    if let Some(object) = post.as_object_mut() {
+        let mut files = object
+            .get("files")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        files.insert("comments".to_string(), json!("comments.json"));
+        files.insert("commentsMarkdown".to_string(), json!("comments.md"));
+        object.insert("files".to_string(), Value::Object(files));
+        object.insert("updatedAt".to_string(), json!(now));
+    }
+    write_json_pretty(&path, &post)
+}
+
+fn write_comments_markdown(root: &Path, post_id: &str, document: &Value) -> Result<(), String> {
+    let comments = document
+        .get("comments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut lines = Vec::new();
+    lines.push(format!("# 评论区：{post_id}"));
+    lines.push(String::new());
+    lines.push(format!("评论数：{}", comments.len()));
+    if let Some(captured_at) =
+        json_string(document, "updatedAt").or_else(|| json_string(document, "capturedAt"))
+    {
+        lines.push(format!("更新时间：{captured_at}"));
+    }
+    lines.push(String::new());
+    for (index, comment) in comments.iter().take(200).enumerate() {
+        let author = comment_author_text(comment);
+        let text = comment_body_text(comment);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let likes = comment
+            .get("likes")
+            .or_else(|| {
+                comment
+                    .get("metrics")
+                    .and_then(|metrics| metrics.get("likes"))
+            })
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        lines.push(format!(
+            "{}. {}{}：{}",
+            index + 1,
+            if author.trim().is_empty() {
+                "匿名"
+            } else {
+                author.trim()
+            },
+            if likes > 0 {
+                format!("（{}赞）", likes)
+            } else {
+                String::new()
+            },
+            text.trim()
+        ));
+    }
+    fs::write(
+        post_directory(root, post_id).join("comments.md"),
+        lines.join("\n"),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn comment_author_text(comment: &Value) -> String {
+    json_string(comment, "author")
+        .or_else(|| {
+            comment.get("author").and_then(|author| {
+                json_string(author, "nickname").or_else(|| json_string(author, "name"))
+            })
+        })
+        .or_else(|| json_string(comment, "nickname"))
+        .unwrap_or_default()
+}
+
+fn comment_body_text(comment: &Value) -> String {
+    json_string(comment, "text")
+        .or_else(|| json_string(comment, "content"))
+        .or_else(|| {
+            comment
+                .get("content")
+                .and_then(|content| json_string(content, "text"))
+        })
+        .unwrap_or_default()
+}
+
+fn account_post_json_paths(posts_root: &Path) -> Vec<PathBuf> {
+    let mut paths = json_files_in_dir(posts_root);
+    if let Ok(entries) = fs::read_dir(posts_root) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                let meta_path = path.join("meta.json");
+                if meta_path.exists() {
+                    paths.push(meta_path);
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn account_comment_json_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = json_files_in_dir(&root.join("comments"));
+    let posts_root = root.join("posts");
+    if let Ok(entries) = fs::read_dir(posts_root) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                let comments_path = path.join("comments.json");
+                if comments_path.exists() {
+                    paths.push(comments_path);
+                }
+            }
+        }
+    }
+    paths
 }
 
 fn sort_time(value: &Value) -> String {
@@ -1135,14 +1501,13 @@ fn refresh_account_learning_if_ready(
     }
 
     refresh_account_learning_artifacts(root, state)?;
-    let synced_memory_count = sync_account_memory_candidates(state, root)?;
     if !account_id.is_empty() {
         mark_account_learned(catalog, &account_id, now);
     }
     write_account_learning_state(root, "completed", 0, 0, now)?;
     Ok(AccountLearningRefreshOutcome {
         status: "completed".to_string(),
-        synced_memory_count,
+        synced_memory_count: 0,
         pending_video_transcriptions: 0,
         failed_video_transcriptions: 0,
     })
@@ -1229,18 +1594,317 @@ fn normalize_platform(value: &str) -> Result<String, String> {
     Ok(platform.to_string())
 }
 
+fn normalize_homepage_url(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("主页 URL 不能为空".to_string());
+    }
+    let candidate = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    };
+    let parsed = Url::parse(&candidate).map_err(|error| format!("主页 URL 无效: {error}"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("主页 URL 只支持 http/https".to_string());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("主页 URL 不能包含账号密码".to_string());
+    }
+    Ok(parsed.to_string())
+}
+
+fn infer_homepage_account(homepage_url: &str) -> Result<InferredHomepageAccount, String> {
+    let parsed = Url::parse(homepage_url).map_err(|error| error.to_string())?;
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let path = parsed.path().trim_matches('/');
+    let parts = path
+        .split('/')
+        .filter(|item| !item.trim().is_empty())
+        .collect::<Vec<_>>();
+    if host.contains("xiaohongshu.com") {
+        let user_id = parts
+            .windows(2)
+            .find_map(|window| {
+                if window[0] == "profile" || (window[0] == "user" && window[1] != "profile") {
+                    Some(window[1].to_string())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                if parts.first() == Some(&"user") && parts.get(1) == Some(&"profile") {
+                    parts.get(2).map(|value| value.to_string())
+                } else {
+                    None
+                }
+            });
+        if user_id.is_none() {
+            return Err("小红书主页 URL 需要包含 /user/profile/{id}".to_string());
+        }
+        return Ok(InferredHomepageAccount {
+            platform: "xiaohongshu".to_string(),
+            platform_user_id: user_id.clone(),
+            username: user_id,
+        });
+    }
+    if host.contains("douyin.com") {
+        let user_id = parts
+            .windows(2)
+            .find_map(|window| (window[0] == "user").then(|| window[1].to_string()));
+        return Ok(InferredHomepageAccount {
+            platform: "douyin".to_string(),
+            platform_user_id: user_id.clone(),
+            username: user_id,
+        });
+    }
+    if host == "space.bilibili.com" || host.ends_with(".space.bilibili.com") {
+        let user_id = parts.first().map(|value| value.to_string());
+        return Ok(InferredHomepageAccount {
+            platform: "bilibili".to_string(),
+            platform_user_id: user_id.clone(),
+            username: user_id,
+        });
+    }
+    if host.contains("tiktok.com") {
+        let handle = parts
+            .first()
+            .map(|value| value.trim_start_matches('@').to_string())
+            .filter(|value| !value.is_empty());
+        return Ok(InferredHomepageAccount {
+            platform: "tiktok".to_string(),
+            platform_user_id: handle.clone(),
+            username: handle,
+        });
+    }
+    Err("暂不支持这个平台主页，请使用小红书、抖音、Bilibili 或 TikTok 主页 URL".to_string())
+}
+
 fn normalized_string(value: Option<String>) -> Option<String> {
     value
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
 }
 
-fn compact_string_values(values: Vec<String>) -> Vec<String> {
-    values
-        .into_iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
+fn follower_count_from_profile(profile: &Value) -> Option<i64> {
+    json_i64_at_paths(
+        profile,
+        &[
+            "stats.followers",
+            "stats.followerCount",
+            "stats.fans",
+            "stats.fansCount",
+            "followers",
+            "followerCount",
+            "fans",
+            "fansCount",
+            "raw.fans",
+            "raw.fans_count",
+            "raw.follower_count",
+            "raw.stats.followers",
+            "raw.stats.followerCount",
+            "raw.stats.fans",
+            "raw.stats.fansCount",
+            "raw.stats.follower_count",
+        ],
+    )
+}
+
+fn total_post_count_from_profile(profile: &Value) -> Option<i64> {
+    json_i64_at_paths(
+        profile,
+        &[
+            "stats.totalPosts",
+            "stats.postCount",
+            "stats.noteCount",
+            "stats.notes",
+            "stats.works",
+            "stats.totalWorks",
+            "totalPostCount",
+            "postCount",
+            "noteCount",
+            "notes",
+            "works",
+            "raw.totalPosts",
+            "raw.postCount",
+            "raw.noteCount",
+            "raw.notes",
+            "raw.works",
+            "raw.stats.totalPosts",
+            "raw.stats.postCount",
+            "raw.stats.noteCount",
+            "raw.stats.notes",
+            "raw.stats.works",
+        ],
+    )
+}
+
+fn total_like_count_from_profile(profile: &Value) -> Option<i64> {
+    json_i64_at_paths(
+        profile,
+        &[
+            "stats.totalLikes",
+            "stats.likeCount",
+            "stats.likes",
+            "stats.likedCount",
+            "stats.liked",
+            "totalLikeCount",
+            "likeCount",
+            "likes",
+            "likedCount",
+            "liked",
+            "raw.totalLikes",
+            "raw.likeCount",
+            "raw.likes",
+            "raw.likedCount",
+            "raw.liked",
+            "raw.stats.totalLikes",
+            "raw.stats.likeCount",
+            "raw.stats.likes",
+            "raw.stats.likedCount",
+            "raw.stats.liked",
+        ],
+    )
+}
+
+fn json_i64_at_paths(value: &Value, paths: &[&str]) -> Option<i64> {
+    for path in paths {
+        let mut current = value;
+        let mut found = true;
+        for part in path.split('.') {
+            match current.get(part) {
+                Some(next) => current = next,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if found {
+            if let Some(number) = json_count_value(current) {
+                return Some(number);
+            }
+        }
+    }
+    None
+}
+
+fn json_count_value(value: &Value) -> Option<i64> {
+    if let Some(number) = value.as_i64() {
+        return Some(number);
+    }
+    if let Some(number) = value.as_u64() {
+        return i64::try_from(number).ok();
+    }
+    let text = value.as_str()?.trim().replace(',', "");
+    if text.is_empty() {
+        return None;
+    }
+    if let Some(raw) = text.strip_suffix('万') {
+        return raw
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|number| (number * 10_000.0).round() as i64);
+    }
+    text.parse::<i64>().ok()
+}
+
+fn first_post_string(posts: &[Value], keys: &[&str]) -> Option<String> {
+    posts.iter().find_map(|post| {
+        keys.iter()
+            .find_map(|key| json_string(post, key))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn should_replace_catalog_username(account: &AccountSummary) -> bool {
+    let username = account.username.trim();
+    username.is_empty()
+        || username == "未命名账号"
+        || username == account.id
+        || account.platform_user_id.as_deref() == Some(username)
+}
+
+fn patch_account_profile_from_import(
+    root: &Path,
+    account: &AccountSummary,
+    username: Option<&str>,
+    avatar_url: Option<&str>,
+    platform_user_id: Option<&str>,
+    profile_patch: Option<&Value>,
+) -> Result<(), String> {
+    let path = root.join("profile.json");
+    let Some(mut profile) = read_json_value(&path) else {
+        return Ok(());
+    };
+    let now = now_iso();
+    if let Some(object) = profile.as_object_mut() {
+        if let Some(value) = username.map(str::trim).filter(|value| !value.is_empty()) {
+            let current = object
+                .get("username")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if current.is_empty()
+                || current == "未命名账号"
+                || current == account.id
+                || account.platform_user_id.as_deref() == Some(current)
+            {
+                object.insert("username".to_string(), json!(value));
+                object.insert("displayName".to_string(), json!(value));
+            }
+        }
+        if let Some(value) = avatar_url.map(str::trim).filter(|value| !value.is_empty()) {
+            let current = object
+                .get("avatarUrl")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if current.is_empty() {
+                object.insert("avatarUrl".to_string(), json!(value));
+            }
+        }
+        if let Some(value) = platform_user_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let current = object
+                .get("platformUserId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if current.is_empty() {
+                object.insert("platformUserId".to_string(), json!(value));
+            }
+        }
+        if let Some(patch) = profile_patch.and_then(Value::as_object) {
+            for (source_key, target_key) in [
+                ("username", "username"),
+                ("displayName", "displayName"),
+                ("avatarUrl", "avatarUrl"),
+                ("bio", "bio"),
+                ("homepageUrl", "homepageUrl"),
+                ("platformUserId", "platformUserId"),
+            ] {
+                if let Some(value) = patch
+                    .get(source_key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    object.insert(target_key.to_string(), json!(value));
+                }
+            }
+            if let Some(stats) = patch.get("stats").filter(|value| value.is_object()) {
+                object.insert("stats".to_string(), stats.clone());
+            }
+            object.insert("rawProfile".to_string(), Value::Object(patch.clone()));
+        }
+        object.insert("updatedAt".to_string(), json!(now));
+    }
+    write_json_pretty(&path, &profile)
 }
 
 fn post_identifier(post: &Value) -> String {
@@ -1300,7 +1964,7 @@ fn video_transcription_state(post: &Value) -> Option<&'static str> {
 }
 
 fn video_transcription_count(root: &Path, state: &str) -> i64 {
-    json_files_in_dir(&root.join("posts"))
+    account_post_json_paths(&root.join("posts"))
         .into_iter()
         .filter_map(|path| read_json_value(&path))
         .filter(|post| video_transcription_state(post) == Some(state))
@@ -1354,40 +2018,476 @@ fn normalize_media_payload(mut media: Value, account_id: &str, platform: &str, n
     })
 }
 
-fn existing_post_count(root: &Path) -> i64 {
-    fs::read_dir(root.join("posts"))
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry.path().extension().and_then(|value| value.to_str()) == Some("json")
-                })
-                .count() as i64
-        })
+fn backfill_account_media_files_from_knowledge(
+    state: &State<'_, AppState>,
+    root: &Path,
+) -> Result<(), String> {
+    let now = now_iso();
+    for path in json_files_in_dir(&root.join("media")) {
+        let Some(mut media) = read_json_value(&path) else {
+            continue;
+        };
+        if media_local_path_exists(&media) {
+            continue;
+        }
+        materialize_account_media(state, root, &mut media, false)?;
+        if !media_local_path_exists(&media) {
+            continue;
+        }
+        if let Some(object) = media.as_object_mut() {
+            object.insert("updatedAt".to_string(), json!(now.clone()));
+            object.remove("localizeError");
+        }
+        write_json_pretty(&path, &media)?;
+        patch_post_media_local_path(root, &media, &now)?;
+    }
+    Ok(())
+}
+
+fn materialize_account_media(
+    state: &State<'_, AppState>,
+    root: &Path,
+    media: &mut Value,
+    allow_remote_download: bool,
+) -> Result<(), String> {
+    if media_local_path_exists(media) {
+        return Ok(());
+    }
+    if let Some(local_path) = copy_account_media_from_knowledge(state, root, media)? {
+        set_media_local_path(media, &local_path, "knowledge");
+        return Ok(());
+    }
+    if !allow_remote_download {
+        return Ok(());
+    }
+    let Some(source_url) = media_source_url(media) else {
+        return Ok(());
+    };
+    let local_path = download_account_media(root, media, &source_url)?;
+    set_media_local_path(media, &local_path, "remote");
+    Ok(())
+}
+
+fn media_local_path_exists(media: &Value) -> bool {
+    json_string(media, "localPath")
+        .map(PathBuf::from)
+        .is_some_and(|path| path.exists())
+}
+
+fn set_media_local_path(media: &mut Value, local_path: &Path, source: &str) {
+    if let Some(object) = media.as_object_mut() {
+        object.insert(
+            "localPath".to_string(),
+            json!(local_path.to_string_lossy().to_string()),
+        );
+        object.insert("localMediaSource".to_string(), json!(source));
+    }
+}
+
+fn media_post_identifier(media: &Value) -> Option<String> {
+    ["postId", "noteId", "platformPostId"]
+        .iter()
+        .filter_map(|key| media.get(*key).and_then(Value::as_str))
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+}
+
+fn media_source_url(media: &Value) -> Option<String> {
+    ["url", "src", "sourceUrl", "downloadUrl"]
+        .iter()
+        .filter_map(|key| media.get(*key).and_then(Value::as_str))
+        .map(|value| value.trim().to_string())
+        .find(|value| value.starts_with("http://") || value.starts_with("https://"))
+}
+
+fn media_index(media: &Value) -> usize {
+    media
+        .get("index")
+        .and_then(Value::as_i64)
+        .filter(|value| *value >= 0)
+        .map(|value| value as usize)
         .unwrap_or(0)
 }
 
-fn existing_comment_count(root: &Path) -> i64 {
-    fs::read_dir(root.join("comments"))
+fn media_kind_text(media: &Value) -> String {
+    json_string(media, "kind").unwrap_or_else(|| "media".to_string())
+}
+
+fn is_image_media_value(media: &Value) -> bool {
+    let kind = media_kind_text(media).to_ascii_lowercase();
+    if kind.contains("image") || kind.contains("cover") {
+        return true;
+    }
+    media_source_url(media)
+        .as_deref()
+        .is_some_and(|source| is_image_extension(media_extension_from_source(source).as_deref()))
+}
+
+fn is_video_media_value(media: &Value) -> bool {
+    let kind = media_kind_text(media).to_ascii_lowercase();
+    if kind.contains("video") {
+        return true;
+    }
+    media_source_url(media)
+        .as_deref()
+        .is_some_and(|source| is_video_extension(media_extension_from_source(source).as_deref()))
+}
+
+fn copy_account_media_from_knowledge(
+    state: &State<'_, AppState>,
+    root: &Path,
+    media: &Value,
+) -> Result<Option<PathBuf>, String> {
+    let Some(post_id) = media_post_identifier(media) else {
+        return Ok(None);
+    };
+    let workspace = workspace_root(state)?;
+    let Some(source_path) = find_knowledge_media_file(&workspace, &post_id, media) else {
+        return Ok(None);
+    };
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bin");
+    let target_path = account_media_file_path(root, &post_id, &media_identifier(media), extension);
+    if !target_path.exists() {
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::copy(&source_path, &target_path).map_err(|error| error.to_string())?;
+    }
+    Ok(Some(target_path))
+}
+
+fn find_knowledge_media_file(workspace: &Path, post_id: &str, media: &Value) -> Option<PathBuf> {
+    let entry_dir = workspace
+        .join("knowledge")
+        .join("redbook")
+        .join(format!("knowledge-{}", storage_safe_file_stem(post_id)));
+    if !entry_dir.exists() {
+        return None;
+    }
+    if is_image_media_value(media) {
+        return find_knowledge_image_file(&entry_dir, media_index(media));
+    }
+    if is_video_media_value(media) {
+        return find_first_media_file(&entry_dir, &["mp4", "mov", "m4v", "webm", "mkv"], 3);
+    }
+    None
+}
+
+fn find_knowledge_image_file(entry_dir: &Path, index: usize) -> Option<PathBuf> {
+    let images_dir = entry_dir.join("images");
+    let mut images = files_with_extensions(&images_dir, &["webp", "jpg", "jpeg", "png", "avif"]);
+    images.sort();
+    for candidate_name in [
+        format!("image-{}.webp", index + 1),
+        format!("image-{}.jpg", index + 1),
+        format!("image-{}.jpeg", index + 1),
+        format!("image-{}.png", index + 1),
+        format!("image-{}.avif", index + 1),
+        format!("image-{index}.webp"),
+        format!("image-{index}.jpg"),
+        format!("image-{index}.jpeg"),
+        format!("image-{index}.png"),
+        format!("image-{index}.avif"),
+    ] {
+        let path = images_dir.join(candidate_name);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    images
+        .get(index)
+        .cloned()
+        .or_else(|| images.first().cloned())
+}
+
+fn find_first_media_file(root: &Path, extensions: &[&str], max_depth: usize) -> Option<PathBuf> {
+    if max_depth == 0 || !root.exists() {
+        return None;
+    }
+    for path in files_with_extensions(root, extensions) {
+        return Some(path);
+    }
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_first_media_file(&path, extensions, max_depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn files_with_extensions(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
+    fs::read_dir(root)
         .map(|entries| {
             entries
                 .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry.path().extension().and_then(|value| value.to_str()) == Some("json")
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.is_file()
+                        && path
+                            .extension()
+                            .and_then(|value| value.to_str())
+                            .map(|extension| {
+                                extensions
+                                    .iter()
+                                    .any(|item| extension.eq_ignore_ascii_case(item))
+                            })
+                            .unwrap_or(false)
                 })
-                .map(|entry| {
-                    read_json_value(&entry.path())
-                        .and_then(|value| {
-                            value
-                                .get("comments")
-                                .and_then(Value::as_array)
-                                .map(|items| items.len() as i64)
-                        })
-                        .unwrap_or(0)
-                })
-                .sum()
+                .collect()
         })
-        .unwrap_or(0)
+        .unwrap_or_default()
+}
+
+fn download_account_media(root: &Path, media: &Value, source_url: &str) -> Result<PathBuf, String> {
+    let parsed = Url::parse(source_url).map_err(|error| format!("媒体 URL 无效: {error}"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("媒体 URL 只支持 http/https".to_string());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .user_agent("Mozilla/5.0 RedBox/AccountMediaLocalizer")
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(source_url)
+        .send()
+        .map_err(|error| format!("媒体下载失败: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("媒体下载失败: HTTP {status}"));
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = response
+        .bytes()
+        .map_err(|error| format!("媒体读取失败: {error}"))?;
+    if bytes.is_empty() {
+        return Err("媒体下载结果为空".to_string());
+    }
+    if bytes.len() > ACCOUNT_MEDIA_DOWNLOAD_LIMIT_BYTES {
+        return Err("媒体文件过大".to_string());
+    }
+    if content_type.contains("application/json")
+        || content_type.starts_with("text/")
+        || bytes.first().copied() == Some(b'{')
+    {
+        return Err("媒体 URL 返回的不是媒体文件".to_string());
+    }
+    let post_id = media_post_identifier(media).unwrap_or_else(|| "unknown".to_string());
+    let extension = media_extension_from_content(&content_type)
+        .or_else(|| media_extension_from_source(source_url))
+        .unwrap_or_else(|| {
+            if is_video_media_value(media) {
+                "mp4".to_string()
+            } else {
+                "webp".to_string()
+            }
+        });
+    let target_path = account_media_file_path(root, &post_id, &media_identifier(media), &extension);
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(&target_path, bytes).map_err(|error| error.to_string())?;
+    Ok(target_path)
+}
+
+fn account_media_file_path(root: &Path, post_id: &str, media_id: &str, extension: &str) -> PathBuf {
+    let media_stem = if media_id.trim().is_empty() {
+        short_hash(post_id)
+    } else {
+        storage_safe_file_stem(media_id)
+    };
+    root.join("media-files")
+        .join(storage_safe_file_stem(post_id))
+        .join(format!("{media_stem}.{}", normalize_extension(extension)))
+}
+
+fn normalize_extension(extension: &str) -> String {
+    extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .trim()
+        .to_string()
+        .if_empty("bin")
+}
+
+trait EmptyStringFallback {
+    fn if_empty(self, fallback: &str) -> String;
+}
+
+impl EmptyStringFallback for String {
+    fn if_empty(self, fallback: &str) -> String {
+        if self.is_empty() {
+            fallback.to_string()
+        } else {
+            self
+        }
+    }
+}
+
+fn media_extension_from_content(content_type: &str) -> Option<String> {
+    let normalized = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "image/webp" => Some("webp".to_string()),
+        "image/jpeg" | "image/jpg" => Some("jpg".to_string()),
+        "image/png" => Some("png".to_string()),
+        "image/gif" => Some("gif".to_string()),
+        "image/avif" => Some("avif".to_string()),
+        "video/mp4" => Some("mp4".to_string()),
+        "video/quicktime" => Some("mov".to_string()),
+        "video/webm" => Some("webm".to_string()),
+        _ => None,
+    }
+}
+
+fn media_extension_from_source(source: &str) -> Option<String> {
+    if source.contains("format/webp") || source.contains("format=webp") {
+        return Some("webp".to_string());
+    }
+    let parsed = Url::parse(source).ok();
+    let path = parsed
+        .as_ref()
+        .map(Url::path)
+        .unwrap_or(source)
+        .split('?')
+        .next()
+        .unwrap_or(source);
+    Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(normalize_extension)
+        .filter(|value| !value.is_empty())
+}
+
+fn is_image_extension(extension: Option<&str>) -> bool {
+    matches!(
+        extension.map(|value| value.to_ascii_lowercase()).as_deref(),
+        Some("webp" | "jpg" | "jpeg" | "png" | "gif" | "avif")
+    )
+}
+
+fn is_video_extension(extension: Option<&str>) -> bool {
+    matches!(
+        extension.map(|value| value.to_ascii_lowercase()).as_deref(),
+        Some("mp4" | "mov" | "m4v" | "webm" | "mkv")
+    )
+}
+
+fn patch_post_media_local_path(root: &Path, media: &Value, now: &str) -> Result<(), String> {
+    let Some(local_path) = json_string(media, "localPath") else {
+        return Ok(());
+    };
+    let Some(post_id) = media_post_identifier(media) else {
+        return Ok(());
+    };
+    let post_path = post_meta_path(root, &post_id);
+    if !post_path.exists() {
+        return Ok(());
+    }
+    let Some(mut post) = read_json_value(&post_path) else {
+        return Ok(());
+    };
+    let media_id = media_identifier(media);
+    let media_url = media_source_url(media).unwrap_or_default();
+    let current_media_index = media_index(media);
+    let mut changed = false;
+    if let Some(items) = post.get_mut("media").and_then(Value::as_array_mut) {
+        for item in items {
+            let same_id = !media_id.is_empty() && media_identifier(item) == media_id;
+            let same_url = !media_url.is_empty()
+                && media_source_url(item)
+                    .as_deref()
+                    .map(|value| value == media_url)
+                    .unwrap_or(false);
+            let same_index = media_index(item) == current_media_index
+                && media_post_identifier(item).as_deref() == Some(post_id.as_str());
+            if same_id || same_url || same_index {
+                if let Some(object) = item.as_object_mut() {
+                    object.insert("localPath".to_string(), json!(local_path));
+                    changed = true;
+                }
+            }
+        }
+    }
+    if changed {
+        if let Some(object) = post.as_object_mut() {
+            object.insert("updatedAt".to_string(), json!(now));
+        }
+        write_json_pretty(&post_path, &post)?;
+    }
+    Ok(())
+}
+
+fn existing_post_count(root: &Path) -> i64 {
+    account_post_json_paths(&root.join("posts"))
+        .into_iter()
+        .filter_map(|path| read_json_value(&path))
+        .map(|post| {
+            let id = post_identifier(&post);
+            if id.is_empty() {
+                short_hash(&post.to_string())
+            } else {
+                id
+            }
+        })
+        .collect::<BTreeSet<_>>()
+        .len() as i64
+}
+
+fn existing_post_like_count(root: &Path) -> i64 {
+    account_post_json_paths(&root.join("posts"))
+        .into_iter()
+        .filter_map(|path| read_json_value(&path))
+        .filter_map(|post| {
+            json_i64_at_paths(
+                &post,
+                &[
+                    "stats.likes",
+                    "stats.likeCount",
+                    "stats.likedCount",
+                    "likes",
+                    "likeCount",
+                    "likedCount",
+                ],
+            )
+        })
+        .sum()
+}
+
+fn existing_comment_count(root: &Path) -> i64 {
+    account_comment_json_paths(root)
+        .into_iter()
+        .map(|path| {
+            read_json_value(&path)
+                .and_then(|value| {
+                    value
+                        .get("comments")
+                        .and_then(Value::as_array)
+                        .map(|items| items.len() as i64)
+                })
+                .unwrap_or(0)
+        })
+        .sum()
 }
 
 fn existing_media_count(root: &Path) -> i64 {
@@ -1483,120 +2583,6 @@ fn refresh_account_learning_artifacts(
 ) -> Result<(), String> {
     crate::profile_learning::refresh_own_account_profile(root, ACCOUNT_SCHEMA_VERSION, state)?;
     Ok(())
-}
-
-fn sync_account_memory_candidates(
-    state: &State<'_, AppState>,
-    root: &Path,
-) -> Result<usize, String> {
-    let profile = read_json_value(&root.join("profile.json")).unwrap_or_else(|| json!({}));
-    let platform = json_string(&profile, "platform").unwrap_or_default();
-    let username = json_string(&profile, "username").unwrap_or_else(|| "未命名账号".to_string());
-    let account_id = json_string(&profile, "id").unwrap_or_default();
-    if account_id.is_empty() {
-        return Ok(0);
-    }
-
-    let path = root.join("memory-candidates.json");
-    let mut document = read_json_value(&path).unwrap_or_else(|| json!({ "candidates": [] }));
-    let mut synced_count = 0_usize;
-    let now = now_iso();
-    if let Some(candidates) = document
-        .get_mut("candidates")
-        .and_then(|value| value.as_array_mut())
-    {
-        for candidate in candidates {
-            let text = json_string(candidate, "text").unwrap_or_default();
-            if text.trim().is_empty() {
-                continue;
-            }
-            let kind =
-                json_string(candidate, "kind").unwrap_or_else(|| "account_profile".to_string());
-            let candidate_hash = short_hash(&format!("{account_id}:{kind}:{text}"));
-            let existing_memory_id = find_synced_memory_id(state, &candidate_hash)?;
-            let memory_id = if let Some(memory_id) = existing_memory_id {
-                memory_id
-            } else {
-                let confidence = candidate
-                    .get("confidence")
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or(0.7);
-                let evidence_post_ids = candidate
-                    .get("evidencePostIds")
-                    .cloned()
-                    .unwrap_or_else(|| json!([]));
-                let payload = json!({
-                    "content": format!("账号 @{username}（{platform}）的长期偏好：{text}"),
-                    "type": "account_profile",
-                    "tags": compact_string_values(vec![
-                        "account-profile".to_string(),
-                        platform.clone(),
-                        kind.clone(),
-                    ]),
-                    "entities": compact_string_values(vec![username.clone(), account_id.clone()]),
-                    "scope": "space",
-                    "confidence": confidence,
-                    "source": {
-                        "kind": "account_profile_import",
-                        "accountId": account_id.clone(),
-                        "platform": platform.clone(),
-                        "username": username.clone(),
-                        "candidateKind": kind.clone(),
-                        "candidateHash": candidate_hash.clone(),
-                        "evidencePostIds": evidence_post_ids,
-                    }
-                });
-                match crate::memory::handle_memory_channel(state, "memory:add", &payload)
-                    .transpose()?
-                    .and_then(|value| json_string(&value, "id"))
-                {
-                    Some(memory_id) => {
-                        synced_count += 1;
-                        memory_id
-                    }
-                    None => continue,
-                }
-            };
-            if let Some(object) = candidate.as_object_mut() {
-                object.insert("status".to_string(), json!("synced"));
-                object.insert("memoryId".to_string(), json!(memory_id));
-                object.insert("syncedAt".to_string(), json!(now));
-                object.insert("candidateHash".to_string(), json!(candidate_hash));
-            }
-        }
-    }
-    write_json_pretty(&path, &document)?;
-    Ok(synced_count)
-}
-
-fn find_synced_memory_id(
-    state: &State<'_, AppState>,
-    candidate_hash: &str,
-) -> Result<Option<String>, String> {
-    with_store(state, |store| {
-        Ok(store
-            .memories
-            .iter()
-            .find(|memory| {
-                memory.status.as_deref().unwrap_or("active") == "active"
-                    && memory
-                        .source
-                        .as_ref()
-                        .and_then(|source| source.get("candidateHash"))
-                        .and_then(|value| value.as_str())
-                        == Some(candidate_hash)
-            })
-            .map(|memory| memory.id.clone()))
-    })
-}
-
-fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-    let mut output = value.chars().take(max_chars).collect::<String>();
-    output.push_str("\n...[truncated]");
-    output
 }
 
 fn short_hash(value: &str) -> String {

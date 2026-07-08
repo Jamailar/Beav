@@ -82,6 +82,8 @@ export interface ServerCaptureJobRequest {
     limit?: number;
     maxPages?: number;
     maxItems?: number;
+    collectionMode?: string;
+    sortBy?: string;
   };
 }
 

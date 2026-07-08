@@ -269,9 +269,34 @@ export function createSystemBridge(core: BridgeCore) {
         description?: string;
         thumbnailUrl?: string;
       }) => core.invokeChannel('youtube:save-note', payload),
-      createServerJob: (payload: Record<string, unknown>) => core.invokeChannel('capture:create-server-job', payload),
-      getServerJob: (payload: { jobId: string }) => core.invokeChannel('capture:get-server-job', payload),
-      listServerJobs: (payload?: { limit?: number }) => core.invokeChannel('capture:list-server-jobs', payload || {}),
+      createServerJob: (payload: Record<string, unknown>) => core.invokeChannelGuarded<{
+        success: boolean;
+        duplicate?: boolean;
+        job?: Record<string, unknown>;
+        jobId?: string;
+        status?: 'queued' | 'running' | 'completed' | 'failed' | 'unavailable';
+        error?: string;
+      }>('capture:create-server-job', payload, {
+        timeoutMs: 20000,
+        fallback: { success: false, status: 'unavailable', error: '创建采集任务超时，请稍后重试' },
+      }),
+      getServerJob: (payload: { jobId: string }) => core.invokeChannelGuarded<{
+        success: boolean;
+        job?: Record<string, unknown>;
+        status?: 'queued' | 'running' | 'completed' | 'failed' | 'unavailable';
+        error?: string;
+      }>('capture:get-server-job', payload, {
+        timeoutMs: 15000,
+        fallback: { success: false, status: 'unavailable', error: '获取采集任务超时，请稍后重试' },
+      }),
+      listServerJobs: (payload?: { limit?: number }) => core.invokeChannelGuarded<{
+        success: boolean;
+        jobs?: Array<Record<string, unknown>>;
+        error?: string;
+      }>('capture:list-server-jobs', payload || {}, {
+        timeoutMs: 15000,
+        fallback: { success: false, jobs: [], error: '获取采集任务列表超时，请稍后重试' },
+      }),
     },
     openKnowledgeApiGuide: () => core.invokeChannel('app:open-knowledge-api-guide'),
     windowControls: {

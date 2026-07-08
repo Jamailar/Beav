@@ -2,7 +2,7 @@ use crate::json_util::{json_string, read_json_value};
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub(crate) struct NormalizedPost {
@@ -56,18 +56,12 @@ fn string_array(value: Option<&Value>) -> Vec<String> {
 
 pub(crate) fn load_account_posts(root: &Path, limit: usize) -> Vec<NormalizedPost> {
     let mut values = Vec::new();
-    let Ok(entries) = fs::read_dir(root.join("posts")) else {
-        return values;
-    };
-    for entry in entries.filter_map(Result::ok) {
+    for path in account_post_json_paths(&root.join("posts")) {
         if values.len() >= limit {
             break;
         }
-        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        if let Some(value) = read_json_value(&entry.path()) {
-            values.push(normalize_post(&value));
+        if let Some(value) = read_json_value(&path) {
+            values.push(normalize_post_with_path(&value, &path));
         }
     }
     values.sort_by(|left, right| {
@@ -81,7 +75,29 @@ pub(crate) fn load_account_posts(root: &Path, limit: usize) -> Vec<NormalizedPos
     values
 }
 
-pub(crate) fn normalize_post(value: &Value) -> NormalizedPost {
+fn account_post_json_paths(posts_root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(entries) = fs::read_dir(posts_root) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                paths.push(path);
+            } else if path.is_dir() {
+                let meta_path = path.join("meta.json");
+                if meta_path.exists() {
+                    paths.push(meta_path);
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn normalize_post_with_path(value: &Value, path: &Path) -> NormalizedPost {
+    normalize_post_inner(value, path.parent())
+}
+
+fn normalize_post_inner(value: &Value, post_dir: Option<&Path>) -> NormalizedPost {
     let stats = value.get("stats").unwrap_or(&Value::Null);
     let media_count = value
         .get("media")
@@ -92,6 +108,11 @@ pub(crate) fn normalize_post(value: &Value) -> NormalizedPost {
         .or_else(|| json_string(value, "text"))
         .or_else(|| json_string(value, "description"))
         .unwrap_or_default();
+    if content.trim().is_empty() {
+        if let Some(post_dir) = post_dir {
+            content = fs::read_to_string(post_dir.join("content.md")).unwrap_or_default();
+        }
+    }
     if let Some(transcript) = json_string(value, "transcript") {
         if !transcript.trim().is_empty() {
             if !content.trim().is_empty() {
