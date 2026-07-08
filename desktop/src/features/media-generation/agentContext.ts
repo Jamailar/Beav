@@ -28,6 +28,7 @@ export type GenerationAgentVoice = {
 export type GenerationAgentRuntimeContextParams = {
     mode: StudioMode;
     request: GenerationRequest;
+    spaceId?: string;
     source?: GenerationFeedSource;
     sourceTitle?: string;
     recentAssets: GenerationAgentAssetSummary[];
@@ -154,6 +155,7 @@ export function buildGenerationAgentRuntimeContext(params: GenerationAgentRuntim
             executionMode: 'auto',
             noSecondConfirmation: true,
             currentMode: params.mode,
+            spaceId: params.spaceId || '',
             preferredRole: generationAgentRoleForMode(params.mode),
             activeSkills: generationAgentActiveSkillsForMode(params.mode),
             requiredSkill: params.mode === 'cover' ? SOCIAL_COVER_DIRECTOR_SKILL : undefined,

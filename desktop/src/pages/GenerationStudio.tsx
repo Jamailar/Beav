@@ -45,7 +45,6 @@ import {
     isFeedEntryDeleted,
     isGenerationFeedEntry,
     isGenerationStudioMediaJob,
-    mergeFeedEntriesById,
     mergeMediaJobsIntoFeedEntries,
     normalizeAspectRatio,
     normalizeDeletedFeedState,
@@ -322,6 +321,7 @@ const DEFAULT_COVER_PROMPT_SWITCHES: CoverPromptSwitches = {
     replaceBackground: false,
 };
 const DIGITAL_HUMAN_TTS_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_SPACE_ID = 'default';
 
 const SOURCE_LABELS: Record<string, string> = {
     standalone: '独立创作',
@@ -351,6 +351,15 @@ type ManuscriptReadResult = {
     content?: string;
     metadata?: Record<string, unknown>;
 };
+
+type SpaceListResult = {
+    activeSpaceId?: string;
+    spaces?: Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }>;
+};
+
+function normalizeActiveSpaceId(value: unknown): string {
+    return String(value || '').trim() || DEFAULT_SPACE_ID;
+}
 
 function manuscriptFallbackTitle(path: string): string {
     return String(path || '').split('/').filter(Boolean).pop()?.replace(/\.md$/i, '') || '稿件';
@@ -1633,7 +1642,10 @@ export function GenerationStudio({
     const [studioMode, setStudioMode] = useState<StudioMode>('image');
     const [, setBindTarget] = useState('');
     const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([]);
-    const deletedFeedStateRef = useRef<DeletedFeedState>(readDeletedFeedState());
+    const [activeSpaceId, setActiveSpaceId] = useState('');
+    const feedStorageScope = activeSpaceId || DEFAULT_SPACE_ID;
+    const deletedFeedStateRef = useRef<DeletedFeedState>(normalizeDeletedFeedState(null));
+    const previousFeedSpaceIdRef = useRef('');
     const [previewAsset, setPreviewAsset] = useState<GeneratedAsset | null>(null);
     const [assetContextMenu, setAssetContextMenu] = useState<AssetContextMenuState | null>(null);
     const feedScrollRef = useRef<HTMLElement | null>(null);
@@ -1719,10 +1731,37 @@ export function GenerationStudio({
     const [coverPromptSwitches, setCoverPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_COVER_PROMPT_SWITCHES);
     const [isReadingCoverRefs, setIsReadingCoverRefs] = useState(false);
     const [coverError, setCoverError] = useState('');
+    useEffect(() => {
+        let cancelled = false;
+        const loadActiveSpace = async () => {
+            try {
+                const result = await window.ipcRenderer.spaces.list() as SpaceListResult | null;
+                if (!cancelled) {
+                    setActiveSpaceId(normalizeActiveSpaceId(result?.activeSpaceId));
+                }
+            } catch (error) {
+                console.error('Failed to load generation studio space:', error);
+                if (!cancelled) {
+                    setActiveSpaceId(DEFAULT_SPACE_ID);
+                }
+            }
+        };
+        const handleSpaceChanged = (_event: unknown, payload?: { activeSpaceId?: unknown; spaceId?: unknown }) => {
+            const nextSpaceId = normalizeActiveSpaceId(payload?.activeSpaceId || payload?.spaceId);
+            setActiveSpaceId(nextSpaceId);
+        };
+        void loadActiveSpace();
+        window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
+        return () => {
+            cancelled = true;
+            window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
+        };
+    }, []);
+
     const trackedJobs = useMediaJobsStore(
         useCallback((state) => (
-            Object.values(state.jobsById).filter((job) => isGenerationStudioMediaJob(job, agentSessionId))
-        ), [agentSessionId]),
+            Object.values(state.jobsById).filter((job) => isGenerationStudioMediaJob(job, agentSessionId, activeSpaceId))
+        ), [activeSpaceId, agentSessionId]),
         shallowArrayEqual,
     );
     const isAgentMode = true;
@@ -1740,16 +1779,16 @@ export function GenerationStudio({
         [contextIntent?.sourceTitle],
     );
     const generationAgentContextId = useMemo(
-        () => buildGenerationAgentContextId(activeGenerationProjectId, contextIntent?.source, contextIntent?.sourceTitle),
-        [activeGenerationProjectId, contextIntent?.source, contextIntent?.sourceTitle],
+        () => buildGenerationAgentContextId(activeGenerationProjectId, contextIntent?.source, contextIntent?.sourceTitle, activeSpaceId),
+        [activeGenerationProjectId, activeSpaceId, contextIntent?.source, contextIntent?.sourceTitle],
     );
     const generationAgentInitialContext = useMemo(
-        () => buildGenerationAgentInitialContext(activeGenerationProjectId, contextIntent?.sourceTitle),
-        [activeGenerationProjectId, contextIntent?.sourceTitle],
+        () => buildGenerationAgentInitialContext(activeGenerationProjectId, contextIntent?.sourceTitle, activeSpaceId),
+        [activeGenerationProjectId, activeSpaceId, contextIntent?.sourceTitle],
     );
     const generationAgentSessionMetadata = useMemo(
-        () => buildGenerationAgentSessionMetadata(studioMode, activeGenerationProjectId, contextIntent?.sourceTitle),
-        [activeGenerationProjectId, contextIntent?.sourceTitle, studioMode],
+        () => buildGenerationAgentSessionMetadata(studioMode, activeGenerationProjectId, contextIntent?.sourceTitle, activeSpaceId),
+        [activeGenerationProjectId, activeSpaceId, contextIntent?.sourceTitle, studioMode],
     );
     const trackedJobIds = useMemo(
         () => feedEntries
@@ -1785,11 +1824,11 @@ export function GenerationStudio({
                     : updater;
                 const normalized = sortFeedEntries(next)
                     .filter((entry) => !isFeedEntryDeleted(entry, deletedFeedStateRef.current));
-                persistFeedEntries(normalized);
+                persistFeedEntries(normalized, feedStorageScope);
                 return normalized;
             });
         },
-        [],
+        [feedStorageScope],
     );
     const ensureAgentFeedEntry = useCallback((sessionId: string, createdAt = Date.now(), options?: { bump?: boolean; reviveDeleted?: boolean }) => {
         const agentEntryId = `agent-feed:${generationAgentContextId}`;
@@ -1807,7 +1846,7 @@ export function GenerationStudio({
                 agentContextIds: deletedFeedStateRef.current.agentContextIds.filter((id) => id !== generationAgentContextId),
             };
             deletedFeedStateRef.current = nextDeleted;
-            persistDeletedFeedState(nextDeleted);
+            persistDeletedFeedState(nextDeleted, feedStorageScope);
         }
         updateFeedEntries((prev) => {
             const existingIndex = prev.findIndex((entry) => (
@@ -1818,6 +1857,7 @@ export function GenerationStudio({
                 kind: 'agent-session',
                 id: existingIndex >= 0 ? prev[existingIndex].id : agentEntryId,
                 createdAt: existingIndex >= 0 && !options?.bump ? prev[existingIndex].createdAt : createdAt,
+                spaceId: activeSpaceId,
                 source: contextIntent?.source || 'standalone',
                 sourceTitle: contextIntent?.sourceTitle,
                 sessionId,
@@ -1831,6 +1871,7 @@ export function GenerationStudio({
             if (
                 existing.sessionId === nextEntry.sessionId
                 && existing.contextId === nextEntry.contextId
+                && existing.spaceId === nextEntry.spaceId
                 && existing.title === nextEntry.title
                 && existing.source === nextEntry.source
                 && existing.sourceTitle === nextEntry.sourceTitle
@@ -1842,17 +1883,21 @@ export function GenerationStudio({
             next[existingIndex] = nextEntry;
             return next;
         });
-    }, [contextIntent?.source, contextIntent?.sourceTitle, generationAgentContextId, generationAgentTitle, updateFeedEntries]);
+    }, [activeSpaceId, contextIntent?.source, contextIntent?.sourceTitle, feedStorageScope, generationAgentContextId, generationAgentTitle, updateFeedEntries]);
 
     useEffect(() => {
+        if (!activeSpaceId) return undefined;
         let cancelled = false;
         let timeoutId: number | null = null;
         const frameId = window.requestAnimationFrame(() => {
             timeoutId = window.setTimeout(() => {
                 if (cancelled) return;
-                const persistedEntries = readPersistedFeedEntries();
-                if (persistedEntries.length === 0) return;
-                updateFeedEntries((prev) => mergeFeedEntriesById(prev, persistedEntries));
+                if (previousFeedSpaceIdRef.current && previousFeedSpaceIdRef.current !== activeSpaceId) {
+                    mediaJobsStore.removeJobs(Object.keys(mediaJobsStore.getState().jobsById));
+                }
+                previousFeedSpaceIdRef.current = activeSpaceId;
+                deletedFeedStateRef.current = readDeletedFeedState(activeSpaceId);
+                setFeedEntries(readPersistedFeedEntries(activeSpaceId));
             }, 0);
         });
         return () => {
@@ -1862,15 +1907,15 @@ export function GenerationStudio({
                 window.clearTimeout(timeoutId);
             }
         };
-    }, [updateFeedEntries]);
+    }, [activeSpaceId]);
 
     useMediaJobSubscription(trackedJobIds, {
-        enabled: isActive,
+        enabled: isActive && Boolean(activeSpaceId),
         bootstrapFilter: generationJobBootstrapFilter,
         bootstrapIncludesTrackedJobs: true,
     });
     useMediaJobSubscription([], {
-        enabled: isActive && Boolean(agentGenerationJobBootstrapFilter),
+        enabled: isActive && Boolean(activeSpaceId) && Boolean(agentGenerationJobBootstrapFilter),
         bootstrapFilter: agentGenerationJobBootstrapFilter,
     });
 
@@ -1977,7 +2022,7 @@ export function GenerationStudio({
     }, [agentExecutionActive, feedEntries, onExecutionStateChange]);
 
     useEffect(() => {
-        if (!isAgentMode || isDigitalHumanMode) {
+        if (!isAgentMode || isDigitalHumanMode || !activeSpaceId) {
             agentSessionRequestIdRef.current += 1;
             setAgentExecutionActive(false);
             setAgentSessionError('');
@@ -2037,15 +2082,17 @@ export function GenerationStudio({
                 }
             }
         })();
-    }, [ensureAgentFeedEntry, generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode, isDigitalHumanMode]);
+    }, [activeSpaceId, ensureAgentFeedEntry, generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode, isDigitalHumanMode]);
 
     useEffect(() => {
+        if (!activeSpaceId) return;
         updateFeedEntries((prev) => {
             return mergeMediaJobsIntoFeedEntries(prev, trackedJobs, deletedFeedStateRef.current, {
+                activeSpaceId,
                 ownerSessionId: agentSessionId,
             });
         });
-    }, [agentSessionId, trackedJobs, updateFeedEntries]);
+    }, [activeSpaceId, agentSessionId, trackedJobs, updateFeedEntries]);
 
     useEffect(() => {
         if (!previewAsset) return;
@@ -2359,9 +2406,10 @@ export function GenerationStudio({
 
     const createFeedEntry = useCallback((request: GenerationRequest): GenerationFeedEntry => createGenerationFeedEntry(request, {
         id: makeId('generation'),
+        spaceId: activeSpaceId,
         source: contextIntent?.source || 'standalone',
         sourceTitle: contextIntent?.sourceTitle,
-    }), [contextIntent?.source, contextIntent?.sourceTitle]);
+    }), [activeSpaceId, contextIntent?.source, contextIntent?.sourceTitle]);
 
     const runImageRequest = useCallback((request: ImageGenerationRequest): boolean => {
         const validationError = validateImageGenerationRequest(request, { hasImageConfig });
@@ -2379,6 +2427,7 @@ export function GenerationStudio({
                 const modelRouteOverride = resolveSelectedModelOverride(settings, 'image', 'image', request.model);
                 const result = await submitImageGeneration(window.ipcRenderer.generation, request, {
                     clientRequestId: entry.id,
+                    spaceId: activeSpaceId,
                     source: generationSubmitSource(contextIntent?.source),
                     routeOverride: modelRouteOverride,
                     provider: settings.image_provider,
@@ -2405,6 +2454,7 @@ export function GenerationStudio({
         createFeedEntry,
         hasImageConfig,
         contextIntent?.source,
+        activeSpaceId,
         settings,
         settings.image_provider,
         settings.image_provider_template,
@@ -2426,6 +2476,7 @@ export function GenerationStudio({
             try {
                 const result = await submitVideoGeneration(window.ipcRenderer.generation, request, {
                     clientRequestId: entry.id,
+                    spaceId: activeSpaceId,
                     source: generationSubmitSource(contextIntent?.source),
                 });
 
@@ -2445,7 +2496,7 @@ export function GenerationStudio({
             }
         })();
         return true;
-    }, [contextIntent?.source, createFeedEntry, hasVideoConfig, updateFeedEntries]);
+    }, [activeSpaceId, contextIntent?.source, createFeedEntry, hasVideoConfig, updateFeedEntries]);
 
     const runAudioRequest = useCallback((request: AudioGenerationRequest): boolean => {
         const validationError = validateAudioGenerationRequest(request, {
@@ -2466,6 +2517,7 @@ export function GenerationStudio({
                 const modelRouteOverride = resolveSelectedModelOverride(settings, 'voiceTts', 'tts', request.model);
                 const result = await submitAudioGeneration(window.ipcRenderer.generation, request, {
                     clientRequestId: entry.id,
+                    spaceId: activeSpaceId,
                     source: generationSubmitSource(contextIntent?.source),
                     routeOverride: modelRouteOverride,
                 });
@@ -2486,7 +2538,7 @@ export function GenerationStudio({
             }
         })();
         return true;
-    }, [audioVoicesForModel, contextIntent?.source, createFeedEntry, hasVoiceConfig, settings, updateFeedEntries]);
+    }, [activeSpaceId, audioVoicesForModel, contextIntent?.source, createFeedEntry, hasVoiceConfig, settings, updateFeedEntries]);
 
     const uploadDigitalHumanMedia = useCallback(async (path: string, contentType: string, keyPrefix: string) => {
         if (isRemoteUrl(path)) return path;
@@ -2521,6 +2573,7 @@ export function GenerationStudio({
             try {
                 const result = await submitDigitalHumanGeneration(window.ipcRenderer.generation, window.ipcRenderer.voice, request, {
                     clientRequestId: entry.id,
+                    spaceId: activeSpaceId,
                     source: generationSubmitSource(contextIntent?.source),
                     ttsModel: effectiveAudioModel,
                     languageBoost: audioLanguageBoost,
@@ -2552,6 +2605,7 @@ export function GenerationStudio({
         audioEmotion,
         audioLanguageBoost,
         audioSpeed,
+        activeSpaceId,
         contextIntent?.source,
         createFeedEntry,
         effectiveAudioModel,
@@ -2771,6 +2825,7 @@ export function GenerationStudio({
             ...entry.jobRequest,
             clientRequestId: replayEntry.id,
             clientFeedEntryId: replayEntry.id,
+            spaceId: activeSpaceId,
         };
 
         if (entry.request.type === 'image') {
@@ -2818,7 +2873,7 @@ export function GenerationStudio({
         })();
 
         return true;
-    }, [createFeedEntry, updateFeedEntries]);
+    }, [activeSpaceId, createFeedEntry, updateFeedEntries]);
 
     const handleRegenerate = useCallback((entry: GenerationFeedEntry) => {
         if (replayQueuedMediaRequest(entry)) {
@@ -2928,7 +2983,7 @@ export function GenerationStudio({
                     deleted.agentContextIds = Array.from(new Set([...deleted.agentContextIds, entry.contextId]));
                 }
                 deletedFeedStateRef.current = deleted;
-                persistDeletedFeedState(deleted);
+                persistDeletedFeedState(deleted, feedStorageScope);
             }
             return prev.filter((entry) => entry.id !== entryId);
         });
@@ -2948,7 +3003,7 @@ export function GenerationStudio({
                 console.error('Failed to clear generation agent session:', error);
             });
         }
-    }, [agentSessionId, feedEntries, generationAgentContextId, updateFeedEntries]);
+    }, [agentSessionId, feedEntries, feedStorageScope, generationAgentContextId, updateFeedEntries]);
 
     const resolveAssetSource = useCallback((asset: GeneratedAsset) => (
         asset.previewUrl || asset.relativePath || ''
@@ -3298,7 +3353,7 @@ export function GenerationStudio({
                 const jobs = Array.isArray(result?.items)
                     ? result.items
                         .map(normalizeMediaJobProjection)
-                        .filter((item): item is MediaJobProjection => Boolean(item && isGenerationStudioMediaJob(item)))
+                        .filter((item): item is MediaJobProjection => Boolean(item && isGenerationStudioMediaJob(item, agentSessionId, activeSpaceId)))
                     : [];
                 for (const job of jobs) {
                     nextJobIds.add(job.jobId);
@@ -3317,7 +3372,7 @@ export function GenerationStudio({
                 agentContextIds: Array.from(nextAgentContextIds),
             });
             deletedFeedStateRef.current = nextDeleted;
-            persistDeletedFeedState(nextDeleted);
+            persistDeletedFeedState(nextDeleted, feedStorageScope);
             for (const sessionId of agentSessionIds) {
                 clearFixedSessionWarmSnapshot(sessionId);
             }
@@ -3339,7 +3394,7 @@ export function GenerationStudio({
             console.error('Failed to clear generation records:', error);
             void appAlert(error instanceof Error ? error.message : '清空生成记录失败');
         }
-    }, [agentSessionId, feedEntries, generationAgentContextId, generationJobBootstrapFilter, updateFeedEntries]);
+    }, [activeSpaceId, agentSessionId, feedEntries, feedStorageScope, generationAgentContextId, generationJobBootstrapFilter, updateFeedEntries]);
     const handleSendAgentMessage = useCallback(async () => {
         const content = currentAgentRequest.prompt.trim();
         const hasCoverContext = currentAgentRequest.type === 'cover'
@@ -3449,6 +3504,7 @@ export function GenerationStudio({
             createGenerationFeedEntry(currentAgentRequest, {
                 id: makeId('generation'),
                 createdAt: agentSendTimestamp + 1,
+                spaceId: activeSpaceId,
                 source: contextIntent?.source || 'standalone',
                 sourceTitle: contextIntent?.sourceTitle,
             }),
@@ -3456,6 +3512,7 @@ export function GenerationStudio({
         const runtimeContext = buildGenerationAgentRuntimeContext({
             mode: studioMode,
             request: currentAgentRequest,
+            spaceId: activeSpaceId,
             source: contextIntent?.source || 'standalone',
             sourceTitle: contextIntent?.sourceTitle,
             recentAssets: recentAgentAssets,
@@ -3490,6 +3547,7 @@ export function GenerationStudio({
         agentAttachment,
         agentExecutionActive,
         agentSessionId,
+        activeSpaceId,
         audioLanguageBoost,
         audioVoicesForModel,
         contextIntent?.source,

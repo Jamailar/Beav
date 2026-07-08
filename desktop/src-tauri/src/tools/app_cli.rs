@@ -27,6 +27,7 @@ use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
+use crate::store::spaces as spaces_store;
 use crate::tools::action_aliases::{
     canonical_app_cli_action_for_policy, normalized_app_cli_action_key,
 };
@@ -342,6 +343,24 @@ fn confirmed_team_plan(payload: &Value) -> bool {
         .get("metadata")
         .map(|metadata| bool_payload_field(metadata, "userConfirmedTeamPlan"))
         .unwrap_or(false)
+}
+
+fn runtime_session_space_id(state: &State<'_, AppState>, session_id: &str) -> Option<String> {
+    with_store(state, |store| {
+        let metadata_space_id = store
+            .chat_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.metadata.as_ref())
+            .and_then(|metadata| {
+                payload_string(metadata, "spaceId")
+                    .or_else(|| payload_string(metadata, "activeSpaceId"))
+            })
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        Ok(metadata_space_id.unwrap_or_else(|| spaces_store::active_space_id(&store)))
+    })
+    .ok()
 }
 
 fn require_confirmed_team_plan(action: &str, payload: &Value) -> Result<(), String> {
@@ -2181,6 +2200,11 @@ impl<'a> AppCliExecutor<'a> {
             object
                 .entry("ownerSessionId".to_string())
                 .or_insert_with(|| json!(session_id));
+            if let Some(space_id) = runtime_session_space_id(self.state, session_id) {
+                object
+                    .entry("spaceId".to_string())
+                    .or_insert_with(|| json!(space_id));
+            }
         }
         if let Some(tool_call_id) = self.tool_call_id {
             object

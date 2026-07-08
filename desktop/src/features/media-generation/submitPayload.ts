@@ -20,6 +20,7 @@ export type GenerationQueueMode = 'free_creation' | 'ai_generation';
 
 export type ImageSubmitPayload = {
     clientRequestId: string;
+    spaceId?: string;
     prompt: string;
     bypassPromptOptimizer: true;
     projectId?: string;
@@ -40,6 +41,7 @@ export type ImageSubmitPayload = {
 
 export type VideoSubmitPayload = {
     clientRequestId: string;
+    spaceId?: string;
     prompt: string;
     projectId?: string;
     title?: string;
@@ -61,6 +63,7 @@ export type VideoSubmitPayload = {
 
 export type AudioSubmitPayload = {
     clientRequestId: string;
+    spaceId?: string;
     source: GenerationSubmitSource;
     queueMode: GenerationQueueMode;
     input: string;
@@ -94,6 +97,7 @@ export type CoverGeneratePayload = {
 } & ModelRouteOverride;
 
 export type DigitalHumanSpeechPayload = {
+    spaceId?: string;
     source: GenerationSubmitSource;
     surface: 'digital-human';
     queueMode: GenerationQueueMode;
@@ -114,6 +118,7 @@ export type DigitalHumanSpeechPayload = {
 
 export type DigitalHumanVideoSubmitInput = {
     clientRequestId: string;
+    spaceId?: string;
     source: GenerationSubmitSource;
     queueMode?: GenerationQueueMode;
     request: DigitalHumanGenerationRequest;
@@ -123,6 +128,7 @@ export type DigitalHumanVideoSubmitInput = {
 
 export type ImageSubmitOptions = {
     clientRequestId: string;
+    spaceId?: string;
     source: GenerationSubmitSource;
     queueMode?: GenerationQueueMode;
     routeOverride?: ModelRouteOverride;
@@ -132,12 +138,14 @@ export type ImageSubmitOptions = {
 
 export type VideoSubmitOptions = {
     clientRequestId: string;
+    spaceId?: string;
     source: GenerationSubmitSource;
     queueMode?: GenerationQueueMode;
 };
 
 export type AudioSubmitOptions = {
     clientRequestId: string;
+    spaceId?: string;
     source: GenerationSubmitSource;
     queueMode?: GenerationQueueMode;
     routeOverride?: ModelRouteOverride;
@@ -151,6 +159,7 @@ export type CoverSubmitOptions = {
 };
 
 export type DigitalHumanSpeechOptions = {
+    spaceId?: string;
     source: GenerationSubmitSource;
     queueMode?: GenerationQueueMode;
     input: string;
@@ -187,6 +196,7 @@ export function buildImageSubmitPayload(
 ): ImageSubmitPayload {
     return {
         clientRequestId: options.clientRequestId,
+        spaceId: optionalTrimmed(options.spaceId || ''),
         prompt: request.prompt.trim(),
         bypassPromptOptimizer: true,
         projectId: optionalTrimmed(request.projectId),
@@ -213,6 +223,7 @@ export function buildVideoSubmitPayload(
 ): VideoSubmitPayload {
     return {
         clientRequestId: options.clientRequestId,
+        spaceId: optionalTrimmed(options.spaceId || ''),
         prompt: request.prompt.trim(),
         projectId: optionalTrimmed(request.projectId),
         title: optionalTrimmed(request.title),
@@ -236,6 +247,7 @@ export function buildAudioSubmitPayload(
 ): AudioSubmitPayload {
     return {
         clientRequestId: options.clientRequestId,
+        spaceId: optionalTrimmed(options.spaceId || ''),
         source: options.source,
         queueMode: options.queueMode || 'free_creation',
         input: audioPromptForSpeech(request.prompt.trim()),
@@ -282,6 +294,7 @@ export function buildDigitalHumanSpeechPayload(
     options: DigitalHumanSpeechOptions,
 ): DigitalHumanSpeechPayload {
     return {
+        spaceId: optionalTrimmed(options.spaceId || ''),
         source: options.source,
         surface: 'digital-human',
         queueMode: options.queueMode || 'free_creation',
@@ -307,6 +320,7 @@ export function buildDigitalHumanVideoSubmitPayload(
     const { request } = input;
     return {
         clientRequestId: input.clientRequestId,
+        spaceId: optionalTrimmed(input.spaceId || ''),
         source: input.source,
         queueMode: input.queueMode || 'free_creation',
         model: 'videoretalk',
@@ -326,6 +340,7 @@ export function buildDigitalHumanVideoSubmitPayload(
         metadata: {
             surface: 'digital-human',
             subjectId: request.roleId,
+            spaceId: optionalTrimmed(input.spaceId || ''),
         },
     };
 }

@@ -130,6 +130,7 @@ export type GenerationFeedEntry = {
     kind: 'generation';
     id: string;
     createdAt: number;
+    spaceId?: string;
     source: GenerationFeedSource;
     sourceTitle?: string;
     referencePreview?: ReferenceItem | null;
@@ -147,6 +148,7 @@ export type AgentSessionFeedEntry = {
     kind: 'agent-session';
     id: string;
     createdAt: number;
+    spaceId?: string;
     source: GenerationFeedSource;
     sourceTitle?: string;
     sessionId: string;
@@ -179,6 +181,7 @@ export type DeletedFeedState = {
 export type GenerationFeedEntryInit = {
     id: string;
     createdAt?: number;
+    spaceId?: string;
     source?: GenerationFeedSource;
     sourceTitle?: string;
 };
@@ -204,6 +207,17 @@ export const FEED_STORAGE_KEY = 'redbox:generation-studio:feed:v1';
 export const FEED_DELETED_STORAGE_KEY = 'redbox:generation-studio:feed:deleted:v1';
 const FEED_STORAGE_MAX_CHARS = 750_000;
 const FEED_STORAGE_MAX_ENTRIES = 150;
+const DEFAULT_FEED_STORAGE_SCOPE = 'default';
+
+function normalizeFeedStorageScope(scope?: string | null): string {
+    return String(scope || '').trim() || DEFAULT_FEED_STORAGE_SCOPE;
+}
+
+function scopedFeedStorageKey(baseKey: string, scope?: string | null): string {
+    const normalized = normalizeFeedStorageScope(scope);
+    if (normalized === DEFAULT_FEED_STORAGE_SCOPE) return baseKey;
+    return `${baseKey}:${encodeURIComponent(normalized)}`;
+}
 
 export function normalizeImageQuality(value: unknown): string {
     const quality = String(value || '').trim();
@@ -625,6 +639,7 @@ export function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
             kind: 'agent-session',
             id,
             createdAt: feedTime(record.createdAt) || Date.now(),
+            spaceId: typeof record.spaceId === 'string' ? record.spaceId : undefined,
             source: String(record.source || 'standalone').trim() || 'standalone',
             sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
             sessionId,
@@ -640,6 +655,7 @@ export function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
         kind: 'generation',
         id,
         createdAt: feedTime(record.createdAt) || Date.now(),
+        spaceId: typeof record.spaceId === 'string' ? record.spaceId : undefined,
         source: String(record.source || 'standalone').trim() || 'standalone',
         sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
         referencePreview: normalizeReferenceItem(record.referencePreview),
@@ -675,19 +691,19 @@ export function normalizeDeletedFeedState(value: unknown): DeletedFeedState {
     };
 }
 
-export function readDeletedFeedState(): DeletedFeedState {
+export function readDeletedFeedState(scope?: string | null): DeletedFeedState {
     if (typeof window === 'undefined') return emptyDeletedFeedState();
     try {
-        return normalizeDeletedFeedState(JSON.parse(window.localStorage.getItem(FEED_DELETED_STORAGE_KEY) || '{}'));
+        return normalizeDeletedFeedState(JSON.parse(window.localStorage.getItem(scopedFeedStorageKey(FEED_DELETED_STORAGE_KEY, scope)) || '{}'));
     } catch {
         return emptyDeletedFeedState();
     }
 }
 
-export function persistDeletedFeedState(state: DeletedFeedState): void {
+export function persistDeletedFeedState(state: DeletedFeedState, scope?: string | null): void {
     if (typeof window === 'undefined') return;
     try {
-        window.localStorage.setItem(FEED_DELETED_STORAGE_KEY, JSON.stringify({
+        window.localStorage.setItem(scopedFeedStorageKey(FEED_DELETED_STORAGE_KEY, scope), JSON.stringify({
             entryIds: state.entryIds.slice(-500),
             jobIds: state.jobIds.slice(-500),
             clientRequestIds: state.clientRequestIds.slice(-500),
@@ -703,6 +719,30 @@ export function clientRequestIdFromJob(job: MediaJobProjection | null | undefine
     const request = job?.request;
     if (!request || typeof request !== 'object') return '';
     return String(request.clientRequestId || request.clientFeedEntryId || '').trim();
+}
+
+function feedEntrySpaceId(entry: FeedEntry): string {
+    if (entry.spaceId) return normalizeGenerationSpaceId(entry.spaceId);
+    if (isGenerationFeedEntry(entry)) {
+        const jobRequestSpaceId = entry.jobRequest
+            ? String(
+                entry.jobRequest.spaceId
+                || entry.jobRequest.activeSpaceId
+                || entry.jobRequest.space_id
+                || '',
+            ).trim()
+            : '';
+        return normalizeGenerationSpaceId(jobRequestSpaceId);
+    }
+    const contextParts = entry.contextId.split(':');
+    if (contextParts.length >= 4 && contextParts[0] === 'generation-studio' && contextParts[1] === 'agent') {
+        return normalizeGenerationSpaceId(contextParts[2]);
+    }
+    return 'default';
+}
+
+function feedEntryBelongsToStorageScope(entry: FeedEntry, scope?: string | null): boolean {
+    return feedEntrySpaceId(entry) === normalizeGenerationSpaceId(scope);
 }
 
 export function isFeedEntryDeleted(entry: FeedEntry, deleted: DeletedFeedState): boolean {
@@ -737,31 +777,33 @@ export function sortFeedEntries(entries: FeedEntry[]): FeedEntry[] {
     });
 }
 
-export function persistFeedEntries(entries: FeedEntry[]): void {
+export function persistFeedEntries(entries: FeedEntry[], scope?: string | null): void {
     if (typeof window === 'undefined') return;
     try {
-        window.localStorage.setItem(FEED_STORAGE_KEY, serializeFeedEntries(sortFeedEntries(entries)));
+        window.localStorage.setItem(scopedFeedStorageKey(FEED_STORAGE_KEY, scope), serializeFeedEntries(sortFeedEntries(entries)));
     } catch {
         // ignore persistence errors
     }
 }
 
-export function readPersistedFeedEntries(): FeedEntry[] {
+export function readPersistedFeedEntries(scope?: string | null): FeedEntry[] {
     if (typeof window === 'undefined') return [];
     try {
-        const raw = window.localStorage.getItem(FEED_STORAGE_KEY);
+        const storageKey = scopedFeedStorageKey(FEED_STORAGE_KEY, scope);
+        const raw = window.localStorage.getItem(storageKey);
         if (!raw) return [];
         if (raw.length > FEED_STORAGE_MAX_CHARS) {
-            window.localStorage.removeItem(FEED_STORAGE_KEY);
+            window.localStorage.removeItem(storageKey);
             return [];
         }
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
-        const deleted = readDeletedFeedState();
+        const deleted = readDeletedFeedState(scope);
         return parsed
             .slice(-FEED_STORAGE_MAX_ENTRIES)
             .map(normalizeFeedEntryRecord)
             .filter((item): item is FeedEntry => Boolean(item))
+            .filter((item) => feedEntryBelongsToStorageScope(item, scope))
             .filter((item) => !isFeedEntryDeleted(item, deleted))
             .filter((item) => (
                 !isGenerationFeedEntry(item)
@@ -815,6 +857,7 @@ export function createGenerationFeedEntry(
         kind: 'generation',
         id: init.id,
         createdAt: init.createdAt || Date.now(),
+        spaceId: init.spaceId,
         source: init.source || 'standalone',
         sourceTitle: init.sourceTitle,
         referencePreview: requestLeadingReference(request),
@@ -1092,13 +1135,30 @@ export function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobPro
     };
 }
 
-export function isGenerationStudioMediaJob(job: MediaJobProjection, ownerSessionId?: string | null): boolean {
+function normalizeGenerationSpaceId(value?: string | null): string {
+    return String(value || '').trim() || 'default';
+}
+
+export function spaceIdFromJobProjection(job: MediaJobProjection | null | undefined): string {
+    const request = job?.request;
+    if (!request || typeof request !== 'object') return 'default';
+    const requestSpaceId = String(
+        request.spaceId
+        || request.activeSpaceId
+        || request.space_id
+        || '',
+    ).trim();
+    return requestSpaceId || 'default';
+}
+
+export function isGenerationStudioMediaJob(job: MediaJobProjection, ownerSessionId?: string | null, activeSpaceId?: string | null): boolean {
     const supportedKind = job.kind === 'image'
         || job.kind === 'video'
         || job.kind === 'video_sequence'
         || job.kind === 'audio'
         || job.kind === 'audio_sequence';
     if (!supportedKind) return false;
+    if (spaceIdFromJobProjection(job) !== normalizeGenerationSpaceId(activeSpaceId)) return false;
     if (job.queueMode === 'free_creation') return true;
     return Boolean(ownerSessionId && job.queueMode === 'ai_generation' && job.ownerSessionId === ownerSessionId);
 }
@@ -1107,12 +1167,12 @@ export function mergeMediaJobsIntoFeedEntries(
     entries: FeedEntry[],
     jobs: MediaJobProjection[],
     deleted: DeletedFeedState,
-    options?: { ownerSessionId?: string | null },
+    options?: { ownerSessionId?: string | null; activeSpaceId?: string | null },
 ): FeedEntry[] {
     let changed = false;
     const next = [...entries];
     const sortedJobs = jobs
-        .filter((job) => isGenerationStudioMediaJob(job, options?.ownerSessionId))
+        .filter((job) => isGenerationStudioMediaJob(job, options?.ownerSessionId, options?.activeSpaceId))
         .filter((job) => !isJobDeleted(job, deleted))
         .sort((left, right) => {
             const timeDelta = feedTime(left.createdAt) - feedTime(right.createdAt);
