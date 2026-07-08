@@ -2125,37 +2125,6 @@ declare global {
         create: (payload: { name: string }) => Promise<unknown>;
         rename: (payload: { id: string; name: string }) => Promise<unknown>;
         delete: (spaceId: string) => Promise<unknown>;
-        init: {
-          get: <T = {
-            schemaVersion?: number;
-            status?: 'not_started' | 'running' | 'completed' | 'failed';
-            phase?: 'branch' | 'input' | 'capture' | 'positioning' | 'completed' | string | null;
-            homepageUrl?: string | null;
-            platform?: string | null;
-            accountId?: string | null;
-            progress?: Record<string, unknown> | null;
-            startedAt?: string | null;
-            completedAt?: string | null;
-            lastError?: string | null;
-            updatedAt?: string | null;
-          }>() => Promise<T>;
-          start: <T = unknown>(payload: { homepageUrl: string; platform?: string; accountId?: string; phase?: string; progress?: Record<string, unknown> }) => Promise<T>;
-          progress: <T = unknown>(payload: {
-            phase?: string;
-            homepageUrl?: string;
-            platform?: string;
-            accountId?: string;
-            progress?: Record<string, unknown>;
-          }) => Promise<T>;
-          complete: <T = unknown>(payload: {
-            homepageUrl: string;
-            platform?: string;
-            accountId?: string;
-            account?: Record<string, unknown> | null;
-            progress?: Record<string, unknown>;
-          }) => Promise<T>;
-          fail: <T = unknown>(payload: { error: string }) => Promise<T>;
-        };
         onChanged: (listener: (...args: unknown[]) => void) => void;
         offChanged: (listener: (...args: unknown[]) => void) => void;
       };
