@@ -49,39 +49,33 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let mut sections = vec![
+        "You have access to specialized skills in this runtime.".to_string(),
+        "A skill is a set of local instructions stored in SKILL.md.".to_string(),
+        "Trigger rules: if the user names a skill with @skill, $skill, or plain text, or the task clearly matches a skill description below, use that skill for this turn.".to_string(),
+        "When a skill is selected, the host injects its SKILL.md as a model-visible <skill> context block before sampling. Treat that injected block as the source of truth for the skill rules.".to_string(),
+        "If SKILL.md references relative files such as references/, rules/, templates/, scripts/, or assets/, resolve them relative to that skill directory and read the required files with Read(path=\"skill://<skill>/<relative-path>\") or workflow action skills.readResource before acting on them.".to_string(),
+        "Do not treat skill selection alone as compliance; final output must follow the injected SKILL.md contract and report any missing required resource instead of inventing it.".to_string(),
+    ];
     if resolved.can_invoke_skill {
-        let mut sections = vec![
-            "You have access to specialized skills in this runtime.".to_string(),
-            "Keep full skill bodies out of context until they are actually needed.".to_string(),
-            "Skills listed later in the activated-skills section are already active. Do not invoke them again unless activation explicitly failed.".to_string(),
-            "Only the inactive skills listed below may need manual invocation.".to_string(),
-            "When a task clearly matches one of the inactive skills below, call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })` to load the full instructions, references, scripts, and rules into the current session.".to_string(),
-            "If the user explicitly names a skill, invoke it before proceeding.".to_string(),
-        ];
-        if !active_names.is_empty() {
-            sections.push(format!(
-                "Already active in this session: {}.",
-                active_names.join(", ")
-            ));
-        }
-        if inactive_visible_skills.is_empty() {
-            sections.push("All visible skills for this runtime are already active.".to_string());
-        } else {
-            sections.push(String::new());
-            sections.push("Inactive skills available for manual invocation:".to_string());
-            sections.push(list);
-        }
-        return sections.join("\n");
+        sections.push(
+            "Compatibility fallback: if a needed inactive skill was not injected, call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })` once to request activation and hydration.".to_string(),
+        );
     }
-
-    [
-        "You have access to specialized skills in this runtime.",
-        "Manual skill invocation is unavailable here, so only rely on skills that are already active in this session.",
-        "",
-        "Available skills:",
-        &list,
-    ]
-    .join("\n")
+    if !active_names.is_empty() {
+        sections.push(format!(
+            "Already selected in this session: {}.",
+            active_names.join(", ")
+        ));
+    }
+    if inactive_visible_skills.is_empty() {
+        sections.push("All visible skills for this runtime are already selected.".to_string());
+    } else {
+        sections.push(String::new());
+        sections.push("Available skills:".to_string());
+        sections.push(list);
+    }
+    sections.join("\n")
 }
 
 fn combine_skills_section(catalog_section: &str, active_section: &str) -> String {
@@ -133,12 +127,10 @@ mod tests {
             &["workflow".to_string()],
         );
         let bundle = build_skill_prompt_bundle(&resolved);
-        assert!(bundle.catalog_section.contains(
-            "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
-        ));
         assert!(bundle
             .catalog_section
-            .contains("Only the inactive skills listed below may need manual invocation"));
+            .contains("the host injects its SKILL.md as a model-visible <skill> context block"));
+        assert!(bundle.catalog_section.contains("Compatibility fallback"));
         assert!(bundle
             .catalog_section
             .contains("Activate when: when writing"));
@@ -168,9 +160,9 @@ mod tests {
         let bundle = build_skill_prompt_bundle(&resolved);
         assert!(bundle
             .catalog_section
-            .contains("Already active in this session: session-writer"));
+            .contains("Already selected in this session: session-writer"));
         assert!(bundle
             .catalog_section
-            .contains("All visible skills for this runtime are already active"));
+            .contains("All visible skills for this runtime are already selected"));
     }
 }

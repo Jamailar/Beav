@@ -154,7 +154,7 @@ mod tests {
         assert!(state.active_skills.is_empty());
         assert_eq!(
             state.allowed_tools,
-            vec!["bash".to_string(), "workflow".to_string()]
+            vec!["shell".to_string(), "workflow".to_string()]
         );
     }
 
@@ -173,9 +173,9 @@ mod tests {
         );
         assert_eq!(state.active_skills.len(), 1);
         assert_eq!(state.allowed_tools, vec!["workflow".to_string()]);
-        assert!(state.skills_section.contains(
-            "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
-        ));
+        assert!(state
+            .skills_section
+            .contains("the host injects its SKILL.md as a model-visible <skill> context block"));
         assert!(state.skills_section.contains("xhs-title [forked]"));
     }
 
@@ -206,7 +206,7 @@ mod tests {
     fn skills_catalog_list_value_can_omit_large_bodies() {
         let (list, _) = skills_catalog_list_value(&skills(), None, false);
         let items = list.as_array().expect("skills list should be an array");
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 2);
         assert!(items.iter().all(|item| item.get("body").is_none()));
     }
 
@@ -228,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn build_skill_runtime_state_avoids_manual_invoke_copy_when_skill_tool_is_unavailable() {
+    fn build_skill_runtime_state_omits_invoke_fallback_when_skill_tool_is_unavailable() {
         let state = build_skill_runtime_state(
             &[SkillRecord {
                 name: "writing-style".to_string(),
@@ -243,9 +243,7 @@ mod tests {
             None,
             &["resource".to_string()],
         );
-        assert!(!state.skills_section.contains(
-            "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
-        ));
+        assert!(!state.skills_section.contains("Compatibility fallback"));
         assert!(state.skills_section.contains("- writing-style: desc"));
     }
 
@@ -287,9 +285,9 @@ mod tests {
         );
         assert!(state.active_skills.is_empty());
         assert!(state.skills_section.contains("image-director: image desc"));
-        assert!(state.skills_section.contains(
-            "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
-        ));
+        assert!(state
+            .skills_section
+            .contains("the host injects its SKILL.md as a model-visible <skill> context block"));
 
         let redclaw_state = build_skill_runtime_state(
             &[SkillRecord {

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 #[path = "skills_ai/ai_control.rs"]
 mod ai_control;
 #[path = "skills_ai/marketplace.rs"]
@@ -67,6 +69,124 @@ fn payload_string_list(payload: &Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn truncate_chars_for_context(raw: &str, max_chars: usize) -> (String, bool, usize) {
+    let char_count = raw.chars().count();
+    if char_count <= max_chars {
+        return (raw.to_string(), false, char_count);
+    }
+    (raw.chars().take(max_chars).collect(), true, char_count)
+}
+
+fn normalize_referenced_skill_resource_path(raw: &str) -> Option<String> {
+    let mut value = raw.trim().trim_matches(|ch| {
+        matches!(
+            ch,
+            '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | ';'
+        )
+    });
+    if let Some((before, _)) = value.split_once('#') {
+        value = before;
+    }
+    if let Some((before, _)) = value.split_once('?') {
+        value = before;
+    }
+    let value = value.trim_start_matches("./").replace('\\', "/");
+    let allowed = ["references/", "rules/", "templates/", "scripts/", "assets/"];
+    if allowed.iter().any(|prefix| value.starts_with(prefix)) {
+        return Some(value);
+    }
+    parse_skill_resource_uri(&value).and_then(|parsed| {
+        allowed
+            .iter()
+            .any(|prefix| parsed.path.starts_with(prefix))
+            .then_some(parsed.path)
+    })
+}
+
+fn referenced_skill_resource_paths(body: &str) -> Vec<String> {
+    let mut paths = BTreeSet::<String>::new();
+
+    for (index, part) in body.split('`').enumerate() {
+        if index % 2 == 1 {
+            if let Some(path) = normalize_referenced_skill_resource_path(part) {
+                paths.insert(path);
+            }
+        }
+    }
+
+    for token in body.split_whitespace() {
+        if let Some(path) = normalize_referenced_skill_resource_path(token) {
+            paths.insert(path);
+        }
+    }
+
+    paths.into_iter().collect()
+}
+
+fn skill_context_pack_value(
+    record: &crate::runtime::SkillRecord,
+    workspace: Option<&std::path::Path>,
+) -> Value {
+    let (body, body_truncated, body_char_count) =
+        truncate_chars_for_context(&record.body, DEFAULT_SKILL_RESOURCE_MAX_CHARS);
+    let package = inspect_skill_package_value(record, workspace, false)
+        .get("package")
+        .cloned()
+        .unwrap_or_else(|| json!(null));
+    let referenced_paths = referenced_skill_resource_paths(&record.body);
+    let mut referenced_resources = Vec::<Value>::new();
+    let mut resource_errors = Vec::<Value>::new();
+
+    for path in &referenced_paths {
+        match read_skill_resource_value(
+            record,
+            workspace,
+            path,
+            DEFAULT_SKILL_RESOURCE_MAX_CHARS,
+            Some("skills.invoke.hydration"),
+        ) {
+            Ok(resource) => referenced_resources.push(resource),
+            Err(error) => resource_errors.push(json!({
+                "path": path,
+                "error": error,
+            })),
+        }
+    }
+
+    json!({
+        "schemaVersion": 1,
+        "name": record.name,
+        "hydrated": true,
+        "hydrationSource": "skills.invoke",
+        "body": {
+            "content": body,
+            "charCount": body_char_count,
+            "truncated": body_truncated,
+        },
+        "package": package,
+        "referencedResourcePaths": referenced_paths,
+        "referencedResources": referenced_resources,
+        "resourceErrors": resource_errors,
+        "executionContract": {
+            "skillIsNotUsedUntil": [
+                "SKILL.md body has been applied",
+                "directly referenced resources have been reviewed or their gaps are reported",
+                "the final answer follows the skill output contract and quality gates"
+            ],
+            "beforeDrafting": [
+                "Use this skillContextPack as the source of truth for the skill rules.",
+                "If required rules are missing because content is truncated or a resource failed to load, call skills.readResource before drafting.",
+                "Do not invent expansions for named frameworks or acronyms; use the definitions in SKILL.md and referenced resources."
+            ],
+            "finalAnswerGate": [
+                "State source gaps instead of fabricating proof.",
+                "Include all required sections declared by the skill unless the user explicitly narrows the task.",
+                "Do not treat activation alone as skill compliance."
+            ]
+        }
+    })
 }
 
 pub fn handle_skills_ai_channel(
@@ -322,6 +442,26 @@ pub fn handle_skills_ai_channel(
                         runtime_mode_hint: runtime_mode_hint.as_deref(),
                     },
                 )?;
+                let workspace = workspace_root(state).ok();
+                let record = with_store(state, |store| {
+                    Ok(store
+                        .skills
+                        .iter()
+                        .find(|item| item.name.eq_ignore_ascii_case(&outcome.skill_name))
+                        .cloned())
+                })?
+                .ok_or_else(|| format!("技能不存在: {}", outcome.skill_name))?;
+                let skill_context_pack = skill_context_pack_value(&record, workspace.as_deref());
+                let referenced_resource_count = skill_context_pack
+                    .get("referencedResources")
+                    .and_then(Value::as_array)
+                    .map(|items| items.len())
+                    .unwrap_or(0);
+                let resource_error_count = skill_context_pack
+                    .get("resourceErrors")
+                    .and_then(Value::as_array)
+                    .map(|items| items.len())
+                    .unwrap_or(0);
                 let _ = record_skill_invocation_metric(
                     state,
                     SkillInvocationMetric {
@@ -359,6 +499,14 @@ pub fn handle_skills_ai_channel(
                     "runtimeMode": outcome.runtime_mode,
                     "sessionId": session_id,
                     "activeSkills": outcome.active_skills,
+                    "hydrationStatus": {
+                        "hydrated": true,
+                        "source": "skills.invoke",
+                        "bodyIncluded": true,
+                        "referencedResourceCount": referenced_resource_count,
+                        "resourceErrorCount": resource_error_count,
+                    },
+                    "skillContextPack": skill_context_pack,
                     "activationTransition": {
                         "kind": "skillActivation",
                         "continueWithUpdatedContext": true,
@@ -523,4 +671,38 @@ pub fn handle_skills_ai_channel(
             _ => unreachable!(),
         }
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn referenced_skill_resource_paths_extracts_backticked_skill_references() {
+        let body = r#"
+Before drafting, read:
+- `references/context-intake-and-source-use.md`
+- `references/clock-theory.md`: HKRR design.
+- `rules/output.md`
+- `skill://demo/templates/capture-list.csv`
+"#;
+
+        let paths = referenced_skill_resource_paths(body);
+
+        assert_eq!(
+            paths,
+            vec![
+                "references/clock-theory.md".to_string(),
+                "references/context-intake-and-source-use.md".to_string(),
+                "rules/output.md".to_string(),
+                "templates/capture-list.csv".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn referenced_skill_resource_paths_ignores_plain_words() {
+        let body = "HKRR means Happiness, Knowledge, Resonance, Rhythm. No resource here.";
+        assert!(referenced_skill_resource_paths(body).is_empty());
+    }
 }

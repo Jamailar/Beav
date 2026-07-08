@@ -11,7 +11,7 @@ use crate::skills::resolve_skill_file_path;
 pub const DEFAULT_SKILL_RESOURCE_MAX_CHARS: usize = 20_000;
 
 const MAX_SKILL_RESOURCE_BYTES: u64 = 1_000_000;
-const RESOURCE_ROOTS: &[&str] = &["references", "scripts", "assets", "rules"];
+const RESOURCE_ROOTS: &[&str] = &["references", "scripts", "assets", "rules", "templates"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSkillResourceUri {
@@ -42,7 +42,7 @@ pub fn looks_like_skill_bundle_relative_path(raw: &str) -> bool {
 
 pub fn active_skill_resource_access_note(skill_name: &str) -> String {
     format!(
-        "Bundled skill files under references/, scripts/, assets/, or rules/ are not workspace files. Read them with Read(path=\"skill://{skill_name}/<relative-path>\") or workflow action skills.readResource."
+        "Bundled skill files under references/, scripts/, assets/, rules/, or templates/ are not workspace files. Read them with Read(path=\"skill://{skill_name}/<relative-path>\") or workflow action skills.readResource."
     )
 }
 

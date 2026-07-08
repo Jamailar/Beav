@@ -15,6 +15,7 @@ use crate::runtime::{
     InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord, RedclawStateRecord,
     ResolvedChatConfig, RuntimeWarmEntry, SessionToolResultRecord, SessionTranscriptRecord,
 };
+use crate::skills::SkillInstructionInjection;
 use crate::store::{settings as settings_store, subjects as subject_store};
 use crate::*;
 use base64::Engine;
@@ -793,8 +794,9 @@ pub(crate) fn ensure_video_thumbnail_for_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        append_generated_media_markdown, append_session_transcript, apply_workspace_patch_edits,
-        apply_workspace_patch_file, asset_preview_url_from_result, authoring_saved_final_summary,
+        append_generated_media_markdown, append_interactive_skill_instruction_messages,
+        append_session_transcript, apply_workspace_patch_edits, apply_workspace_patch_file,
+        asset_preview_url_from_result, authoring_saved_final_summary,
         build_interactive_user_turn_messages, build_subject_record_for_workspace,
         clear_interactive_execution_contract_metadata, copy_file_into_dir,
         decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
@@ -807,11 +809,12 @@ mod tests {
         message_is_successful_manuscript_write_tool_result, metadata_requires_voice_speech,
         normalized_structured_payload_arguments, now_ms, persist_subjects_workspace,
         redbox_fs_profile_read_completed, resolve_local_path, sanitize_copy_file_name,
-        structured_tool_error_code, validate_runtime_tool_message_sequence,
-        workspace_inspect_image_response, workspace_read_directory_response, GeneratedMediaPreview,
-        InteractiveExecutionContract, InteractiveExecutionProgress, SubjectAttribute,
-        SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord, SubjectSku,
-        SubjectVoiceInput, COPY_TARGET_FILE_NAME_MAX_CHARS,
+        standalone_draft_save_error_correction_instruction, structured_tool_error_code,
+        validate_runtime_tool_message_sequence, workspace_inspect_image_response,
+        workspace_read_directory_response, GeneratedMediaPreview, InteractiveExecutionContract,
+        InteractiveExecutionProgress, SubjectAttribute, SubjectCategory, SubjectMediaInput,
+        SubjectMutationInput, SubjectRecord, SubjectSku, SubjectVoiceInput,
+        COPY_TARGET_FILE_NAME_MAX_CHARS,
     };
     use serde_json::{json, Value};
     use std::fs;
@@ -860,6 +863,100 @@ mod tests {
             .and_then(Value::as_object)
             .map(|payload| !payload.contains_key("canonicalItem"))
             .unwrap_or(false));
+    }
+
+    #[test]
+    fn append_interactive_skill_instruction_messages_injects_codex_skill_block_once() {
+        let injection = crate::skills::SkillInstructionInjection {
+            name: "demo".to_string(),
+            path: "/tmp/demo/SKILL.md".to_string(),
+            fingerprint: "fp".to_string(),
+            source_scope: Some("workspace".to_string()),
+            content:
+                "<skill>\n<name>demo</name>\n<path>/tmp/demo/SKILL.md</path>\n# Demo\n</skill>"
+                    .to_string(),
+        };
+        let mut prompt_messages = vec![json!({
+            "role": "user",
+            "content": "make a demo"
+        })];
+        let mut canonical_messages = prompt_messages.clone();
+
+        let appended = append_interactive_skill_instruction_messages(
+            &mut prompt_messages,
+            &mut canonical_messages,
+            &[injection.clone()],
+        );
+
+        assert_eq!(appended, vec![injection.clone()]);
+        assert_eq!(prompt_messages.len(), 2);
+        assert_eq!(canonical_messages.len(), 2);
+        assert!(prompt_messages[1]
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("<skill>\n<name>demo</name>"));
+        assert_eq!(
+            canonical_messages[1]
+                .get("metadata")
+                .and_then(|value| value.get("redboxContextType"))
+                .and_then(Value::as_str),
+            Some("skillInstructions")
+        );
+
+        let appended_again = append_interactive_skill_instruction_messages(
+            &mut prompt_messages,
+            &mut canonical_messages,
+            &[injection],
+        );
+
+        assert!(appended_again.is_empty());
+        assert_eq!(prompt_messages.len(), 2);
+        assert_eq!(canonical_messages.len(), 2);
+    }
+
+    #[test]
+    fn append_interactive_skill_instruction_messages_keeps_prompt_injected_when_history_has_skill()
+    {
+        let injection = crate::skills::SkillInstructionInjection {
+            name: "demo".to_string(),
+            path: "/tmp/demo/SKILL.md".to_string(),
+            fingerprint: "fp".to_string(),
+            source_scope: Some("workspace".to_string()),
+            content:
+                "<skill>\n<name>demo</name>\n<path>/tmp/demo/SKILL.md</path>\n# Demo\n</skill>"
+                    .to_string(),
+        };
+        let mut prompt_messages = vec![json!({
+            "role": "user",
+            "content": "second turn"
+        })];
+        let mut canonical_messages = vec![
+            json!({
+                "role": "user",
+                "content": "first turn"
+            }),
+            crate::skills::skill_instruction_message(&injection),
+            json!({
+                "role": "assistant",
+                "content": "done"
+            }),
+        ];
+
+        let appended = append_interactive_skill_instruction_messages(
+            &mut prompt_messages,
+            &mut canonical_messages,
+            &[injection.clone()],
+        );
+
+        assert_eq!(appended, vec![injection]);
+        assert_eq!(prompt_messages.len(), 2);
+        assert_eq!(canonical_messages.len(), 3);
+        assert!(prompt_messages[1]
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("<skill>\n<name>demo</name>"));
     }
 
     #[test]
@@ -1486,6 +1583,67 @@ mod tests {
     }
 
     #[test]
+    fn standalone_draft_save_error_correction_recovers_malformed_operate_body() {
+        let instruction = standalone_draft_save_error_correction_instruction(
+            "workflow",
+            &json!({
+                "__compat": {
+                    "legacyToolName": "Operate",
+                    "legacyCommand": "unknown"
+                },
+                "command": "help",
+                "payload": {
+                    "input": {
+                        "path": "manuscripts://current",
+                        "content": "# Beav App 产品介绍视频脚本\n\n完整正文"
+                    }
+                }
+            }),
+            Some("LEGACY_COMMAND_DISABLED"),
+            false,
+        )
+        .expect("malformed Operate body should get a workspace recovery instruction");
+
+        assert!(instruction.contains("workspace"));
+        assert!(instruction.contains("operation=\"write\""));
+        assert!(instruction.contains("不要继续调用 `Write(manuscripts://current)`"));
+        assert!(instruction.contains("不要创建 manuscript project"));
+    }
+
+    #[test]
+    fn standalone_draft_save_error_correction_recovers_unbound_write_current() {
+        let instruction = standalone_draft_save_error_correction_instruction(
+            "Write",
+            &json!({
+                "path": "manuscripts://current",
+                "content": "# Beav App 产品介绍视频脚本\n\n完整正文"
+            }),
+            Some("ACTION_DEFERRED"),
+            false,
+        )
+        .expect("unbound Write body should get a workspace recovery instruction");
+
+        assert!(instruction.contains("当前没有绑定 `manuscripts://current`"));
+        assert!(instruction.contains("drafts/<short-kebab-title>.md"));
+        assert!(instruction.contains("把完整 Markdown 作为最终回复交付"));
+    }
+
+    #[test]
+    fn standalone_draft_save_error_correction_skips_bound_authoring_target() {
+        let instruction = standalone_draft_save_error_correction_instruction(
+            "Write",
+            &json!({
+                "path": "manuscripts://current",
+                "content": "# Bound manuscript"
+            }),
+            Some("ACTION_DEFERRED"),
+            true,
+        );
+
+        assert!(instruction.is_none());
+    }
+
+    #[test]
     fn interactive_execution_progress_counts_knowledge_read_as_source_read() {
         let mut progress = InteractiveExecutionProgress::default();
         let contract = InteractiveExecutionContract {
@@ -2033,11 +2191,45 @@ mod tests {
         assert_eq!(activations.len(), 1);
         assert_eq!(activations[0].name, "writing-style");
         assert!(!activations[0].persisted_to_session);
+        assert!(!activations[0].hydrated);
 
         let continuation = interactive_skill_activation_continuation(&activations)
             .expect("continuation should exist");
-        assert!(continuation.contains("加入当前轮上下文"));
+        assert!(continuation.contains("供当前轮使用"));
+        assert!(continuation.contains("尚未读取规则正文"));
+        assert!(!continuation.contains("加入当前轮上下文"));
         assert!(!continuation.contains("写入当前会话"));
+    }
+
+    #[test]
+    fn interactive_skill_activation_continuation_mentions_hydrated_context_pack() {
+        let activations = interactive_skill_activations(
+            "workflow",
+            &json!({
+                "data": {
+                    "description": "video helper",
+                    "persistedToSession": false,
+                    "hydrationStatus": {
+                        "hydrated": true,
+                        "referencedResourceCount": 5
+                    },
+                    "activationTransition": {
+                        "continueWithUpdatedContext": true,
+                        "activatedSkillNames": ["high-retention-video-script"]
+                    }
+                }
+            }),
+        );
+
+        assert_eq!(activations.len(), 1);
+        assert!(activations[0].hydrated);
+        assert_eq!(activations[0].referenced_resource_count, 5);
+
+        let continuation = interactive_skill_activation_continuation(&activations)
+            .expect("continuation should exist");
+        assert!(continuation.contains("skillContextPack"));
+        assert!(continuation.contains("5 个引用资源"));
+        assert!(continuation.contains("不要把技能选择本身当成已经遵守技能"));
     }
 }
 
@@ -5121,6 +5313,7 @@ pub(crate) fn interactive_runtime_message_bundle(
     attachment: Option<&Value>,
     protocol: &str,
     model_name: &str,
+    runtime_mode: &str,
 ) -> Result<(Vec<Value>, Vec<Value>), String> {
     let history_messages = load_runtime_history_messages(state, session_id)?;
     let mut prompt_messages = collect_recent_chat_messages(state, session_id, 10);
@@ -5129,7 +5322,118 @@ pub(crate) fn interactive_runtime_message_bundle(
     prompt_messages.push(prompt_user_message);
     let mut full_history_messages = history_messages;
     full_history_messages.push(history_user_message);
+    let injections =
+        interactive_runtime_skill_instruction_injections(state, session_id, runtime_mode)?;
+    let appended = append_interactive_skill_instruction_messages(
+        &mut prompt_messages,
+        &mut full_history_messages,
+        &injections,
+    );
+    append_interactive_skill_instruction_transcripts(state, session_id, &appended)?;
     Ok((prompt_messages, full_history_messages))
+}
+
+pub(crate) fn interactive_runtime_skill_instruction_injections(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    runtime_mode: &str,
+) -> Result<Vec<SkillInstructionInjection>, String> {
+    let Some(session_id) = session_id else {
+        return Ok(Vec::new());
+    };
+    let workspace = workspace_root(state).ok();
+    let active_skills = with_store(state, |store| {
+        let metadata = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|item| item.metadata.as_ref());
+        let base_tools =
+            crate::tools::registry::base_tool_names_for_session_metadata(runtime_mode, metadata);
+        let resolved =
+            crate::skills::resolve_skill_set(&store.skills, runtime_mode, metadata, &base_tools);
+        let mut items = Vec::<(
+            crate::runtime::SkillRecord,
+            crate::skills::LoadedSkillRecord,
+        )>::new();
+        for loaded in resolved.active_skills {
+            if let Some(record) = store
+                .skills
+                .iter()
+                .find(|item| item.name.eq_ignore_ascii_case(&loaded.name))
+                .cloned()
+            {
+                items.push((record, loaded));
+            }
+        }
+        Ok(items)
+    })?;
+    Ok(active_skills
+        .iter()
+        .map(|(record, loaded)| {
+            crate::skills::build_skill_instruction_injection(record, loaded, workspace.as_deref())
+        })
+        .collect())
+}
+
+pub(crate) fn append_interactive_skill_instruction_messages(
+    prompt_messages: &mut Vec<Value>,
+    canonical_messages: &mut Vec<Value>,
+    injections: &[SkillInstructionInjection],
+) -> Vec<SkillInstructionInjection> {
+    let mut appended = Vec::<SkillInstructionInjection>::new();
+    for injection in injections {
+        let prompt_already_has = prompt_messages
+            .iter()
+            .any(|message| crate::skills::message_contains_skill_instruction(message, injection));
+        let canonical_already_has = canonical_messages
+            .iter()
+            .any(|message| crate::skills::message_contains_skill_instruction(message, injection));
+        if prompt_already_has && canonical_already_has {
+            continue;
+        }
+        let message = crate::skills::skill_instruction_message(injection);
+        if !prompt_already_has {
+            prompt_messages.push(message.clone());
+            appended.push(injection.clone());
+        }
+        if !canonical_already_has {
+            canonical_messages.push(message);
+        }
+    }
+    appended
+}
+
+pub(crate) fn append_interactive_skill_instruction_transcripts(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    injections: &[SkillInstructionInjection],
+) -> Result<(), String> {
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    if injections.is_empty() {
+        return Ok(());
+    }
+    with_store_mut(state, |store| {
+        for injection in injections {
+            append_session_transcript(
+                store,
+                session_id,
+                "skill.instruction",
+                "user",
+                injection.content.clone(),
+                Some(json!({
+                    "redboxContextType": "skillInstructions",
+                    "skillName": injection.name,
+                    "skillPath": injection.path,
+                    "skillFingerprint": injection.fingerprint,
+                    "sourceScope": injection.source_scope,
+                })),
+            );
+        }
+        Ok(())
+    })
 }
 
 pub(crate) fn interactive_runtime_turn_system_prompt(
@@ -5826,6 +6130,8 @@ pub(crate) struct InteractiveSkillActivation {
     pub(crate) name: String,
     pub(crate) description: Option<String>,
     pub(crate) persisted_to_session: bool,
+    pub(crate) hydrated: bool,
+    pub(crate) referenced_resource_count: usize,
 }
 
 pub(crate) fn interactive_skill_activations(
@@ -5856,6 +6162,28 @@ pub(crate) fn interactive_skill_activations(
         .get("persistedToSession")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let hydrated = data
+        .get("hydrationStatus")
+        .and_then(|value| value.get("hydrated"))
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            data.get("skillContextPack")
+                .and_then(|value| value.get("hydrated"))
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(false);
+    let referenced_resource_count = data
+        .get("hydrationStatus")
+        .and_then(|value| value.get("referencedResourceCount"))
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            data.get("skillContextPack")
+                .and_then(|value| value.get("referencedResources"))
+                .and_then(Value::as_array)
+                .map(|items| items.len() as u64)
+        })
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0);
     let mut activated = transition
         .get("activatedSkillNames")
         .and_then(Value::as_array)
@@ -5869,6 +6197,8 @@ pub(crate) fn interactive_skill_activations(
                     name: name.to_string(),
                     description: description.clone(),
                     persisted_to_session,
+                    hydrated,
+                    referenced_resource_count,
                 })
                 .collect::<Vec<_>>()
         })
@@ -5905,32 +6235,60 @@ pub(crate) fn interactive_skill_activation_continuation(
     }
     let mut session_scoped = Vec::<String>::new();
     let mut turn_scoped = Vec::<String>::new();
+    let mut hydrated = Vec::<String>::new();
+    let mut not_hydrated = Vec::<String>::new();
     for activation in activations {
         if activation.persisted_to_session {
             session_scoped.push(activation.name.clone());
         } else {
             turn_scoped.push(activation.name.clone());
         }
+        if activation.hydrated {
+            if activation.referenced_resource_count > 0 {
+                hydrated.push(format!(
+                    "{}（已附带 SKILL.md 和 {} 个引用资源）",
+                    activation.name, activation.referenced_resource_count
+                ));
+            } else {
+                hydrated.push(format!("{}（已附带 SKILL.md）", activation.name));
+            }
+        } else {
+            not_hydrated.push(activation.name.clone());
+        }
     }
     let scope_text = match (session_scoped.is_empty(), turn_scoped.is_empty()) {
         (false, true) => format!(
-            "以下技能已激活并写入当前会话：{}",
+            "以下技能已选择并写入当前会话：{}",
             session_scoped.join(", ")
         ),
-        (true, false) => format!(
-            "以下技能已激活并加入当前轮上下文：{}",
-            turn_scoped.join(", ")
-        ),
+        (true, false) => format!("以下技能已选择供当前轮使用：{}", turn_scoped.join(", ")),
         (false, false) => format!(
-            "以下技能已激活：会话级 {}；当前轮 {}",
+            "以下技能已选择：会话级 {}；当前轮 {}",
             session_scoped.join(", "),
             turn_scoped.join(", ")
         ),
         (true, true) => return None,
     };
+    let hydration_text = if !hydrated.is_empty() && not_hydrated.is_empty() {
+        format!(
+            "本次工具结果已返回 skillContextPack：{}。",
+            hydrated.join("；")
+        )
+    } else if !hydrated.is_empty() && !not_hydrated.is_empty() {
+        format!(
+            "本次工具结果已返回部分 skillContextPack：{}。以下技能尚未读取规则正文：{}。",
+            hydrated.join("；"),
+            not_hydrated.join(", ")
+        )
+    } else {
+        format!(
+            "注意：以下技能当前只是被选择，尚未读取规则正文：{}。",
+            not_hydrated.join(", ")
+        )
+    };
     Some(format!(
-        "系统状态更新：{}。技能激活只会更新当前上下文，不会返回加工结果、中间产物或额外工具输出；你必须基于已激活技能的规则自行完成下一步内容构造。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。",
-        scope_text
+        "系统状态更新：{}。{}不要把技能选择本身当成已经遵守技能；必须基于 skillContextPack / SKILL.md 正文和引用资源执行，若缺少必要规则或资源，先调用 skills.inspect、skills.readResource 或 Read(skill://...) 补齐。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于技能规则继续当前任务；如果下一步需要工具，直接发起真实工具调用。",
+        scope_text, hydration_text
     ))
 }
 
@@ -6653,29 +7011,118 @@ pub(crate) fn interactive_authoring_continuation_instruction(
     ))
 }
 
+fn string_at_json_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+    let mut cursor = value;
+    for segment in path {
+        cursor = cursor.get(*segment)?;
+    }
+    cursor
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+fn first_string_at_json_paths(value: &Value, paths: &[&[&str]]) -> Option<String> {
+    paths
+        .iter()
+        .find_map(|path| string_at_json_path(value, path))
+        .map(ToString::to_string)
+}
+
+pub(crate) fn failed_save_argument_content(arguments: &Value) -> Option<String> {
+    let paths: [&[&str]; 5] = [
+        &["content"],
+        &["input", "content"],
+        &["payload", "content"],
+        &["payload", "input", "content"],
+        &["payload", "input", "input", "content"],
+    ];
+    first_string_at_json_paths(arguments, &paths)
+}
+
+pub(crate) fn failed_save_argument_path(arguments: &Value) -> Option<String> {
+    let paths: [&[&str]; 5] = [
+        &["path"],
+        &["input", "path"],
+        &["payload", "path"],
+        &["payload", "input", "path"],
+        &["payload", "input", "input", "path"],
+    ];
+    first_string_at_json_paths(arguments, &paths)
+}
+
+fn failed_save_targets_current_manuscript(arguments: &Value) -> bool {
+    failed_save_argument_path(arguments)
+        .map(|path| path.trim().eq_ignore_ascii_case("manuscripts://current"))
+        .unwrap_or(false)
+        || normalized_app_cli_action_key(arguments) == "manuscriptswritecurrent"
+}
+
+fn is_failed_standalone_save_error(tool_name: &str, error_code: Option<&str>) -> bool {
+    match (tool_name, error_code) {
+        ("workflow", Some("LEGACY_COMMAND_DISABLED" | "MISSING_OPERATE_FIELDS")) => true,
+        ("Operate", Some("LEGACY_COMMAND_DISABLED" | "MISSING_OPERATE_FIELDS")) => true,
+        (
+            "Write",
+            Some("ACTION_DEFERRED" | "ACTION_NOT_AVAILABLE" | "WRITE_TARGET_NOT_ALLOWED"),
+        ) => true,
+        _ => false,
+    }
+}
+
+pub(crate) fn standalone_draft_save_error_correction_instruction(
+    tool_name: &str,
+    arguments: &Value,
+    error_code: Option<&str>,
+    has_bound_authoring_target: bool,
+) -> Option<String> {
+    if has_bound_authoring_target {
+        return None;
+    }
+    failed_save_argument_content(arguments)?;
+    if !failed_save_targets_current_manuscript(arguments) {
+        return None;
+    }
+    if !is_failed_standalone_save_error(tool_name, error_code) {
+        return None;
+    }
+    Some(
+        "刚才的保存动作没有生效，而且当前没有绑定 `manuscripts://current` 稿件工程。不要继续调用 `Write(manuscripts://current)`，不要 `tool_search manuscripts write`，也不要创建 manuscript project。你已经生成了完整 Markdown 正文；下一步只能二选一：如果需要落盘，直接调用 `Operate(resource=\"workspace\", operation=\"write\", input={\"path\":\"drafts/<short-kebab-title>.md\",\"content\":\"<复用上一条失败 tool 参数里的完整正文>\"})` 保存独立草稿；如果不需要落盘，把完整 Markdown 作为最终回复交付。保存成功后的最终回复只给工作区链接和简短说明。"
+            .to_string(),
+    )
+}
+
 pub(crate) fn interactive_authoring_error_correction_instruction(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
     tool_name: &str,
+    arguments: &Value,
     error: &str,
 ) -> Option<String> {
-    if tool_name != "workflow" {
-        return None;
-    }
     let error_code = structured_tool_error_code(error);
-    if !matches!(
-        error_code.as_deref(),
-        Some("ACTION_REQUIRED")
-            | Some("MISSING_OPERATE_FIELDS")
-            | Some("MANUSCRIPT_WRITE_REQUIRES_WRITE")
-    ) {
-        return None;
+    let target = interactive_authoring_session_target(state, session_id);
+    if tool_name == "workflow"
+        && matches!(
+            error_code.as_deref(),
+            Some("ACTION_REQUIRED")
+                | Some("MISSING_OPERATE_FIELDS")
+                | Some("MANUSCRIPT_WRITE_REQUIRES_WRITE")
+                | Some("LEGACY_COMMAND_DISABLED")
+        )
+    {
+        if let Some(target) = target.as_ref() {
+            return Some(format!(
+                "你刚才没有完成有效保存。当前写稿工程已经绑定为 `{}`。下一步直接调用 `Write(path=\"manuscripts://current\", content=\"<最终标题和完整正文>\")` 保存内容；不要再次发送空的 Operate，也不要用 Operate 写正文，不要重新创建工程，不要把整篇正文作为普通回复打印出来。如果仍然无法调用成功，只能明确说明“内容已生成但尚未保存”。",
+                target.project_path
+            ));
+        }
     }
-    let target = interactive_authoring_session_target(state, session_id)?;
-    Some(format!(
-        "你刚才没有完成有效保存。当前写稿工程已经绑定为 `{}`。下一步直接调用 `Write(path=\"manuscripts://current\", content=\"<最终标题和完整正文>\")` 保存内容；不要再次发送空的 Operate，也不要用 Operate 写正文，不要重新创建工程，不要把整篇正文作为普通回复打印出来。如果仍然无法调用成功，只能明确说明“内容已生成但尚未保存”。",
-        target.project_path
-    ))
+    standalone_draft_save_error_correction_instruction(
+        tool_name,
+        arguments,
+        error_code.as_deref(),
+        target.is_some(),
+    )
 }
 
 pub(crate) fn auto_save_interactive_authoring_content(
@@ -7260,6 +7707,7 @@ pub(crate) fn run_anthropic_interactive_chat_runtime(
         attachment,
         "anthropic",
         &config.model_name,
+        runtime_mode,
     )?;
     let is_wander = runtime_mode == "wander";
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -7913,6 +8361,7 @@ pub(crate) fn run_gemini_interactive_chat_runtime(
         attachment,
         "gemini",
         &config.model_name,
+        runtime_mode,
     )?;
     let is_wander = runtime_mode == "wander";
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -8547,6 +8996,7 @@ pub(crate) fn run_openai_interactive_chat_runtime(
         attachment,
         "openai",
         &config.model_name,
+        runtime_mode,
     )?;
     let is_wander = runtime_mode == "wander";
     let provider_profile = provider_profile_from_config(config);
@@ -9215,6 +9665,7 @@ pub(crate) fn run_openai_interactive_chat_runtime(
                                 state,
                                 session_id,
                                 effective_tool_name,
+                                &effective_arguments,
                                 &failure_text,
                             );
                     }
