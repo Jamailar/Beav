@@ -53,6 +53,7 @@ pub(crate) fn interactive_runtime_context_bundle(
         explicit_knowledge_section,
         explicit_asset_section,
         active_media_task_section,
+        include_video_analysis_section,
         team_creation_intent_section,
         has_member_speaker,
         host_runtime_context_section,
@@ -102,6 +103,13 @@ pub(crate) fn interactive_runtime_context_bundle(
                 project_context.push_str(role_id.trim());
             }
         }
+        let active_media_task_section =
+            crate::media_task_context::active_media_task_prompt_section(&store, session_id);
+        let include_video_analysis_section = should_include_video_analysis_section(
+            runtime_mode,
+            metadata,
+            &active_media_task_section,
+        );
         Ok((
             prompt_tool_lines_for_session(&store, runtime_mode, session_id),
             resolved_skills.active_skills.len(),
@@ -113,7 +121,8 @@ pub(crate) fn interactive_runtime_context_bundle(
             active_speaker_prompt_section(metadata, &store.advisors),
             explicit_knowledge_prompt_section(metadata),
             explicit_asset_prompt_section(metadata),
-            crate::media_task_context::active_media_task_prompt_section(&store, session_id),
+            active_media_task_section,
+            include_video_analysis_section,
             team_creation_intent_prompt_section(metadata),
             has_active_member_speaker(metadata),
             render_host_runtime_context_section(&host_context),
@@ -137,6 +146,7 @@ pub(crate) fn interactive_runtime_context_bundle(
             String::new(),
             String::new(),
             String::new(),
+            false,
             String::new(),
             false,
             render_host_runtime_context_section(&host_context),
@@ -161,7 +171,8 @@ pub(crate) fn interactive_runtime_context_bundle(
         crate::accounts::build_account_prompt_section(state)
     };
     let runtime_agent_overlay = runtime_agent_overlay_prompt(runtime_mode);
-    let video_analysis_section = video_analysis_prompt_section();
+    let video_analysis_section =
+        include_video_analysis_section.then_some(video_analysis_prompt_section());
     if runtime_mode == "wander" {
         let mut sections = Vec::<String>::new();
         if !prompt_prefix.trim().is_empty() {
@@ -187,7 +198,9 @@ pub(crate) fn interactive_runtime_context_bundle(
         if !subagent_role_overlay_section.trim().is_empty() {
             sections.push(subagent_role_overlay_section.trim().to_string());
         }
-        sections.push(video_analysis_section.to_string());
+        if let Some(video_analysis_section) = video_analysis_section {
+            sections.push(video_analysis_section.to_string());
+        }
         if !available_tools.trim().is_empty() {
             sections.push(format!("Available tools:\n{available_tools}"));
         }
@@ -353,8 +366,10 @@ pub(crate) fn interactive_runtime_context_bundle(
             rendered.push_str("\n\n");
             rendered.push_str(runtime_agent_overlay.trim());
         }
-        rendered.push_str("\n\n");
-        rendered.push_str(video_analysis_section);
+        if let Some(video_analysis_section) = video_analysis_section {
+            rendered.push_str("\n\n");
+            rendered.push_str(video_analysis_section);
+        }
         if !subagent_role_overlay_section.trim().is_empty() {
             rendered.push_str("\n\n");
             rendered.push_str(subagent_role_overlay_section.trim());
@@ -440,10 +455,11 @@ pub(crate) fn interactive_runtime_context_bundle(
                 }
             }
         }
-        rendered.push_str(
-            "\n\nRuntime tool note:\n- Only call the tools explicitly listed in available_tools.\n- Use `Read`, `List`, `Search`, `Write`, `Operate`, `bash`, `shell`, and `tool_search` exactly as exposed; do not call internal tools such as `workflow`, `resource`, or `editor`.\n- The available_tools section already lists the action families exposed for this runtime; prefer those families directly instead of exploratory help calls.\n- For a user-provided public URL, use `Read(path=\"https://...\")`; do not use `bash`/`shell` with curl/wget for web pages.\n- For public web search, use `Operate(resource=\"web\", operation=\"search\", input={\"query\":\"...\"})`.\n- For workspace project files, use `Operate(resource=\"workspace\", operation=\"write\", input={\"path\":\"drafts/file.md\",\"content\":\"...\"})` for complete UTF-8 writes and `Operate(resource=\"workspace\", operation=\"patch\", input={\"path\":\"drafts/file.md\",\"edits\":[{\"oldText\":\"...\",\"newText\":\"...\"}]})` for exact replacements. Do not use `Write(path=\"workspace://...\")`, shell redirects, or here-documents for workspace files.\n- For browser automation, use the Codex-style `Operate(resource=\"browser\", operation=\"control\", input={\"operation\":\"open|goto|back|forward|getTab|domSnapshot|queryElements|count|allTextContents|waitForSelector|waitForURL|click|type|press|scroll|screenshot|finalizeTabs\", ...})`; name the browser session before sustained browser work, verify each interaction with the cheapest fresh DOM/screenshot state check, and finalize tabs before ending the turn. Do not use `mcp.call` or raw browser MCP tools for ordinary browser work.\n- When diagnosing local CLI availability, use `Operate(resource=\"cli_runtime\", operation=\"inspect\", input={\"command\":\"<name>\"})` for a known command and `Operate(resource=\"cli_runtime\", operation=\"verify\", input={\"command\":\"<name>\"})` for resolution/sandbox diagnostics. Preserve the exact executable string the user typed, including hyphens such as `lark-cli`; do not shorten it to a guessed alias like `lark`.\n- Do not infer “not installed” only because a command failed. `cli_runtime.inspect` and `cli_runtime.diagnose` include host shell and shell resolve probe evidence; treat missing as final only after that evidence and retry options are exhausted.\n- To actually run a local CLI command or script, including `python`, `python3`, `node`, `npm`, `pnpm`, and tool-specific CLIs, use `Operate(resource=\"cli_runtime\", operation=\"run\", input={\"argv\":[\"<command>\",\"--flag\"]})`; for inline scripts use argv such as `[\"python3\",\"-c\",\"print(1)\"]`, not shell strings. This response includes stdoutText/stderrText for short output. If more output is needed, call `Operate(resource=\"cli_runtime\", operation=\"get\", input={\"executionId\":\"cli-exec-...\"})`; for interactive PTY input, call `Operate(resource=\"cli_runtime\", operation=\"writeStdin\", input={\"executionId\":\"cli-exec-...\",\"text\":\"...\",\"appendNewline\":true})`.\n- Do not read CLI runtime log files directly and do not write temporary files just to capture command output.\n- Do not use `bash` or `shell` for real CLI execution, script execution, file writes, PATH diagnosis, or network fetches such as `python3 -c`, `node`, `npm`, `pnpm`, `curl`, `which`, `command -v`, `type`, `lark-cli`, `echo $PATH`, redirection, or here-documents; `bash`/`shell` are read-only workspace inspection only and their allowlists do not model host CLI availability.\n- For advisor/member knowledge, prefer `List(path=\"knowledge://\")`, `Search(path=\"knowledge://\", query=\"...\")`, or `Read(path=\"knowledge://...\")` instead of broad `bash`/`shell` scanning.\n- For workspace file discovery, prefer `Search(path=\"workspace://\", query=\"...\")` or exact relative paths instead of `bash find` when the path is known or can be narrowed.\n- When `bash` or `shell` is available, use it only for read-only inspection inside currentSpaceRoot.\n",
-        );
-        rendered.push_str("- For MCP setup or diagnostics, use `Operate(resource=\"mcp\", operation=\"list|install|verify|get|run\")`; do not stop at written installation instructions when the user asked you to configure or test MCP. If an MCP package must be installed, use `Operate(resource=\"cli_runtime\", ...)` to inspect/install/run the host CLI, then save and test the server through `Operate(resource=\"mcp\", ...)`.\n");
+        rendered.push_str(runtime_tool_note());
+        if let Some(video_analysis_section) = video_analysis_section {
+            rendered.push_str("\n\n");
+            rendered.push_str(video_analysis_section);
+        }
         rendered.push_str("\n");
         rendered.push_str(team_coordinator_prompt());
         if !prompt_suffix.trim().is_empty() {
@@ -569,6 +585,93 @@ Host runtime context: {}\n{}",
 
 fn video_analysis_prompt_section() -> &'static str {
     "Video And Media Tools:\n- If the user asks for subtitles, captions, transcript, transcription, SRT, VTT, ASR, speech text, or spoken words from an attached video/audio file, call `Operate(resource=\"media\", operation=\"transcribe\", input={\"sourcePath\":\"<attachment toolPath>\",\"format\":\"srt\"})` as the first tool call. The attachment toolPath has already been resolved by the host; do not first inspect the file with `Read`, `List`, `Search`, `bash`, `shell`, `cli_runtime`, `meta.json`, or directory listing.\n- Do not use `video.analyze` or `speech_extract` for subtitle recognition.\n- When a user attaches a video and the task depends on visual content, shots, scenes, highlights, or smart-edit reasoning, use `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"<attachment toolPath>\",\"mode\":\"summary|shot_breakdown|highlight_clips|talking_head_cut|smart_edit\",\"instruction\":\"...\"})` before making claims about the video's visual content.\n- `video.analyze` is executed by the locked `Video Analysis Agent` specialist/subagent. The main chat model must not pretend to have watched the video and must not replace this specialist with ordinary `Read`.\n- If `video.analyze` reports that the dedicated video model is missing or unsupported, tell the user to configure the Video Analysis Agent model instead of inventing video details."
+}
+
+fn runtime_tool_note() -> &'static str {
+    "\n\nRuntime tool note:\n- Only call tools listed in Available tools or discovered through `tool_search`; do not call internal aliases such as `workflow`, `resource`, or `editor` directly.\n- Treat the tool schema as the authority for `Operate` resources, operations, and input fields; when a capability is deferred, use `tool_search` instead of guessing an action name.\n- Use structured app tools for product state, workspace writes, browser work, CLI runtime execution, MCP setup, media work, and web fetch/search when those actions are exposed.\n- Keep `bash` and `shell` read-only inside currentSpaceRoot; do not use them for writes, host CLI execution, PATH diagnosis, network fetches, or here-documents.\n- Save standalone user-facing scripts, articles, HTML, Markdown, and other content artifacts under `manuscripts/` unless the user explicitly requests another workspace location; use `Write` only for bound targets such as `manuscripts://current` or `editor://current/script`.\n"
+}
+
+fn should_include_video_analysis_section(
+    runtime_mode: &str,
+    metadata: Option<&Value>,
+    active_media_task_section: &str,
+) -> bool {
+    if !active_media_task_section.trim().is_empty() {
+        return true;
+    }
+    if matches!(
+        runtime_mode,
+        "media" | "media-generation" | "video" | "video-generation" | "generation-studio"
+    ) {
+        return true;
+    }
+    if metadata_has_media_attachment(metadata) {
+        return true;
+    }
+    task_hint_string(metadata, "taskIntent")
+        .or_else(|| task_hint_string(metadata, "intent"))
+        .map(|intent| {
+            matches!(
+                intent.as_str(),
+                "media"
+                    | "video"
+                    | "audio"
+                    | "transcribe"
+                    | "transcription"
+                    | "subtitle"
+                    | "subtitles"
+                    | "video_analysis"
+                    | "media_generation"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn metadata_has_media_attachment(metadata: Option<&Value>) -> bool {
+    let Some(metadata) = metadata else {
+        return false;
+    };
+    for key in ["attachment", "input_attachment"] {
+        if value_is_media_attachment(metadata.get(key)) {
+            return true;
+        }
+    }
+    for key in ["attachments", "input_attachments"] {
+        if metadata
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .any(|item| value_is_media_attachment(Some(item)))
+            })
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn value_is_media_attachment(value: Option<&Value>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    let kind = value
+        .get("kind")
+        .or_else(|| value.get("type"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    let mime_type = value
+        .get("mimeType")
+        .or_else(|| value.get("mime"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    matches!(kind, "video" | "audio" | "media")
+        || mime_type.starts_with("video/")
+        || mime_type.starts_with("audio/")
 }
 
 fn effective_member_runtime_metadata(
@@ -981,6 +1084,7 @@ fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
             prompt.push_str("\n\n");
             prompt.push_str(video_rules);
         }
+        prompt.push_str("\n\nScript-package boundary: writing a video script, AV script, storyboard table, or HTML script package is not video generation by itself. Do not invoke video-director or media generation tools for script-package-only tasks unless the user explicitly asks to generate storyboard images, keyframes, or a final video asset.");
     }
     prompt
 }
@@ -1286,5 +1390,46 @@ mod tests {
         assert!(prompt.contains("video.generate"));
         assert!(prompt.contains("waitForCompletion=true"));
         assert!(prompt.contains("Never say a video generation has started"));
+    }
+
+    #[test]
+    fn video_analysis_prompt_is_conditioned_on_typed_media_context() {
+        assert!(!should_include_video_analysis_section("team", None, ""));
+
+        let attachment_metadata = json!({
+            "attachments": [{
+                "kind": "video",
+                "mimeType": "video/mp4"
+            }]
+        });
+        assert!(should_include_video_analysis_section(
+            "team",
+            Some(&attachment_metadata),
+            ""
+        ));
+
+        let intent_metadata = json!({ "taskIntent": "transcribe" });
+        assert!(should_include_video_analysis_section(
+            "team",
+            Some(&intent_metadata),
+            ""
+        ));
+
+        assert!(should_include_video_analysis_section(
+            "team",
+            None,
+            "Active Media Task:\n- taskId: demo"
+        ));
+    }
+
+    #[test]
+    fn runtime_tool_note_stays_compact() {
+        let note = runtime_tool_note();
+
+        assert!(note.contains("tool_search"));
+        assert!(note.contains("schema"));
+        assert!(note.contains("manuscripts/"));
+        assert!(!note.contains("queryElements"));
+        assert!(!note.contains("python3\",\"-c"));
     }
 }

@@ -1,11 +1,11 @@
 use crate::mcp::McpToolInfo;
 use serde_json::{json, Value};
 
-use crate::payload_string;
 use crate::tools::action_aliases::canonicalize_app_cli_arguments;
 use crate::tools::catalog::descriptor_by_name;
 use crate::tools::compat::{canonical_tool_name, is_legacy_tool_alias, normalize_tool_call};
 use crate::tools::plan::ToolRegistryPlan;
+use crate::{payload_string, storage_safe_file_stem};
 
 #[derive(Debug, Clone)]
 pub struct PreparedToolCall {
@@ -103,6 +103,9 @@ impl ToolRouter {
             self.validate_operate_call(arguments)?;
         }
         if name.trim() == "Write" {
+            if let Some(prepared) = self.prepare_unbound_artifact_write(arguments) {
+                return Ok(prepared);
+            }
             self.validate_write_call(arguments)?;
         }
         let raw_allowed = self.is_allowed_tool_name(name);
@@ -298,6 +301,34 @@ impl ToolRouter {
         if action == "manuscripts.writeCurrent" && self.is_bound_manuscript_write(arguments) {
             return Ok(());
         }
+        if action == "manuscripts.createProject"
+            && self.is_standalone_artifact_manuscript_create(arguments)
+        {
+            return Err(self
+                .error(
+                    "MANUSCRIPT_PROJECT_NOT_NEEDED_FOR_STANDALONE_ARTIFACT",
+                    "Do not create a manuscript project for a standalone script package; save the generated HTML or Markdown artifact under manuscripts/ with workspace.write".to_string(),
+                    true,
+                    Some(json!({
+                        "suggestedAction": "workspace.write",
+                        "suggestedPayload": {
+                            "resource": "workspace",
+                            "operation": "write",
+                            "input": {
+                                "path": "manuscripts/<short-kebab-title>.html",
+                                "content": "<complete self-contained HTML script package>"
+                            }
+                        },
+                        "doNotUse": [
+                            "tool_search manuscript create",
+                            "manuscripts.createProject",
+                            "Write manuscripts://current"
+                        ],
+                        "reason": "standalone script packages do not require a bound manuscript project"
+                    })),
+                )
+                .to_json_string(Some("workflow"), Some(&action)));
+        }
         if self.plan.has_direct_app_cli_action(&action) {
             return Ok(());
         }
@@ -413,8 +444,12 @@ impl ToolRouter {
         if resource.is_empty() || operation.is_empty() {
             return Err(self
                 .error(
-                    "MISSING_OPERATE_FIELDS",
-                    "Operate requires non-empty resource and operation fields".to_string(),
+                    if operate_object.is_empty() {
+                        "EMPTY_OPERATE_CALL"
+                    } else {
+                        "MISSING_OPERATE_FIELDS"
+                    },
+                    "Operate requires non-empty resource and operation fields; do not call Operate as a help or planning probe".to_string(),
                     false,
                     Some(json!({
                         "requiredFields": ["resource", "operation"],
@@ -453,6 +488,55 @@ impl ToolRouter {
                 .to_json_string(Some("Operate"), Some("manuscripts.writeCurrent")));
         }
         Ok(())
+    }
+
+    fn prepare_unbound_artifact_write(&self, arguments: &Value) -> Option<PreparedToolCall> {
+        if !self.plan.allowed_write_targets.is_empty() {
+            return None;
+        }
+        let path = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let is_unbound_target =
+            path.is_empty() || path.eq_ignore_ascii_case("manuscripts://current");
+        if !is_unbound_target {
+            return None;
+        }
+        let content = arguments.get("content").and_then(Value::as_str)?;
+        if !looks_like_complete_html_artifact(content) {
+            return None;
+        }
+        let filename = html_artifact_filename(content);
+        let target_path = format!("manuscripts/{filename}");
+        let legacy_command = if path.is_empty() {
+            "standalone-artifact"
+        } else {
+            path
+        };
+        Some(PreparedToolCall {
+            name: "resource".to_string(),
+            arguments: json!({
+                "action": "workspace.write",
+                "path": target_path.clone(),
+                "content": content,
+                "__compat": {
+                    "legacyToolName": "Write",
+                    "legacyCommand": legacy_command,
+                    "translatedAction": "workspace.write"
+                },
+                "writeRecoveryDecision": {
+                    "reason": "unbound_write_complete_html_artifact",
+                    "originalTool": "Write",
+                    "targetPath": target_path,
+                    "contentChars": content.chars().count()
+                }
+            }),
+            plan_fingerprint: self.plan.fingerprint.clone(),
+            mcp_tool: None,
+            mcp_resource: None,
+        })
     }
 
     fn validate_write_call(&self, arguments: &Value) -> Result<(), String> {
@@ -520,6 +604,29 @@ impl ToolRouter {
                 .eq_ignore_ascii_case("manuscripts://current")
     }
 
+    fn is_standalone_artifact_manuscript_create(&self, arguments: &Value) -> bool {
+        let compat = arguments.get("__compat").and_then(Value::as_object);
+        let legacy_tool = compat
+            .and_then(|object| object.get("legacyToolName"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let legacy_command = compat
+            .and_then(|object| object.get("legacyCommand"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let payload_path = arguments
+            .get("payload")
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("path"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        legacy_tool == "Operate"
+            && legacy_command.eq_ignore_ascii_case("manuscript.create")
+            && (payload_path.is_empty()
+                || payload_path.eq_ignore_ascii_case("manuscripts://current"))
+    }
+
     fn prepare_mcp_resource_tool(&self, name: &str) -> Option<McpResourcePreparedCall> {
         if self.plan.mcp_tool_namespaces.is_empty() {
             return None;
@@ -562,6 +669,47 @@ impl ToolRouter {
             }),
         }
     }
+}
+
+fn looks_like_complete_html_artifact(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    let lower_start = trimmed
+        .chars()
+        .take(256)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let lower_end = content
+        .chars()
+        .rev()
+        .take(512)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>()
+        .to_ascii_lowercase();
+    (lower_start.starts_with("<!doctype html") || lower_start.starts_with("<html"))
+        && lower_start.contains("<html")
+        && lower_end.contains("</html>")
+}
+
+fn html_artifact_filename(content: &str) -> String {
+    let title = extract_html_title(content).unwrap_or("script-package");
+    let stem = storage_safe_file_stem(title);
+    let stem = stem.trim_matches('-');
+    if stem.is_empty() || stem == "root" {
+        "script-package.html".to_string()
+    } else {
+        format!("{stem}.html")
+    }
+}
+
+fn extract_html_title(content: &str) -> Option<&str> {
+    let lower = content.to_ascii_lowercase();
+    let start = lower.find("<title>")?;
+    let title_start = start + "<title>".len();
+    let relative_end = lower[title_start..].find("</title>")?;
+    let title = content[title_start..title_start + relative_end].trim();
+    (!title.is_empty()).then_some(title)
 }
 
 #[cfg(test)]
@@ -1029,9 +1177,44 @@ mod tests {
             .prepare("Operate", &json!({}))
             .expect_err("empty Operate should fail");
 
-        assert!(error.contains("MISSING_OPERATE_FIELDS"));
+        assert!(error.contains("EMPTY_OPERATE_CALL"));
         assert!(error.contains("resource"));
         assert!(error.contains("operation"));
+    }
+
+    #[test]
+    fn router_recovers_unbound_write_complete_html_to_workspace_write() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Write",
+                &json!({
+                    "content": "<!doctype html><html><head><title>Beav Intro Video Script</title></head><body><h1>Beav</h1></body></html>"
+                }),
+            )
+            .expect("complete standalone html should recover to workspace.write");
+
+        assert_eq!(prepared.name, "resource");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("workspace.write"))
+        );
+        assert_eq!(
+            prepared.arguments.get("path"),
+            Some(&json!("manuscripts/Beav Intro Video Script.html"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/__compat/legacyToolName"),
+            Some(&json!("Write"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/writeRecoveryDecision/reason"),
+            Some(&json!("unbound_write_complete_html_artifact"))
+        );
     }
 
     #[test]
@@ -1054,6 +1237,32 @@ mod tests {
 
         assert!(error.contains("MANUSCRIPT_WRITE_REQUIRES_WRITE"));
         assert!(error.contains("manuscripts://current"));
+    }
+
+    #[test]
+    fn router_rejects_deferred_manuscript_create_for_standalone_artifact() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let error = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "manuscript",
+                    "operation": "create",
+                    "input": {
+                        "path": "manuscripts://current",
+                        "source": "ai"
+                    }
+                }),
+            )
+            .expect_err("standalone artifact should not create manuscript project");
+
+        assert!(error.contains("MANUSCRIPT_PROJECT_NOT_NEEDED_FOR_STANDALONE_ARTIFACT"));
+        assert!(error.contains("workspace.write"));
+        assert!(!error.contains("ACTION_DEFERRED"));
     }
 
     #[test]
@@ -1281,13 +1490,13 @@ mod tests {
     }
 
     #[test]
-    fn router_reports_deferred_team_operate_without_legacy_error() {
+    fn router_routes_team_session_create_to_consolidated_team_control() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "redclaw",
             ..ToolRegistryPlanParams::default()
         });
         let router = ToolRouter::new(plan);
-        let error = router
+        let prepared = router
             .prepare(
                 "Operate",
                 &json!({
@@ -1300,10 +1509,21 @@ mod tests {
                     }
                 }),
             )
-            .expect_err("low-level team creation should be deferred");
+            .expect("team.session.create should route through consolidated team.control");
 
-        assert!(error.contains("ACTION_DEFERRED"));
-        assert!(!error.contains("LEGACY_COMMAND_DISABLED"));
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("team.control"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/operation"),
+            Some(&json!("session.create"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/__compat/legacyCommand"),
+            Some(&json!("team.session.create"))
+        );
     }
 
     #[test]
@@ -1388,6 +1608,7 @@ mod tests {
         };
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "team",
+            session_metadata: Some(&json!({ "maxDirectMcpTools": 4 })),
             mcp_inventory: Some(&inventory),
             ..ToolRegistryPlanParams::default()
         });

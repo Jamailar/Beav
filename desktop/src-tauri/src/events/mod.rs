@@ -483,7 +483,8 @@ pub fn emit_runtime_tool_request(
     input: Value,
     description: Option<&str>,
 ) {
-    let legacy_input = input.clone();
+    let display_input = summarize_large_tool_input(input);
+    let legacy_input = display_input.clone();
     emit_runtime_event(
         app,
         "runtime:tool-start",
@@ -492,7 +493,7 @@ pub fn emit_runtime_tool_request(
         serde_json::to_value(RuntimeToolCallPayload::new(
             call_id,
             name,
-            input,
+            display_input,
             description.unwrap_or(""),
         ))
         .unwrap_or_else(|_| {
@@ -504,6 +505,51 @@ pub fn emit_runtime_tool_request(
             })
         }),
     );
+}
+
+const TOOL_EVENT_STRING_PREVIEW_LIMIT: usize = 1200;
+
+fn summarize_large_tool_input(value: Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(summarize_large_tool_input)
+                .collect::<Vec<_>>(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| {
+                    if key == "content" {
+                        (key, summarize_large_content_value(value))
+                    } else {
+                        (key, summarize_large_tool_input(value))
+                    }
+                })
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn summarize_large_content_value(value: Value) -> Value {
+    let Value::String(text) = value else {
+        return summarize_large_tool_input(value);
+    };
+    let chars = text.chars().count();
+    if chars <= TOOL_EVENT_STRING_PREVIEW_LIMIT {
+        return Value::String(text);
+    }
+    let preview = text
+        .chars()
+        .take(TOOL_EVENT_STRING_PREVIEW_LIMIT)
+        .collect::<String>();
+    json!({
+        "omitted": true,
+        "reason": "large_tool_content",
+        "chars": chars,
+        "preview": preview,
+    })
 }
 
 pub fn emit_runtime_done(
@@ -789,4 +835,40 @@ pub fn emit_redclaw_task_event(
             "createdAt": crate::now_iso(),
         }),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_large_tool_input_replaces_large_content_fields() {
+        let value = summarize_large_tool_input(json!({
+            "path": "manuscripts://current",
+            "content": "x".repeat(TOOL_EVENT_STRING_PREVIEW_LIMIT + 1),
+        }));
+
+        assert_eq!(
+            value.get("path").and_then(Value::as_str),
+            Some("manuscripts://current")
+        );
+        let content = value.get("content").expect("content summary should exist");
+        assert_eq!(
+            content.get("reason").and_then(Value::as_str),
+            Some("large_tool_content")
+        );
+        assert_eq!(
+            content.get("chars").and_then(Value::as_u64),
+            Some((TOOL_EVENT_STRING_PREVIEW_LIMIT + 1) as u64)
+        );
+    }
+
+    #[test]
+    fn summarize_large_tool_input_keeps_short_content_fields() {
+        let value = summarize_large_tool_input(json!({
+            "content": "short",
+        }));
+
+        assert_eq!(value.get("content").and_then(Value::as_str), Some("short"));
+    }
 }

@@ -796,10 +796,11 @@ pub(crate) fn ensure_video_thumbnail_for_path(
 mod tests {
     use super::{
         append_generated_media_markdown, append_interactive_skill_instruction_messages,
-        append_session_transcript, apply_workspace_patch_edits, apply_workspace_patch_file,
-        asset_preview_url_from_result, authoring_saved_final_summary,
-        build_interactive_user_turn_messages, build_subject_record_for_workspace,
-        clear_interactive_execution_contract_metadata, copy_file_into_dir,
+        append_internal_runtime_user_message, append_session_transcript,
+        apply_workspace_patch_edits, apply_workspace_patch_file, asset_preview_url_from_result,
+        authoring_saved_final_summary, build_interactive_user_turn_messages,
+        build_subject_record_for_workspace, canonical_messages_to_openai_messages,
+        canonical_text_message, clear_interactive_execution_contract_metadata, copy_file_into_dir,
         decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
         interactive_base64_payload_size, interactive_execution_contract_instruction,
         interactive_execution_progress_observe_success, interactive_history_attachment_note,
@@ -813,10 +814,10 @@ mod tests {
         resolve_local_path, sanitize_copy_file_name,
         standalone_draft_save_error_correction_instruction, structured_tool_error_code,
         validate_runtime_tool_message_sequence, workspace_inspect_image_response,
-        workspace_read_directory_response, GeneratedMediaPreview, InteractiveExecutionContract,
-        InteractiveExecutionProgress, SubjectAttribute, SubjectCategory, SubjectMediaInput,
-        SubjectMutationInput, SubjectRecord, SubjectSku, SubjectVoiceInput,
-        COPY_TARGET_FILE_NAME_MAX_CHARS,
+        workspace_read_directory_response, workspace_write_current_target_error,
+        GeneratedMediaPreview, InteractiveExecutionContract, InteractiveExecutionProgress,
+        SubjectAttribute, SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord,
+        SubjectSku, SubjectVoiceInput, COPY_TARGET_FILE_NAME_MAX_CHARS,
     };
     use serde_json::{json, Value};
     use std::fs;
@@ -1630,6 +1631,33 @@ mod tests {
     }
 
     #[test]
+    fn internal_runtime_message_is_hidden_system_prompt_not_canonical_history() {
+        let mut prompt_messages = vec![canonical_text_message("user", "start".to_string())];
+        let mut canonical_messages = prompt_messages.clone();
+
+        append_internal_runtime_user_message(
+            &mut prompt_messages,
+            &mut canonical_messages,
+            "系统状态更新：以下技能已选择供当前轮使用：demo。".to_string(),
+        );
+
+        assert_eq!(canonical_messages.len(), 1);
+        assert_eq!(
+            prompt_messages
+                .last()
+                .and_then(|message| message.get("role")),
+            Some(&json!("system"))
+        );
+        let openai_messages = canonical_messages_to_openai_messages(&prompt_messages);
+        assert_eq!(
+            openai_messages
+                .last()
+                .and_then(|message| message.get("role")),
+            Some(&json!("system"))
+        );
+    }
+
+    #[test]
     fn standalone_draft_save_error_correction_recovers_malformed_operate_body() {
         let instruction = standalone_draft_save_error_correction_instruction(
             "workflow",
@@ -1671,8 +1699,82 @@ mod tests {
         .expect("unbound Write body should get a workspace recovery instruction");
 
         assert!(instruction.contains("当前没有绑定 `manuscripts://current`"));
-        assert!(instruction.contains("drafts/<short-kebab-title>.md"));
-        assert!(instruction.contains("把完整 Markdown 作为最终回复交付"));
+        assert!(instruction.contains("manuscripts/<short-kebab-title>.md"));
+        assert!(instruction.contains("不要保存到顶层 `drafts/`"));
+        assert!(instruction.contains("把完整内容作为最终回复交付"));
+    }
+
+    #[test]
+    fn standalone_draft_save_error_correction_recovers_workflow_deferred_html_write_current() {
+        let instruction = standalone_draft_save_error_correction_instruction(
+            "workflow",
+            &json!({
+                "action": "manuscripts.writeCurrent",
+                "payload": {
+                    "content": "<!doctype html><html><body>Skill promo script</body></html>"
+                },
+                "__compat": {
+                    "legacyToolName": "Write",
+                    "legacyCommand": "manuscripts://current"
+                }
+            }),
+            Some("ACTION_DEFERRED"),
+            false,
+        )
+        .expect("deferred workflow write-current should get a workspace recovery instruction");
+
+        assert!(instruction.contains("当前没有绑定 `manuscripts://current`"));
+        assert!(instruction.contains("manuscripts/<short-kebab-title>.html"));
+        assert!(instruction.contains("workspace"));
+        assert!(instruction.contains("不要 `tool_search manuscripts write`"));
+        assert!(instruction.contains("完整内容（HTML/Markdown 等）"));
+    }
+
+    #[test]
+    fn standalone_draft_save_error_correction_recovers_workspace_write_current_missing_content() {
+        let instruction = standalone_draft_save_error_correction_instruction(
+            "resource",
+            &json!({
+                "action": "workspace.write",
+                "path": "manuscripts://current",
+                "source": "ai",
+                "__compat": {
+                    "legacyToolName": "Operate",
+                    "legacyCommand": "workspace.write"
+                }
+            }),
+            Some("WORKSPACE_WRITE_REQUIRES_CONTENT"),
+            false,
+        )
+        .expect("missing workspace.write content should get a generation-and-save instruction");
+
+        assert!(instruction.contains("不要读取 `manuscripts://current`"));
+        assert!(instruction.contains("先生成完整内容"));
+        assert!(instruction.contains("manuscripts/<short-kebab-title>.html"));
+        assert!(instruction.contains("content"));
+    }
+
+    #[test]
+    fn workspace_write_current_target_error_is_structured_and_recoverable() {
+        let error = workspace_write_current_target_error("manuscripts://current", None);
+        let parsed: Value = serde_json::from_str(&error).expect("structured error");
+
+        assert_eq!(
+            parsed.pointer("/error/code"),
+            Some(&json!("WORKSPACE_WRITE_REQUIRES_CONTENT"))
+        );
+        assert_eq!(
+            parsed.pointer("/error/details/suggestedAction"),
+            Some(&json!("workspace.write"))
+        );
+        assert_eq!(
+            parsed.pointer("/error/details/suggestedPayload/path"),
+            Some(&json!("manuscripts/<short-kebab-title>.html"))
+        );
+        assert_eq!(
+            structured_tool_error_code(&error).as_deref(),
+            Some("WORKSPACE_WRITE_REQUIRES_CONTENT")
+        );
     }
 
     #[test]
@@ -3547,6 +3649,8 @@ fn active_skill_resource_read_fallback(
     session_id: Option<&str>,
     raw_path: &str,
     max_chars: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
 ) -> Result<Option<Value>, String> {
     let Some(session_id) = session_id else {
         return Ok(None);
@@ -3581,6 +3685,8 @@ fn active_skill_resource_read_fallback(
         workspace.as_deref(),
         raw_path,
         max_chars,
+        offset,
+        limit,
     ) {
         Some(Ok(value)) => Ok(Some(value)),
         Some(Err(error)) => Err(error),
@@ -4721,6 +4827,14 @@ pub(crate) fn execute_interactive_tool_call(
                         }
                         let max_chars =
                             parse_usize_arg(&normalized_arguments, "maxChars", 4000, 20000);
+                        let offset = normalized_arguments
+                            .get("offset")
+                            .and_then(Value::as_u64)
+                            .map(|value| value as usize);
+                        let skill_limit = normalized_arguments
+                            .get("limit")
+                            .and_then(Value::as_u64)
+                            .map(|value| (value as usize).clamp(1, 400));
                         let resolved =
                             interactive_runtime_shared::resolve_workspace_tool_path_for_session(
                                 state, session_id, &raw_path,
@@ -4730,7 +4844,12 @@ pub(crate) fn execute_interactive_tool_call(
                             workspace_read_directory_response(&resolved, limit)
                         } else if !resolved.is_file() {
                             if let Some(skill_resource) = active_skill_resource_read_fallback(
-                                state, session_id, &raw_path, max_chars,
+                                state,
+                                session_id,
+                                &raw_path,
+                                max_chars,
+                                offset,
+                                skill_limit,
                             )? {
                                 Ok(skill_resource)
                             } else {
@@ -4785,7 +4904,17 @@ pub(crate) fn execute_interactive_tool_call(
                             return Err("path is required for workspace.write".to_string());
                         }
                         reject_parent_directory_traversal(&raw_path)?;
-                        let content = payload_string(&normalized_arguments, "content")
+                        let content = payload_string(&normalized_arguments, "content");
+                        if raw_path
+                            .trim()
+                            .eq_ignore_ascii_case("manuscripts://current")
+                        {
+                            return Err(workspace_write_current_target_error(
+                                &raw_path,
+                                content.as_deref(),
+                            ));
+                        }
+                        let content = content
                             .ok_or_else(|| "content is required for workspace.write".to_string())?;
                         let resolved =
                             interactive_runtime_shared::resolve_workspace_tool_path_for_session(
@@ -5700,6 +5829,10 @@ pub(crate) fn canonical_messages_to_openai_messages(messages: &[Value]) -> Vec<V
                     "tool_call_id": message.get("tool_call_id").and_then(Value::as_str).unwrap_or(""),
                     "content": message.get("content").and_then(Value::as_str).unwrap_or("")
                 })),
+                "system" | "developer" => Some(json!({
+                    "role": role,
+                    "content": message.get("content").and_then(Value::as_str).unwrap_or("")
+                })),
                 _ => None,
             }
         })
@@ -5982,14 +6115,10 @@ pub(crate) fn append_prompt_and_canonical_message(
 
 pub(crate) fn append_internal_runtime_user_message(
     prompt_messages: &mut Vec<Value>,
-    canonical_messages: &mut Vec<Value>,
+    _canonical_messages: &mut Vec<Value>,
     instruction: String,
 ) {
-    append_prompt_and_canonical_message(
-        prompt_messages,
-        canonical_messages,
-        canonical_text_message("user", instruction),
-    );
+    prompt_messages.push(canonical_text_message("system", instruction));
 }
 
 pub(crate) fn llm_input_attachments_from_tool_result(result: &Value) -> Vec<Value> {
@@ -6288,6 +6417,74 @@ pub(crate) fn structured_tool_error_code(text: &str) -> Option<String> {
         .and_then(|value| value.get("code"))
         .and_then(Value::as_str)
         .map(ToString::to_string)
+}
+
+fn workspace_write_current_recovery_path(content: Option<&str>) -> String {
+    let extension = content
+        .map(standalone_save_recovery_extension)
+        .unwrap_or("html");
+    format!("manuscripts/<short-kebab-title>.{extension}")
+}
+
+fn workspace_write_error_json(
+    code: &str,
+    message: &str,
+    retryable: bool,
+    details: Value,
+) -> String {
+    serde_json::to_string_pretty(&json!({
+        "ok": false,
+        "tool": "resource",
+        "action": "workspace.write",
+        "error": {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+            "details": details
+        }
+    }))
+    .unwrap_or_else(|_| message.to_string())
+}
+
+fn workspace_write_current_target_error(raw_path: &str, content: Option<&str>) -> String {
+    let suggested_path = workspace_write_current_recovery_path(content);
+    let content_placeholder = if content.is_some() {
+        "<reuse the exact content from the failed workspace.write call>"
+    } else {
+        "<generate the complete self-contained HTML/Markdown content first>"
+    };
+    let code = if content.is_some() {
+        "WORKSPACE_WRITE_CURRENT_TARGET_NOT_SUPPORTED"
+    } else {
+        "WORKSPACE_WRITE_REQUIRES_CONTENT"
+    };
+    let message = if content.is_some() {
+        "workspace.write cannot target manuscripts://current; use a workspace-relative manuscripts/ file path."
+    } else {
+        "workspace.write requires content and cannot target manuscripts://current without a bound manuscript."
+    };
+    workspace_write_error_json(
+        code,
+        message,
+        true,
+        json!({
+            "path": raw_path,
+            "suggestedAction": "workspace.write",
+            "suggestedPayload": {
+                "action": "workspace.write",
+                "path": suggested_path,
+                "content": content_placeholder
+            },
+            "reuseContentFromFailedToolCall": content.is_some(),
+            "doNotUse": [
+                "Read manuscripts://current",
+                "Write manuscripts://current",
+                "tool_search manuscripts write",
+                "manuscripts.createProject"
+            ],
+            "reason": "No active manuscript project is bound for manuscripts://current; standalone script artifacts should be saved under manuscripts/."
+        }),
+    )
 }
 
 pub(crate) fn interactive_skill_activation_continuation(
@@ -7123,13 +7320,61 @@ fn failed_save_targets_current_manuscript(arguments: &Value) -> bool {
 
 fn is_failed_standalone_save_error(tool_name: &str, error_code: Option<&str>) -> bool {
     match (tool_name, error_code) {
-        ("workflow", Some("LEGACY_COMMAND_DISABLED" | "MISSING_OPERATE_FIELDS")) => true,
+        (
+            "workflow",
+            Some(
+                "LEGACY_COMMAND_DISABLED"
+                | "MISSING_OPERATE_FIELDS"
+                | "ACTION_DEFERRED"
+                | "ACTION_NOT_AVAILABLE"
+                | "WRITE_TARGET_NOT_ALLOWED"
+                | "WRITE_TARGET_NOT_BOUND",
+            ),
+        ) => true,
         ("Operate", Some("LEGACY_COMMAND_DISABLED" | "MISSING_OPERATE_FIELDS")) => true,
         (
             "Write",
-            Some("ACTION_DEFERRED" | "ACTION_NOT_AVAILABLE" | "WRITE_TARGET_NOT_ALLOWED"),
+            Some(
+                "ACTION_DEFERRED"
+                | "ACTION_NOT_AVAILABLE"
+                | "WRITE_TARGET_NOT_ALLOWED"
+                | "WRITE_TARGET_NOT_BOUND",
+            ),
+        ) => true,
+        (
+            "resource",
+            Some(
+                "WORKSPACE_WRITE_REQUIRES_CONTENT"
+                | "WORKSPACE_WRITE_CURRENT_TARGET_NOT_SUPPORTED"
+                | "WRITE_TARGET_NOT_BOUND",
+            ),
         ) => true,
         _ => false,
+    }
+}
+
+fn is_missing_standalone_save_content_error(tool_name: &str, error_code: Option<&str>) -> bool {
+    matches!(
+        (tool_name, error_code),
+        ("resource", Some("WORKSPACE_WRITE_REQUIRES_CONTENT"))
+    )
+}
+
+fn standalone_save_recovery_extension(content: &str) -> &'static str {
+    let trimmed = content.trim_start();
+    let lower = trimmed
+        .chars()
+        .take(512)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if lower.starts_with("<!doctype html")
+        || lower.starts_with("<html")
+        || lower.contains("<html")
+        || lower.contains("<!doctype html")
+    {
+        "html"
+    } else {
+        "md"
     }
 }
 
@@ -7142,16 +7387,35 @@ pub(crate) fn standalone_draft_save_error_correction_instruction(
     if has_bound_authoring_target {
         return None;
     }
-    failed_save_argument_content(arguments)?;
+    let content = failed_save_argument_content(arguments);
+    let missing_content = is_missing_standalone_save_content_error(tool_name, error_code);
+    if content.is_none() && !missing_content {
+        return None;
+    }
     if !failed_save_targets_current_manuscript(arguments) {
         return None;
     }
     if !is_failed_standalone_save_error(tool_name, error_code) {
         return None;
     }
+    let extension = content
+        .as_deref()
+        .map(standalone_save_recovery_extension)
+        .unwrap_or("html");
+    let content_instruction = if missing_content {
+        "你还没有把完整正文放进 tool 参数；先生成完整内容（默认自包含 HTML 视频脚本包），再把全文作为 `content` 传入。"
+    } else {
+        "你已经生成了完整内容（HTML/Markdown 等）。"
+    };
+    let content_placeholder = if missing_content {
+        "<先生成完整自包含 HTML 视频脚本包，再把全文放在这里>"
+    } else {
+        "<复用上一条失败 tool 参数里的完整内容>"
+    };
     Some(
-        "刚才的保存动作没有生效，而且当前没有绑定 `manuscripts://current` 稿件工程。不要继续调用 `Write(manuscripts://current)`，不要 `tool_search manuscripts write`，也不要创建 manuscript project。你已经生成了完整 Markdown 正文；下一步只能二选一：如果需要落盘，直接调用 `Operate(resource=\"workspace\", operation=\"write\", input={\"path\":\"drafts/<short-kebab-title>.md\",\"content\":\"<复用上一条失败 tool 参数里的完整正文>\"})` 保存独立草稿；如果不需要落盘，把完整 Markdown 作为最终回复交付。保存成功后的最终回复只给工作区链接和简短说明。"
-            .to_string(),
+        format!(
+            "刚才的保存动作没有生效，而且当前没有绑定 `manuscripts://current` 稿件工程。不要读取 `manuscripts://current`，不要继续调用 `Write(manuscripts://current)`，不要 `tool_search manuscripts write`，也不要创建 manuscript project。{content_instruction}下一步只能二选一：如果需要落盘，直接调用 `Operate(resource=\"workspace\", operation=\"write\", input={{\"path\":\"manuscripts/<short-kebab-title>.{extension}\",\"content\":\"{content_placeholder}\"}})` 保存独立稿件；如果不需要落盘，把完整内容作为最终回复交付。RedConvert 的稿件列表只索引 `manuscripts/` 下的内容产物，不要保存到顶层 `drafts/`。保存成功后的最终回复只给工作区链接和简短说明。"
+        ),
     )
 }
 

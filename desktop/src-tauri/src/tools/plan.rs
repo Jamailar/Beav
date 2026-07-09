@@ -914,7 +914,11 @@ mod tests {
 
         assert!(plan.has_direct_app_cli_action("image.generate"));
         assert!(!plan.has_direct_app_cli_action("tools.search"));
-        assert!(plan.direct_app_cli_actions.len() <= DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS);
+        assert!(
+            plan.direct_app_cli_actions.len()
+                <= DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS
+                    .max(DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS.len())
+        );
         assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
         assert!(plan
             .visible_tools
@@ -1152,6 +1156,9 @@ mod tests {
         assert_eq!(visible, vec!["Read", "List", "Write", "Operate"]);
         for action in [
             "team.guide.create",
+            "skills.inspect",
+            "skills.listResources",
+            "skills.readResource",
             "skills.invoke",
             "manuscripts.createProject",
             "manuscripts.readCurrent",
@@ -1159,7 +1166,7 @@ mod tests {
         ] {
             assert!(actions.contains(&action), "{action} should be direct");
         }
-        assert_eq!(actions.len(), 5);
+        assert_eq!(actions.len(), 8);
         assert!(!plan.has_direct_app_cli_action("manuscripts.writeCurrent"));
         assert!(!visible.contains(&"tool_search"));
         assert!(!visible.contains(&"shell"));
@@ -1186,6 +1193,10 @@ mod tests {
 
         assert!(plan.has_direct_app_cli_action("profile.read"));
         assert!(plan.has_direct_app_cli_action("profile.manage"));
+        assert!(plan.has_direct_app_cli_action("skills.inspect"));
+        assert!(plan.has_direct_app_cli_action("skills.listResources"));
+        assert!(plan.has_direct_app_cli_action("skills.readResource"));
+        assert!(plan.has_direct_app_cli_action("skills.invoke"));
         assert!(!plan.has_direct_app_cli_action("redclaw.profile.update"));
         assert!(!plan.has_direct_app_cli_action("redclaw.profile.completeStyleDefinition"));
         assert!(!plan.has_direct_app_cli_action("video.analyze"));
@@ -1588,6 +1599,46 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(actions, vec!["profile.read", "profile.manage"]);
+        assert!(plan.deferred_app_cli_actions.is_empty());
+    }
+
+    #[test]
+    fn active_skills_preserve_skill_read_actions_with_explicit_allowlist() {
+        let metadata = json!({
+            "activeSkills": [
+                "high-retention-video-script",
+                "redclaw-style-definition"
+            ],
+            "allowedOperateActions": [
+                "redclaw.profile.bundle",
+                "redclaw.profile.read",
+                "redclaw.profile.update",
+                "redclaw.profile.completeStyleDefinition"
+            ]
+        });
+
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let actions = plan
+            .direct_app_cli_actions
+            .iter()
+            .map(|descriptor| descriptor.action)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                "profile.read",
+                "profile.manage",
+                "skills.inspect",
+                "skills.listResources",
+                "skills.readResource",
+                "skills.invoke"
+            ]
+        );
         assert!(plan.deferred_app_cli_actions.is_empty());
     }
 

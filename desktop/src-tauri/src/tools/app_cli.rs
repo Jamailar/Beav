@@ -295,6 +295,55 @@ fn is_bound_manuscript_write_call(arguments: &Value) -> bool {
             .eq_ignore_ascii_case("manuscripts://current")
 }
 
+fn write_current_recovery_extension(arguments: &Value) -> &'static str {
+    let content = payload_field(arguments, "payload")
+        .and_then(|payload| payload_string(payload, "content"))
+        .or_else(|| payload_string(arguments, "content"))
+        .unwrap_or_default();
+    let trimmed = content.trim_start();
+    let lower = trimmed
+        .chars()
+        .take(512)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if lower.starts_with("<!doctype html")
+        || lower.starts_with("<html")
+        || lower.contains("<html")
+        || lower.contains("<!doctype html")
+    {
+        "html"
+    } else {
+        "md"
+    }
+}
+
+fn unbound_manuscript_write_current_error(action: &str, arguments: &Value) -> String {
+    let extension = write_current_recovery_extension(arguments);
+    app_cli_error_json(
+        Some(action),
+        "WRITE_TARGET_NOT_BOUND",
+        "当前没有绑定 manuscripts://current 稿件工程；请把已生成内容作为独立稿件保存到工作区。",
+        true,
+        Some(json!({
+            "suggestedAction": "workspace.write",
+            "suggestedPayload": {
+                "action": "workspace.write",
+                "payload": {
+                    "path": format!("manuscripts/<short-kebab-title>.{extension}"),
+                    "content": "<reuse the exact content from the failed tool call>"
+                }
+            },
+            "reuseContentFromFailedToolCall": true,
+            "doNotUse": [
+                "tool_search manuscripts write",
+                "manuscripts.createProject",
+                "Write manuscripts://current"
+            ],
+            "reason": "No active manuscript project is bound for manuscripts://current"
+        })),
+    )
+}
+
 fn app_cli_error_json(
     action: Option<&str>,
     code: &str,
@@ -573,11 +622,11 @@ impl<'a> AppCliExecutor<'a> {
             return Ok(());
         }
         let policy_action = canonical_app_cli_action_for_policy(action);
-        if action == "manuscripts.writeCurrent"
-            && is_bound_manuscript_write_call(arguments)
-            && self.current_authoring_session_target().is_some()
-        {
-            return Ok(());
+        if action == "manuscripts.writeCurrent" && is_bound_manuscript_write_call(arguments) {
+            if self.current_authoring_session_target().is_some() {
+                return Ok(());
+            }
+            return Err(unbound_manuscript_write_current_error(action, arguments));
         }
         let Some(allowed_actions) = self.session_allowed_structured_actions() else {
             let plan = with_store(self.state, |store| {
@@ -4493,6 +4542,41 @@ mod tests {
             "action": "manuscripts.writeCurrent",
             "payload": { "content": "body" }
         })));
+    }
+
+    #[test]
+    fn unbound_manuscript_write_current_error_points_to_workspace_write() {
+        let error = unbound_manuscript_write_current_error(
+            "manuscripts.writeCurrent",
+            &json!({
+                "action": "manuscripts.writeCurrent",
+                "payload": {
+                    "content": "<!doctype html><html><body>Video script</body></html>"
+                },
+                "__compat": {
+                    "legacyToolName": "Write",
+                    "legacyCommand": "manuscripts://current"
+                }
+            }),
+        );
+        let parsed: Value = serde_json::from_str(&error).expect("structured error");
+
+        assert_eq!(
+            parsed.pointer("/error/code"),
+            Some(&json!("WRITE_TARGET_NOT_BOUND"))
+        );
+        assert_eq!(
+            parsed.pointer("/error/details/suggestedAction"),
+            Some(&json!("workspace.write"))
+        );
+        assert_eq!(
+            parsed.pointer("/error/details/suggestedPayload/payload/path"),
+            Some(&json!("manuscripts/<short-kebab-title>.html"))
+        );
+        assert_eq!(
+            parsed.pointer("/error/details/doNotUse/0"),
+            Some(&json!("tool_search manuscripts write"))
+        );
     }
 
     #[test]

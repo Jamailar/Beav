@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, State};
 use tokio::runtime::Handle;
 use tokio::task;
@@ -14,6 +14,7 @@ use tokio::task;
 use super::{LlmTransportError, TransportErrorKind, TransportMode};
 use crate::events::{
     emit_runtime_stream_start, emit_runtime_task_checkpoint_saved, emit_runtime_text_delta,
+    emit_runtime_tool_partial,
 };
 use crate::{
     append_debug_trace_state, format_http_error_message, http_error_debug_line,
@@ -34,6 +35,8 @@ const OPENAI_STREAM_MAX_ATTEMPTS: usize = 3;
 const QWEN_PROMPT_CACHE_TTL_MS: u128 = 5 * 60 * 1000;
 const QWEN_PROMPT_CACHE_GC_GRACE_MS: u128 = 10 * 60 * 1000;
 const PROMPT_CACHE_STABLE_PREFIX_MIN_CHARS: usize = 1200;
+const TOOL_ARGUMENT_PREVIEW_INTERVAL_MS: u128 = 500;
+const TOOL_ARGUMENT_PREVIEW_MIN_CONTENT_CHARS: usize = 1200;
 
 struct OpenaiStreamAttemptError {
     error: LlmTransportError,
@@ -824,6 +827,243 @@ fn openai_tool_arguments_text(value: Option<&Value>) -> Option<String> {
     }
 }
 
+#[derive(Debug, Default)]
+struct ToolArgumentPreviewState {
+    last_sent_at: Option<Instant>,
+    last_sent_content_chars: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ToolWritePreview {
+    target: Option<String>,
+    content_chars: usize,
+    complete: bool,
+}
+
+impl ToolArgumentPreviewState {
+    fn maybe_emit(
+        &mut self,
+        app: &AppHandle,
+        session_id: Option<&str>,
+        call_id: &str,
+        tool_name: &str,
+        arguments: &str,
+    ) {
+        let Some(preview) = write_preview_from_partial_tool_arguments(tool_name, arguments) else {
+            return;
+        };
+        if preview.content_chars < TOOL_ARGUMENT_PREVIEW_MIN_CONTENT_CHARS {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(last_sent_at) = self.last_sent_at {
+            let since_last = now.duration_since(last_sent_at).as_millis();
+            let char_delta = preview
+                .content_chars
+                .saturating_sub(self.last_sent_content_chars);
+            if since_last < TOOL_ARGUMENT_PREVIEW_INTERVAL_MS && char_delta < 1200 {
+                return;
+            }
+        }
+        self.last_sent_at = Some(now);
+        self.last_sent_content_chars = preview.content_chars;
+        let target = preview
+            .target
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("待确定目标");
+        let suffix = if preview.complete {
+            "，等待执行写入"
+        } else {
+            ""
+        };
+        emit_runtime_tool_partial(
+            app,
+            session_id,
+            call_id,
+            tool_name,
+            &format!(
+                "正在生成写入内容：{} 字，目标：{}{}",
+                preview.content_chars, target, suffix
+            ),
+        );
+    }
+}
+
+fn write_preview_from_partial_tool_arguments(
+    tool_name: &str,
+    arguments: &str,
+) -> Option<ToolWritePreview> {
+    let normalized_name = tool_name.trim();
+    if matches!(
+        normalized_name,
+        "Write" | "workflow" | "app_cli" | "Operate"
+    ) {
+        if let Ok(value) = serde_json::from_str::<Value>(arguments) {
+            return write_preview_from_complete_tool_arguments(normalized_name, &value);
+        }
+    }
+    let path = partial_json_string_field(arguments, "path").and_then(|item| item.value);
+    let content = partial_json_string_field(arguments, "content")?;
+    if matches!(
+        normalized_name,
+        "Write" | "workflow" | "app_cli" | "Operate"
+    ) && content.char_count > 0
+    {
+        return Some(ToolWritePreview {
+            target: path,
+            content_chars: content.char_count,
+            complete: content.complete,
+        });
+    }
+    None
+}
+
+fn write_preview_from_complete_tool_arguments(
+    tool_name: &str,
+    value: &Value,
+) -> Option<ToolWritePreview> {
+    if tool_name == "Write" {
+        let content = value.get("content").and_then(Value::as_str)?;
+        return Some(ToolWritePreview {
+            target: value
+                .get("path")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            content_chars: content.chars().count(),
+            complete: true,
+        });
+    }
+    let action = value
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let payload = value
+        .get("payload")
+        .or_else(|| value.get("input"))
+        .unwrap_or(value);
+    let resource = value
+        .get("resource")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let operation = value
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let is_write = action == "workspace.write"
+        || action == "manuscripts.writeCurrent"
+        || (resource == "workspace" && operation == "write")
+        || payload.get("content").and_then(Value::as_str).is_some();
+    if !is_write {
+        return None;
+    }
+    let content = payload.get("content").and_then(Value::as_str)?;
+    Some(ToolWritePreview {
+        target: payload
+            .get("path")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        content_chars: content.chars().count(),
+        complete: true,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PartialJsonStringField {
+    value: Option<String>,
+    char_count: usize,
+    complete: bool,
+}
+
+fn partial_json_string_field(source: &str, key: &str) -> Option<PartialJsonStringField> {
+    let key_start = find_json_key_outside_string(source, key)?;
+    let key_pattern = format!("\"{}\"", key);
+    let after_key = &source[key_start + key_pattern.len()..];
+    let colon_offset = after_key.find(':')?;
+    let mut chars = after_key[colon_offset + 1..].char_indices().peekable();
+    while let Some((_, ch)) = chars.peek().copied() {
+        if !ch.is_whitespace() {
+            break;
+        }
+        chars.next();
+    }
+    let (_, first) = chars.next()?;
+    if first != '"' {
+        return None;
+    }
+    let mut value = String::new();
+    let mut escape = false;
+    let mut unicode_escape_remaining = 0usize;
+    let mut complete = false;
+    for (_, ch) in chars {
+        if unicode_escape_remaining > 0 {
+            unicode_escape_remaining -= 1;
+            if unicode_escape_remaining == 0 {
+                value.push('?');
+            }
+            continue;
+        }
+        if escape {
+            match ch {
+                '"' => value.push('"'),
+                '\\' => value.push('\\'),
+                '/' => value.push('/'),
+                'b' => value.push('\u{0008}'),
+                'f' => value.push('\u{000c}'),
+                'n' => value.push('\n'),
+                'r' => value.push('\r'),
+                't' => value.push('\t'),
+                'u' => unicode_escape_remaining = 4,
+                other => value.push(other),
+            }
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' => escape = true,
+            '"' => {
+                complete = true;
+                break;
+            }
+            other => value.push(other),
+        }
+    }
+    let char_count = value.chars().count();
+    Some(PartialJsonStringField {
+        value: Some(value),
+        char_count,
+        complete,
+    })
+}
+
+fn find_json_key_outside_string(source: &str, key: &str) -> Option<usize> {
+    let key_pattern = format!("\"{}\"", key);
+    let mut in_string = false;
+    let mut escape = false;
+    let mut last_match = None;
+    for (index, ch) in source.char_indices() {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if source[index..].starts_with(&key_pattern) {
+            last_match = Some(index);
+            in_string = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+        }
+    }
+    last_match
+}
+
 fn process_openai_sse_event(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -832,6 +1072,7 @@ fn process_openai_sse_event(
     data: &str,
     result: &mut StreamingChatCompletion,
     tool_deltas: &mut Vec<StreamingToolDelta>,
+    tool_preview_states: &mut Vec<ToolArgumentPreviewState>,
     saw_tool_calls: &mut bool,
     saw_reasoning: &mut bool,
     responding_started: &mut bool,
@@ -887,6 +1128,9 @@ fn process_openai_sse_event(
             while tool_deltas.len() <= index {
                 tool_deltas.push(StreamingToolDelta::default());
             }
+            while tool_preview_states.len() <= index {
+                tool_preview_states.push(ToolArgumentPreviewState::default());
+            }
             let entry = &mut tool_deltas[index];
             if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
                 entry.id = id.to_string();
@@ -898,6 +1142,18 @@ fn process_openai_sse_event(
                 if let Some(arguments_piece) = openai_tool_arguments_text(function.get("arguments"))
                 {
                     entry.arguments.push_str(&arguments_piece);
+                    let preview_call_id = if entry.id.trim().is_empty() {
+                        format!("call-{}-{}", session_id.unwrap_or(runtime_mode), index + 1)
+                    } else {
+                        entry.id.clone()
+                    };
+                    tool_preview_states[index].maybe_emit(
+                        app,
+                        session_id,
+                        &preview_call_id,
+                        &entry.name,
+                        &entry.arguments,
+                    );
                 }
             }
         }
@@ -1037,6 +1293,7 @@ async fn run_stream_attempt(
     let mut event_data_lines = Vec::<String>::new();
     let mut result = StreamingChatCompletion::default();
     let mut tool_deltas = Vec::<StreamingToolDelta>::new();
+    let mut tool_preview_states = Vec::<ToolArgumentPreviewState>::new();
     let mut saw_tool_calls = false;
     let mut saw_reasoning = false;
     let mut responding_started = false;
@@ -1081,6 +1338,7 @@ async fn run_stream_attempt(
                                 &event_data_lines.join("\n"),
                                 &mut result,
                                 &mut tool_deltas,
+                                &mut tool_preview_states,
                                 &mut saw_tool_calls,
                                 &mut saw_reasoning,
                                 &mut responding_started,
@@ -1212,6 +1470,7 @@ async fn run_stream_attempt(
             &event_data_lines.join("\n"),
             &mut result,
             &mut tool_deltas,
+            &mut tool_preview_states,
             &mut saw_tool_calls,
             &mut saw_reasoning,
             &mut responding_started,
@@ -1905,8 +2164,9 @@ pub(crate) fn run_openai_json_chat_completion_transport(
 mod tests {
     use super::{
         is_retryable_json_error, openai_chat_body_to_responses_body, openai_prompt_cache_body,
-        openai_provider_profile, openai_reasoning_fragments, preferred_transport_mode,
-        qwen_prompt_cache_body, value_contains_cache_control,
+        openai_provider_profile, openai_reasoning_fragments, partial_json_string_field,
+        preferred_transport_mode, qwen_prompt_cache_body, value_contains_cache_control,
+        write_preview_from_partial_tool_arguments,
     };
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
     use crate::provider_compat::ProviderFamily;
@@ -2145,6 +2405,59 @@ mod tests {
             "reasoning_content": "step zero"
         }));
         assert_eq!(fragments, vec!["step zero", "step one", "step two"]);
+    }
+
+    #[test]
+    fn partial_json_string_field_counts_incomplete_content() {
+        let parsed = partial_json_string_field(
+            r#"{"path":"manuscripts://current","content":"hello\nworld"#,
+            "content",
+        )
+        .expect("content field should be detected");
+
+        assert_eq!(parsed.char_count, "hello\nworld".chars().count());
+        assert!(!parsed.complete);
+    }
+
+    #[test]
+    fn partial_json_string_field_ignores_key_like_text_inside_content() {
+        let parsed = partial_json_string_field(
+            r#"{"content":"<meta name=\"content\" value=\"demo\">tail"#,
+            "content",
+        )
+        .expect("outer content key should be detected");
+
+        assert_eq!(
+            parsed.char_count,
+            "<meta name=\"content\" value=\"demo\">tail".chars().count()
+        );
+        assert!(!parsed.complete);
+    }
+
+    #[test]
+    fn write_preview_detects_streaming_write_arguments() {
+        let preview = write_preview_from_partial_tool_arguments(
+            "Write",
+            r#"{"path":"manuscripts://current","content":"hello"#,
+        )
+        .expect("write preview should be detected");
+
+        assert_eq!(preview.target.as_deref(), Some("manuscripts://current"));
+        assert_eq!(preview.content_chars, 5);
+        assert!(!preview.complete);
+    }
+
+    #[test]
+    fn write_preview_detects_complete_workspace_write_arguments() {
+        let preview = write_preview_from_partial_tool_arguments(
+            "workflow",
+            r#"{"action":"workspace.write","payload":{"path":"manuscripts/demo.html","content":"<html></html>"}}"#,
+        )
+        .expect("workspace write preview should be detected");
+
+        assert_eq!(preview.target.as_deref(), Some("manuscripts/demo.html"));
+        assert_eq!(preview.content_chars, "<html></html>".chars().count());
+        assert!(preview.complete);
     }
 
     #[test]

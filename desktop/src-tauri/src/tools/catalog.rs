@@ -55,8 +55,8 @@ const REDBOX_EDITOR_DESCRIPTION: &str = "Structured editor actions for the curre
 const READ_DESCRIPTION: &str = "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, or editor://current/script. Do not use bash/curl for web pages.";
 const LIST_DESCRIPTION: &str = "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, assets:// for asset library entries, or media:// for media.";
 const SEARCH_DESCRIPTION: &str = "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and assets:// for asset library lookup. For public web search, use Operate(resource=\"web\", operation=\"search\", input={\"query\":\"...\"}).";
-const WRITE_DESCRIPTION: &str = "Write content only to a currently bound authoring resource. Supported paths are manuscripts://current for the bound manuscript body and editor://current/script for the bound editor script. Do not use Write for standalone Markdown drafts or workspace:// files; use Operate(resource=\"workspace\", operation=\"write\", input={\"path\":\"drafts/name.md\",\"content\":\"...\"}) when a normal workspace file should be saved.";
-const REDBOX_DESCRIPTION: &str = "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
+const WRITE_DESCRIPTION: &str = "Write content only to a currently bound authoring resource. Supported paths are manuscripts://current for the bound manuscript body and editor://current/script for the bound editor script. Do not use Write as a normal file-save tool when no current manuscript/editor is bound. RedConvert lists user-facing scripts, articles, HTML, Markdown, and other content artifacts only under manuscripts/. For standalone manuscript artifacts, use Operate(resource=\"workspace\", operation=\"write\", input={\"path\":\"manuscripts/name.md\",\"content\":\"...\"}).";
+const REDBOX_DESCRIPTION: &str = "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls. Operate must include non-empty resource and operation fields; never call Operate with an empty object or as a help/planning probe.";
 const TOOL_SEARCH_DESCRIPTION: &str = "Search deferred Operate actions and MCP tools that are available to this session but not exposed directly in the current turn. Use this when a tool or action is reported as deferred.";
 const ALL_APP_RUNTIME_MODES: &[&str] = &[
     "team",
@@ -3531,7 +3531,15 @@ fn skills_read_input_schema() -> Value {
                 string_schema("Optional Codex-style opaque package handle returned by skills.list."),
             ),
             (
+                "id",
+                string_schema("Alias for package when passing an opaque skill package id."),
+            ),
+            (
                 "skillPackage",
+                string_schema("Alias for package."),
+            ),
+            (
+                "packageId",
                 string_schema("Alias for package."),
             ),
             (
@@ -3575,6 +3583,22 @@ fn skills_read_resource_input_schema() -> Value {
             (
                 "name",
                 string_schema("Skill name that owns the bundled resource."),
+            ),
+            (
+                "id",
+                string_schema("Alias for package when passing an opaque skill package id returned by skills.list or skills.invoke."),
+            ),
+            (
+                "package",
+                string_schema("Optional opaque package handle returned by skills.list or skills.invoke."),
+            ),
+            (
+                "skillPackage",
+                string_schema("Alias for package."),
+            ),
+            (
+                "packageId",
+                string_schema("Alias for package."),
             ),
             (
                 "path",
@@ -4219,7 +4243,7 @@ fn fs_workspace_write_input_schema() -> Value {
             (
                 "path",
                 string_schema(
-                    "Workspace-relative file path to write. Parent directories are created as needed.",
+                    "Workspace-relative file path to write. Parent directories are created as needed. Save user-facing scripts, articles, HTML, Markdown, and other content artifacts under manuscripts/ so they appear in the manuscript list; do not use top-level drafts/ for content artifacts.",
                 ),
             ),
             (
@@ -6787,7 +6811,7 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "workspace.write",
         namespace: "workspace",
-        description: "Write one UTF-8 text file inside the workspace, creating parent directories as needed. Use for project manifests, drafts, plans, transcripts, and indexes that should live as user-managed project files.",
+        description: "Write one UTF-8 text file inside the workspace, creating parent directories as needed. Use manuscripts/ for user-facing scripts, articles, HTML, Markdown, and other content artifacts; use other workspace paths only for project manifests, plans, transcripts, and indexes.",
         input_schema: fs_workspace_write_input_schema,
         output_schema: file_system_output_schema,
         mutating: true,
@@ -7097,6 +7121,7 @@ pub fn tool_action_family_summary(tool_name: &str, runtime_mode: Option<&str>) -
     Some(action_family_summary(&descriptors))
 }
 
+#[allow(dead_code)]
 pub fn tool_action_family_summary_for_descriptors(
     descriptors: &[ActionDescriptor],
 ) -> Option<String> {
@@ -7356,7 +7381,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": bound_write_path_schema("Target bound authoring path. Supported write paths are manuscripts://current and editor://current/script. workspace:// paths and standalone drafts are not supported by Write; use Operate(resource=\"workspace\", operation=\"write\", input={...}) when a normal file should be saved."),
+                        "path": bound_write_path_schema("Target bound authoring path. Supported write paths are manuscripts://current and editor://current/script. workspace:// paths and standalone artifacts are not supported by Write; use Operate(resource=\"workspace\", operation=\"write\", input={...}) when a normal workspace file or standalone HTML/Markdown script package should be saved."),
                         "content": { "type": "string", "description": "Complete replacement content to write." },
                         "source": { "type": "string", "enum": ["user", "ai", "system"], "description": "Optional content source for editor script writes." }
                     },
