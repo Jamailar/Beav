@@ -1742,27 +1742,6 @@ export const MessageItem = memo(({
                 {showAttachments && (!msg.attachments || msg.attachments.length === 0) && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
                 {userCopyContent && (
                   <div className="mt-1.5 flex justify-end gap-1 opacity-0 transition-opacity group-hover/user:opacity-100 focus-within:opacity-100">
-                    {onSaveToKnowledge && (
-                      <button
-                        type="button"
-                        onClick={() => onSaveToKnowledge(msg, userCopyContent)}
-                        disabled={savingKnowledgeMessageId === msg.id}
-                        className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-default disabled:opacity-60"
-                        title="存入知识库"
-                      >
-                        {savedKnowledgeMessageId === msg.id ? (
-                          <>
-                            <Check className="h-3.5 w-3.5 text-green-500" />
-                            <span className="text-green-500">已入库</span>
-                          </>
-                        ) : (
-                          <>
-                            <Archive className="h-3.5 w-3.5" />
-                            <span>{savingKnowledgeMessageId === msg.id ? '入库中' : '入库'}</span>
-                          </>
-                        )}
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => onCopyMessage(msg.id, userCopyContent)}

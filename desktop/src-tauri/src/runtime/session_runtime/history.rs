@@ -128,9 +128,7 @@ pub(super) fn is_internal_runtime_history_user_message(content: &str) -> bool {
         || crate::skills::is_available_skills_instruction_content(content)
         || content
         == "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。"
-        || content.starts_with("系统状态更新：以下技能已激活并写入当前会话：")
-        || content.starts_with("系统状态更新：以下技能已激活并加入当前轮上下文：")
-        || content.starts_with("系统状态更新：以下技能已激活：")
+        || content.starts_with("系统状态更新：")
         || content.starts_with("当前写稿工程已创建并绑定为 `")
         || content.starts_with("你刚才发送了空的 `workflow` 调用")
         || content.starts_with("当前任务是执行型创作任务")
@@ -224,6 +222,9 @@ mod tests {
 
     #[test]
     fn media_followup_bridge_prompts_are_internal_history_messages() {
+        assert!(is_internal_runtime_history_user_message(
+            "系统状态更新：以下技能已选择供当前轮使用：high-retention-video-script。本次工具结果已返回 skillContextPack。"
+        ));
         assert!(is_internal_runtime_history_user_message(
             "你正在处理一个图片生成后台进度回传。不要提到后台任务、session bridge、系统提示或内部轮询。"
         ));

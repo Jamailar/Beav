@@ -4,7 +4,7 @@ use crate::mcp::{McpToolInfo, McpToolInventorySnapshot};
 use crate::tools::action_aliases::canonical_app_cli_action_for_policy;
 use crate::tools::catalog::{
     descriptor_by_name, schema_for_tool_for_runtime_mode, schema_for_tool_from_action_descriptors,
-    tool_action_family_summary, tool_action_family_summary_for_descriptors, ToolDescriptor,
+    tool_action_family_summary, ToolDescriptor,
 };
 use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_runtime_mode};
 use crate::tools::plan::{
@@ -68,9 +68,13 @@ pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<Strin
         }
     }
     if !operate_actions.is_empty() {
+        append_active_skill_actions(metadata, &mut operate_actions);
         return operate_actions;
     }
     let mut actions = canonical_action_list(string_list(metadata, "allowedAppCliActions"));
+    if !actions.is_empty() {
+        append_active_skill_actions(metadata, &mut actions);
+    }
     if is_artifact_authoring_manuscript(metadata) {
         actions.retain(|item| item != "manuscripts.writeCurrent");
         if !actions.is_empty() && !actions.iter().any(|item| item == "manuscripts.readCurrent") {
@@ -90,6 +94,55 @@ pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<Strin
         actions.push("image.generate".to_string());
     }
     actions
+}
+
+fn append_active_skill_actions(metadata: Option<&Value>, actions: &mut Vec<String>) {
+    if !metadata_has_active_skill_context(metadata)
+        && !actions.iter().any(|item| item == "skills.invoke")
+    {
+        return;
+    }
+    for action in [
+        "skills.inspect",
+        "skills.listResources",
+        "skills.readResource",
+        "skills.invoke",
+    ] {
+        if !actions.iter().any(|item| item == action) {
+            actions.push(action.to_string());
+        }
+    }
+}
+
+fn metadata_has_active_skill_context(metadata: Option<&Value>) -> bool {
+    let Some(metadata) = metadata else {
+        return false;
+    };
+    if string_value(Some(metadata), "requiredSkill").is_some() {
+        return true;
+    }
+    if metadata
+        .get("activeSkills")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .any(|item| !item.is_empty())
+        })
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    match metadata
+        .get("sessionSkillState")
+        .and_then(|state| state.get("active"))
+    {
+        Some(Value::Object(items)) => !items.is_empty(),
+        Some(Value::Array(items)) => !items.is_empty(),
+        _ => false,
+    }
 }
 
 fn canonical_action_list(actions: Vec<String>) -> Vec<String> {
@@ -317,7 +370,7 @@ pub fn prompt_tool_lines_for_runtime_mode(runtime_mode: &str) -> String {
         .iter()
         .map(|item| {
             let capability_summary = tool_action_family_summary(item.name, Some(runtime_mode))
-                .map(|summary| format!(" | capabilities={summary}"))
+                .map(|_| " | capabilities=schema-defined".to_string())
                 .unwrap_or_default();
             format!(
                 "- {} | kind={} | requiresApproval={} | concurrencySafe={} | outputBudget={} chars{}",
@@ -342,7 +395,7 @@ pub fn prompt_tool_lines_for_tool_names(
         .iter()
         .map(|item| {
             let capability_summary = tool_action_family_summary(item.name, runtime_mode)
-                .map(|summary| format!(" | capabilities={summary}"))
+                .map(|_| " | capabilities=schema-defined".to_string())
                 .unwrap_or_default();
             format!(
                 "- {} | kind={} | requiresApproval={} | concurrencySafe={} | outputBudget={} chars{}",
@@ -386,7 +439,7 @@ pub fn prompt_tool_lines_for_session(
 
 fn capability_summary_for_plan_tool(tool_name: &str, plan: &ToolRegistryPlan) -> Option<String> {
     if tool_name == "Operate" && !plan.direct_app_cli_actions.is_empty() {
-        let mut summary = tool_action_family_summary_for_descriptors(&plan.direct_app_cli_actions)?;
+        let mut summary = format!("directActions={}", plan.direct_app_cli_actions.len());
         if !plan.deferred_action_namespaces.is_empty() {
             summary.push_str(" | deferred=");
             summary.push_str(&plan.deferred_action_namespaces.join(","));
@@ -395,6 +448,7 @@ fn capability_summary_for_plan_tool(tool_name: &str, plan: &ToolRegistryPlan) ->
         return Some(summary);
     }
     tool_action_family_summary(tool_name, Some(&plan.runtime_mode))
+        .map(|_| "schema-defined".to_string())
 }
 
 fn mcp_openai_schema(tool: &McpToolInfo) -> Value {
@@ -665,5 +719,17 @@ mod tests {
         assert!(names.contains(&"list_mcp_resources"));
         assert!(names.contains(&"list_mcp_resource_templates"));
         assert!(names.contains(&"read_mcp_resource"));
+    }
+
+    #[test]
+    fn prompt_tool_lines_keep_operate_actions_compact() {
+        let store = crate::AppStore::default();
+        let lines = prompt_tool_lines_for_session(&store, "team", None);
+
+        assert!(lines.contains("Operate"));
+        assert!(lines.contains("directActions=") || lines.contains("schema-defined"));
+        assert!(!lines.contains("video.generate"));
+        assert!(!lines.contains("workspace.write"));
+        assert!(!lines.contains("cli_runtime.execute"));
     }
 }

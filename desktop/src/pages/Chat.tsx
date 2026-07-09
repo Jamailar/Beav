@@ -1463,9 +1463,7 @@ function stringifyRuntimePreview(value: unknown, maxLength = 420): string {
 
 const RUNTIME_EVENT_MESSAGE_TIME_TOLERANCE_MS = 1_500;
 const INTERNAL_RUNTIME_STATUS_PREFIXES = [
-  '系统状态更新：以下技能已激活并写入当前会话：',
-  '系统状态更新：以下技能已激活并加入当前轮上下文：',
-  '系统状态更新：以下技能已激活：',
+  '系统状态更新：',
   '你正在处理一个图片生成后台进度回传。',
   '你正在处理一个图片生成后台回传任务。',
   '你正在处理一个视频生成后台进度回传。',
