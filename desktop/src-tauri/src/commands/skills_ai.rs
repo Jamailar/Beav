@@ -16,7 +16,9 @@ use crate::skills::{
     write_skill_record_to_path, InstallSkillsFromRepoRequest, SkillInvokeRequest,
     SkillPackageRecord, UninstallSkillRequest, DEFAULT_SKILL_RESOURCE_MAX_CHARS,
 };
-use crate::skills::{list_skill_resources_value, parse_skill_resource_uri};
+use crate::skills::{
+    list_skill_resources_value, parse_skill_resource_uri, read_unique_active_skill_resource_value,
+};
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
@@ -45,6 +47,7 @@ fn requested_skill_package(payload: &Value) -> String {
     payload_string(payload, "package")
         .or_else(|| payload_string(payload, "skillPackage"))
         .or_else(|| payload_string(payload, "packageId"))
+        .or_else(|| payload_string(payload, "id"))
         .unwrap_or_default()
 }
 
@@ -265,6 +268,8 @@ fn skill_context_pack_value(
             workspace,
             path,
             DEFAULT_SKILL_RESOURCE_MAX_CHARS,
+            None,
+            None,
             Some("skills.invoke.hydration"),
             package_hash,
         ) {
@@ -506,9 +511,10 @@ pub fn handle_skills_ai_channel(
                 let resource = requested_skill_resource(payload);
                 if !resource.trim().is_empty() && resource.trim() != "SKILL.md" {
                     let max_chars = payload_usize(payload, "maxChars")
-                        .or_else(|| payload_usize(payload, "limit"))
                         .unwrap_or(DEFAULT_SKILL_RESOURCE_MAX_CHARS)
                         .clamp(1, DEFAULT_SKILL_RESOURCE_MAX_CHARS);
+                    let offset = payload_usize(payload, "offset");
+                    let limit = payload_usize(payload, "limit").map(|value| value.clamp(1, 400));
                     let package_record = package_for_record(&package_records, &record);
                     let resource_value = cached_read_skill_resource_value(
                         &state.skill_performance_cache,
@@ -516,6 +522,8 @@ pub fn handle_skills_ai_channel(
                         workspace.as_deref(),
                         &resource,
                         max_chars,
+                        offset,
+                        limit,
                         Some("skills.read"),
                         package_record
                             .map(|package| package.package_hash.as_str())
@@ -574,12 +582,27 @@ pub fn handle_skills_ai_channel(
                     workspace.as_deref(),
                     &discovery_fingerprint,
                 )?;
+                let raw_resource_path = requested_skill_resource_path(payload);
+                let max_chars = payload_usize(payload, "maxChars")
+                    .unwrap_or(DEFAULT_SKILL_RESOURCE_MAX_CHARS)
+                    .clamp(1, DEFAULT_SKILL_RESOURCE_MAX_CHARS);
+                let offset = payload_usize(payload, "offset");
+                let limit = payload_usize(payload, "limit").map(|value| value.clamp(1, 400));
                 let Some(record) =
                     find_skill_record_for_payload(&skill_records, &package_records, payload)
                 else {
+                    if let Some(result) = read_unique_active_skill_resource_value(
+                        &skill_records,
+                        workspace.as_deref(),
+                        &raw_resource_path,
+                        max_chars,
+                        offset,
+                        limit,
+                    ) {
+                        return result;
+                    }
                     return Err("技能名称不能为空".to_string());
                 };
-                let raw_resource_path = requested_skill_resource_path(payload);
                 let resource_path = raw_resource_path
                     .trim()
                     .strip_prefix("SKILL.md/")
@@ -588,10 +611,6 @@ pub fn handle_skills_ai_channel(
                 if resource_path.trim().is_empty() {
                     return Err("技能资源路径不能为空".to_string());
                 }
-                let max_chars = payload_usize(payload, "maxChars")
-                    .or_else(|| payload_usize(payload, "limit"))
-                    .unwrap_or(DEFAULT_SKILL_RESOURCE_MAX_CHARS)
-                    .clamp(1, DEFAULT_SKILL_RESOURCE_MAX_CHARS);
                 let package_hash = package_for_record(&package_records, &record)
                     .map(|package| package.package_hash.as_str())
                     .unwrap_or("");
@@ -601,6 +620,8 @@ pub fn handle_skills_ai_channel(
                     workspace.as_deref(),
                     &resource_path,
                     max_chars,
+                    offset,
+                    limit,
                     None,
                     package_hash,
                 )
@@ -900,5 +921,15 @@ Before drafting, read:
     fn referenced_skill_resource_paths_ignores_plain_words() {
         let body = "HKRR means Happiness, Knowledge, Resonance, Rhythm. No resource here.";
         assert!(referenced_skill_resource_paths(body).is_empty());
+    }
+
+    #[test]
+    fn requested_skill_package_accepts_invoke_package_id_alias() {
+        let payload = json!({
+            "id": "skill_2b61f9380659beaa",
+            "path": "references/clock-theory.md"
+        });
+
+        assert_eq!(requested_skill_package(&payload), "skill_2b61f9380659beaa");
     }
 }

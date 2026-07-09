@@ -20,7 +20,10 @@ pub struct ParsedSkillResourceUri {
 }
 
 pub fn parse_skill_resource_uri(raw: &str) -> Option<ParsedSkillResourceUri> {
-    let rest = raw.trim().strip_prefix("skill://")?;
+    let trimmed = raw.trim();
+    let rest = trimmed
+        .strip_prefix("skill://")
+        .or_else(|| trimmed.strip_prefix("skills://"))?;
     let (skill_name, path) = rest.split_once('/')?;
     let skill_name = skill_name.trim();
     let path = path.trim_start_matches('/');
@@ -108,6 +111,8 @@ pub fn read_skill_resource_value(
     workspace_root: Option<&Path>,
     raw_path: &str,
     max_chars: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
     resolved_from: Option<&str>,
 ) -> Result<Value, String> {
     let (path, normalized_path) = resolve_skill_resource_file(record, workspace_root, raw_path)?;
@@ -125,7 +130,7 @@ pub fn read_skill_resource_value(
             record.name, normalized_path
         )
     })?;
-    let truncated_content = truncate_chars(&content, max_chars);
+    let content_slice = slice_resource_content(&content, offset, limit, max_chars);
     let modified_at = metadata
         .modified()
         .ok()
@@ -139,9 +144,21 @@ pub fn read_skill_resource_value(
         "kind": resource_kind(&normalized_path),
         "byteSize": metadata.len(),
         "sha256": format!("{:x}", Sha256::digest(&bytes)),
-        "truncated": truncated_content.chars().count() < content.chars().count(),
-        "content": truncated_content
+        "truncated": content_slice.truncated,
+        "content": content_slice.content
     });
+    if let Some(line_start) = content_slice.line_start {
+        response["lineStart"] = json!(line_start);
+    }
+    if let Some(line_end) = content_slice.line_end {
+        response["lineEnd"] = json!(line_end);
+    }
+    if let Some(total_lines) = content_slice.total_lines {
+        response["totalLines"] = json!(total_lines);
+    }
+    if let Some(next_offset) = content_slice.next_offset {
+        response["nextOffset"] = json!(next_offset);
+    }
     if let Some(modified_at) = modified_at {
         response["modifiedAt"] = json!(modified_at);
     }
@@ -156,6 +173,8 @@ pub fn read_unique_active_skill_resource_value(
     workspace_root: Option<&Path>,
     raw_path: &str,
     max_chars: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
 ) -> Option<Result<Value, String>> {
     if !looks_like_skill_bundle_relative_path(raw_path) {
         return None;
@@ -172,6 +191,8 @@ pub fn read_unique_active_skill_resource_value(
             workspace_root,
             raw_path,
             max_chars,
+            offset,
+            limit,
             Some("activeSkillResourceFallback"),
         )),
         _ => Some(Err(format!(
@@ -303,6 +324,62 @@ fn truncate_chars(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect::<String>()
 }
 
+#[derive(Debug)]
+struct ResourceContentSlice {
+    content: String,
+    truncated: bool,
+    line_start: Option<usize>,
+    line_end: Option<usize>,
+    total_lines: Option<usize>,
+    next_offset: Option<usize>,
+}
+
+fn slice_resource_content(
+    content: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    max_chars: usize,
+) -> ResourceContentSlice {
+    if offset.is_none() && limit.is_none() {
+        let sliced = truncate_chars(content, max_chars);
+        return ResourceContentSlice {
+            truncated: sliced.chars().count() < content.chars().count(),
+            content: sliced,
+            line_start: None,
+            line_end: None,
+            total_lines: None,
+            next_offset: None,
+        };
+    }
+
+    let lines = content.lines().collect::<Vec<_>>();
+    let total_lines = lines.len();
+    let safe_offset = offset.unwrap_or(0).min(total_lines);
+    let line_limit = limit.unwrap_or(400).clamp(1, 400);
+    let line_end = safe_offset.saturating_add(line_limit).min(total_lines);
+    let raw_slice = lines[safe_offset..line_end].join("\n");
+    let sliced = truncate_chars(&raw_slice, max_chars);
+    let char_truncated = sliced.chars().count() < raw_slice.chars().count();
+    let line_truncated = line_end < total_lines;
+
+    ResourceContentSlice {
+        content: sliced,
+        truncated: char_truncated || line_truncated,
+        line_start: if line_end > safe_offset {
+            Some(safe_offset + 1)
+        } else {
+            Some(0)
+        },
+        line_end: Some(line_end),
+        total_lines: Some(total_lines),
+        next_offset: if line_end < total_lines {
+            Some(line_end)
+        } else {
+            None
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,11 +421,38 @@ mod tests {
     fn reads_skill_resource_from_workspace_skill() {
         let temp = temp_workspace();
         let record = workspace_skill(&temp);
-        let value =
-            read_skill_resource_value(&record, Some(&temp), "references/guide.md", 100, None)
-                .expect("read resource");
+        let value = read_skill_resource_value(
+            &record,
+            Some(&temp),
+            "references/guide.md",
+            100,
+            None,
+            None,
+            None,
+        )
+        .expect("read resource");
         assert_eq!(value["content"], "hello");
         assert_eq!(value["uri"], "skill://writer/references/guide.md");
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn reads_unique_relative_resource_without_explicit_skill_name() {
+        let temp = temp_workspace();
+        let record = workspace_skill(&temp);
+        let value = read_unique_active_skill_resource_value(
+            &[record],
+            Some(&temp),
+            "references/guide.md",
+            100,
+            None,
+            None,
+        )
+        .expect("relative resource should resolve to one skill")
+        .expect("read resource");
+
+        assert_eq!(value["content"], "hello");
+        assert_eq!(value["resolvedFrom"], "activeSkillResourceFallback");
         let _ = fs::remove_dir_all(temp);
     }
 
@@ -365,9 +469,41 @@ mod tests {
     fn rejects_parent_traversal() {
         let temp = temp_workspace();
         let record = workspace_skill(&temp);
-        let error = read_skill_resource_value(&record, Some(&temp), "../SKILL.md", 100, None)
-            .expect_err("parent traversal rejected");
+        let error =
+            read_skill_resource_value(&record, Some(&temp), "../SKILL.md", 100, None, None, None)
+                .expect_err("parent traversal rejected");
         assert!(error.contains("parent traversal"));
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn reads_skill_resource_line_slice_with_next_offset() {
+        let temp = temp_workspace();
+        let record = workspace_skill(&temp);
+        let skill_root = temp.join("skills").join("writer");
+        fs::write(
+            skill_root.join("references").join("guide.md"),
+            "line 1\nline 2\nline 3\nline 4",
+        )
+        .expect("reference");
+
+        let value = read_skill_resource_value(
+            &record,
+            Some(&temp),
+            "references/guide.md",
+            100,
+            Some(1),
+            Some(2),
+            None,
+        )
+        .expect("read resource");
+
+        assert_eq!(value["content"], "line 2\nline 3");
+        assert_eq!(value["lineStart"], 2);
+        assert_eq!(value["lineEnd"], 3);
+        assert_eq!(value["totalLines"], 4);
+        assert_eq!(value["nextOffset"], 3);
+        assert_eq!(value["truncated"], true);
         let _ = fs::remove_dir_all(temp);
     }
 
@@ -375,6 +511,14 @@ mod tests {
     fn parses_skill_uri() {
         let parsed =
             parse_skill_resource_uri("skill://writer/references/guide.md").expect("parsed");
+        assert_eq!(parsed.skill_name, "writer");
+        assert_eq!(parsed.path, "references/guide.md");
+    }
+
+    #[test]
+    fn parses_plural_skills_uri_alias() {
+        let parsed =
+            parse_skill_resource_uri("skills://writer/references/guide.md").expect("parsed");
         assert_eq!(parsed.skill_name, "writer");
         assert_eq!(parsed.path, "references/guide.md");
     }

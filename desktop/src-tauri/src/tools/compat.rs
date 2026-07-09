@@ -361,7 +361,8 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
             let mut payload = Map::new();
             payload.insert("path".to_string(), json!(path));
             payload.insert("uri".to_string(), json!(path));
-            copy_universal_as(&mut payload, &object, "limit", "maxChars");
+            copy_universal_as(&mut payload, &object, "offset", "offset");
+            copy_universal_as(&mut payload, &object, "limit", "limit");
             copy_universal_as(&mut payload, &object, "maxChars", "maxChars");
             app_cli_action_call(
                 "skills.readResource",
@@ -373,7 +374,8 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
         _ if crate::skills::looks_like_skill_bundle_relative_path(path) => {
             let mut payload = Map::new();
             payload.insert("path".to_string(), json!(path));
-            copy_universal_as(&mut payload, &object, "limit", "maxChars");
+            copy_universal_as(&mut payload, &object, "offset", "offset");
+            copy_universal_as(&mut payload, &object, "limit", "limit");
             copy_universal_as(&mut payload, &object, "maxChars", "maxChars");
             app_cli_action_call(
                 "skills.readResource",
@@ -2817,7 +2819,12 @@ mod tests {
     fn normalizes_skill_uri_read_to_skill_resource_action() {
         let normalized = normalize_tool_call(
             "Read",
-            &json!({ "path": "skill://writer/references/guide.md", "maxChars": 1200 }),
+            &json!({
+                "path": "skill://writer/references/guide.md",
+                "offset": 600,
+                "limit": 400,
+                "maxChars": 1200
+            }),
         );
 
         assert_eq!(normalized.name, "workflow");
@@ -2828,6 +2835,36 @@ mod tests {
         assert_eq!(
             normalized.arguments.pointer("/payload/path"),
             Some(&json!("skill://writer/references/guide.md"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/maxChars"),
+            Some(&json!(1200))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/offset"),
+            Some(&json!(600))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/limit"),
+            Some(&json!(400))
+        );
+    }
+
+    #[test]
+    fn normalizes_plural_skills_uri_read_to_skill_resource_action() {
+        let normalized = normalize_tool_call(
+            "Read",
+            &json!({ "path": "skills://writer/references/guide.md", "maxChars": 1200 }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("skills.readResource"))
+        );
+        assert_eq!(
+            normalized.arguments.pointer("/payload/path"),
+            Some(&json!("skills://writer/references/guide.md"))
         );
         assert_eq!(
             normalized.arguments.pointer("/payload/maxChars"),

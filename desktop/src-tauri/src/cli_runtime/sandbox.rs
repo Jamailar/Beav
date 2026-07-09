@@ -252,7 +252,39 @@ fn host_tool_read_paths(argv: &[String], env: &BTreeMap<String, String>) -> Vec<
     if let Some(path) = resolved {
         push_tool_closure(&mut paths, &path, env, 2);
     }
+    push_skill_resource_argument_roots(&mut paths, argv);
     paths
+}
+
+fn push_skill_resource_argument_roots(paths: &mut Vec<String>, argv: &[String]) {
+    for arg in argv.iter().skip(1) {
+        let trimmed = arg.trim().trim_matches('"').trim_matches('\'');
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = Path::new(trimmed);
+        if !path.is_absolute() || !path.exists() {
+            continue;
+        }
+        if let Some(skill_root) = skill_root_for_resource_argument(path) {
+            push_unique_path(paths, skill_root.to_string_lossy().to_string());
+        }
+    }
+}
+
+fn skill_root_for_resource_argument(path: &Path) -> Option<PathBuf> {
+    let resolved = fs::canonicalize(path).ok()?;
+    let start = if resolved.is_dir() {
+        resolved.as_path()
+    } else {
+        resolved.parent()?
+    };
+    for ancestor in start.ancestors() {
+        if ancestor.join("SKILL.md").is_file() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
 }
 
 fn build_macos_sandbox_profile(spec: &CliSandboxSpec, env: &BTreeMap<String, String>) -> String {
@@ -509,6 +541,35 @@ mod tests {
         assert!(paths.iter().any(|item| item == &homebrew_cellar_text));
         assert!(paths.iter().any(|item| item == &homebrew_opt_text));
         assert!(paths.iter().any(|item| item == &homebrew_etc_text));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn host_tool_read_paths_includes_explicit_skill_script_root() {
+        let root =
+            std::env::temp_dir().join(format!("redbox-cli-skill-script-{}", crate::now_i64()));
+        let skill_root = root.join("skills").join("gzh-design");
+        let scripts = skill_root.join("scripts");
+        fs::create_dir_all(&scripts).expect("skill scripts dir should be created");
+        fs::write(skill_root.join("SKILL.md"), "# gzh-design").expect("skill file");
+        let script = scripts.join("validate_gzh_html.py");
+        fs::write(&script, "print('ok')\n").expect("script should be written");
+
+        let env = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+        let paths = host_tool_read_paths(
+            &[
+                "python3".to_string(),
+                script.to_string_lossy().to_string(),
+                "/tmp/article.html".to_string(),
+            ],
+            &env,
+        );
+        let skill_root_text = fs::canonicalize(&skill_root)
+            .expect("skill root should canonicalize")
+            .to_string_lossy()
+            .to_string();
+
+        assert!(paths.iter().any(|item| item == &skill_root_text));
         let _ = fs::remove_dir_all(root);
     }
 

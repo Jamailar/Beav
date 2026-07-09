@@ -40,6 +40,8 @@ struct SkillResourceReadCacheKey {
     skill_name: String,
     raw_path: String,
     max_chars: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
     resolved_from: Option<String>,
 }
 
@@ -134,6 +136,8 @@ pub fn cached_read_skill_resource_value(
     workspace_root: Option<&Path>,
     raw_path: &str,
     max_chars: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
     resolved_from: Option<&str>,
     package_hash: &str,
 ) -> Result<Value, String> {
@@ -142,6 +146,8 @@ pub fn cached_read_skill_resource_value(
         skill_name: record.name.clone(),
         raw_path: raw_path.to_string(),
         max_chars,
+        offset,
+        limit,
         resolved_from: resolved_from.map(ToString::to_string),
     };
     if let Ok(guard) = cache.lock() {
@@ -150,8 +156,15 @@ pub fn cached_read_skill_resource_value(
         }
     }
 
-    let value =
-        read_skill_resource_value(record, workspace_root, raw_path, max_chars, resolved_from)?;
+    let value = read_skill_resource_value(
+        record,
+        workspace_root,
+        raw_path,
+        max_chars,
+        offset,
+        limit,
+        resolved_from,
+    )?;
     let content_bytes = value
         .get("content")
         .and_then(Value::as_str)
