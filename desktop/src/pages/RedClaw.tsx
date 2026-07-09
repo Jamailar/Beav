@@ -116,6 +116,25 @@ function writeHiddenExternalSessionIds(sessionIds: string[]): void {
     }
 }
 
+function stringFromRecord(record: Record<string, unknown>, key: string): string {
+    const value = record[key];
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function nestedStringFromRecord(record: Record<string, unknown>, objectKey: string, key: string): string {
+    const value = record[objectKey];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    const nested = (value as Record<string, unknown>)[key];
+    return typeof nested === 'string' ? nested.trim() : '';
+}
+
+function sessionMetadataSpaceId(metadata: Record<string, unknown>): string {
+    return stringFromRecord(metadata, 'spaceId')
+        || stringFromRecord(metadata, 'activeSpaceId')
+        || nestedStringFromRecord(metadata, 'redclawContext', 'spaceId')
+        || nestedStringFromRecord(metadata, 'scope', 'spaceId');
+}
+
 function visibleTeamSessions(sessions: TeamWorkbenchSession[]): TeamWorkbenchSession[] {
     return sessions.filter((session) => !['archived', 'completed'].includes(String(session.status || '').toLowerCase()));
 }
@@ -868,9 +887,10 @@ export function RedClaw({
         };
     }, []);
 
-    const loadExternalAgentSessions = useCallback(async () => {
+    const loadExternalAgentSessions = useCallback(async (spaceIdOverride?: string) => {
         try {
             const result = await window.ipcRenderer.sessions.list() as ContextChatSessionListItem[];
+            const currentSpaceId = String(spaceIdOverride || activeSpaceId || '').trim();
             const items = Array.isArray(result)
                 ? sortContextSessionItems(result
                     .filter((item) => {
@@ -878,7 +898,10 @@ export function RedClaw({
                             ? item.metadata as Record<string, unknown>
                             : {};
                         const sessionId = String(item.id || item.chatSession?.id || '').trim();
+                        const sessionSpaceId = sessionMetadataSpaceId(metadata);
                         return String(metadata.source || '').trim() === 'acp'
+                            && Boolean(currentSpaceId)
+                            && sessionSpaceId === currentSpaceId
                             && !hiddenExternalSessionIdSet.has(sessionId)
                             && !item.archived
                             && metadata.archived !== true
@@ -890,7 +913,7 @@ export function RedClaw({
         } catch (error) {
             console.error('Failed to load external agent sessions:', error);
         }
-    }, [hiddenExternalSessionIdSet, normalizeExternalAgentSession]);
+    }, [activeSpaceId, hiddenExternalSessionIdSet, normalizeExternalAgentSession]);
 
     useEffect(() => {
         return subscribeRuntimeEventStream({
@@ -1175,7 +1198,7 @@ export function RedClaw({
             setActiveSpaceName(nextSpaceName);
             setSessionList(items);
             sessionListRef.current = items;
-            void loadExternalAgentSessions();
+            void loadExternalAgentSessions(nextActiveSpaceId);
             activeSessionIdRef.current = nextActiveSessionId;
             setActiveSessionId(nextActiveSessionId);
             hasSessionSnapshotRef.current = true;

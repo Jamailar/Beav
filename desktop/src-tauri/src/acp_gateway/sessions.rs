@@ -4,6 +4,7 @@ use crate::runtime::{
     create_collab_session, ensure_collab_session_coordinator, post_collab_message,
 };
 use crate::session_manager::create_session;
+use crate::store::spaces as spaces_store;
 use crate::{
     append_session_transcript, AcpMessageRecord, AcpSessionRecord, AppStore, ChatMessageRecord,
 };
@@ -23,7 +24,109 @@ fn value_object(value: Option<Value>) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+fn metadata_string(metadata: &Map<String, Value>, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn metadata_nested_string(
+    metadata: &Map<String, Value>,
+    object_key: &str,
+    key: &str,
+) -> Option<String> {
+    metadata
+        .get(object_key)
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn metadata_space_id(metadata: &Map<String, Value>) -> Option<String> {
+    metadata_string(metadata, "spaceId")
+        .or_else(|| metadata_string(metadata, "activeSpaceId"))
+        .or_else(|| metadata_nested_string(metadata, "redclawContext", "spaceId"))
+        .or_else(|| metadata_nested_string(metadata, "scope", "spaceId"))
+}
+
+fn copy_space_scope_metadata(target: &mut Map<String, Value>, source: Option<&Value>) {
+    let Some(source) = source.and_then(Value::as_object) else {
+        return;
+    };
+    if metadata_space_id(target).is_some() {
+        return;
+    }
+    for key in [
+        "spaceId",
+        "activeSpaceId",
+        "spaceName",
+        "scope",
+        "redclawContext",
+    ] {
+        if let Some(value) = source.get(key) {
+            target.insert(key.to_string(), value.clone());
+        }
+    }
+}
+
+fn ensure_acp_space_scope_metadata(store: &AppStore, metadata: &mut Map<String, Value>) {
+    let explicit_space_id = metadata_space_id(metadata);
+    let (active_space_id, active_space_name) = spaces_store::active_workspace_snapshot(store);
+    let space_id = explicit_space_id.unwrap_or(active_space_id);
+    if space_id.trim().is_empty() {
+        return;
+    }
+    let space_name = store
+        .spaces
+        .iter()
+        .find(|space| space.id == space_id)
+        .map(|space| space.name.clone())
+        .unwrap_or_else(|| {
+            metadata_string(metadata, "spaceName").unwrap_or_else(|| {
+                if space_id == spaces_store::active_space_id(store) {
+                    active_space_name
+                } else {
+                    space_id.clone()
+                }
+            })
+        });
+    metadata
+        .entry("spaceId".to_string())
+        .or_insert_with(|| json!(space_id.clone()));
+    metadata
+        .entry("activeSpaceId".to_string())
+        .or_insert_with(|| json!(space_id.clone()));
+    metadata
+        .entry("spaceName".to_string())
+        .or_insert_with(|| json!(space_name.clone()));
+    metadata.entry("scope".to_string()).or_insert_with(|| {
+        json!({
+            "type": "space",
+            "spaceId": space_id,
+            "spaceName": space_name
+        })
+    });
+}
+
+fn acp_payload_metadata_with_scope(
+    store: &AppStore,
+    payload: &Value,
+    fallback_metadata: Option<&Value>,
+) -> Value {
+    let mut metadata = value_object(payload_object(payload, "metadata"));
+    copy_space_scope_metadata(&mut metadata, fallback_metadata);
+    ensure_acp_space_scope_metadata(store, &mut metadata);
+    Value::Object(metadata)
+}
+
 fn acp_chat_metadata(
+    store: &AppStore,
     acp_session_id: &str,
     collab_session_id: &str,
     client: &AcpRequestClient,
@@ -31,6 +134,7 @@ fn acp_chat_metadata(
     extra_metadata: Option<Value>,
 ) -> Value {
     let mut metadata = value_object(extra_metadata);
+    ensure_acp_space_scope_metadata(store, &mut metadata);
     metadata.insert("source".to_string(), json!("acp"));
     metadata.insert("sourceLabel".to_string(), json!(client.source_label()));
     metadata.insert("isExternalAgentSession".to_string(), json!(true));
@@ -80,6 +184,7 @@ fn create_acp_session_record(
     title: String,
     objective: String,
     project_ref: Option<Value>,
+    metadata: Value,
 ) -> AcpSessionRecord {
     let now = crate::now_i64();
     AcpSessionRecord {
@@ -95,7 +200,7 @@ fn create_acp_session_record(
         title,
         objective,
         status: "active".to_string(),
-        metadata: payload_object(payload, "metadata"),
+        metadata: Some(metadata),
         created_at: now,
         updated_at: now,
         last_message_at: None,
@@ -285,12 +390,15 @@ pub(crate) fn create_or_attach_acp_session(
         } else {
             create_session(store, title.clone(), None).id
         };
+        let session_metadata =
+            acp_payload_metadata_with_scope(store, payload, collab.metadata.as_ref());
         let metadata = acp_chat_metadata(
+            store,
             &acp_id,
             &collab_session_id,
             client,
             project_ref.clone(),
-            payload_object(payload, "metadata"),
+            Some(session_metadata.clone()),
         );
         update_chat_session_metadata(store, &chat_session_id, metadata)?;
         let session = create_acp_session_record(
@@ -302,6 +410,7 @@ pub(crate) fn create_or_attach_acp_session(
             title,
             objective,
             project_ref,
+            session_metadata,
         );
         store.acp_sessions.push(session.clone());
         let creator_member_id = ensure_acp_creator_member_id(store, &session.collab_session_id)?;
@@ -329,6 +438,15 @@ pub(crate) fn create_or_attach_acp_session(
         .unwrap_or_else(|| "Work with RedBox Creator Agent through ACP.".to_string());
     let project_ref = project_ref_from_payload(payload);
     let chat_session = create_session(store, title.clone(), None);
+    let session_metadata = acp_payload_metadata_with_scope(store, payload, None);
+    let mut collab_metadata = value_object(Some(session_metadata.clone()));
+    collab_metadata.insert("source".to_string(), json!("acp"));
+    collab_metadata.insert("sourceLabel".to_string(), json!(client.source_label()));
+    collab_metadata.insert("externalClientId".to_string(), json!(client.id.clone()));
+    collab_metadata.insert("externalClientName".to_string(), json!(client.name.clone()));
+    collab_metadata.insert("externalClientKind".to_string(), json!(client.kind.clone()));
+    collab_metadata.insert("acpSessionId".to_string(), json!(acp_id.clone()));
+    collab_metadata.insert("projectRef".to_string(), json!(project_ref.clone()));
     let collab = create_collab_session(
         store,
         &json!({
@@ -338,24 +456,17 @@ pub(crate) fn create_or_attach_acp_session(
             "runtimeMode": payload_string(payload, "runtimeMode")
                 .unwrap_or_else(|| store.acp_gateway.default_runtime_mode.clone()),
             "source": "acp",
-            "metadata": {
-                "source": "acp",
-                "sourceLabel": client.source_label(),
-                "externalClientId": client.id.clone(),
-                "externalClientName": client.name.clone(),
-                "externalClientKind": client.kind.clone(),
-                "acpSessionId": acp_id.clone(),
-                "projectRef": project_ref.clone()
-            }
+            "metadata": Value::Object(collab_metadata)
         }),
     )
     .map_err(AcpHttpError::internal)?;
     let metadata = acp_chat_metadata(
+        store,
         &acp_id,
         &collab.id,
         client,
         project_ref.clone(),
-        payload_object(payload, "metadata"),
+        Some(session_metadata.clone()),
     );
     update_chat_session_metadata(store, &chat_session.id, metadata)?;
     let session = create_acp_session_record(
@@ -367,6 +478,7 @@ pub(crate) fn create_or_attach_acp_session(
         title,
         objective,
         project_ref,
+        session_metadata,
     );
     store.acp_sessions.push(session.clone());
     let creator_member_id = ensure_acp_creator_member_id(store, &session.collab_session_id)?;
@@ -566,6 +678,108 @@ mod tests {
             .any(|item| item.id == session.collab_session_id
                 && item.source == "acp"
                 && item.coordinator_member_id.is_some()));
+    }
+
+    #[test]
+    fn auto_created_acp_session_inherits_active_space_scope() {
+        let mut store = crate::persistence::default_store();
+        store.spaces[0].id = "space-a".to_string();
+        store.spaces[0].name = "Space A".to_string();
+        store.active_space_id = "space-a".to_string();
+        let payload = json!({
+            "title": "Project brief",
+            "objective": "Create a scoped ACP session"
+        });
+
+        let session = create_or_attach_acp_session(&mut store, &payload, &test_client()).unwrap();
+        let chat_session = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session.chat_session_id)
+            .unwrap();
+        let collab_session = store
+            .collab_sessions
+            .iter()
+            .find(|item| item.id == session.collab_session_id)
+            .unwrap();
+
+        assert_eq!(
+            chat_session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("spaceId")),
+            Some(&json!("space-a"))
+        );
+        assert_eq!(
+            collab_session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("spaceId")),
+            Some(&json!("space-a"))
+        );
+        assert_eq!(
+            session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("scope"))
+                .and_then(|scope| scope.get("spaceName")),
+            Some(&json!("Space A"))
+        );
+    }
+
+    #[test]
+    fn collab_attach_inherits_collab_space_scope() {
+        let mut store = crate::persistence::default_store();
+        store.spaces[0].id = "space-a".to_string();
+        store.spaces[0].name = "Space A".to_string();
+        store.spaces.push(crate::SpaceRecord {
+            id: "space-b".to_string(),
+            name: "Space B".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+        });
+        store.active_space_id = "space-b".to_string();
+        let collab = create_collab_session(
+            &mut store,
+            &json!({
+                "title": "Scoped team",
+                "objective": "Keep ACP attach scoped",
+                "metadata": {
+                    "spaceId": "space-a",
+                    "spaceName": "Space A"
+                }
+            }),
+        )
+        .unwrap();
+        let payload = json!({
+            "title": "Attach to scoped team",
+            "attachTo": {
+                "type": "collab_session",
+                "id": collab.id
+            }
+        });
+
+        let session = create_or_attach_acp_session(&mut store, &payload, &test_client()).unwrap();
+
+        assert_eq!(
+            session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("spaceId")),
+            Some(&json!("space-a"))
+        );
+        let chat_session = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session.chat_session_id)
+            .unwrap();
+        assert_eq!(
+            chat_session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("spaceId")),
+            Some(&json!("space-a"))
+        );
     }
 
     #[test]

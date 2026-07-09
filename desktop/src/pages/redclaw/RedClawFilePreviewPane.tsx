@@ -156,7 +156,14 @@ export function RedClawFilePreviewPane({
             );
         }
 
-        if ((target.kind === 'text' || target.kind === 'html' || target.kind === 'manuscript') && typeof target.previewText === 'string') {
+        if (
+            (
+                target.kind === 'text'
+                || target.kind === 'manuscript'
+                || (target.kind === 'html' && !target.resolvedUrl)
+            )
+            && typeof target.previewText === 'string'
+        ) {
             if (isReadableManuscriptPreview(target)) {
                 return (
                     <div className="h-full w-full overflow-auto bg-surface-secondary/30 px-6 py-5">
