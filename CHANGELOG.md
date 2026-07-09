@@ -1,5 +1,40 @@
 # Beav（原RedBox）更新日志
 
+## v2.6.4 (2026-07-09)
+
+### 版本定位
+- 本次是预发布版本，重点验证 Beav Agent 在使用第三方 / 市场 Skill 时的真实执行质量，尤其是大体量组件库、技能自带脚本、独立 HTML/Markdown 稿件写入和长内容写入反馈。
+- 适合正在测试 `gzh-design`、`high-retention-video-script` 等 Skill 的用户升级；这版主要解决“Skill 已激活但没有按 Skill 资源和模板执行”的问题。
+- GitHub Release 继续作为自动更新资产源头，本次发布会同时上传普通安装包、Tauri updater 包和对应 `.sig` 签名。
+
+### Skill 执行与资源读取
+- 修复 `skills.readResource` 对大文件资源的分页读取能力，`offset` / `limit` / `maxChars` 现在会按行切片生效，不再反复返回文件开头。
+- 修复 `Read(path="skill://...")` 兼容层把 `limit` 错误翻译成 `maxChars` 的问题，Agent 可以继续读取主题库后半段、模板骨架和签名区组件。
+- 支持 `skills://...` 协议别名，并允许通过 Skill package id 读取资源，降低模型在多来源 Skill 下选错读取方式的概率。
+- 当 Agent 需要运行 Skill 自带脚本时，CLI 沙箱会对显式引用的 Skill 根目录开放只读访问，解决 `validate_gzh_html.py`、`wrap_preview.py` 等脚本报 `Operation not permitted` 的问题。
+
+### 独立稿件与 HTML 写入
+- 强化 `manuscripts://current` 未绑定时的恢复路径：独立视频脚本包、公众号排版 HTML、Markdown 稿件会被引导保存到 `manuscripts/` 下，而不是继续创建无关 manuscript project 或反复调用失败工具。
+- 对完整 HTML artifact 的 `Write` 误用增加自动恢复，能够转成 `workspace.write` 写入 `manuscripts/<name>.html`，减少长 HTML 生成后最后一步保存失败。
+- 工具路由会拒绝空 `Operate` 探测调用，并在错误信息中给出可执行的结构化恢复建议，减少模型进入 `tool_search manuscript create` 之类的错误循环。
+- OpenAI 流式工具参数增加写入进度预览，长 HTML/Markdown 写入时会持续显示正在生成的内容长度和目标路径，避免被误判为卡住。
+
+### 提示词与运行时收敛
+- 瘦身基础系统提示词和 Skill catalog 描述，减少重复工具说明、路径树和长 activation hint 占用上下文。
+- Active Skill 场景会保留 `skills.inspect` / `skills.listResources` / `skills.readResource` / `skills.invoke` 等关键动作，避免显式 allowlist 把 Skill 后续读取能力挤掉。
+- 内部 Skill 激活状态消息改为隐藏运行时状态，不再污染普通对话历史和用户可见聊天内容。
+- 移除用户消息旁的“入库”按钮，降低聊天列表中与当前任务无关的可见操作噪音。
+
+### ACP 与空间隔离
+- ACP 创建或附加外部 Agent 会话时会继承当前 Space scope，聊天会话、协作会话和 ACP session 元数据保持同一空间归属。
+- RedClaw 外部 Agent 会话列表现在按当前 Space 过滤，避免不同账号 / 空间的外部 Agent 会话串到一起。
+- HTML 文件预览在已有可解析 URL 时优先走浏览器预览，减少富文本 HTML 被当作普通文本塞进预览面板。
+
+### 分发与验证
+- 本次预发布会重新打包 macOS Apple Silicon / Intel、Windows x64 / arm64 / x86、Linux amd64 安装包，并上传对应 updater 资产。
+- 已完成针对性验证：Skill 资源分页读取、Skill 脚本沙箱读取、工具兼容层、standalone artifact 写入恢复、ACP 空间继承等单元测试。
+- macOS 测试包如未配置 notarization 凭据，会保持 Developer ID 签名但跳过 notarization；Windows 交叉构建包默认未做 Windows 代码签名。
+
 ## v2.6.2 (2026-07-03)
 
 ### 版本定位
