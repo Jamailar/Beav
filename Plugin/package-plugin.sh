@@ -49,6 +49,8 @@ cd "$BUILD_DIR"
 zip -r "$TMP_ARCHIVE" . \
   -x '.git/*' \
   -x 'node_modules/*' \
+  -x '.DS_Store' \
+  -x '*/.DS_Store' \
   -x '__MACOSX/*'
 
 mv "$TMP_ARCHIVE" "$OUTPUT_PATH"
