@@ -32,9 +32,7 @@
 
 <p align="center">
   <strong>教程：</strong>
-  <a href="https://www.bilibili.com/video/BV1V3onBdEf9/?share_source=copy_web&vd_source=54733b01cc63209b4e5b5254537d4bab">Bilibili 视频教程</a>
-  ·
-  <a href="https://www.youtube.com/watch?v=9Glgg3naHbg">YouTube 视频教程</a>
+  <a href="https://www.bilibili.com/video/BV1TLNn6HEUU/?spm_id_from=333.1387.0.0&vd_source=f03b51f63c859c70e5434404d761f384">Bilibili 视频教程</a>
 </p>
 
 <p align="center">
