@@ -32,6 +32,7 @@ Common failure states:
 - `host_path_uses_env_node_script`: manifest points directly at `host.mjs`; GUI Chrome may start it without a Node PATH and the host exits immediately.
 - `endpoint_state_missing`: the native host has not published its current socket state.
 - `endpoint_state_stale`: the socket state is old; restart the extension/native host connection.
+- `endpoint_registry_stale`: a descriptor under `~/Library/Application Support/RedBox/native-host/browser-control-agent-endpoints/` points to a closed socket. It is safe to reload the corresponding extension; host exit removes its own descriptor.
 - `socket_missing`: the endpoint points to a socket that no longer exists.
 - `extension_forwarding_failed`: the native host socket responded, but the extension did not answer browser-control tool calls.
 - Tool results that show only `capabilities.toolsResponse.tools` and end with `[truncated by ToolResultBudget]` are not page-read failures. They mean the App facade returned a full MCP capability snapshot before the action result, so the model never saw the real `tab.info` / `page.queryElements` payload.
@@ -54,3 +55,4 @@ Real Chrome acceptance:
 - A real Chrome acceptance run must use the user's installed Google Chrome profile, the installed Beav extension, the native host launcher, and `pnpm diagnose:browser-control -- --require-connected`.
 - At least one MCP/tool call should verify `tabs.list`, `tab.info`, `page.queryElements`, and one controlled interaction such as `page.click` or `page.type` on a safe test page.
 - Active controlled tabs should show the in-page `Beav 控制中` badge and an active favicon marker. If DOM actions work but the badge is missing, check `AGENT_CONTROL_BADGE`, `GET_AGENT_CONTROL_BADGE_STATE`, and tab lease events.
+- With more than one Chrome profile, verify `agent.browsers.list()` reports distinct `extensionInstanceId` values and call `agent.browsers.get(id)` before the tab workflow. A default `extension` selection intentionally remains for compatibility.

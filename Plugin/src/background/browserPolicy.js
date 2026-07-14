@@ -58,6 +58,7 @@ export function classifyBrowserAction(type) {
   if (/^cdp\.(attach|detach)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
   if (/^cdp\.viewport/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
   if (/^cdp\.send$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
+  if (/^research\.run$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
   if (/^(page\.navigate|page\.goto)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
   if (/^page\.waitForLoadState$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
   if (/^(page\.evaluate|page\.evaluateScript)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.STATE_CHANGING;
@@ -189,6 +190,7 @@ export function buildBrowserPolicyDecision(action, options = {}) {
     'browser.ping',
     'browser.info',
     'browser.capabilities',
+    'research.run',
     'browser.events',
     'browser.events.summary',
     'browser.sessionEvents',

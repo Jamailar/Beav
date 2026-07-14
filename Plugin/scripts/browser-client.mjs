@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +10,8 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const docsRoot = path.join(pluginRoot, 'docs');
 const defaultEndpointStatePath = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
   || path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
+const defaultEndpointsDirectory = process.env.REDBOX_BROWSER_CONTROL_ENDPOINTS_DIRECTORY
+  || path.join(path.dirname(defaultEndpointStatePath), 'browser-control-agent-endpoints');
 const defaultSocketPath = process.platform === 'win32'
   ? '\\\\.\\pipe\\redbox-browser-control'
   : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.sock`);
@@ -48,21 +49,58 @@ export class BrowserControlTransport {
   constructor(options = {}) {
     this.socketPath = options.socketPath || '';
     this.endpointStatePath = options.endpointStatePath || defaultEndpointStatePath;
+    this.endpointsDirectory = options.endpointsDirectory || defaultEndpointsDirectory;
+    this.browserId = String(options.browserId || options.instanceId || options.extensionInstanceId || '').trim();
     this.timeoutMs = Number(options.timeoutMs || defaultTimeoutMs);
   }
 
-  resolveSocketPath() {
+  async listEndpoints() {
+    const explicit = this.socketPath || process.env.REDBOX_BROWSER_CONTROL_SOCKET;
+    if (explicit) return [{ socketPath: explicit, id: 'explicit', source: 'explicit' }];
+    const descriptors = [];
+    try {
+      const entries = await fs.readdir(this.endpointsDirectory, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+        try {
+          const state = JSON.parse(await fs.readFile(path.join(this.endpointsDirectory, entry.name), 'utf8'));
+          if (isEndpointDescriptor(state)) descriptors.push({ ...state, source: 'registry' });
+        } catch {}
+      }
+    } catch {}
+    try {
+      const state = JSON.parse(await fs.readFile(this.endpointStatePath, 'utf8'));
+      if (isEndpointDescriptor(state) && !descriptors.some((entry) => entry.socketPath === state.socketPath)) {
+        descriptors.push({ ...state, source: 'legacy' });
+      }
+    } catch {}
+    if (!descriptors.length) descriptors.push({ socketPath: defaultSocketPath, id: 'legacy-default', source: 'legacy-default' });
+    return descriptors.sort(compareEndpointDescriptors);
+  }
+
+  async resolveEndpoint() {
     if (this.socketPath) return this.socketPath;
     if (process.env.REDBOX_BROWSER_CONTROL_SOCKET) return process.env.REDBOX_BROWSER_CONTROL_SOCKET;
-    try {
-      const state = JSON.parse(readFileSyncUtf8(this.endpointStatePath));
-      if (typeof state.socketPath === 'string' && state.socketPath.trim()) return state.socketPath;
-    } catch {}
-    return defaultSocketPath;
+    const endpoints = await this.listEndpoints();
+    const requested = this.browserId;
+    const selected = requested
+      ? endpoints.find((endpoint) => endpoint.instanceId === requested
+        || endpoint.extension?.extensionInstanceId === requested
+        || endpoint.extensionInstanceId === requested)
+      : endpoints[0];
+    if (!selected?.socketPath) {
+      throw new Error(`Browser instance is not available: ${requested}`);
+    }
+    return selected;
+  }
+
+  async resolveSocketPath() {
+    const endpoint = await this.resolveEndpoint();
+    return typeof endpoint === 'string' ? endpoint : endpoint.socketPath;
   }
 
   async request(method, params = {}, options = {}) {
-    const response = await sendSocketJsonRpc(this.resolveSocketPath(), {
+    const response = await sendSocketJsonRpc(await this.resolveSocketPath(), {
       jsonrpc: '2.0',
       id: options.id || `browser-client:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
       method,
@@ -93,14 +131,33 @@ export class BrowserControlTransport {
       arguments: isObject(args) ? args : {},
     }, options);
   }
+
+  withBrowser(browserId) {
+    return new BrowserControlTransport({
+      endpointStatePath: this.endpointStatePath,
+      endpointsDirectory: this.endpointsDirectory,
+      browserId,
+      timeoutMs: this.timeoutMs,
+    });
+  }
+
+  withSocketPath(socketPath) {
+    return new BrowserControlTransport({
+      socketPath,
+      endpointStatePath: this.endpointStatePath,
+      endpointsDirectory: this.endpointsDirectory,
+      timeoutMs: this.timeoutMs,
+    });
+  }
 }
 
 class BrowserRuntime {
   constructor(options) {
     this.transport = options.transport;
+    this.documentationRoot = options.documentationRoot;
     this.sessionId = options.sessionId || `redbox-browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     this.turnId = options.turnId || `turn-${Date.now().toString(36)}`;
-    this.documentation = new BrowserDocumentation(options.documentationRoot);
+    this.documentation = new BrowserDocumentation(this.documentationRoot);
     this.browsers = new BrowserCollection(this);
   }
 
@@ -114,6 +171,28 @@ class BrowserRuntime {
 
   async callTool(name, args = {}, options = {}) {
     return await this.transport.callTool(name, this.scopedArgs(args), options);
+  }
+
+  withBrowser(browserId) {
+    return new BrowserRuntime({
+      transport: typeof this.transport.withBrowser === 'function'
+        ? this.transport.withBrowser(browserId)
+        : this.transport,
+      documentationRoot: this.documentationRoot,
+      sessionId: this.sessionId,
+      turnId: this.turnId,
+    });
+  }
+
+  withSocketPath(socketPath) {
+    return new BrowserRuntime({
+      transport: typeof this.transport.withSocketPath === 'function'
+        ? this.transport.withSocketPath(socketPath)
+        : this.transport,
+      documentationRoot: this.documentationRoot,
+      sessionId: this.sessionId,
+      turnId: this.turnId,
+    });
   }
 }
 
@@ -137,41 +216,54 @@ class BrowserCollection {
   }
 
   async list() {
-    try {
-      const [info, tools] = await Promise.all([
-        this.runtime.callTool('browser.info', {}),
-        this.runtime.transport.listTools(),
-      ]);
-      const data = unwrapActionData(info);
-      return [{
-        id: 'extension',
-        name: 'RedBox Browser Control',
-        type: 'extension',
-        metadata: {
-          backend: 'native-host',
-          sessionId: this.runtime.sessionId,
-          nativeConnected: String(data?.nativeHost?.connected ?? data?.connected ?? ''),
-        },
-        capabilities: {
-          browser: buildCapabilityList(data?.capabilities?.browser || data?.contracts || []),
-          tab: buildCapabilityList(tools),
-        },
-      }];
-    } catch {
-      return [];
-    }
+    const endpoints = await this.runtime.transport.listEndpoints();
+    const browsers = await Promise.all(endpoints.map(async (endpoint) => {
+      const transport = new BrowserControlTransport({
+        socketPath: endpoint.socketPath,
+        timeoutMs: this.runtime.transport.timeoutMs,
+      });
+      try {
+        const [host, info, tools] = await Promise.all([
+          transport.hostInfo(),
+          transport.callTool('browser.info', this.runtime.scopedArgs({})),
+          transport.listTools(),
+        ]);
+        const data = unwrapActionData(info);
+        const extensionInstanceId = data?.extensionInstanceId || host?.extension?.extensionInstanceId || endpoint.extension?.extensionInstanceId || '';
+        const id = extensionInstanceId || host?.instanceId || endpoint.instanceId || endpoint.socketPath;
+        return {
+          id,
+          name: data?.name || 'RedBox Browser Control',
+          type: 'extension',
+          metadata: {
+            backend: 'native-host',
+            hostInstanceId: host?.instanceId || endpoint.instanceId || '',
+            socketPath: endpoint.socketPath,
+            extensionId: data?.extensionId || host?.extension?.extensionId || '',
+            extensionInstanceId,
+            sessionId: this.runtime.sessionId,
+            nativeConnected: String(data?.nativeHost?.connected ?? data?.connected ?? host?.nativeConnected ?? ''),
+          },
+          capabilities: {
+            browser: buildCapabilityList(data?.capabilities?.browser || data?.contracts || []),
+            tab: buildCapabilityList(tools),
+          },
+        };
+      } catch {
+        return null;
+      }
+    }));
+    return browsers.filter(Boolean);
   }
 
   async get(id) {
     const requested = String(id || '').trim();
-    if (!['extension', 'chrome', 'browser', 'redbox'].includes(requested)) {
-      throw new Error(`Browser is not available: ${requested}`);
-    }
     const browsers = await this.list();
-    if (!browsers.length) {
-      throw new Error('Browser is not available: extension');
-    }
-    return new BrowserFacade(this.runtime, browsers[0]);
+    const browser = !requested || ['extension', 'chrome', 'browser', 'redbox'].includes(requested)
+      ? browsers[0]
+      : browsers.find((entry) => entry.id === requested || entry.metadata?.hostInstanceId === requested);
+    if (!browser) throw new Error(`Browser is not available: ${requested || 'extension'}`);
+    return new BrowserFacade(this.runtime.withSocketPath(browser.metadata.socketPath), browser);
   }
 }
 
@@ -198,6 +290,10 @@ class BrowserFacade {
 
   async executeUnhandledCommand(command) {
     return await this.runtime.transport.request('executeUnhandledCommand', this.runtime.scopedArgs(command));
+  }
+
+  async research(options = {}) {
+    return await this.runtime.callTool('research.run', options);
   }
 }
 
@@ -683,8 +779,14 @@ function sendSocketJsonRpc(socketPath, payload, timeoutMs) {
   });
 }
 
-function readFileSyncUtf8(filePath) {
-  return readFileSync(filePath, 'utf8');
+function isEndpointDescriptor(value) {
+  return isObject(value) && typeof value.socketPath === 'string' && value.socketPath.trim().length > 0;
+}
+
+function compareEndpointDescriptors(left, right) {
+  const leftTime = Date.parse(String(left?.updatedAt || '')) || 0;
+  const rightTime = Date.parse(String(right?.updatedAt || '')) || 0;
+  return rightTime - leftTime || String(left?.instanceId || left?.socketPath || '').localeCompare(String(right?.instanceId || right?.socketPath || ''));
 }
 
 function unwrapActionData(value) {

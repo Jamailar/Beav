@@ -11,16 +11,23 @@ const DEFAULT_API_BASE = '';
 const LOG_PATH = path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-host.log');
 const ENDPOINT_STATE_PATH = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
   || path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
+const ENDPOINTS_DIRECTORY = process.env.REDBOX_BROWSER_CONTROL_ENDPOINTS_DIRECTORY
+  || path.join(path.dirname(ENDPOINT_STATE_PATH), 'browser-control-agent-endpoints');
 const DEFAULT_AGENT_SOCKET_PATH = process.platform === 'win32'
   ? '\\\\.\\pipe\\redbox-browser-control'
-  : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.sock`);
+  : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}-${process.pid}.sock`);
 const AGENT_REQUEST_TIMEOUT_MS = Number(process.env.REDBOX_BROWSER_CONTROL_AGENT_TIMEOUT_MS || 60_000);
+const AGENT_PROTOCOL_VERSION = 2;
 
 let nextRequestId = 0;
 let nextAgentRequestId = 0;
 let nativeConnected = false;
 let agentServer = null;
 let agentSocketPath = process.env.REDBOX_BROWSER_CONTROL_SOCKET || DEFAULT_AGENT_SOCKET_PATH;
+const hostInstanceId = process.env.REDBOX_BROWSER_CONTROL_INSTANCE_ID
+  || `native-host-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+const endpointDescriptorPath = path.join(ENDPOINTS_DIRECTORY, `${hostInstanceId}.json`);
+let extensionMetadata = {};
 const pendingAgentRequests = new Map();
 
 function log(message) {
@@ -181,6 +188,16 @@ function handleNativeResponse(message) {
   if (!message || typeof message !== 'object' || message.id == null) return false;
   const pending = pendingAgentRequests.get(String(message.id));
   if (!pending) return false;
+  if (pending.method === 'getInfo' && message.result && typeof message.result === 'object') {
+    const result = message.result;
+    extensionMetadata = {
+      extensionId: typeof result.extensionId === 'string' ? result.extensionId : '',
+      extensionInstanceId: typeof result.extensionInstanceId === 'string' ? result.extensionInstanceId : '',
+      extensionVersion: typeof result.version === 'string' ? result.version : '',
+      updatedAt: new Date().toISOString(),
+    };
+    writeEndpointState();
+  }
   pendingAgentRequests.delete(String(message.id));
   clearTimeout(pending.timer);
   const response = { jsonrpc: '2.0', id: pending.clientId };
@@ -292,10 +309,15 @@ function buildHostInfo(patch = {}) {
     platform: process.platform,
     socketPath: agentSocketPath,
     endpointStatePath: ENDPOINT_STATE_PATH,
+    endpointDescriptorPath,
+    endpointsDirectory: ENDPOINTS_DIRECTORY,
+    instanceId: hostInstanceId,
+    extension: extensionMetadata,
     nativeConnected,
     protocol: {
       transport: 'unix-socket-jsonrpc-lines',
       jsonrpc: '2.0',
+      version: AGENT_PROTOCOL_VERSION,
       requestDirection: 'agent -> native-host -> chrome-extension-background',
     },
     ...patch,
@@ -375,14 +397,29 @@ function startAgentServer() {
 function writeEndpointState() {
   try {
     fs.mkdirSync(path.dirname(ENDPOINT_STATE_PATH), { recursive: true });
-    fs.writeFileSync(ENDPOINT_STATE_PATH, JSON.stringify(buildHostInfo({
+    fs.mkdirSync(ENDPOINTS_DIRECTORY, { recursive: true });
+    const descriptor = buildHostInfo({
       ok: true,
       capabilities: buildAgentCapabilities(),
       updatedAt: new Date().toISOString(),
-    }), null, 2));
+    });
+    fs.writeFileSync(endpointDescriptorPath, JSON.stringify(descriptor, null, 2), { mode: 0o600 });
+    // Keep the v1 singleton state file as a compatibility pointer for older clients.
+    fs.writeFileSync(ENDPOINT_STATE_PATH, JSON.stringify(descriptor, null, 2), { mode: 0o600 });
   } catch (error) {
     log(`failed to write endpoint state: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function cleanupEndpointState() {
+  if (process.platform !== 'win32') {
+    try {
+      fs.rmSync(agentSocketPath, { force: true });
+    } catch {}
+  }
+  try {
+    fs.rmSync(endpointDescriptorPath, { force: true });
+  } catch {}
 }
 
 function startNativeMessageReader(onMessage) {
@@ -463,6 +500,10 @@ async function main() {
     });
   });
 }
+
+process.once('exit', cleanupEndpointState);
+process.once('SIGTERM', () => process.exit(0));
+process.once('SIGINT', () => process.exit(0));
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((error) => {

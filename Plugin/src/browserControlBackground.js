@@ -23,6 +23,7 @@ import { exportPage } from './background/pageExportRuntime.js';
 import { evaluatePageScript } from './background/pageScriptRuntime.js';
 import { CONTENT_CURSOR_ARRIVED_TYPE, TARGET_CURSOR_ARRIVED_TYPE, TARGET_GET_CURSOR_STATE_TYPE, clearCursorOverlayForLeases, clearCursorOverlayForTab, configurePixelInputTelemetry, dispatchKeyboardCombo, dispatchKeyboardPress, dispatchKeyboardType, dispatchMouseClick, dispatchMouseDrag, dispatchMouseMove, dispatchMouseWheel, hasPendingCursorArrivals, hideCursorOverlay, moveCursorOverlay, notifyCursorArrived, readCursorOverlayState, republishCursorOverlayStateForTab } from './background/pixelInput.js';
 import { closeSidePanel, configureSidePanelTelemetry, getSidePanelStatus, openSidePanel, registerSidePanelStatus, requireSidePanelOpen, restoreSidePanelStatus, toggleSidePanel } from './background/sidePanelStatus.js';
+import { listSiteCapabilities, runSiteResearch } from './background/siteResearchRuntime.js';
 import { TARGET_GET_CONTROL_BADGE_STATE_TYPE, initializeTabControlBadges, readTabControlBadgeState } from './background/tabControlBadge.js';
 import { clearLeaseFaviconBadges, hasUnseenFinalizedBadges, initializeTabFaviconBadges, listFinalizedBadges, markFinalizedBadges } from './background/tabFaviconBadge.js';
 import { configureManagedTabGroupTelemetry, ensureAgentTabGroup, getManagedGroupIdContainingTabs, initializeManagedTabGroups, listManagedTabGroups, reconcileManagedGroupForTabs, refreshManagedGroupsFromChrome, releaseTabsFromManagedGroups, setSessionGroupTitle } from './background/tabGroupManager.js';
@@ -102,7 +103,7 @@ addDownloadChangeListener((event) => {
 });
 const nativeMethodRouter = createNativeMethodRouter({
   ping: () => ({ ok: true, now: new Date().toISOString(), status: nativeStatus }),
-  getInfo: () => getBrowserControlInfo(),
+  getInfo: async () => await getBrowserControlInfo(),
   listTools: () => listBrowserControlMcpTools(),
   executeCommand: (command) => executeCommand(command),
   runBrowserAction: async (action, sessionId = '') => runBrowserAction(action, {
@@ -121,6 +122,11 @@ const BROWSER_CONTROL_MCP_TOOLS = [
     name: 'browser.info',
     description: 'Return browser-control backend, session, policy, and capability metadata.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: true },
+  },
+  {
+    name: 'research.run',
+    description: 'Run a bounded read-only site research macro for Xiaohongshu search/profile/content, Douyin content, or YouTube content. Returns the source tab and evidence snapshot; it never submits, publishes, or changes remote state.',
+    inputSchema: { type: 'object', properties: { site: { type: 'string' }, operation: { type: 'string', enum: ['search', 'author_scan', 'content_scan'] }, query: { type: 'string' }, url: { type: 'string' }, tabId: { type: 'number' }, snapshot: { type: 'boolean' }, timeoutMs: { type: 'number' } }, required: ['operation'], additionalProperties: true },
   },
   {
     name: 'browser.context',
@@ -1433,10 +1439,22 @@ async function runBrowserAction(action, context = {}) {
       case 'command.unsupported':
         throw unsupportedBrowserCommandError(normalized);
       case 'browser.info':
-        result = getBrowserControlInfo();
+        result = await getBrowserControlInfo();
         break;
       case 'browser.capabilities':
-        result = getBrowserControlInfo();
+        result = await getBrowserControlInfo();
+        break;
+      case 'research.run':
+        result = await runSiteResearch(normalized, {
+          getTab: async (tabId) => await chrome.tabs.get(tabId).catch(() => null),
+          createControlledTab,
+          claimTab: async (tabId, pageRole) => await claimTabForSession(session, tabId, 'agent', pageRole),
+          waitForTabComplete,
+          readSnapshot: async (tabId) => {
+            await requireActiveControlledTabLease(session, tabId, 'research.run');
+            return await sendContentMessage(tabId, CONTENT_DOM_SNAPSHOT_TYPE, {});
+          },
+        });
         break;
       case 'session.name':
         result = await nameBrowserSession(session.sessionId, normalized.name || normalized.sessionName || '');
@@ -2338,8 +2356,9 @@ function normalizeCdpTargetInfo(target = {}) {
   };
 }
 
-function getBrowserControlInfo() {
+async function getBrowserControlInfo() {
   const manifest = chrome.runtime.getManifest();
+  const lifecycle = await getLifecycleStatus().catch(() => null);
   return {
     success: true,
     ...buildBrowserCapabilityMetadata({
@@ -2352,6 +2371,9 @@ function getBrowserControlInfo() {
       browserPolicy: buildBrowserPolicyMetadata(),
       consoleLogSnapshot: getConsoleLogSnapshot(),
       clientHeartbeat: getLastClientHeartbeatSnapshot(),
+      lifecycleStatus: lifecycle,
+      extensionInstanceId: lifecycle?.extensionInstanceId || '',
+      siteResearch: { capabilities: listSiteCapabilities(), contractVersion: 1 },
     }),
   };
 }

@@ -245,6 +245,7 @@ export function createLocalCommandActionRouter(deps = {}) {
     .register('ping', async ({ payload, session }) => runBrowserAction('browser.ping', payload, session))
     .register('getInfo', async ({ payload, session }) => runBrowserAction('browser.info', payload, session))
     .register('browser.capabilities', async ({ payload, session }) => runBrowserAction('browser.capabilities', payload, session))
+    .register('research.run', async ({ payload, session }) => runBrowserAction('research.run', payload, session))
     .register('capabilities.get', async ({ payload, session }) => runBrowserAction('browser.capabilities', payload, session))
     .register('getCapabilities', async ({ payload, session }) => runBrowserAction('browser.capabilities', payload, session))
     .register('native.status', async () => deps.getNativeStatus())

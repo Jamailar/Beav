@@ -15,8 +15,8 @@ await browser.tabs.finalize({ keep: [] });
 
 ## API
 
-- `agent.browsers.list()` returns available Beav browser backends.
-- `agent.browsers.get("extension")` returns the Chrome extension backed browser.
+- `agent.browsers.list()` discovers every live Native Messaging host endpoint and returns one browser per connected Chrome extension instance. Each browser id is the stable `extensionInstanceId` when available, otherwise its host instance id.
+- `agent.browsers.get("extension")` keeps the previous default behavior; pass an id returned by `list()` to bind to a specific Chrome profile/extension instance.
 - `agent.documentation.get("api")`, `agent.documentation.get("playwright")`, and `agent.documentation.get("browser-troubleshooting")` return packaged docs.
 - `browser.documentation()` returns this document.
 - `browser.nameSession(name)` names the current browser-control session before tab work.
@@ -35,6 +35,20 @@ await browser.tabs.finalize({ keep: [] });
 - `tab.dom_cua` exposes DOM snapshot and node-id actions.
 - `tab.clipboard` exposes browser clipboard reads and writes.
 - `tab.dev.logs()` reads captured console logs.
+
+## Site research
+
+Use `research.run` for bounded site work instead of guessing selectors in an agent prompt. It is navigation/read-only only and always returns a source tab plus a bounded DOM evidence snapshot.
+
+```js
+const research = await browser.research({
+  site: 'xiaohongshu',
+  operation: 'search',
+  query: 'AI 浏览器',
+});
+```
+
+Current operations are Xiaohongshu `search`, `author_scan`, and `content_scan`, plus Douyin/YouTube `content_scan`. The macro does not publish, submit, or mutate remote content. Persist results through the desktop `capture.collect` action with `mode: "browser_research"`; that path writes the evidence into Knowledge with a stable dedupe key.
 
 ## Discipline
 

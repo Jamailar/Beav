@@ -156,6 +156,7 @@ assert(builtBackground.includes('redbox-browser-control'), 'Built background sho
 const builtObserver = await readText(path.join(outputDir, 'pageObserver.js'));
 assert(builtObserver.includes('page-state:get'), 'Built pageObserver should retain page-state message handling');
 assert(builtObserver.includes('pageRouteBridge.js'), 'Built pageObserver should retain page route bridge injection');
+assert(!builtObserver.includes('redbox-page-overlay-host'), 'Built pageObserver must not inject a floating capture overlay');
 
 const browserMcpConfig = await readJson(path.join(pluginRoot, '.mcp.json'));
 const configuredBrowserTools = browserMcpConfig.mcpServers?.['browser-control']?.enabledTools || [];

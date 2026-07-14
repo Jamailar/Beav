@@ -15,9 +15,6 @@ let dragZoneMetaElement = null;
 let currentDragPayload = null;
 let dragHideTimer = null;
 let dragSaveInFlight = false;
-let xhsOverlayHost = null;
-let xhsOverlayStatusElement = null;
-let xhsOverlayStatusTimer = null;
 let xhsDomStyleElement = null;
 let xhsDomStatusTimer = null;
 let xhsDomInjectionTimer = null;
@@ -1141,21 +1138,6 @@ function handleDocumentDrop(event) {
     hideDragZone(true);
 }
 
-function setXhsOverlayStatus(message, state = 'idle') {
-    if (!xhsOverlayStatusElement) return;
-    clearTimeout(xhsOverlayStatusTimer);
-    xhsOverlayStatusElement.textContent = normalizeText(message);
-    xhsOverlayStatusElement.dataset.state = state;
-    xhsOverlayStatusElement.hidden = !message;
-    if (message) {
-        xhsOverlayStatusTimer = setTimeout(() => {
-            if (!xhsOverlayStatusElement) return;
-            xhsOverlayStatusElement.textContent = '';
-            xhsOverlayStatusElement.hidden = true;
-        }, state === 'error' ? 3200 : 2200);
-    }
-}
-
 function setXhsDomStatus(container, message, state = 'idle') {
     const statusEl = container?.querySelector?.('.redbox-xhs-status');
     if (!statusEl) return;
@@ -1230,11 +1212,7 @@ async function runXhsDomAction(action, options = {}) {
     const config = actionMap[action];
     if (!config) return;
     const statusTarget = options.statusTarget || null;
-    if (statusTarget) {
-        setXhsDomStatus(statusTarget, config.pending, 'pending');
-    } else {
-        setXhsOverlayStatus(config.pending, 'pending');
-    }
+    if (statusTarget) setXhsDomStatus(statusTarget, config.pending, 'pending');
     try {
         const message = action === 'collectLink'
             ? {
@@ -1248,34 +1226,12 @@ async function runXhsDomAction(action, options = {}) {
             throw new Error(response?.error || '操作失败');
         }
         const doneText = summarizeActionResponse(response, config.done || '');
-        if (statusTarget) {
-            setXhsDomStatus(statusTarget, doneText, 'success');
-        } else {
-            setXhsOverlayStatus(doneText, 'success');
-        }
+        if (statusTarget) setXhsDomStatus(statusTarget, doneText, 'success');
     } catch (error) {
         const message = String(error?.message || error || '操作失败');
         console.warn('[redbox-plugin][page-observer] xhs dom action failed', action, message);
-        if (statusTarget) {
-            setXhsDomStatus(statusTarget, message, 'error');
-        } else {
-            setXhsOverlayStatus(message, 'error');
-        }
+        if (statusTarget) setXhsDomStatus(statusTarget, message, 'error');
     }
-}
-
-async function runXhsOverlayAction(action) {
-    await runXhsDomAction(action);
-}
-
-function removeXhsOverlay() {
-    clearTimeout(xhsOverlayStatusTimer);
-    xhsOverlayStatusTimer = null;
-    xhsOverlayStatusElement = null;
-    if (xhsOverlayHost?.isConnected) {
-        xhsOverlayHost.remove();
-    }
-    xhsOverlayHost = null;
 }
 
 function ensureXhsDomStyle() {
@@ -1812,302 +1768,6 @@ function removeXhsDomButtons() {
     xhsDomStyleElement = null;
 }
 
-function getRedboxOverlayConfig(pageInfo) {
-    if (USER_PROFILE_FEATURE_ENABLED && (isXhsProfilePath() || pageInfo?.kind === 'xhs-profile')) {
-        return null;
-    }
-    if (isXhsNoteDetailPath() || /^xhs-(note|image|video)$/i.test(String(pageInfo?.kind || ''))) {
-        return {
-            variant: 'note',
-            title: 'Beav 笔记采集',
-            subtitle: '小红书笔记页',
-            actions: [
-                { label: '保存笔记', action: 'save', primary: true, title: '保存当前笔记到 Beav' },
-                { label: '下载素材', action: 'download', title: '下载当前笔记图片或视频' },
-                { label: '采集评论', action: 'comments', title: '采集当前笔记评论' },
-                { label: '导出 JSON', action: 'exportJson', title: '导出当前笔记原始 JSON' },
-            ],
-        };
-    }
-    if (isXhsHost()) {
-        return {
-            variant: 'xhs',
-            title: 'Beav 小红书采集',
-            subtitle: '当前页面',
-            actions: [
-                { label: '保存网页', action: 'savePageLink', primary: true, title: '保存当前页面链接到 Beav' },
-            ],
-        };
-    }
-    if (pageInfo?.kind === 'youtube') {
-        return {
-            variant: 'youtube',
-            title: 'Beav 视频采集',
-            subtitle: 'YouTube',
-            actions: [
-                { label: '保存视频', action: 'saveYoutube', primary: true, title: '保存当前 YouTube 视频到 Beav' },
-            ],
-        };
-    }
-    if (pageInfo?.kind === 'douyin-video') {
-        return {
-            variant: 'douyin',
-            title: 'Beav 视频采集',
-            subtitle: '抖音',
-            actions: [
-                { label: '保存视频', action: 'saveDouyin', primary: true, title: '保存当前抖音视频到 Beav' },
-            ],
-        };
-    }
-    const platformMap = {
-        'bilibili': { variant: 'bilibili', subtitle: 'Bilibili', label: '保存内容', action: 'saveBilibili', title: '保存当前 Bilibili 内容到 Beav' },
-        'kuaishou': { variant: 'kuaishou', subtitle: '快手', label: '保存内容', action: 'saveKuaishou', title: '保存当前快手内容到 Beav' },
-        'tiktok': { variant: 'tiktok', subtitle: 'TikTok', label: '保存内容', action: 'saveTiktok', title: '保存当前 TikTok 内容到 Beav' },
-        'reddit': { variant: 'reddit', subtitle: 'Reddit', label: '保存内容', action: 'saveReddit', title: '保存当前 Reddit 内容到 Beav' },
-        'x': { variant: 'x', subtitle: 'X', label: '保存内容', action: 'saveX', title: '保存当前 X 内容到 Beav' },
-        'instagram': { variant: 'instagram', subtitle: 'Instagram', label: '保存内容', action: 'saveInstagram', title: '保存当前 Instagram 内容到 Beav' },
-    };
-    const platformKey = String(pageInfo?.platform || pageInfo?.kind || '').split('-')[0];
-    if (platformMap[platformKey]) {
-        const platform = platformMap[platformKey];
-        return {
-            variant: platform.variant,
-            title: 'Beav 页面采集',
-            subtitle: platform.subtitle,
-            actions: [
-                { label: platform.label, action: platform.action, primary: true, title: platform.title },
-            ],
-        };
-    }
-    if (pageInfo?.kind === 'wechat-article') {
-        return {
-            variant: 'wechat',
-            title: 'Beav 文章采集',
-            subtitle: '微信公众号',
-            actions: [
-                { label: '保存文章', action: 'savePageLink', primary: true, title: '保存当前公众号文章到 Beav' },
-            ],
-        };
-    }
-    if (pageInfo?.kind === 'zhihu-answer') {
-        return {
-            variant: 'zhihu',
-            title: 'Beav 回答采集',
-            subtitle: '知乎',
-            actions: [
-                { label: '保存回答', action: 'saveZhihuAnswer', primary: true, title: '保存当前知乎回答到 Beav' },
-            ],
-        };
-    }
-    if (pageInfo?.kind === 'zhihu-article') {
-        return {
-            variant: 'zhihu',
-            title: 'Beav 文章采集',
-            subtitle: '知乎专栏',
-            actions: [
-                { label: '保存文章', action: 'saveZhihuArticle', primary: true, title: '保存当前知乎专栏文章到 Beav' },
-            ],
-        };
-    }
-    return {
-        variant: 'generic',
-        title: 'Beav 页面采集',
-        subtitle: pageInfo?.detected ? '当前页面' : '网页链接',
-        actions: [
-            { label: '保存网页', action: pageInfo?.action === 'save-page-auto' ? 'savePageAuto' : 'savePageLink', primary: true, title: '保存当前网页到 Beav' },
-        ],
-    };
-}
-
-function renderXhsOverlay(pageInfo, config = getRedboxOverlayConfig(pageInfo)) {
-    if (!xhsOverlayHost?.shadowRoot) return;
-    if (!config) {
-        removeXhsOverlay();
-        return;
-    }
-    const shadow = xhsOverlayHost.shadowRoot;
-    const dock = shadow.querySelector('.dock');
-    if (!dock) return;
-    if (dock.dataset.variant === config.variant) {
-        const primaryButton = shadow.querySelector('[data-primary="true"]');
-        if (primaryButton) primaryButton.disabled = pageInfo?.primaryEnabled === false;
-        return;
-    }
-    dock.dataset.variant = config.variant;
-    dock.innerHTML = '';
-
-    const header = document.createElement('div');
-    header.className = 'panel-head';
-    const mark = document.createElement('div');
-    mark.className = 'panel-mark';
-    mark.textContent = 'R';
-    const copy = document.createElement('div');
-    copy.className = 'panel-copy';
-    const title = document.createElement('div');
-    title.className = 'panel-title';
-    title.textContent = config.title;
-    const subtitle = document.createElement('div');
-    subtitle.className = 'panel-subtitle';
-    subtitle.textContent = config.subtitle;
-    copy.append(title, subtitle);
-    header.append(mark, copy);
-    dock.append(header);
-
-    const actions = document.createElement('div');
-    actions.className = 'panel-actions';
-    for (const item of config.actions) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.dataset.action = item.action;
-        button.className = item.primary ? 'primary' : '';
-        button.title = item.title || item.label;
-        button.textContent = item.label;
-        if (item.primary) {
-            button.dataset.primary = 'true';
-            button.disabled = pageInfo?.primaryEnabled === false;
-        }
-        button.addEventListener('click', () => {
-            void runXhsOverlayAction(button.dataset.action);
-        });
-        actions.appendChild(button);
-    }
-    dock.appendChild(actions);
-
-    const status = document.createElement('div');
-    status.className = 'status';
-    status.dataset.state = 'idle';
-    status.hidden = true;
-    dock.appendChild(status);
-    xhsOverlayStatusElement = status;
-}
-
-function ensureXhsOverlay(pageInfo) {
-    const config = getRedboxOverlayConfig(pageInfo);
-    if (!config) {
-        removeXhsOverlay();
-        return;
-    }
-    if (xhsOverlayHost?.isConnected) {
-        renderXhsOverlay(pageInfo, config);
-        return;
-    }
-
-    const host = document.createElement('div');
-    host.id = 'redbox-page-overlay-host';
-    host.style.position = 'fixed';
-    host.style.right = '16px';
-    host.style.top = '112px';
-    host.style.zIndex = '2147483647';
-    host.style.pointerEvents = 'none';
-
-    const shadow = host.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `
-      <style>
-        :host {
-          all: initial;
-        }
-        .dock {
-          display: grid;
-          gap: 10px;
-          width: 148px;
-          border: 1px solid rgba(15, 23, 42, 0.12);
-          border-radius: 12px;
-          background: rgba(255, 255, 255, 0.98);
-          box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
-          padding: 10px;
-          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
-          pointer-events: auto;
-        }
-        .panel-head {
-          display: grid;
-          grid-template-columns: 28px 1fr;
-          gap: 8px;
-          align-items: center;
-          min-width: 0;
-        }
-        .panel-mark {
-          display: grid;
-          place-items: center;
-          width: 28px;
-          height: 28px;
-          border-radius: 8px;
-          background: #0f766e;
-          color: #f7fffb;
-          font: 800 14px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-        }
-        .panel-copy {
-          min-width: 0;
-        }
-        .panel-title {
-          color: #171717;
-          font-size: 12px;
-          font-weight: 800;
-          line-height: 1.2;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .panel-subtitle {
-          margin-top: 2px;
-          color: #737373;
-          font-size: 11px;
-          line-height: 1.2;
-        }
-        .panel-actions {
-          display: grid;
-          gap: 7px;
-        }
-        button {
-          width: 100%;
-          min-height: 31px;
-          border: 1px solid rgba(15, 23, 42, 0.14);
-          border-radius: 7px;
-          background: rgba(255, 255, 255, 0.96);
-          color: #171717;
-          cursor: pointer;
-          font-size: 12px;
-          font-weight: 700;
-          line-height: 1.1;
-        }
-        button:hover:not(:disabled) {
-          border-color: #0f766e;
-          color: #115e59;
-        }
-        button.primary {
-          border-color: #0f766e;
-          background: #0f766e;
-          color: #f7fffb;
-        }
-        button:disabled {
-          cursor: not-allowed;
-          opacity: 0.55;
-        }
-        .status {
-          border: 1px solid rgba(15, 23, 42, 0.12);
-          border-radius: 8px;
-          background: #f0fdf4;
-          color: #166534;
-          padding: 8px;
-          font-size: 12px;
-          line-height: 1.35;
-          word-break: break-word;
-        }
-        .status[data-state="error"] {
-          color: #b91c1c;
-        }
-        .status[data-state="pending"] {
-          color: #115e59;
-        }
-      </style>
-      <div class="dock" role="toolbar" aria-label="Beav 页面采集">
-      </div>
-    `;
-
-    xhsOverlayHost = host;
-    (document.body || document.documentElement).appendChild(host);
-    renderXhsOverlay(pageInfo, config);
-}
-
 function handleWindowBlur() {
     if (dragSaveInFlight) return;
     hideDragZone(true);
@@ -2188,7 +1848,6 @@ function stopObservers() {
         dragOverlayHost.remove();
     }
     removeXhsDomButtons();
-    removeXhsOverlay();
     dragOverlayHost = null;
     dragZoneElement = null;
     dragZoneTitleElement = null;
@@ -2204,7 +1863,6 @@ function emitPageState() {
     if (observerStopped) return;
     latestPageInfo = detectPageInfo();
     ensureXhsDomButtons(latestPageInfo);
-    ensureXhsOverlay(latestPageInfo);
     try {
         chrome.runtime.sendMessage({
             type: 'page-state:update',
