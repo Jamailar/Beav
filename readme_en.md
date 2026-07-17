@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="./images/beav-icon.png" alt="Beav" width="88">
+</p>
+
+<p align="center">
   <a href="./README.md">简体中文</a> · <strong>English</strong>
 </p>
 
@@ -27,7 +31,9 @@
   <a href="https://www.bilibili.com/video/BV12LNn6nEem/">Video Tutorial</a>
 </p>
 
-![Beav AI content operations workspace](./images/gpt-image-2-media-suite.jpg)
+<p align="center">
+  <img src="./images/beav-agent-workflow-hero.png" alt="Beav AI content operations workspace" width="50%">
+</p>
 
 > RedBox is now **Beav**. Existing local data and workspaces are unaffected.
 
@@ -76,7 +82,7 @@ Every capability below is implemented today.
 | ✅ Batch / keyword capture | ✅ Topic Center | ✅ Short-video scripts | ✅ Social covers | ✅ Weekly / fixed intervals |
 | ✅ Comment capture | ✅ Video transcription & summaries | ✅ Voice-over scripts / shots | ✅ Video clips | ✅ Scheduled creation |
 | ✅ Web / WeChat / selections | ✅ Knowledge search | ✅ Titles / tags / CTAs | ✅ Digital human / audio | ✅ Execution status & outputs |
-| ✅ Local files / folders | ✅ Account-specific context | ✅ Multi-platform publishing copy | ✅ Reusable people / products | ✅ RedClaw / Skills |
+| ✅ Local files / folders | ✅ Account-specific context | ✅ Multi-platform publishing copy | ✅ Reusable people / products | ✅ Curated creator Skills with one-click install |
 | ✅ Images / video / asset archives | ✅ Source-backed references | ✅ Editable manuscript projects | ✅ Reusable media library | ✅ External agent access |
 
 ## Screenshots
