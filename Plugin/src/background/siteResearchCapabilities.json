@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": 3,
+  "capabilities": [
+    {
+      "id": "xiaohongshu",
+      "aliases": ["xhs", "redbook", "rednote"],
+      "displayName": "小红书",
+      "hostPatterns": ["xiaohongshu.com", "xhslink.com", "rednote.com"],
+      "supportedOperations": ["search", "author_scan", "content_scan"],
+      "supportedFilters": {
+        "sort": ["relevance", "latest", "most_liked"],
+        "contentType": ["all", "image_text", "video"],
+        "publishTime": ["all", "day", "week", "half_year"]
+      },
+      "defaultSurface": ["search", "author_scan", "content_scan"],
+      "debugSurface": ["search", "author_scan", "content_scan"],
+      "capabilityVersion": "1.2.0",
+      "extractorSchemaHash": "eddf2be8a517abe0cb4c06074300cecc9cf8b285e97fe2815f9530e0999100d9",
+      "concurrencyPolicy": "single_account"
+    },
+    {
+      "id": "douyin",
+      "aliases": ["dy"],
+      "displayName": "抖音",
+      "hostPatterns": ["douyin.com", "iesdouyin.com"],
+      "supportedOperations": ["search", "author_scan", "content_scan"],
+      "supportedFilters": {
+        "sort": ["relevance", "latest", "most_liked"],
+        "contentType": ["all", "image_text", "video"],
+        "publishTime": ["all", "day", "week", "half_year"]
+      },
+      "defaultSurface": ["search", "author_scan", "content_scan"],
+      "debugSurface": ["search", "author_scan", "content_scan"],
+      "capabilityVersion": "1.3.0",
+      "extractorSchemaHash": "67bc5c506ab968ceecfad4aab4b3aa4f0c2ca390d5adbeaa70679b4c0c0f5060",
+      "concurrencyPolicy": "single_account"
+    },
+    {
+      "id": "youtube",
+      "aliases": ["yt"],
+      "displayName": "YouTube",
+      "hostPatterns": ["youtube.com", "youtu.be"],
+      "supportedOperations": ["content_scan"],
+      "supportedFilters": {},
+      "defaultSurface": ["content_scan"],
+      "debugSurface": ["content_scan"],
+      "capabilityVersion": "1.1.0",
+      "extractorSchemaHash": "41f27edfc1ed3e00ecb0b4ec1ba43b4c0991f0f5ca0381578836020b129dd84f",
+      "concurrencyPolicy": "single_account"
+    },
+    {
+      "id": "web",
+      "aliases": ["generic_web", "generic"],
+      "displayName": "Generic Web",
+      "hostPatterns": ["*"],
+      "supportedOperations": ["content_scan"],
+      "supportedFilters": {},
+      "defaultSurface": ["content_scan"],
+      "debugSurface": ["content_scan"],
+      "capabilityVersion": "1.1.0",
+      "extractorSchemaHash": "4c8cf3f106faf41c0af38e456d6396d9b32c1b6af321e4932e16a556c715c762",
+      "concurrencyPolicy": "single_account"
+    }
+  ]
+}

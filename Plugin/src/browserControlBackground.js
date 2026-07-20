@@ -4,7 +4,7 @@ import { buildBrowserCapabilityMetadata, buildPluginRegistrationPayload } from '
 import { createBrowserControlRuntime } from './background/browserControlRuntime.js';
 import { createBrowserEventBridge, listBrowserEvents } from './background/browserEventBridge.js';
 import { configureBrowserVisibilityTelemetry, getBrowserVisibility, setBrowserVisibility } from './background/browserVisibilityRuntime.js';
-import { beginBrowserSessionTurn, createBrowserSession as createStoredBrowserSession, endBrowserSession as endStoredBrowserSession, ensureBrowserSession as ensureStoredBrowserSession, finishBrowserSessionRequest, getBrowserSession, listBrowserSessionEvents, listBrowserSessions as listStoredBrowserSessions, markTurnEnded as markStoredTurnEnded, nameBrowserSession as nameStoredBrowserSession, sessionHasActiveRequests, startBrowserSessionRequest, stopActiveBrowserSessions as stopStoredActiveBrowserSessions, subscribeBrowserSessionEvents } from './background/browserSessionRuntime.js';
+import { beginBrowserSessionTurn, createBrowserSession as createStoredBrowserSession, endBrowserSession as endStoredBrowserSession, ensureBrowserSession as ensureStoredBrowserSession, finishBrowserSessionRequest, getBrowserSession, listBrowserSessionEvents, listBrowserSessions as listStoredBrowserSessions, markTurnEnded as markStoredTurnEnded, nameBrowserSession as nameStoredBrowserSession, reconcileInterruptedBrowserRequests, sessionHasActiveRequests, startBrowserSessionRequest, stopActiveBrowserSessions as stopStoredActiveBrowserSessions, subscribeBrowserSessionEvents } from './background/browserSessionRuntime.js';
 import { attachCdpTab, attachCdpTarget, configureCdpTransportTelemetry, detachAttachedDebuggersBestEffort, detachAttachedDebuggersForTabs, detachCdpTarget, forgetAttachedCdpTab, getAttachedCdpSnapshot, getCdpProtocolVersion, getDefaultCdpTimeoutMs, handleDebuggerDetach, hasAttachedCdp, isCdpCommandTimeoutError, listCdpTargetsRaw, requireDebuggerApi, sendCdpCommandWithTimeout } from './background/cdpTransport.js';
 import { listCdpEvents, recordCdpEvent, summarizeCdpEvents } from './background/cdpEventRuntime.js';
 import { captureCdpScreenshot, captureVisibleTabScreenshot, getViewportState, resetBrowserViewport, resetCdpViewport, setBrowserViewport, setCdpViewport } from './background/cdpPageRuntime.js';
@@ -23,7 +23,7 @@ import { exportPage } from './background/pageExportRuntime.js';
 import { evaluatePageScript } from './background/pageScriptRuntime.js';
 import { CONTENT_CURSOR_ARRIVED_TYPE, TARGET_CURSOR_ARRIVED_TYPE, TARGET_GET_CURSOR_STATE_TYPE, clearCursorOverlayForLeases, clearCursorOverlayForTab, configurePixelInputTelemetry, dispatchKeyboardCombo, dispatchKeyboardPress, dispatchKeyboardType, dispatchMouseClick, dispatchMouseDrag, dispatchMouseMove, dispatchMouseWheel, hasPendingCursorArrivals, hideCursorOverlay, moveCursorOverlay, notifyCursorArrived, readCursorOverlayState, republishCursorOverlayStateForTab } from './background/pixelInput.js';
 import { closeSidePanel, configureSidePanelTelemetry, getSidePanelStatus, openSidePanel, registerSidePanelStatus, requireSidePanelOpen, restoreSidePanelStatus, toggleSidePanel } from './background/sidePanelStatus.js';
-import { listSiteCapabilities, runSiteResearch } from './background/siteResearchRuntime.js';
+import { listSiteCapabilities, runSiteResearch, SITE_RESEARCH_CONTRACT_VERSION } from './background/siteResearchRuntime.js';
 import { TARGET_GET_CONTROL_BADGE_STATE_TYPE, initializeTabControlBadges, readTabControlBadgeState } from './background/tabControlBadge.js';
 import { clearLeaseFaviconBadges, hasUnseenFinalizedBadges, initializeTabFaviconBadges, listFinalizedBadges, markFinalizedBadges } from './background/tabFaviconBadge.js';
 import { configureManagedTabGroupTelemetry, ensureAgentTabGroup, getManagedGroupIdContainingTabs, initializeManagedTabGroups, listManagedTabGroups, reconcileManagedGroupForTabs, refreshManagedGroupsFromChrome, releaseTabsFromManagedGroups, setSessionGroupTitle } from './background/tabGroupManager.js';
@@ -41,6 +41,8 @@ const SCRAPERS_KEY = 'redboxBrowserControlScrapers';
 const POLL_ALARM = 'redbox-browser-control-poll';
 const CONTENT_READ_TYPE = 'xwow-data-ai:read-frame';
 const CONTENT_DOM_SNAPSHOT_TYPE = 'xwow-data-ai:dom-snapshot';
+const CONTENT_SITE_RESEARCH_EXTRACT_TYPE = 'xwow-data-ai:site-research-extract';
+const CONTENT_SITE_RESEARCH_APPLY_FILTERS_TYPE = 'xwow-data-ai:site-research-apply-filters';
 const CONTENT_SCROLL_TYPE = 'xwow-data-ai:scroll-page';
 const CONTENT_CLICK_NEXT_TYPE = 'xwow-data-ai:click-next';
 const CONTENT_CLICK_ELEMENT_TYPE = 'xwow-data-ai:click-element';
@@ -125,8 +127,39 @@ const BROWSER_CONTROL_MCP_TOOLS = [
   },
   {
     name: 'research.run',
-    description: 'Run a bounded read-only site research macro for Xiaohongshu search/profile/content, Douyin content, or YouTube content. Returns the source tab and evidence snapshot; it never submits, publishes, or changes remote state.',
-    inputSchema: { type: 'object', properties: { site: { type: 'string' }, operation: { type: 'string', enum: ['search', 'author_scan', 'content_scan'] }, query: { type: 'string' }, url: { type: 'string' }, tabId: { type: 'number' }, snapshot: { type: 'boolean' }, timeoutMs: { type: 'number' } }, required: ['operation'], additionalProperties: true },
+    description: 'Execute one typed read-only site-research action. Desktop owns multi-step navigation, scrolling, detail-tab, retry, and cleanup orchestration; macro mode remains for backward compatibility.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        site: { type: 'string', enum: ['xiaohongshu', 'xhs', 'douyin', 'youtube', 'web'] },
+        operation: { type: 'string', enum: ['search', 'author_scan', 'content_scan'] },
+        query: { type: 'string' },
+        url: { type: 'string' },
+        tabId: { type: 'number' },
+        filters: {
+          type: 'object',
+          properties: {
+            sort: { type: 'string', enum: ['relevance', 'latest', 'most_liked'] },
+            contentType: { type: 'string', enum: ['all', 'image_text', 'video'] },
+            publishTime: { type: 'string', enum: ['all', 'day', 'week', 'half_year'] },
+          },
+          additionalProperties: false,
+        },
+        limit: { type: 'number', minimum: 1, maximum: 100 },
+        commentLimit: { type: 'number', minimum: 0, maximum: 100 },
+        depth: { type: 'string', enum: ['preview', 'standard', 'deep'] },
+        executionMode: { type: 'string', enum: ['macro', 'extract', 'apply_filters', 'download_media'] },
+        media: { type: 'array', maxItems: 40, items: { type: 'object', additionalProperties: true } },
+        maxScrolls: { type: 'number', minimum: 0, maximum: 8 },
+        downloadMedia: { type: 'boolean' },
+        ocr: { type: 'boolean' },
+        transcribeAudio: { type: 'boolean' },
+        snapshot: { type: 'boolean' },
+        timeoutMs: { type: 'number' },
+      },
+      required: ['operation'],
+      additionalProperties: true,
+    },
   },
   {
     name: 'browser.context',
@@ -511,7 +544,25 @@ configureNativeTransport({
     nativeStatus = status;
   },
   onTelemetry: (event) => browserEventBridge.publishNativeTransportEvent(event),
+  getRegistration: async () => {
+    const lifecycle = await ensureLifecycleInstallState();
+    return {
+      extensionId: chrome.runtime.id,
+      extensionInstanceId: lifecycle.extensionInstanceId,
+      version: chrome.runtime.getManifest().version,
+      browser: detectBrowserFamily(),
+    };
+  },
 });
+
+function detectBrowserFamily() {
+  const userAgent = String(globalThis.navigator?.userAgent || '');
+  if (/Edg\//i.test(userAgent)) return 'edge';
+  if (/Brave\//i.test(userAgent) || globalThis.navigator?.brave) return 'brave';
+  if (/Chromium\//i.test(userAgent)) return 'chromium';
+  if (/Chrome\//i.test(userAgent)) return 'chrome';
+  return 'unknown';
+}
 
 registerLifecycleUpdateListener();
 registerSidePanelStatus();
@@ -703,10 +754,43 @@ async function initialize() {
   await initializeManagedTabGroups().catch(() => {});
   initializeTabFaviconBadges();
   initializeTabControlBadges();
+  await reconcileInterruptedBrowserRuntime().catch((error) => {
+    console.warn('[XWOW BrowserDataAI] interrupted browser runtime reconciliation failed', error);
+  });
   setStatus({
     connected: nativeStatus.state === 'connected',
     lastError: nativeStatus.error || '',
   });
+}
+
+async function reconcileInterruptedBrowserRuntime() {
+  const reconciled = await reconcileInterruptedBrowserRequests('extension_runtime_resumed');
+  const cleanupResults = [];
+  for (const session of reconciled.reconciledSessions || []) {
+    const cleanupResult = await endActiveTurn(session, session.interruptedTurnId || session.lastTurnId || session.turnId).catch((error) => ({
+      success: false,
+      browserError: {
+        code: 'BROWSER_CLEANUP_INCOMPLETE',
+        message: describeErrorMessage(error),
+        retryable: true,
+        userActionRequired: false,
+      },
+    }));
+    cleanupResults.push({ sessionId: session.sessionId, turnId: session.interruptedTurnId || '', result: cleanupResult });
+  }
+  if (cleanupResults.length) {
+    const cleanup = await recordLifecycleCleanupResult({
+      reason: 'extension_runtime_resumed',
+      interruptedRequests: reconciled.interruptedRequests || [],
+      cleanupResults,
+    });
+    await browserEventBridge.publishLifecycleEvent('interrupted_runtime_reconciled', {
+      interruptedRequests: reconciled.interruptedRequests || [],
+      cleanupResults,
+      cleanupResult: cleanup.cleanupResult || null,
+    }).catch(() => {});
+  }
+  return { ...reconciled, cleanupResults };
 }
 
 function ensureInitialized() {
@@ -1337,6 +1421,9 @@ async function runBrowserAction(action, context = {}) {
   let decision = null;
   let actionSuccess = false;
   let actionError = '';
+  let terminalResponse = null;
+  let terminalBrowserError = null;
+  let actionCleanup = null;
   try {
     const preparedTurn = await prepareBrowserActionTurn(session, normalized);
     session = preparedTurn.session || session;
@@ -1354,10 +1441,28 @@ async function runBrowserAction(action, context = {}) {
     }
     const requestTabId = Number(normalized.tabId || session.activeTabId || activeBrowserSession?.activeTabId || 0);
     activeRequest = await startBrowserSessionRequest(session.sessionId, {
+      requestId: normalized.callId || normalized.requestId || '',
       action: normalized.type,
       tabId: Number.isInteger(requestTabId) && requestTabId > 0 ? requestTabId : null,
       turnId: session.currentTurnId || session.turnId,
     });
+    if (activeRequest.duplicateActive === true) {
+      const duplicateError = new Error(`Browser action ${activeRequest.requestId} is already running`);
+      duplicateError.code = 'BROWSER_ACTION_FAILED';
+      duplicateError.retryable = true;
+      throw duplicateError;
+    }
+    if (activeRequest.replayed === true) {
+      if (activeRequest.responsePersisted !== true) {
+        const replayError = new Error(`Browser action ${activeRequest.requestId} already reached a terminal state, but its response was too large to persist; refusing to execute the same callId again`);
+        replayError.code = 'BROWSER_RESPONSE_TOO_LARGE';
+        replayError.retryable = false;
+        throw replayError;
+      }
+      terminalResponse = activeRequest.response;
+      actionSuccess = terminalResponse?.success !== false;
+      return terminalResponse;
+    }
     await browserControlRuntime.startRequest(session.sessionId, requestTabId, {
       turnId: session.currentTurnId || session.turnId,
       publishTabs: false,
@@ -1453,6 +1558,41 @@ async function runBrowserAction(action, context = {}) {
           readSnapshot: async (tabId) => {
             await requireActiveControlledTabLease(session, tabId, 'research.run');
             return await sendContentMessage(tabId, CONTENT_DOM_SNAPSHOT_TYPE, {});
+          },
+          readSiteEvidence: async (tabId, options) => {
+            await requireActiveControlledTabLease(session, tabId, 'research.run');
+            return await sendContentMessage(tabId, CONTENT_SITE_RESEARCH_EXTRACT_TYPE, options || {});
+          },
+          applyFilters: async (tabId, options) => {
+            await requireActiveControlledTabLease(session, tabId, 'research.run');
+            return await sendContentMessage(tabId, CONTENT_SITE_RESEARCH_APPLY_FILTERS_TYPE, options || {});
+          },
+          scrollPage: async (tabId) => {
+            await requireActiveControlledTabLease(session, tabId, 'research.run');
+            return await sendContentMessage(tabId, CONTENT_SCROLL_TYPE, { deltaY: 800 });
+          },
+          closeTab: async (tabId) => await closeControlledTab(session, {
+            tabId,
+            reason: 'research_detail_complete',
+          }).catch(() => {}),
+          downloadAsset: async (asset, options) => {
+            const sourceUrl = String(asset?.sourceUrl || '').trim();
+            if (!isHttpUrl(sourceUrl)) throw new Error('research media URL must use http or https');
+            const downloadId = await chrome.downloads.download({
+              url: sourceUrl,
+              saveAs: false,
+              conflictAction: 'uniquify',
+            });
+            return await waitForDownload({
+              downloadId,
+              timeoutMs: Math.max(Number(options?.timeoutMs || 30_000), 30_000),
+              sessionId: session.sessionId,
+              turnId: session.currentTurnId || session.turnId || '',
+              artifactBinding: {
+                kind: 'browser_research_media',
+                sourceUrl,
+              },
+            });
           },
         });
         break;
@@ -1925,7 +2065,7 @@ async function runBrowserAction(action, context = {}) {
         throw new Error(`Unsupported browser action: ${normalized.type}`);
     }
     actionSuccess = result?.success !== false;
-    return {
+    terminalResponse = {
       success: actionSuccess,
       sessionId: session.sessionId,
       turnId: session.currentTurnId || session.turnId || '',
@@ -1933,12 +2073,23 @@ async function runBrowserAction(action, context = {}) {
       policy: decision,
       requestId: activeRequest?.requestId || '',
       result,
+      cleanup: result?.cleanup || null,
+      browserError: result?.browserError || null,
       startedAt,
       completedAt: new Date().toISOString(),
     };
+    return terminalResponse;
   } catch (error) {
     actionSuccess = false;
-    actionError = describeError(error);
+    actionError = describeErrorMessage(error);
+    terminalBrowserError = buildBrowserActionError(error, normalized, session, activeRequest);
+    actionCleanup = createCleanupReport('browser_action_failed', session.sessionId, session.currentTurnId || session.turnId || normalized.turnId || '');
+    await runCleanupStep(actionCleanup, 'detach_action_debuggers', async () => await detachAttachedDebuggersForTabs([normalized.tabId]));
+    finishCleanupReport(actionCleanup);
+    terminalBrowserError.details = {
+      ...(terminalBrowserError.details || {}),
+      cleanup: actionCleanup,
+    };
     decision = decision || error?.details?.decision || null;
     if (decision) {
       await publishPolicyDecisionAudit({
@@ -1951,18 +2102,22 @@ async function runBrowserAction(action, context = {}) {
         error: actionError,
       }).catch(() => {});
     }
-    return {
+    terminalResponse = {
       success: false,
       sessionId: session.sessionId,
+      turnId: session.currentTurnId || session.turnId || '',
       action: normalized.type,
       policy: decision || null,
       requestId: activeRequest?.requestId || '',
+      browserError: terminalBrowserError,
+      cleanup: actionCleanup,
       error: actionError,
       startedAt,
       completedAt: new Date().toISOString(),
     };
+    return terminalResponse;
   } finally {
-    if (activeRequest?.requestId) {
+    if (activeRequest?.requestId && activeRequest.replayed !== true && activeRequest.duplicateActive !== true) {
       await browserControlRuntime.finishRequest(session.sessionId, {
         publishTabs: false,
         reason: 'browser_action_request_finished',
@@ -1970,6 +2125,9 @@ async function runBrowserAction(action, context = {}) {
       const finished = await finishBrowserSessionRequest(session.sessionId, activeRequest.requestId, {
         success: actionSuccess,
         error: actionError,
+        browserError: terminalBrowserError,
+        response: terminalResponse,
+        persistResult: true,
       }).catch(() => null);
       if (finished?.session && activeBrowserSession?.sessionId === session.sessionId) {
         activeBrowserSession = finished.session;
@@ -1978,6 +2136,42 @@ async function runBrowserAction(action, context = {}) {
       await maybeReloadForPendingUpdate().catch(() => {});
     }
   }
+}
+
+function buildBrowserActionError(error, action = {}, session = {}, activeRequest = null) {
+  const message = describeErrorMessage(error) || 'Browser action failed';
+  const normalizedMessage = message.toLowerCase();
+  const declaredCode = String(error?.code || '').toUpperCase();
+  let code = declaredCode.startsWith('BROWSER_') ? declaredCode : 'BROWSER_ACTION_FAILED';
+  let retryable = error?.retryable === true;
+  let userActionRequired = error?.userActionRequired === true;
+  if (isCdpCommandTimeoutError(error) || normalizedMessage.includes('timed out') || normalizedMessage.includes('timeout')) {
+    code = 'BROWSER_ACTION_TIMEOUT';
+    retryable = true;
+  } else if (normalizedMessage.includes('unclaimed tab') || normalizedMessage.includes('active lease')) {
+    code = 'BROWSER_TAB_NOT_OWNED';
+    retryable = false;
+    userActionRequired = true;
+  } else if (declaredCode === 'BROWSER_ACTION_CANCELLED' || error?.name === 'AbortError') {
+    code = 'BROWSER_ACTION_CANCELLED';
+    retryable = false;
+  }
+  return {
+    code,
+    message,
+    retryable,
+    userActionRequired,
+    browserInstanceId: String(action.browserInstanceId || ''),
+    callId: String(action.callId || activeRequest?.requestId || ''),
+    details: {
+      sessionId: String(session.sessionId || ''),
+      turnId: String(session.currentTurnId || session.turnId || action.turnId || ''),
+      action: String(action.type || ''),
+      tabId: Number.isInteger(Number(action.tabId)) ? Number(action.tabId) : null,
+      targetId: typeof action.targetId === 'string' ? action.targetId : '',
+      attempt: Number.isInteger(Number(action.attempt)) ? Number(action.attempt) : 1,
+    },
+  };
 }
 
 async function publishPolicyDecisionAudit({ kind, action = {}, decision = {}, session = {}, requestId = '', tabId = null, error = '' } = {}) {
@@ -2373,7 +2567,7 @@ async function getBrowserControlInfo() {
       clientHeartbeat: getLastClientHeartbeatSnapshot(),
       lifecycleStatus: lifecycle,
       extensionInstanceId: lifecycle?.extensionInstanceId || '',
-      siteResearch: { capabilities: listSiteCapabilities(), contractVersion: 1 },
+      siteResearch: { capabilities: listSiteCapabilities(), contractVersion: SITE_RESEARCH_CONTRACT_VERSION },
     }),
   };
 }
@@ -2421,24 +2615,47 @@ async function markTurnEnded(sessionId, turnId) {
 
 async function endActiveTurn(session, turnId) {
   const activeTurnId = String(turnId || session?.currentTurnId || session?.turnId || '');
-  const marked = await markTurnEnded(session.sessionId, activeTurnId);
-  const released = await releaseActiveTurnLeases(session.sessionId, activeTurnId).catch((error) => ({
-    success: false,
-    error: describeError(error),
-    releasedLeases: [],
-    sessionEvents: [],
-  }));
-  await releaseTabsFromManagedGroups((released.releasedLeases || []).map((lease) => lease.tabId)).catch(() => {});
-  await clearCursorOverlayForLeases(released.releasedLeases || [], 'turn_ended').catch(() => {});
-  await browserControlRuntime.untrackTabs(session.sessionId, (released.releasedLeases || []).map((lease) => lease.tabId), {
+  const cleanup = createCleanupReport('turn_ended', session.sessionId, activeTurnId);
+  const active = await runCleanupStep(cleanup, 'read_active_leases', async () => await getSessionActiveLeases(session.sessionId));
+  const activeTurnLeases = (active?.leases || []).filter((lease) => !activeTurnId || lease.turnId === activeTurnId);
+  const touchedIds = activeTurnLeases.map((lease) => lease.tabId).filter((tabId) => Number.isInteger(tabId));
+  const closeAgentIds = activeTurnLeases
+    .filter((lease) => lease.origin === 'agent')
+    .map((lease) => lease.tabId)
+    .filter((tabId) => Number.isInteger(tabId));
+  await runCleanupStep(cleanup, 'detach_debuggers', async () => await detachAttachedDebuggersForTabs(touchedIds));
+  await runCleanupStep(cleanup, 'untrack_runtime_tabs', async () => await browserControlRuntime.untrackTabs(session.sessionId, touchedIds, {
     reason: 'turn_ended',
     publish: false,
-    clearCursor: false,
-  }).catch(() => {});
-  await clearLeaseFaviconBadges(released.releasedLeases || []).catch(() => {});
+    clearCursor: true,
+  }));
+  await runCleanupStep(cleanup, 'release_managed_groups', async () => await releaseTabsFromManagedGroups(touchedIds));
+  await runCleanupStep(cleanup, 'clear_cursor_overlays', async () => await clearCursorOverlayForLeases(activeTurnLeases, 'turn_ended'));
+  await runCleanupStep(cleanup, 'clear_favicon_badges', async () => await clearLeaseFaviconBadges(activeTurnLeases));
+  await runCleanupStep(cleanup, 'close_agent_tabs', async () => await closeTabsIdempotently(closeAgentIds));
+  await runCleanupStep(cleanup, 'refresh_managed_groups', async () => await refreshManagedGroupsFromChrome());
+  const released = cleanup.failures.length === 0
+    ? await runCleanupStep(cleanup, 'release_turn_leases', async () => await releaseActiveTurnLeases(session.sessionId, activeTurnId)) || { releasedLeases: [], sessionEvents: [], session: null }
+    : { releasedLeases: [], sessionEvents: [], session: null };
+  if (cleanup.failures.length > 0 && !cleanup.steps.some((step) => step.name === 'release_turn_leases')) {
+    cleanup.steps.push({
+      name: 'release_turn_leases',
+      success: false,
+      skipped: true,
+      reason: 'prior_cleanup_failure',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+  }
+  const marked = await runCleanupStep(cleanup, 'mark_turn_terminal', async () => await markTurnEnded(session.sessionId, activeTurnId)) || {
+    success: false,
+    session: released.session || session,
+    sessionEvent: null,
+  };
+  finishCleanupReport(cleanup);
   if (activeBrowserSession?.sessionId === session.sessionId) {
     activeBrowserSession = {
-      ...(marked.session || activeBrowserSession),
+      ...(marked.session || released.session || activeBrowserSession),
       activeTabId: released.releasedLeases?.some((lease) => lease.tabId === activeBrowserSession?.activeTabId)
         ? null
         : marked.session?.activeTabId || activeBrowserSession?.activeTabId || null,
@@ -2446,10 +2663,14 @@ async function endActiveTurn(session, turnId) {
     setStatus({ browserControl: activeBrowserSession });
   }
   return {
-    success: marked.success !== false && released.success !== false,
+    success: cleanup.success,
+    partial: cleanup.success !== true,
     session: marked.session,
     turnId: activeTurnId,
     releasedLeases: released.releasedLeases || [],
+    closedTabIds: closeAgentIds,
+    cleanup,
+    ...(cleanup.success ? {} : { browserError: browserCleanupIncompleteError(cleanup) }),
     sessionEvents: [
       ...(marked.sessionEvent ? [marked.sessionEvent] : []),
       ...(released.sessionEvents || []),
@@ -2458,23 +2679,32 @@ async function endActiveTurn(session, turnId) {
 }
 
 async function finalizeTabs(tabEntries, session) {
-  const active = await getSessionActiveLeases(session.sessionId).catch(() => ({ leases: [] }));
-  const activeLeases = active.leases || [];
-  const activeIds = new Set(activeLeases.map((lease) => lease.tabId).filter((tabId) => Number.isInteger(tabId)));
-  const keepEntries = normalizeFinalizeKeepEntries(tabEntries, activeIds);
+  const cleanup = createCleanupReport('tabs_finalized', session.sessionId, session.currentTurnId || session.turnId || '');
+  const storedLeases = await runCleanupStep(cleanup, 'read_session_leases', async () => ({
+    success: true,
+    leases: (await listStoredTabLeases()).filter((lease) => lease?.sessionId === session.sessionId),
+  })) || { leases: [] };
+  const sessionLeases = storedLeases.leases || [];
+  const activeLeases = sessionLeases.filter((lease) => lease.state === 'active');
+  const eligibleIds = new Set(sessionLeases.map((lease) => lease.tabId).filter((tabId) => Number.isInteger(tabId)));
+  const keepEntries = normalizeFinalizeKeepEntries(tabEntries, eligibleIds);
   const keepByTabId = new Map(keepEntries.map((entry) => [entry.tabId, entry.status]));
   const activeAgentIds = activeLeases
     .filter((lease) => lease.origin === 'agent')
     .map((lease) => lease.tabId)
     .filter((tabId) => Number.isInteger(tabId));
-  const groupId = await getManagedGroupIdContainingTabs(activeAgentIds).catch(() => null);
+  const managedGroup = await runCleanupStep(cleanup, 'read_managed_group', async () => ({
+    success: true,
+    groupId: await getManagedGroupIdContainingTabs(activeAgentIds),
+  }));
+  const groupId = managedGroup?.groupId ?? null;
   const tabEntriesWithGroup = keepEntries.map((entry) => ({
     ...entry,
     ...(entry.status === 'handoff' && groupId == null ? {} : entry.status === 'handoff' ? { groupId } : {}),
     ...(session.activeTabId === entry.tabId ? { isActiveHandoff: true } : {}),
   }));
   const result = await finalizeTabLeases(tabEntriesWithGroup, session, { groupFinalized: false });
-  await markFinalizedBadges(result.finalized || []).catch(() => {});
+  await runCleanupStep(cleanup, 'mark_finalized_badges', async () => await markFinalizedBadges(result.finalized || []));
 
   const keepDeliverableIds = new Set(keepEntries.filter((entry) => entry.status === 'deliverable').map((entry) => entry.tabId));
   const keepHandoffIds = new Set(keepEntries.filter((entry) => entry.status === 'handoff').map((entry) => entry.tabId));
@@ -2487,22 +2717,33 @@ async function finalizeTabs(tabEntries, session) {
   }
   const releaseIds = [...keepDeliverableIds, ...releaseUserIds, ...closeAgentIds];
   const touchedIds = [...new Set([...keepHandoffIds, ...releaseIds])];
-  await detachAttachedDebuggersForTabs(touchedIds).catch(() => {});
-  await browserControlRuntime.untrackTabs(session.sessionId, touchedIds, {
+  await runCleanupStep(cleanup, 'detach_debuggers', async () => await detachAttachedDebuggersForTabs(touchedIds));
+  await runCleanupStep(cleanup, 'untrack_runtime_tabs', async () => await browserControlRuntime.untrackTabs(session.sessionId, touchedIds, {
     reason: 'tabs_finalized',
     publish: false,
     clearCursor: true,
-  }).catch(() => {});
-  await releaseTabsFromManagedGroups([...keepDeliverableIds, ...releaseUserIds, ...closeAgentIds]).catch(() => {});
-  const released = releaseIds.length
-    ? await releaseTabsForSession(session.sessionId, releaseIds, 'tabs_finalized')
-    : { releasedLeases: [], sessionEvents: [], session: null };
-  const releasedUserLeases = (released.releasedLeases || []).filter((lease) => releaseUserIds.includes(lease.tabId));
-  await clearLeaseFaviconBadges(releasedUserLeases).catch(() => {});
+  }));
+  await runCleanupStep(cleanup, 'release_managed_groups', async () => await releaseTabsFromManagedGroups([...keepDeliverableIds, ...releaseUserIds, ...closeAgentIds]));
+  const releasingUserLeases = activeLeases.filter((lease) => releaseUserIds.includes(lease.tabId));
+  await runCleanupStep(cleanup, 'clear_favicon_badges', async () => await clearLeaseFaviconBadges(releasingUserLeases));
   if (closeAgentIds.length) {
-    await chrome.tabs.remove(closeAgentIds.length === 1 ? closeAgentIds[0] : closeAgentIds).catch(() => {});
-    await refreshManagedGroupsFromChrome().catch(() => {});
+    await runCleanupStep(cleanup, 'close_agent_tabs', async () => await closeTabsIdempotently(closeAgentIds));
+    await runCleanupStep(cleanup, 'refresh_managed_groups', async () => await refreshManagedGroupsFromChrome());
   }
+  const released = releaseIds.length && cleanup.failures.length === 0
+    ? await runCleanupStep(cleanup, 'release_tab_leases', async () => await releaseTabsForSession(session.sessionId, releaseIds, 'tabs_finalized')) || { releasedLeases: [], sessionEvents: [], session: null }
+    : { releasedLeases: [], sessionEvents: [], session: null };
+  if (releaseIds.length && cleanup.failures.length > 0 && !cleanup.steps.some((step) => step.name === 'release_tab_leases')) {
+    cleanup.steps.push({
+      name: 'release_tab_leases',
+      success: false,
+      skipped: true,
+      reason: 'prior_cleanup_failure',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+  }
+  finishCleanupReport(cleanup);
   if (activeBrowserSession?.sessionId === session.sessionId) {
     const releasedSet = new Set(releaseIds);
     activeBrowserSession = {
@@ -2515,16 +2756,117 @@ async function finalizeTabs(tabEntries, session) {
   }
   return {
     ...result,
+    success: result.success !== false && cleanup.success,
+    partial: cleanup.success !== true,
     releasedLeases: released.releasedLeases || [],
     closedTabIds: closeAgentIds,
     releasedTabIds: releaseIds,
     handoffTabIds: [...keepHandoffIds],
     deliverableTabIds: [...keepDeliverableIds],
+    cleanup,
+    ...(cleanup.success ? {} : { browserError: browserCleanupIncompleteError(cleanup) }),
     sessionEvents: [
       ...(result.sessionEvents || []),
       ...(released.sessionEvents || []),
     ],
   };
+}
+
+function createCleanupReport(reason, sessionId, turnId) {
+  return {
+    reason: String(reason || 'browser_cleanup'),
+    sessionId: String(sessionId || ''),
+    turnId: String(turnId || ''),
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    success: true,
+    steps: [],
+    failures: [],
+  };
+}
+
+async function runCleanupStep(cleanup, name, action) {
+  const startedAt = new Date().toISOString();
+  try {
+    const result = await action();
+    const success = result?.success !== false;
+    const step = { name, success, startedAt, finishedAt: new Date().toISOString(), result: summarizeCleanupStepResult(result) };
+    cleanup.steps.push(step);
+    if (!success) {
+      cleanup.success = false;
+      cleanup.failures.push({ name, error: describeErrorMessage(result?.error || `${name} returned success=false`) });
+    }
+    return result;
+  } catch (error) {
+    const message = describeErrorMessage(error);
+    cleanup.success = false;
+    cleanup.steps.push({ name, success: false, startedAt, finishedAt: new Date().toISOString(), error: message });
+    cleanup.failures.push({ name, error: message });
+    return null;
+  }
+}
+
+function summarizeCleanupStepResult(result) {
+  if (result == null || typeof result !== 'object') return result ?? null;
+  if (Array.isArray(result)) return result.slice(0, 100).map(summarizeCleanupArrayItem);
+  const summary = {};
+  for (const [key, value] of Object.entries(result)) {
+    if (key === 'session' || key === 'sessionEvents' || key === 'cleanupResult') continue;
+    if (value == null || ['string', 'number', 'boolean'].includes(typeof value)) {
+      summary[key] = typeof value === 'string' ? value.slice(0, 500) : value;
+    } else if (Array.isArray(value)) {
+      summary[key] = value.slice(0, 100).map(summarizeCleanupArrayItem);
+    }
+  }
+  return summary;
+}
+
+function summarizeCleanupArrayItem(value) {
+  if (value == null || ['string', 'number', 'boolean'].includes(typeof value)) return value;
+  if (typeof value !== 'object') return String(value).slice(0, 500);
+  return Object.fromEntries(['name', 'operation', 'tabId', 'targetId', 'status', 'success', 'alreadyDetached', 'error']
+    .filter((key) => value[key] != null)
+    .map((key) => [key, typeof value[key] === 'string' ? value[key].slice(0, 500) : value[key]]));
+}
+
+function finishCleanupReport(cleanup) {
+  cleanup.finishedAt = new Date().toISOString();
+  cleanup.success = cleanup.failures.length === 0;
+  return cleanup;
+}
+
+function browserCleanupIncompleteError(cleanup) {
+  return {
+    code: 'BROWSER_CLEANUP_INCOMPLETE',
+    message: `Browser cleanup completed with ${cleanup.failures.length} failure(s)`,
+    retryable: true,
+    userActionRequired: false,
+    browserInstanceId: '',
+    callId: '',
+    details: {
+      reason: cleanup.reason,
+      sessionId: cleanup.sessionId,
+      turnId: cleanup.turnId,
+      failures: cleanup.failures,
+    },
+  };
+}
+
+async function closeTabsIdempotently(tabIds) {
+  const closedTabIds = [];
+  const alreadyClosedTabIds = [];
+  const failures = [];
+  for (const tabId of [...new Set((tabIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))]) {
+    try {
+      await chrome.tabs.remove(tabId);
+      closedTabIds.push(tabId);
+    } catch (error) {
+      const message = describeErrorMessage(error);
+      if (/no tab with id|invalid tab id/i.test(message)) alreadyClosedTabIds.push(tabId);
+      else failures.push({ tabId, error: message });
+    }
+  }
+  return { success: failures.length === 0, closedTabIds, alreadyClosedTabIds, failures };
 }
 
 async function groupFinalizedTabs(finalized) {
@@ -2674,6 +3016,20 @@ async function endBrowserSession(sessionId, options = {}) {
 }
 
 async function stopActiveBrowserSessions(reason = 'stop_active_sessions') {
+  const cleanupResults = [];
+  const activeSessions = (await listStoredBrowserSessions()).filter((session) => session?.status === 'active');
+  for (const session of activeSessions) {
+    const cleanup = await endActiveTurn(session, session.currentTurnId || session.turnId).catch((error) => ({
+      success: false,
+      browserError: browserCleanupIncompleteError({
+        reason,
+        sessionId: session.sessionId,
+        turnId: session.currentTurnId || session.turnId || '',
+        failures: [{ name: 'stop_active_session', error: describeErrorMessage(error) }],
+      }),
+    }));
+    cleanupResults.push({ sessionId: session.sessionId, cleanup });
+  }
   const result = await stopStoredActiveBrowserSessions(reason);
   const stoppedSessions = Array.isArray(result.stoppedSessions) ? result.stoppedSessions : [];
   for (const session of stoppedSessions) {
@@ -2693,7 +3049,11 @@ async function stopActiveBrowserSessions(reason = 'stop_active_sessions') {
   await browserControlRuntime.stopActiveSessions(reason).catch(() => {});
   activeBrowserSession = null;
   await maybeReloadForPendingUpdate().catch(() => {});
-  return { success: true, stoppedSessions };
+  return {
+    success: cleanupResults.every((entry) => entry.cleanup?.success !== false),
+    stoppedSessions,
+    cleanupResults,
+  };
 }
 
 async function listTabLeases() {

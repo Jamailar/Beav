@@ -260,7 +260,7 @@ async function refreshContext() {
 
 function renderContext(nextContext) {
   const health = nextContext?.health || {};
-  renderConnection(health);
+  renderConnection(health, nextContext?.browserControl || {});
   renderPageIdentity(resolvePageIdentity(nextContext));
   renderCaptureActions(nextContext);
   renderBloggerNotesPanel(nextContext);
@@ -268,15 +268,23 @@ function renderContext(nextContext) {
   renderTaskLogs(nextContext?.logs || nextContext?.queue?.logs || []);
 }
 
-function renderConnection(health) {
-  if (!health?.success) {
-    elements.serverStatus.textContent = '未链接，请打开Beav';
+function renderConnection(captureHealth, browserControlHealth) {
+  const captureConnected = captureHealth?.success === true;
+  const browserControlConnected = browserControlHealth?.success === true;
+  if (!captureConnected && !browserControlConnected) {
+    elements.serverStatus.textContent = '未连接，请打开Beav';
     elements.serverStatus.className = 'status error';
     return;
   }
-
-  elements.serverStatus.textContent = '已链接';
-  elements.serverStatus.className = 'status ok';
+  if (captureConnected && browserControlConnected) {
+    elements.serverStatus.textContent = '可保存 · AI控制可用';
+    elements.serverStatus.className = 'status ok';
+    return;
+  }
+  elements.serverStatus.textContent = captureConnected
+    ? '可保存 · AI控制未连接'
+    : 'AI控制可用 · 保存未连接';
+  elements.serverStatus.className = 'status error';
 }
 
 function resolvePageIdentity(nextContext) {

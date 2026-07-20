@@ -5,8 +5,15 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
+const DEFAULT_STATE_ROOT = process.env.REDBOX_BROWSER_CONTROL_STATE_DIR || (
+  process.platform === 'darwin'
+    ? path.join(os.homedir(), 'Library/Application Support/RedBox/native-host')
+    : process.platform === 'win32'
+      ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData/Roaming'), 'RedBox/native-host')
+      : path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'RedBox/native-host')
+);
 const DEFAULT_ENDPOINT_STATE_PATH = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
-  || path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
+  || path.join(DEFAULT_STATE_ROOT, 'browser-control-agent-endpoint.json');
 const DEFAULT_SOCKET_PATH = process.platform === 'win32'
   ? '\\\\.\\pipe\\redbox-browser-control'
   : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.sock`);
@@ -36,19 +43,23 @@ function usage() {
   ].join('\n');
 }
 
-function resolveSocketPath(explicitPath = '') {
-  if (explicitPath) return explicitPath;
-  if (process.env.REDBOX_BROWSER_CONTROL_SOCKET) return process.env.REDBOX_BROWSER_CONTROL_SOCKET;
+function resolveEndpoint(explicitPath = '') {
+  if (explicitPath) return { socketPath: explicitPath };
+  if (process.env.REDBOX_BROWSER_CONTROL_SOCKET) return { socketPath: process.env.REDBOX_BROWSER_CONTROL_SOCKET };
   try {
     const state = JSON.parse(fs.readFileSync(DEFAULT_ENDPOINT_STATE_PATH, 'utf8'));
-    if (state.socketPath) return state.socketPath;
+    if (state.socketPath || state.endpoint?.address || state.tcpAddress) return state;
   } catch {}
-  return DEFAULT_SOCKET_PATH;
+  return { socketPath: DEFAULT_SOCKET_PATH };
 }
 
-function callAgentSocket(socketPath, request, timeoutMs = 30_000) {
+function callAgentEndpoint(endpoint, request, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath);
+    const address = String(endpoint?.endpoint?.address || endpoint?.tcpAddress || '');
+    const match = address.match(/^127\.0\.0\.1:(\d+)$/);
+    const socket = match
+      ? net.createConnection({ host: '127.0.0.1', port: Number(match[1]) })
+      : net.createConnection(endpoint?.socketPath || DEFAULT_SOCKET_PATH);
     let buffer = '';
     const timer = setTimeout(() => {
       socket.destroy();
@@ -56,6 +67,8 @@ function callAgentSocket(socketPath, request, timeoutMs = 30_000) {
     }, timeoutMs);
     socket.setEncoding('utf8');
     socket.on('connect', () => {
+      const authToken = String(endpoint?.endpoint?.authToken || endpoint?.authToken || '');
+      if (authToken) request._browserControlAuth = authToken;
       socket.write(`${JSON.stringify(request)}\n`);
     });
     socket.on('data', (chunk) => {
@@ -85,8 +98,8 @@ async function main() {
     console.log(usage());
     process.exit(args.help ? 0 : 1);
   }
-  const socketPath = resolveSocketPath(args.socketPath);
-  const response = await callAgentSocket(socketPath, {
+  const endpoint = resolveEndpoint(args.socketPath);
+  const response = await callAgentEndpoint(endpoint, {
     jsonrpc: '2.0',
     id: `agent-client:${Date.now().toString(36)}`,
     method: args.method,

@@ -10,6 +10,7 @@ export const XWOW_NATIVE_RESPONSE_VALIDATION = 'strict_jsonrpc_expected_id_exact
 export const NATIVE_RECONNECT_DELAY_MS = 5000;
 export const NATIVE_RECONNECT_PERIOD_MINUTES = NATIVE_RECONNECT_DELAY_MS / 60_000;
 export const NATIVE_TELEMETRY_LIMIT = 50;
+export const NATIVE_HANDSHAKE_TIMEOUT_MS = 3000;
 
 let nativePort = null;
 let nativeRequestSeq = 0;
@@ -19,6 +20,7 @@ let nativeReconnectTimeoutId = null;
 let onNativeMessage = null;
 let onStatusChange = null;
 let onTelemetry = null;
+let getNativeRegistration = null;
 const pendingNativeRequests = new Map();
 const nativeTelemetry = [];
 
@@ -34,6 +36,7 @@ export function configureNativeTransport(options = {}) {
   if (typeof options.onMessage === 'function') onNativeMessage = options.onMessage;
   if (typeof options.onStatusChange === 'function') onStatusChange = options.onStatusChange;
   if (typeof options.onTelemetry === 'function') onTelemetry = options.onTelemetry;
+  if (typeof options.getRegistration === 'function') getNativeRegistration = options.getRegistration;
 }
 
 export function getNativeStatus() {
@@ -99,18 +102,72 @@ export async function connectNativeTransport(options = {}) {
       });
     }
   });
+  const connectedPort = nativePort;
   nativePort.onDisconnect.addListener(() => {
     const error = chrome.runtime.lastError?.message || 'Native host disconnected';
-    nativePort = null;
+    if (nativePort === connectedPort) nativePort = null;
     rejectPendingNativeRequests(new Error(error));
     recordNativeTelemetry('disconnected', { hostName, error });
     void setNativeStatus('disconnected', { hostName, error }).then(() => scheduleNativeReconnect()).catch(() => {});
   });
+  let handshake;
+  try {
+    handshake = await requestNativeHost('ping', {}, NATIVE_HANDSHAKE_TIMEOUT_MS);
+    if (!handshake || handshake.ok !== true) {
+      throw new Error('Native host handshake returned an invalid response');
+    }
+  } catch (error) {
+    if (nativePort === connectedPort) {
+      nativePort = null;
+      try {
+        connectedPort.disconnect();
+      } catch {}
+    }
+    rejectPendingNativeRequests(error);
+    recordNativeTelemetry('connect_failed', { hostName, error: describeError(error), phase: 'handshake' });
+    await setNativeStatus(options.silent ? 'reconnecting' : 'disconnected', {
+      hostName,
+      error: describeError(error),
+      nextRetryMs: NATIVE_RECONNECT_DELAY_MS,
+    });
+    await scheduleNativeReconnect();
+    if (!options.silent) throw error;
+    return getNativeStatus();
+  }
+  let registration = null;
+  let registrationSucceeded = false;
+  if (getNativeRegistration) {
+    try {
+      registration = sanitizeNativeRegistration(await getNativeRegistration());
+      if (registration) {
+        await requestNativeHost('extension.register', registration, NATIVE_HANDSHAKE_TIMEOUT_MS);
+        registrationSucceeded = true;
+        recordNativeTelemetry('registration_succeeded', {
+          hostName,
+          extensionInstanceId: registration.extensionInstanceId,
+          extensionVersion: registration.version,
+          browser: registration.browser,
+        });
+      }
+    } catch (error) {
+      recordNativeTelemetry('registration_failed', {
+        hostName,
+        error: describeError(error),
+        backwardCompatible: true,
+      });
+    }
+  }
   nativeReconnectAttempt = 0;
   nativeReconnectPending = false;
   clearNativeReconnectTimeout();
-  recordNativeTelemetry('connected', { hostName });
-  await setNativeStatus('connected', { hostName, error: '' });
+  recordNativeTelemetry('connected', { hostName, handshake: true, registered: registrationSucceeded });
+  await setNativeStatus('connected', {
+    hostName,
+    error: '',
+    handshake,
+    registration,
+    registrationSucceeded,
+  });
   await clearNativeReconnectAlarm();
   return getNativeStatus();
 }
@@ -366,6 +423,24 @@ function validateNativeParams(params, method) {
   } catch {
     throw new Error(`native ${method} params must be JSON serializable`);
   }
+}
+
+function sanitizeNativeRegistration(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const extensionId = String(value.extensionId || '').trim();
+  const extensionInstanceId = String(value.extensionInstanceId || '').trim();
+  const version = String(value.version || '').trim();
+  const browserValue = String(value.browser || 'unknown').trim().toLowerCase();
+  const browser = ['chrome', 'edge', 'brave', 'chromium'].includes(browserValue) ? browserValue : 'unknown';
+  if (!/^[a-p]{32}$/.test(extensionId)) return null;
+  if (!/^[A-Za-z0-9._-]{1,160}$/.test(extensionInstanceId)) return null;
+  if (!version || version.length > 64) return null;
+  return {
+    extensionId,
+    extensionInstanceId,
+    version,
+    browser,
+  };
 }
 
 function nativeResponseError(error = {}) {

@@ -1,4 +1,5 @@
 import './browserControlBackground.js';
+import { getNativeStatus, requestNativeHost } from './background/nativeTransport.js';
 
 const KNOWLEDGE_API_CANDIDATES = [
   {
@@ -961,10 +962,13 @@ async function openSidePanelForSender(sender) {
 
 async function getSidePanelContext(tabIdInput) {
   const { tab } = await resolveMessageTab({ tabId: tabIdInput }, null);
-  const health = await checkDesktopServer().catch((error) => ({
-    success: false,
-    error: error instanceof Error ? error.message : String(error),
-  }));
+  const [health, browserControl] = await Promise.all([
+    checkDesktopServer().catch((error) => ({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    })),
+    readBrowserControlHealth(),
+  ]);
   const inspection = tab?.id ? await inspectPage(tab.id).catch(() => null) : null;
   const pageIdentity = tab?.id
     ? await runExtraction(tab.id, extractSidePanelPageIdentity, { world: 'MAIN' }).catch(() => null)
@@ -979,11 +983,43 @@ async function getSidePanelContext(tabIdInput) {
       hostname: extractDomainFromUrl(tab.url || ''),
     } : null,
     health,
+    browserControl,
     pageInfo: inspection?.pageInfo || createLinkFallbackPageInfo(),
     pageIdentity,
     logs: getXhsTaskLogsForState(),
     queue: getXhsTaskQueueState(),
   };
+}
+
+async function readBrowserControlHealth() {
+  const status = getNativeStatus();
+  if (status.state !== 'connected') {
+    return {
+      success: false,
+      state: status.state,
+      hostName: status.hostName,
+      error: status.error || 'Native host is not connected',
+      checkedAt: new Date().toISOString(),
+    };
+  }
+  try {
+    const host = await requestNativeHost('ping', {}, 1500);
+    return {
+      success: host?.ok !== false,
+      state: 'connected',
+      hostName: status.hostName,
+      host,
+      checkedAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    return {
+      success: false,
+      state: 'unreachable',
+      hostName: status.hostName,
+      error: error instanceof Error ? error.message : String(error),
+      checkedAt: new Date().toISOString(),
+    };
+  }
 }
 
 function extractSidePanelPageIdentity() {

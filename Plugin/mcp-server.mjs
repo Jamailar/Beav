@@ -15,6 +15,7 @@ const DEFAULT_TIMEOUT_MS = Number(process.env.REDBOX_BROWSER_CONTROL_MCP_TIMEOUT
 const FALLBACK_TOOLS = [
   browserTool('browser.capabilities', 'Return browser-control capabilities and action contracts.', {}),
   browserTool('browser.info', 'Return browser-control backend, session, policy, and capability metadata.', {}),
+  browserTool('research.run', 'Run a bounded read-only site research macro with traceable DOM evidence.', { site: { type: 'string' }, operation: { type: 'string' }, query: { type: 'string' }, url: { type: 'string' }, tabId: { type: 'number' }, snapshot: { type: 'boolean' }, timeoutMs: { type: 'number' } }, ['operation']),
   browserTool('browser.context', 'Return readonly user browser context such as open tabs, windows, and history summaries.', { limit: { type: 'number' } }),
   browserTool('browser.events', 'Replay browser-control runtime events.', { limit: { type: 'number' }, afterEventId: { type: 'string' } }),
   browserTool('browser.events.summary', 'Summarize browser-control runtime events.', {}),

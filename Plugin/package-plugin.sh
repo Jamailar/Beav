@@ -26,7 +26,7 @@ import sys
 manifest_path = sys.argv[1]
 with open(manifest_path, "r", encoding="utf-8") as fh:
     data = json.load(fh)
-version = str(data.get("version", "")).strip()
+version = str(data.get("version_name") or data.get("version", "")).strip()
 if not version:
     raise SystemExit("manifest.json 缺少 version")
 print(version)

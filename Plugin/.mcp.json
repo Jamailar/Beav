@@ -12,6 +12,7 @@
       "enabledTools": [
         "browser.info",
         "browser.capabilities",
+        "research.run",
         "browser.context",
         "browser.events",
         "browser.events.summary",
@@ -77,6 +78,7 @@
       "perTool": {
         "browser.info": { "approvalMode": "never" },
         "browser.capabilities": { "approvalMode": "never" },
+        "research.run": { "approvalMode": "never" },
         "browser.context": { "approvalMode": "destructive" },
         "browser.events": { "approvalMode": "never" },
         "browser.events.summary": { "approvalMode": "never" },

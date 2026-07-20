@@ -83,7 +83,8 @@ export async function attachCdpTarget(targetId, tabId = null) {
 export async function detachCdpTarget(target) {
   requireDebuggerApi();
   emitCdpTransportTelemetry('detach.started', { target: normalizeDebuggerTarget(target) });
-  await chrome.debugger.detach(target).catch(() => {});
+  const detached = await detachDebuggerTarget(target);
+  if (!detached.success) throw new Error(detached.error || 'Chrome debugger detach failed');
   if (target.tabId) attachedCdpTabs.delete(target.tabId);
   if (target.targetId) {
     attachedCdpTargets.delete(target.targetId);
@@ -94,8 +95,15 @@ export async function detachCdpTarget(target) {
 
 export async function detachAttachedDebuggersBestEffort() {
   if (!chrome.debugger) return { success: true, detachedTabs: 0, detachedTargets: 0 };
-  const rawTargets = await chrome.debugger.getTargets().catch(() => []);
+  let rawTargets = [];
+  let targetDiscoveryError = '';
+  try {
+    rawTargets = await chrome.debugger.getTargets();
+  } catch (error) {
+    targetDiscoveryError = describeChromeError(error);
+  }
   const targetTabIds = new Set((Array.isArray(rawTargets) ? rawTargets : [])
+    .filter((target) => target?.attached === true)
     .map((target) => Number(target?.tabId || 0))
     .filter((tabId) => Number.isInteger(tabId) && tabId > 0));
   const tabIds = new Set([...targetTabIds, ...attachedCdpTabs]);
@@ -103,31 +111,43 @@ export async function detachAttachedDebuggersBestEffort() {
   let detachedTargets = 0;
   const detachedTabIds = [];
   const detachedTargetIds = [];
+  const failures = targetDiscoveryError ? [{ operation: 'debugger.getTargets', error: targetDiscoveryError }] : [];
   for (const tabId of [...tabIds]) {
     emitCdpTransportTelemetry('detach.best_effort.started', { target: { tabId }, source: targetTabIds.has(tabId) ? 'debugger.getTargets' : 'attached_set' });
-    await chrome.debugger.detach({ tabId }).catch(() => {});
-    attachedCdpTabs.delete(tabId);
-    emitCdpTransportTelemetry('detach.best_effort.succeeded', { target: { tabId }, source: targetTabIds.has(tabId) ? 'debugger.getTargets' : 'attached_set' });
-    detachedTabs += 1;
-    detachedTabIds.push(tabId);
+    const result = await detachDebuggerTarget({ tabId });
+    if (result.success) {
+      attachedCdpTabs.delete(tabId);
+      emitCdpTransportTelemetry('detach.best_effort.succeeded', { target: { tabId }, source: targetTabIds.has(tabId) ? 'debugger.getTargets' : 'attached_set' });
+      detachedTabs += 1;
+      detachedTabIds.push(tabId);
+    } else {
+      failures.push({ target: { tabId }, error: result.error });
+      emitCdpTransportTelemetry('detach.best_effort.failed', { target: { tabId }, error: result.error });
+    }
   }
   for (const targetId of [...attachedCdpTargets]) {
     emitCdpTransportTelemetry('detach.best_effort.started', { target: { targetId } });
-    await chrome.debugger.detach({ targetId }).catch(() => {});
-    attachedCdpTargets.delete(targetId);
-    attachedCdpTargetTabs.delete(targetId);
-    emitCdpTransportTelemetry('detach.best_effort.succeeded', { target: { targetId } });
-    detachedTargets += 1;
-    detachedTargetIds.push(targetId);
+    const result = await detachDebuggerTarget({ targetId });
+    if (result.success) {
+      attachedCdpTargets.delete(targetId);
+      attachedCdpTargetTabs.delete(targetId);
+      emitCdpTransportTelemetry('detach.best_effort.succeeded', { target: { targetId } });
+      detachedTargets += 1;
+      detachedTargetIds.push(targetId);
+    } else {
+      failures.push({ target: { targetId }, error: result.error });
+      emitCdpTransportTelemetry('detach.best_effort.failed', { target: { targetId }, error: result.error });
+    }
   }
   return {
-    success: true,
+    success: failures.length === 0,
     rawTargetCount: Array.isArray(rawTargets) ? rawTargets.length : 0,
     targetTabIds: [...targetTabIds].sort((a, b) => a - b),
     detachedTabIds: detachedTabIds.sort((a, b) => a - b),
     detachedTargetIds: detachedTargetIds.sort(),
     detachedTabs,
     detachedTargets,
+    failures,
   };
 }
 
@@ -135,24 +155,49 @@ export async function detachAttachedDebuggersForTabs(tabIds = []) {
   if (!chrome.debugger) return { success: true, detachedTabs: 0, detachedTargets: 0 };
   const ids = new Set((tabIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0));
   if (!ids.size) return { success: true, detachedTabs: 0, detachedTargets: 0 };
+  let rawTargets = [];
+  let targetDiscoveryError = '';
+  try {
+    rawTargets = await chrome.debugger.getTargets();
+  } catch (error) {
+    targetDiscoveryError = describeChromeError(error);
+  }
+  const discoveredTabIds = (Array.isArray(rawTargets) ? rawTargets : [])
+    .filter((target) => target?.attached === true && ids.has(Number(target?.tabId || 0)))
+    .map((target) => Number(target.tabId));
   let detachedTabs = 0;
   let detachedTargets = 0;
-  for (const tabId of [...attachedCdpTabs].filter((id) => ids.has(id))) {
+  const detachedTabIds = [];
+  const detachedTargetIds = [];
+  const failures = targetDiscoveryError ? [{ operation: 'debugger.getTargets', error: targetDiscoveryError }] : [];
+  for (const tabId of [...new Set([...attachedCdpTabs].filter((id) => ids.has(id)).concat(discoveredTabIds))]) {
     emitCdpTransportTelemetry('detach.best_effort.started', { target: { tabId }, reason: 'tabs_finalize' });
-    await chrome.debugger.detach({ tabId }).catch(() => {});
-    attachedCdpTabs.delete(tabId);
-    emitCdpTransportTelemetry('detach.best_effort.succeeded', { target: { tabId }, reason: 'tabs_finalize' });
-    detachedTabs += 1;
+    const result = await detachDebuggerTarget({ tabId });
+    if (result.success) {
+      attachedCdpTabs.delete(tabId);
+      emitCdpTransportTelemetry('detach.best_effort.succeeded', { target: { tabId }, reason: 'tabs_finalize' });
+      detachedTabs += 1;
+      detachedTabIds.push(tabId);
+    } else {
+      failures.push({ target: { tabId }, error: result.error });
+      emitCdpTransportTelemetry('detach.best_effort.failed', { target: { tabId }, reason: 'tabs_finalize', error: result.error });
+    }
   }
   for (const [targetId, tabId] of [...attachedCdpTargetTabs.entries()].filter(([, id]) => ids.has(id))) {
     emitCdpTransportTelemetry('detach.best_effort.started', { target: { targetId }, tabId, reason: 'tabs_finalize' });
-    await chrome.debugger.detach({ targetId }).catch(() => {});
-    attachedCdpTargets.delete(targetId);
-    attachedCdpTargetTabs.delete(targetId);
-    emitCdpTransportTelemetry('detach.best_effort.succeeded', { target: { targetId }, tabId, reason: 'tabs_finalize' });
-    detachedTargets += 1;
+    const result = await detachDebuggerTarget({ targetId });
+    if (result.success) {
+      attachedCdpTargets.delete(targetId);
+      attachedCdpTargetTabs.delete(targetId);
+      emitCdpTransportTelemetry('detach.best_effort.succeeded', { target: { targetId }, tabId, reason: 'tabs_finalize' });
+      detachedTargets += 1;
+      detachedTargetIds.push(targetId);
+    } else {
+      failures.push({ target: { targetId }, tabId, error: result.error });
+      emitCdpTransportTelemetry('detach.best_effort.failed', { target: { targetId }, tabId, reason: 'tabs_finalize', error: result.error });
+    }
   }
-  return { success: true, detachedTabs, detachedTargets };
+  return { success: failures.length === 0, detachedTabs, detachedTargets, detachedTabIds, detachedTargetIds, discoveredTabIds, failures };
 }
 
 export async function sendCdpCommandWithTimeout(target, method, params = {}, timeoutMs = CDP_COMMAND_TIMEOUT_MS) {
@@ -239,6 +284,19 @@ export function requireDebuggerApi() {
 function describeChromeError(error) {
   if (error instanceof Error) return error.stack || error.message;
   return String(error);
+}
+
+async function detachDebuggerTarget(target) {
+  try {
+    await chrome.debugger.detach(target);
+    return { success: true, alreadyDetached: false };
+  } catch (error) {
+    const message = describeChromeError(error);
+    if (/not attached|no tab with given id|target closed/i.test(message)) {
+      return { success: true, alreadyDetached: true };
+    }
+    return { success: false, alreadyDetached: false, error: message };
+  }
 }
 
 function normalizeCdpTimeout(timeoutMs) {

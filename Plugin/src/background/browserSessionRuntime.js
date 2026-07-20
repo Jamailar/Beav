@@ -3,6 +3,8 @@ import { getStoredMap, setStoredMap } from './storage.js';
 export const BROWSER_SESSIONS_KEY = 'xwowBrowserDataAiSessions';
 export const BROWSER_SESSION_EVENTS_KEY = 'xwowBrowserDataAiSessionEvents';
 const MAX_BROWSER_SESSION_EVENTS = 500;
+const MAX_RECENT_BROWSER_REQUESTS = 50;
+const MAX_PERSISTED_BROWSER_RESPONSE_BYTES = 128 * 1024;
 const browserSessionEventSubscribers = new Set();
 
 export function subscribeBrowserSessionEvents(handler) {
@@ -23,6 +25,7 @@ export async function createBrowserSession(owner = 'manual_repair', metadata = {
     ownedTabIds: [],
     activeRequests: {},
     activeRequestCount: 0,
+    recentRequests: {},
     status: 'active',
   };
   session.currentTurnId = session.turnId;
@@ -59,6 +62,7 @@ export async function ensureBrowserSession(sessionId, owner = 'manual_repair', m
     ownedTabIds: [],
     activeRequests: {},
     activeRequestCount: 0,
+    recentRequests: normalizeRecentRequests(existing?.recentRequests),
     status: 'active',
     restoredFromEndedSession: Boolean(existing),
   };
@@ -146,6 +150,34 @@ export async function startBrowserSessionRequest(sessionId, request = {}) {
     session.turnId = session.currentTurnId;
   }
   const requestId = String(request.requestId || `browser-request-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`);
+  if (session.activeRequests[requestId]) {
+    return {
+      success: false,
+      duplicateActive: true,
+      requestId,
+      session,
+      activeRequest: session.activeRequests[requestId],
+    };
+  }
+  const replay = session.recentRequests?.[requestId];
+  if (replay?.terminal === true) {
+    const sessionEvent = await recordBrowserSessionEvent('request.replayed', session, {
+      requestId,
+      action: replay.action || String(request.action || ''),
+      terminalState: replay.terminalState || '',
+      responsePersisted: replay.responsePersisted === true,
+    });
+    return {
+      success: true,
+      replayed: true,
+      requestId,
+      session,
+      response: replay.response || null,
+      responsePersisted: replay.responsePersisted === true,
+      terminalState: replay.terminalState || '',
+      sessionEvent,
+    };
+  }
   const startedAt = new Date().toISOString();
   session.activeRequests[requestId] = {
     requestId,
@@ -176,6 +208,7 @@ export async function finishBrowserSessionRequest(sessionId, requestId, result =
   const session = normalizeSessionRuntimeState(sessions[sessionId]);
   if (!session) return { success: true, finished: false };
   const id = String(requestId || '');
+  const activeRequest = id ? session.activeRequests[id] : null;
   if (id && session.activeRequests[id]) {
     session.activeRequests[id] = {
       ...session.activeRequests[id],
@@ -187,6 +220,23 @@ export async function finishBrowserSessionRequest(sessionId, requestId, result =
   } else if (!id) {
     const [oldestId] = Object.keys(session.activeRequests);
     if (oldestId) delete session.activeRequests[oldestId];
+  }
+  if (id && activeRequest && result.persistResult !== false) {
+    const persistedResponse = persistableBrowserResponse(result.response);
+    session.recentRequests[id] = {
+      requestId: id,
+      action: activeRequest.action || '',
+      tabId: activeRequest.tabId || null,
+      startedAt: activeRequest.startedAt || '',
+      finishedAt: new Date().toISOString(),
+      terminal: true,
+      terminalState: result.cancelled === true ? 'cancelled' : result.success === false ? 'failed' : 'completed',
+      error: result.error || '',
+      browserError: result.browserError || null,
+      response: persistedResponse.response,
+      responsePersisted: persistedResponse.persisted,
+    };
+    session.recentRequests = retainRecentRequests(session.recentRequests);
   }
   session.activeRequestCount = Object.keys(session.activeRequests).length;
   session.lastRequestFinishedAt = new Date().toISOString();
@@ -281,6 +331,74 @@ export async function stopActiveBrowserSessions(reason = 'stop_active_sessions')
   return { success: true, stoppedSessions, sessionEvents };
 }
 
+export async function reconcileInterruptedBrowserRequests(reason = 'extension_runtime_resumed') {
+  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
+  const reconciledSessions = [];
+  const interruptedRequests = [];
+  const interruptedAt = new Date().toISOString();
+  for (const [sessionId, storedSession] of Object.entries(sessions)) {
+    const session = normalizeSessionRuntimeState(storedSession);
+    const activeRequests = Object.values(session?.activeRequests || {});
+    if (!session || session.status !== 'active' || !activeRequests.length) continue;
+    const interruptedTurnId = String(session.currentTurnId || session.turnId || '');
+    for (const request of activeRequests) {
+      const requestId = String(request.requestId || '');
+      if (!requestId) continue;
+      const browserError = {
+        code: 'BROWSER_ACTION_CANCELLED',
+        message: 'Browser action was interrupted when the extension runtime restarted',
+        retryable: false,
+        userActionRequired: false,
+        browserInstanceId: '',
+        callId: requestId,
+        details: { reason, sessionId, turnId: interruptedTurnId, action: request.action || '', tabId: request.tabId || null },
+      };
+      const response = {
+        success: false,
+        sessionId,
+        turnId: interruptedTurnId,
+        action: request.action || '',
+        requestId,
+        browserError,
+        error: browserError.message,
+        startedAt: request.startedAt || '',
+        completedAt: interruptedAt,
+      };
+      session.recentRequests[requestId] = {
+        requestId,
+        action: request.action || '',
+        tabId: request.tabId || null,
+        startedAt: request.startedAt || '',
+        finishedAt: interruptedAt,
+        terminal: true,
+        terminalState: 'cancelled',
+        error: browserError.message,
+        browserError,
+        response,
+        responsePersisted: true,
+      };
+      interruptedRequests.push({ sessionId, turnId: interruptedTurnId, requestId, action: request.action || '', tabId: request.tabId || null });
+    }
+    session.activeRequests = {};
+    session.activeRequestCount = 0;
+    session.recentRequests = retainRecentRequests(session.recentRequests);
+    session.lastTurnId = interruptedTurnId;
+    session.lastTurnInterruptedAt = interruptedAt;
+    session.lastTurnInterruptReason = String(reason || 'extension_runtime_resumed');
+    session.currentTurnId = null;
+    session.updatedAt = interruptedAt;
+    sessions[sessionId] = session;
+    reconciledSessions.push({ ...session, interruptedTurnId });
+  }
+  if (reconciledSessions.length) await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const sessionEvents = [];
+  for (const request of interruptedRequests) {
+    const session = sessions[request.sessionId] || {};
+    sessionEvents.push(await recordBrowserSessionEvent('request.interrupted', session, { ...request, reason }));
+  }
+  return { success: true, reason, reconciledSessions, interruptedRequests, sessionEvents };
+}
+
 export async function listBrowserSessionEvents(options = {}) {
   const limit = clampLimit(options.limit || 200, 1, MAX_BROWSER_SESSION_EVENTS);
   const events = Object.values(await getStoredMap(BROWSER_SESSION_EVENTS_KEY))
@@ -333,12 +451,37 @@ function normalizeSessionRuntimeState(session) {
     ownedTabIds: normalizeOwnedTabIds(session.ownedTabIds, session.activeTabId),
     activeRequests,
     activeRequestCount: Object.keys(activeRequests).length,
+    recentRequests: normalizeRecentRequests(session.recentRequests),
   };
 }
 
 function normalizeActiveRequests(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).filter(([requestId, request]) => requestId && request && typeof request === 'object'));
+}
+
+function normalizeRecentRequests(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return retainRecentRequests(Object.fromEntries(Object.entries(value).filter(([requestId, request]) => (
+    requestId && request && typeof request === 'object' && request.terminal === true
+  ))));
+}
+
+function retainRecentRequests(value) {
+  return Object.fromEntries(Object.entries(value || {})
+    .sort(([, left], [, right]) => String(right?.finishedAt || '').localeCompare(String(left?.finishedAt || '')))
+    .slice(0, MAX_RECENT_BROWSER_REQUESTS));
+}
+
+function persistableBrowserResponse(response) {
+  if (response == null) return { persisted: true, response: null };
+  try {
+    const serialized = JSON.stringify(response);
+    if (serialized.length <= MAX_PERSISTED_BROWSER_RESPONSE_BYTES) {
+      return { persisted: true, response };
+    }
+  } catch {}
+  return { persisted: false, response: null };
 }
 
 function normalizeActiveRequestCount(session) {

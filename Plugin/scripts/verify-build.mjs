@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertChromeManifestVersion, toChromeManifestVersion } from './sync-manifest-version.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = path.resolve(pluginRoot, '..');
@@ -112,7 +114,43 @@ async function assertOutputFile(relativePath) {
 
 const sourceManifest = await readJson(path.join(sourceDir, 'manifest.json'));
 const outputManifest = await readJson(path.join(outputDir, 'manifest.json'));
+const packageJson = await readJson(path.join(pluginRoot, 'package.json'));
+const browserIdentity = await readJson(path.join(pluginRoot, 'browser-control.identity.json'));
+const siteResearchCapabilities = await readJson(path.join(sourceDir, 'background', 'siteResearchCapabilities.json'));
 assert.deepEqual(outputManifest, sourceManifest, 'Built manifest must match source manifest exactly');
+assert.equal(
+  assertChromeManifestVersion(outputManifest.version),
+  toChromeManifestVersion(packageJson.version),
+  'Manifest version must be a Chrome-compatible projection of package.json version',
+);
+const extensionIdFromKey = crypto.createHash('sha256')
+  .update(Buffer.from(outputManifest.key, 'base64'))
+  .digest()
+  .subarray(0, 16)
+  .toString('hex')
+  .replace(/[0-9a-f]/g, (value) => String.fromCharCode('a'.charCodeAt(0) + Number.parseInt(value, 16)));
+assert.equal(outputManifest.key, browserIdentity.manifestPublicKey, 'Built manifest must use the published extension public key');
+assert.equal(extensionIdFromKey, browserIdentity.publishedExtensionId, 'Built manifest key must derive the published extension id');
+assert.equal(
+  outputManifest.version_name,
+  packageJson.version,
+  'Manifest version_name must preserve the release version shown to users',
+);
+assert.equal(siteResearchCapabilities.schemaVersion, 1, 'Site research capability schema must be versioned');
+assert.equal(siteResearchCapabilities.contractVersion, 3, 'Site research capability contract must match Desktop');
+assert(siteResearchCapabilities.capabilities.length > 0, 'Site research capability registry must not be empty');
+const siteCapabilityIds = new Set();
+const siteCapabilityHosts = new Set();
+for (const capability of siteResearchCapabilities.capabilities) {
+  assert(!siteCapabilityIds.has(capability.id), `Duplicate site research capability id: ${capability.id}`);
+  siteCapabilityIds.add(capability.id);
+  assert(Array.isArray(capability.supportedOperations) && capability.supportedOperations.length > 0, `${capability.id} must declare operations`);
+  assert.match(capability.extractorSchemaHash, /^[a-f0-9]{64}$/, `${capability.id} must declare a sha256 extractor schema hash`);
+  for (const host of capability.hostPatterns || []) {
+    assert(!siteCapabilityHosts.has(host), `Duplicate site research host: ${host}`);
+    siteCapabilityHosts.add(host);
+  }
+}
 
 for (const file of collectManifestFiles(outputManifest)) {
   await assertOutputFile(file);
@@ -152,6 +190,12 @@ assert(outputManifest.host_permissions.includes('<all_urls>'), 'Manifest must in
 const builtBackground = await readText(path.join(outputDir, 'background.js'));
 assert(!/^\s*import\s/m.test(builtBackground), 'Background service worker must not rely on ESM imports');
 assert(builtBackground.includes('redbox-browser-control'), 'Built background should include browser-control runtime');
+assert(builtBackground.includes('extension.register'), 'Built background should register its stable extension instance with the native host');
+assert(builtBackground.includes('registrationSucceeded'), 'Built background should report extension registration truth separately from host connectivity');
+for (const capability of siteResearchCapabilities.capabilities) {
+  assert(builtBackground.includes(capability.capabilityVersion), `Built background must include ${capability.id} capability version`);
+  assert(builtBackground.includes(capability.extractorSchemaHash), `Built background must include ${capability.id} extractor hash`);
+}
 
 const builtObserver = await readText(path.join(outputDir, 'pageObserver.js'));
 assert(builtObserver.includes('page-state:get'), 'Built pageObserver should retain page-state message handling');

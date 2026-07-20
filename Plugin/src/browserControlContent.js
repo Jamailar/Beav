@@ -5,9 +5,12 @@ import { readDomSnapshot, readFrame } from './content/domReader.js';
 import { applyTabFaviconBadge } from './content/faviconBadge.js';
 import { readPageAssets } from './content/pageAssetInventory.js';
 import { checkElement, clickElement, clickNextButton, clickNode, getElementAttribute, getElementValue, getElementValues, hoverElement, inspectPoint, isCheckedElement, isElementVisible, queryElements, scrollNode, scrollPage, selectElement, typeElement, waitForDomStable, waitForNode, waitForSelector } from './content/pageActions.js';
+import { applySiteResearchFilters, extractSiteResearch } from './content/siteResearchExtractor.js';
 
 const XWOW_READ_FRAME = 'xwow-data-ai:read-frame';
 const XWOW_DOM_SNAPSHOT = 'xwow-data-ai:dom-snapshot';
+const XWOW_SITE_RESEARCH_EXTRACT = 'xwow-data-ai:site-research-extract';
+const XWOW_SITE_RESEARCH_APPLY_FILTERS = 'xwow-data-ai:site-research-apply-filters';
 const XWOW_SCROLL_PAGE = 'xwow-data-ai:scroll-page';
 const XWOW_CLICK_NEXT = 'xwow-data-ai:click-next';
 const XWOW_CLICK_ELEMENT = 'xwow-data-ai:click-element';
@@ -51,6 +54,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === XWOW_DOM_SNAPSHOT) {
       sendResponse(readDomSnapshot(message.options || {}));
+      return;
+    }
+    if (message?.type === XWOW_SITE_RESEARCH_EXTRACT) {
+      sendResponse(extractSiteResearch(message.options || {}));
+      return;
+    }
+    if (message?.type === XWOW_SITE_RESEARCH_APPLY_FILTERS) {
+      sendResponse(await applySiteResearchFilters(message.options || {}));
       return;
     }
     if (message?.type === XWOW_SCROLL_PAGE) {

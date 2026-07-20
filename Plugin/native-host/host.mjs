@@ -8,16 +8,23 @@ import { fileURLToPath } from 'node:url';
 
 const HOST_NAME = 'com.redbox.browser_control';
 const DEFAULT_API_BASE = '';
-const LOG_PATH = path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-host.log');
+const STATE_ROOT = process.env.REDBOX_BROWSER_CONTROL_STATE_DIR || (
+  process.platform === 'darwin'
+    ? path.join(os.homedir(), 'Library/Application Support/RedBox/native-host')
+    : process.platform === 'win32'
+      ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData/Roaming'), 'RedBox/native-host')
+      : path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'RedBox/native-host')
+);
+const LOG_PATH = path.join(STATE_ROOT, 'browser-control-host.log');
 const ENDPOINT_STATE_PATH = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
-  || path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
+  || path.join(STATE_ROOT, 'browser-control-agent-endpoint.json');
 const ENDPOINTS_DIRECTORY = process.env.REDBOX_BROWSER_CONTROL_ENDPOINTS_DIRECTORY
   || path.join(path.dirname(ENDPOINT_STATE_PATH), 'browser-control-agent-endpoints');
 const DEFAULT_AGENT_SOCKET_PATH = process.platform === 'win32'
   ? '\\\\.\\pipe\\redbox-browser-control'
   : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}-${process.pid}.sock`);
 const AGENT_REQUEST_TIMEOUT_MS = Number(process.env.REDBOX_BROWSER_CONTROL_AGENT_TIMEOUT_MS || 60_000);
-const AGENT_PROTOCOL_VERSION = 2;
+const AGENT_PROTOCOL_VERSION = 3;
 
 let nextRequestId = 0;
 let nextAgentRequestId = 0;
@@ -314,6 +321,9 @@ function buildHostInfo(patch = {}) {
     instanceId: hostInstanceId,
     extension: extensionMetadata,
     nativeConnected,
+    schemaVersion: 2,
+    updatedAtMs: Date.now(),
+    lastSeenAtMs: Date.now(),
     protocol: {
       transport: 'unix-socket-jsonrpc-lines',
       jsonrpc: '2.0',
@@ -470,6 +480,7 @@ async function main() {
   log('native host started');
   nativeConnected = true;
   startAgentServer();
+  setInterval(() => writeEndpointState(), 10_000).unref();
   startNativeMessageReader(async (message) => {
     if (!message || typeof message !== 'object') return;
     if (handleNativeResponse(message)) return;

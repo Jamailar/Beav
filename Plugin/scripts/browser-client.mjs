@@ -8,14 +8,40 @@ import { fileURLToPath } from 'node:url';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const docsRoot = path.join(pluginRoot, 'docs');
-const defaultEndpointStatePath = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
-  || path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
-const defaultEndpointsDirectory = process.env.REDBOX_BROWSER_CONTROL_ENDPOINTS_DIRECTORY
+const runtimeProcess = globalThis.process && typeof globalThis.process === 'object'
+  ? globalThis.process
+  : null;
+const runtimeEnv = runtimeProcess?.env && typeof runtimeProcess.env === 'object'
+  ? runtimeProcess.env
+  : {};
+const runtimePlatform = runtimeProcess?.platform || os.platform();
+const defaultStateRoot = resolveDefaultStateRoot();
+const defaultEndpointStatePath = runtimeEnv.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
+  || path.join(defaultStateRoot, 'browser-control-agent-endpoint.json');
+const defaultEndpointsDirectory = runtimeEnv.REDBOX_BROWSER_CONTROL_ENDPOINTS_DIRECTORY
   || path.join(path.dirname(defaultEndpointStatePath), 'browser-control-agent-endpoints');
-const defaultSocketPath = process.platform === 'win32'
+const defaultSocketPath = runtimePlatform === 'win32'
   ? '\\\\.\\pipe\\redbox-browser-control'
-  : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.sock`);
-const defaultTimeoutMs = Number(process.env.REDBOX_BROWSER_CONTROL_CLIENT_TIMEOUT_MS || 30_000);
+  : path.join(os.tmpdir(), `redbox-browser-control-${currentUserId()}.sock`);
+const defaultTimeoutMs = Number(runtimeEnv.REDBOX_BROWSER_CONTROL_CLIENT_TIMEOUT_MS || 30_000);
+const endpointStaleAfterMs = Number(runtimeEnv.REDBOX_BROWSER_CONTROL_ENDPOINT_STALE_MS || 120_000);
+const maxEndpointResponseBytes = 8 * 1024 * 1024;
+
+function resolveDefaultStateRoot() {
+  if (runtimeEnv.REDBOX_BROWSER_CONTROL_STATE_DIR) return runtimeEnv.REDBOX_BROWSER_CONTROL_STATE_DIR;
+  if (runtimePlatform === 'darwin') return path.join(os.homedir(), 'Library/Application Support/RedBox/native-host');
+  if (runtimePlatform === 'win32') return path.join(runtimeEnv.APPDATA || path.join(os.homedir(), 'AppData/Roaming'), 'RedBox/native-host');
+  return path.join(runtimeEnv.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'RedBox/native-host');
+}
+
+function currentUserId() {
+  try {
+    const uid = os.userInfo().uid;
+    return uid == null || uid < 0 ? 'user' : String(uid);
+  } catch {
+    return 'user';
+  }
+}
 
 const documentationAliases = new Map([
   ['api', 'browser-runtime'],
@@ -48,6 +74,7 @@ export async function setupBrowserRuntime(options = {}) {
 export class BrowserControlTransport {
   constructor(options = {}) {
     this.socketPath = options.socketPath || '';
+    this.endpoint = isObject(options.endpoint) ? options.endpoint : null;
     this.endpointStatePath = options.endpointStatePath || defaultEndpointStatePath;
     this.endpointsDirectory = options.endpointsDirectory || defaultEndpointsDirectory;
     this.browserId = String(options.browserId || options.instanceId || options.extensionInstanceId || '').trim();
@@ -55,7 +82,7 @@ export class BrowserControlTransport {
   }
 
   async listEndpoints() {
-    const explicit = this.socketPath || process.env.REDBOX_BROWSER_CONTROL_SOCKET;
+    const explicit = this.socketPath || runtimeEnv.REDBOX_BROWSER_CONTROL_SOCKET;
     if (explicit) return [{ socketPath: explicit, id: 'explicit', source: 'explicit' }];
     const descriptors = [];
     try {
@@ -64,32 +91,45 @@ export class BrowserControlTransport {
         if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
         try {
           const state = JSON.parse(await fs.readFile(path.join(this.endpointsDirectory, entry.name), 'utf8'));
-          if (isEndpointDescriptor(state)) descriptors.push({ ...state, source: 'registry' });
+          if (!isEndpointDescriptor(state)) continue;
+          if (!endpointIsFresh(state)) {
+            await fs.unlink(path.join(this.endpointsDirectory, entry.name)).catch(() => {});
+            continue;
+          }
+          descriptors.push({ ...state, source: 'registry' });
         } catch {}
       }
     } catch {}
     try {
       const state = JSON.parse(await fs.readFile(this.endpointStatePath, 'utf8'));
-      if (isEndpointDescriptor(state) && !descriptors.some((entry) => entry.socketPath === state.socketPath)) {
+      if (isEndpointDescriptor(state) && endpointIsFresh(state) && !descriptors.some((entry) => endpointKey(entry) === endpointKey(state))) {
         descriptors.push({ ...state, source: 'legacy' });
       }
     } catch {}
     if (!descriptors.length) descriptors.push({ socketPath: defaultSocketPath, id: 'legacy-default', source: 'legacy-default' });
-    return descriptors.sort(compareEndpointDescriptors);
+    return dedupeBrowserEndpoints(descriptors.sort(compareEndpointDescriptors));
   }
 
   async resolveEndpoint() {
+    if (this.endpoint) return this.endpoint;
     if (this.socketPath) return this.socketPath;
-    if (process.env.REDBOX_BROWSER_CONTROL_SOCKET) return process.env.REDBOX_BROWSER_CONTROL_SOCKET;
+    if (runtimeEnv.REDBOX_BROWSER_CONTROL_SOCKET) return runtimeEnv.REDBOX_BROWSER_CONTROL_SOCKET;
     const endpoints = await this.listEndpoints();
     const requested = this.browserId;
+    if (!requested && endpoints.length > 1) {
+      const error = browserClientError('BROWSER_INSTANCE_SELECTION_REQUIRED', 'Multiple browser instances are available; select one explicitly');
+      error.data = { instances: summarizeBrowserEndpoints(endpoints) };
+      throw error;
+    }
     const selected = requested
       ? endpoints.find((endpoint) => endpoint.instanceId === requested
         || endpoint.extension?.extensionInstanceId === requested
         || endpoint.extensionInstanceId === requested)
       : endpoints[0];
-    if (!selected?.socketPath) {
-      throw new Error(`Browser instance is not available: ${requested}`);
+    if (!selected || !isEndpointDescriptor(selected)) {
+      const error = browserClientError('BROWSER_INSTANCE_DISCONNECTED', `Browser instance is not available: ${requested || '<none>'}`);
+      error.data = { requestedBrowserInstanceId: requested, instances: summarizeBrowserEndpoints(endpoints) };
+      throw error;
     }
     return selected;
   }
@@ -100,12 +140,16 @@ export class BrowserControlTransport {
   }
 
   async request(method, params = {}, options = {}) {
-    const response = await sendSocketJsonRpc(await this.resolveSocketPath(), {
+    const endpoint = await this.resolveEndpoint();
+    const payload = {
       jsonrpc: '2.0',
       id: options.id || `browser-client:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
       method,
       params,
-    }, Number(options.timeoutMs || this.timeoutMs));
+    };
+    const authToken = endpointAuthToken(endpoint);
+    if (authToken) payload._browserControlAuth = authToken;
+    const response = await sendEndpointJsonRpc(endpoint, payload, Number(options.timeoutMs || this.timeoutMs));
     if (response.error) {
       const error = new Error(response.error.message || JSON.stringify(response.error));
       error.code = response.error.code;
@@ -137,6 +181,15 @@ export class BrowserControlTransport {
       endpointStatePath: this.endpointStatePath,
       endpointsDirectory: this.endpointsDirectory,
       browserId,
+      timeoutMs: this.timeoutMs,
+    });
+  }
+
+  withEndpoint(endpoint) {
+    return new BrowserControlTransport({
+      endpoint,
+      endpointStatePath: this.endpointStatePath,
+      endpointsDirectory: this.endpointsDirectory,
       timeoutMs: this.timeoutMs,
     });
   }
@@ -194,6 +247,17 @@ class BrowserRuntime {
       turnId: this.turnId,
     });
   }
+
+  withEndpoint(endpoint) {
+    return new BrowserRuntime({
+      transport: typeof this.transport.withEndpoint === 'function'
+        ? this.transport.withEndpoint(endpoint)
+        : this.transport,
+      documentationRoot: this.documentationRoot,
+      sessionId: this.sessionId,
+      turnId: this.turnId,
+    });
+  }
 }
 
 class BrowserDocumentation {
@@ -219,7 +283,7 @@ class BrowserCollection {
     const endpoints = await this.runtime.transport.listEndpoints();
     const browsers = await Promise.all(endpoints.map(async (endpoint) => {
       const transport = new BrowserControlTransport({
-        socketPath: endpoint.socketPath,
+        endpoint,
         timeoutMs: this.runtime.transport.timeoutMs,
       });
       try {
@@ -239,6 +303,7 @@ class BrowserCollection {
             backend: 'native-host',
             hostInstanceId: host?.instanceId || endpoint.instanceId || '',
             socketPath: endpoint.socketPath,
+            endpoint,
             extensionId: data?.extensionId || host?.extension?.extensionId || '',
             extensionInstanceId,
             sessionId: this.runtime.sessionId,
@@ -259,11 +324,17 @@ class BrowserCollection {
   async get(id) {
     const requested = String(id || '').trim();
     const browsers = await this.list();
-    const browser = !requested || ['extension', 'chrome', 'browser', 'redbox'].includes(requested)
+    const defaultRequested = !requested || ['extension', 'chrome', 'browser', 'redbox'].includes(requested);
+    if (defaultRequested && browsers.length > 1) {
+      const error = browserClientError('BROWSER_INSTANCE_SELECTION_REQUIRED', 'Multiple browser instances are available; select one returned by agent.browsers.list()');
+      error.data = { instances: browsers.map(summarizeBrowserFacade) };
+      throw error;
+    }
+    const browser = defaultRequested
       ? browsers[0]
       : browsers.find((entry) => entry.id === requested || entry.metadata?.hostInstanceId === requested);
     if (!browser) throw new Error(`Browser is not available: ${requested || 'extension'}`);
-    return new BrowserFacade(this.runtime.withSocketPath(browser.metadata.socketPath), browser);
+    return new BrowserFacade(this.runtime.withBrowser(browser.id), browser);
   }
 }
 
@@ -742,13 +813,20 @@ class CapabilityCollection {
   }
 }
 
-function sendSocketJsonRpc(socketPath, payload, timeoutMs) {
+function sendEndpointJsonRpc(endpoint, payload, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath);
+    const socket = net.createConnection(endpointConnectionOptions(endpoint));
     let buffer = '';
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
     const timer = setTimeout(() => {
       socket.destroy();
-      reject(new Error(`browser-control request timed out after ${timeoutMs}ms`));
+      finish(reject, browserClientError('BROWSER_ACTION_TIMEOUT', `browser-control request timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     socket.setEncoding('utf8');
     socket.on('connect', () => {
@@ -756,37 +834,119 @@ function sendSocketJsonRpc(socketPath, payload, timeoutMs) {
     });
     socket.on('data', (chunk) => {
       buffer += chunk;
+      if (Buffer.byteLength(buffer, 'utf8') > maxEndpointResponseBytes) {
+        socket.destroy();
+        finish(reject, browserClientError('BROWSER_RESPONSE_TOO_LARGE', 'browser-control endpoint response exceeded 8 MiB'));
+        return;
+      }
       while (buffer.includes('\n')) {
         const index = buffer.indexOf('\n');
         const line = buffer.slice(0, index).trim();
         buffer = buffer.slice(index + 1);
         if (!line) continue;
-        clearTimeout(timer);
         socket.end();
         try {
-          resolve(JSON.parse(line));
+          finish(resolve, JSON.parse(line));
         } catch (error) {
-          reject(error);
+          finish(reject, error);
         }
         return;
       }
     });
     socket.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
+      finish(reject, browserClientError('BROWSER_INSTANCE_DISCONNECTED', error.message || String(error), error));
     });
-    socket.on('close', () => clearTimeout(timer));
+    socket.on('close', () => {
+      finish(reject, browserClientError('BROWSER_INSTANCE_DISCONNECTED', 'browser-control endpoint closed before returning a complete response'));
+    });
   });
 }
 
+function browserClientError(code, message, cause) {
+  const error = new Error(message, cause ? { cause } : undefined);
+  error.code = code;
+  return error;
+}
+
 function isEndpointDescriptor(value) {
-  return isObject(value) && typeof value.socketPath === 'string' && value.socketPath.trim().length > 0;
+  return isObject(value) && Boolean(endpointSocketPath(value) || endpointTcpAddress(value));
+}
+
+function endpointSocketPath(value) {
+  return typeof value?.socketPath === 'string' ? value.socketPath.trim() : '';
+}
+
+function endpointTcpAddress(value) {
+  const address = value?.endpoint?.address || value?.tcpAddress || '';
+  return typeof address === 'string' ? address.trim() : '';
+}
+
+function endpointAuthToken(value) {
+  return String(value?.endpoint?.authToken || value?.authToken || '');
+}
+
+function endpointConnectionOptions(endpoint) {
+  const socketPath = typeof endpoint === 'string' ? endpoint : endpointSocketPath(endpoint);
+  if (socketPath) return socketPath;
+  const address = endpointTcpAddress(endpoint);
+  const match = address.match(/^127\.0\.0\.1:(\d+)$/);
+  if (!match) throw new Error(`Unsupported browser-control endpoint: ${address || '<empty>'}`);
+  return { host: '127.0.0.1', port: Number(match[1]) };
+}
+
+function endpointIsFresh(value) {
+  const updatedAtMs = Number(value?.lastSeenAtMs || value?.updatedAtMs || Date.parse(String(value?.updatedAt || '')) || 0);
+  return updatedAtMs <= 0 || (Date.now() >= updatedAtMs && Date.now() - updatedAtMs <= endpointStaleAfterMs);
+}
+
+function endpointKey(value) {
+  return endpointTcpAddress(value) || endpointSocketPath(value) || String(value?.instanceId || '');
 }
 
 function compareEndpointDescriptors(left, right) {
-  const leftTime = Date.parse(String(left?.updatedAt || '')) || 0;
-  const rightTime = Date.parse(String(right?.updatedAt || '')) || 0;
-  return rightTime - leftTime || String(left?.instanceId || left?.socketPath || '').localeCompare(String(right?.instanceId || right?.socketPath || ''));
+  const leftTime = endpointUpdatedAtMs(left);
+  const rightTime = endpointUpdatedAtMs(right);
+  return rightTime - leftTime || String(left?.instanceId || endpointKey(left)).localeCompare(String(right?.instanceId || endpointKey(right)));
+}
+
+function endpointUpdatedAtMs(endpoint) {
+  return Number(endpoint?.lastSeenAtMs || endpoint?.updatedAtMs || Date.parse(String(endpoint?.updatedAt || '')) || 0);
+}
+
+function dedupeBrowserEndpoints(endpoints) {
+  const seen = new Set();
+  return endpoints.filter((endpoint) => {
+    const identity = String(
+      endpoint?.extension?.extensionInstanceId
+      || endpoint?.extensionInstanceId
+      || endpoint?.browserInstanceId
+      || endpoint?.instanceId
+      || endpointKey(endpoint),
+    );
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+function summarizeBrowserEndpoints(endpoints) {
+  return endpoints.map((endpoint) => ({
+    instanceId: String(endpoint?.instanceId || ''),
+    browserInstanceId: String(endpoint?.browserInstanceId || ''),
+    extensionInstanceId: String(endpoint?.extension?.extensionInstanceId || endpoint?.extensionInstanceId || ''),
+    browser: String(endpoint?.extension?.browser || endpoint?.browser || ''),
+    profileId: String(endpoint?.extension?.profileId || endpoint?.profileId || ''),
+    source: String(endpoint?.source || ''),
+  }));
+}
+
+function summarizeBrowserFacade(browser) {
+  return {
+    id: browser.id,
+    name: browser.name,
+    hostInstanceId: browser.metadata?.hostInstanceId || '',
+    extensionInstanceId: browser.metadata?.extensionInstanceId || '',
+  };
 }
 
 function unwrapActionData(value) {

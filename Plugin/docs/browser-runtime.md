@@ -1,5 +1,7 @@
 # Beav Browser Runtime
 
+Desktop/Extension production compatibility, diagnostics, release gates, and privacy boundaries are documented in [`../../desktop/docs/browser-control-production-runbook.md`](../../desktop/docs/browser-control-production-runbook.md). This file defines the developer-facing browser facade; it is not a second discovery/retry/selection truth.
+
 Use this as the supported agent-side browser surface. It mirrors Codex Browser Use shape while routing through Beav Browser Control.
 
 ```js
@@ -16,7 +18,8 @@ await browser.tabs.finalize({ keep: [] });
 ## API
 
 - `agent.browsers.list()` discovers every live Native Messaging host endpoint and returns one browser per connected Chrome extension instance. Each browser id is the stable `extensionInstanceId` when available, otherwise its host instance id.
-- `agent.browsers.get("extension")` keeps the previous default behavior; pass an id returned by `list()` to bind to a specific Chrome profile/extension instance.
+- `agent.browsers.get("extension")` is accepted only when discovery finds exactly one browser instance. With multiple profiles/browsers it throws `BROWSER_INSTANCE_SELECTION_REQUIRED`; pass an id returned by `list()` to bind explicitly.
+- A browser facade binds to the stable `extensionInstanceId`, not a transient Native Host endpoint. Host rotation therefore preserves the selected profile, while a missing bound instance fails with `BROWSER_INSTANCE_DISCONNECTED` and never falls back to another account.
 - `agent.documentation.get("api")`, `agent.documentation.get("playwright")`, and `agent.documentation.get("browser-troubleshooting")` return packaged docs.
 - `browser.documentation()` returns this document.
 - `browser.nameSession(name)` names the current browser-control session before tab work.
@@ -38,22 +41,43 @@ await browser.tabs.finalize({ keep: [] });
 
 ## Site research
 
-Use `research.run` for bounded site work instead of guessing selectors in an agent prompt. It is navigation/read-only only and always returns a source tab plus a bounded DOM evidence snapshot.
+Production Agent work uses Desktop `capture.collect` with `mode: "browser_research"`. The Desktop Research Runner owns navigation, login/security handoff, typed filters, bounded scrolling, detail-tab fan-out, partial failure, media handoff, artifact persistence, Knowledge ingest, Resume, and terminal tab cleanup.
 
-```js
-const research = await browser.research({
-  site: 'xiaohongshu',
-  operation: 'search',
-  query: 'AI 浏览器',
-});
+```json
+{
+  "action": "capture.collect",
+  "payload": {
+    "mode": "browser_research",
+    "researchOperation": "search",
+    "site": "xiaohongshu",
+    "query": "AI 浏览器",
+    "filters": { "publishTime": "week" },
+    "limit": 10,
+    "depth": "standard"
+  }
+}
 ```
 
-Current operations are Xiaohongshu `search`, `author_scan`, and `content_scan`, plus Douyin/YouTube `content_scan`. The macro does not publish, submit, or mutate remote content. Persist results through the desktop `capture.collect` action with `mode: "browser_research"`; that path writes the evidence into Knowledge with a stable dedupe key.
+The extension-side `research.run` contract exposes `extract`, `apply_filters`, and `download_media` execution modes for the Desktop Runner. Each mode operates on one already claimed tab and never creates, scrolls, fans out, retries, or finalizes tabs. Extension `macro` mode remains only for old Desktop/JS facade compatibility and must not become a second production state machine.
+
+Current capability contract `3` supports:
+
+- Xiaohongshu and Douyin: `search`, `author_scan`, `content_scan`;
+- YouTube and generic Web: `content_scan`;
+- typed Xiaohongshu/Douyin filters: `sort`, `contentType`, `publishTime`.
+
+Every response carries `capabilityVersion` and `extractorSchemaHash`. Desktop fails closed on drift, so rebuilding the extension is not enough: reload `Plugin/dist/extension` in the target browser before current-build acceptance. Site research is read-only at the browser layer; it never publishes, submits, likes, follows, comments, or changes remote content.
 
 ## Discipline
 
+- 普通 Agent 优先调用 `browser.connection.status/repair`、`browser.tabs.list`、`browser.tab.open/claim`、`browser.page.inspect/click/type` 和 `browser.tabs.finalize`；本页 JS facade 主要用于运行时与开发集成。
+- 连接失败时只允许先调用一次 `browser.connection.repair` 再重试原动作一次；仍失败就返回结构化 blocker，不要让 Agent 用 shell 搜索 socket、manifest 或浏览器进程。
 - Name a session before sustained browser work.
 - Prefer DOM snapshots and locator reads before screenshots.
 - Before click, fill, select, or press, verify the locator is unique unless uniqueness is obvious.
 - After interactions, collect the cheapest state check that answers the next decision.
 - Call `browser.tabs.finalize({ keep })` before ending a browser task.
+
+## Compatibility contract
+
+The current checkout uses descriptor schema `2`, browser protocol `3`, site-research contract `3`, and published extension id `dhfphfekcjahljnefpdjoidehnhhoeie`. A protocol or site-capability mismatch fails closed. The Rust BrowserClient owns production discovery, instance binding, repair, retry, cancellation, and lifecycle state; Desktop Research Runner owns research macro orchestration; this JavaScript facade remains a development/external adapter.

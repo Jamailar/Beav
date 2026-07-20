@@ -3,58 +3,74 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = __dirname;
-const hostName = 'com.redbox.browser_control';
+const identity = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'browser-control.identity.json'), 'utf8'));
+const hostName = String(identity.hostName || 'com.redbox.browser_control');
 const hostScript = path.join(__dirname, 'native-host', 'host.mjs');
 const templatePath = path.join(__dirname, 'native-host', `${hostName}.json`);
-const nativeHostStateDir = path.join(os.homedir(), 'Library/Application Support/RedBox/native-host');
+const nativeHostStateDir = path.join(resolvePlatformDataRoot(), 'RedBox', 'native-host');
 const launcherPath = path.join(nativeHostStateDir, `${hostName}.launcher.sh`);
 const extensionSourceRoots = [
   path.join(pluginRoot, 'dist', 'extension'),
   pluginRoot,
   path.join(pluginRoot, 'src'),
 ].map((item) => path.resolve(item));
-const browserTargets = [
-  {
-    id: 'chrome',
-    label: 'Google Chrome',
-    profileRoot: path.join(os.homedir(), 'Library/Application Support/Google/Chrome'),
-    manifestPath: path.join(os.homedir(), 'Library/Application Support/Google/Chrome/NativeMessagingHosts', `${hostName}.json`),
-  },
-  {
-    id: 'chrome-beta',
-    label: 'Google Chrome Beta',
-    profileRoot: path.join(os.homedir(), 'Library/Application Support/Google/Chrome Beta'),
-    manifestPath: path.join(os.homedir(), 'Library/Application Support/Google/Chrome Beta/NativeMessagingHosts', `${hostName}.json`),
-  },
-  {
-    id: 'chrome-canary',
-    label: 'Google Chrome Canary',
-    profileRoot: path.join(os.homedir(), 'Library/Application Support/Google/Chrome Canary'),
-    manifestPath: path.join(os.homedir(), 'Library/Application Support/Google/Chrome Canary/NativeMessagingHosts', `${hostName}.json`),
-  },
-  {
-    id: 'chromium',
-    label: 'Chromium',
-    profileRoot: path.join(os.homedir(), 'Library/Application Support/Chromium'),
-    manifestPath: path.join(os.homedir(), 'Library/Application Support/Chromium/NativeMessagingHosts', `${hostName}.json`),
-  },
-  {
-    id: 'edge',
-    label: 'Microsoft Edge',
-    profileRoot: path.join(os.homedir(), 'Library/Application Support/Microsoft Edge'),
-    manifestPath: path.join(os.homedir(), 'Library/Application Support/Microsoft Edge/NativeMessagingHosts', `${hostName}.json`),
-  },
-  {
-    id: 'brave',
-    label: 'Brave Browser',
-    profileRoot: path.join(os.homedir(), 'Library/Application Support/BraveSoftware/Brave-Browser'),
-    manifestPath: path.join(os.homedir(), 'Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts', `${hostName}.json`),
-  },
-];
+const browserTargets = buildBrowserTargets();
+
+function resolvePlatformDataRoot() {
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library/Application Support');
+  if (process.platform === 'win32') return process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  return process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+}
+
+function buildBrowserTargets() {
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return [
+      windowsBrowserTarget('chrome', 'Google Chrome', path.join(local, 'Google/Chrome/User Data'), 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts'),
+      windowsBrowserTarget('edge', 'Microsoft Edge', path.join(local, 'Microsoft/Edge/User Data'), 'HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts'),
+      windowsBrowserTarget('brave', 'Brave Browser', path.join(local, 'BraveSoftware/Brave-Browser/User Data'), 'HKCU\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts'),
+    ];
+  }
+  if (process.platform === 'darwin') {
+    const root = path.join(os.homedir(), 'Library/Application Support');
+    return [
+      unixBrowserTarget('chrome', 'Google Chrome', root, 'Google/Chrome'),
+      unixBrowserTarget('chrome-beta', 'Google Chrome Beta', root, 'Google/Chrome Beta'),
+      unixBrowserTarget('chrome-canary', 'Google Chrome Canary', root, 'Google/Chrome Canary'),
+      unixBrowserTarget('chromium', 'Chromium', root, 'Chromium'),
+      unixBrowserTarget('edge', 'Microsoft Edge', root, 'Microsoft Edge'),
+      unixBrowserTarget('brave', 'Brave Browser', root, 'BraveSoftware/Brave-Browser'),
+    ];
+  }
+  const config = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return [
+    unixBrowserTarget('chrome', 'Google Chrome', config, 'google-chrome'),
+    unixBrowserTarget('chrome-beta', 'Google Chrome Beta', config, 'google-chrome-beta'),
+    unixBrowserTarget('chromium', 'Chromium', config, 'chromium'),
+    unixBrowserTarget('edge', 'Microsoft Edge', config, 'microsoft-edge'),
+    unixBrowserTarget('brave', 'Brave Browser', config, 'BraveSoftware/Brave-Browser'),
+  ];
+}
+
+function unixBrowserTarget(id, label, root, relative) {
+  const profileRoot = path.join(root, relative);
+  return { id, label, profileRoot, manifestPath: path.join(profileRoot, 'NativeMessagingHosts', `${hostName}.json`) };
+}
+
+function windowsBrowserTarget(id, label, profileRoot, registryRoot) {
+  return {
+    id,
+    label,
+    profileRoot,
+    manifestPath: path.join(nativeHostStateDir, 'manifests', `${id}.${hostName}.json`),
+    registryKey: `${registryRoot}\\${hostName}`,
+  };
+}
 
 function parseArgs(argv) {
   const out = {
@@ -63,6 +79,7 @@ function parseArgs(argv) {
     extensionId: process.env.REDBOX_BROWSER_CONTROL_EXTENSION_ID || '',
     json: false,
     node: process.env.REDBOX_BROWSER_CONTROL_NODE || process.env.REDBOX_NATIVE_NODE || '',
+    hostPath: process.env.REDBOX_BROWSER_CONTROL_HOST_PATH || '',
     target: '',
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -70,6 +87,7 @@ function parseArgs(argv) {
     if (item === '--extension-id') out.extensionId = argv[++index] || '';
     else if (item === '--browser') out.browser = argv[++index] || '';
     else if (item === '--node') out.node = argv[++index] || '';
+    else if (item === '--host-path') out.hostPath = argv[++index] || '';
     else if (item === '--all') out.browser = 'all';
     else if (item === '--target') out.target = argv[++index] || '';
     else if (item === '--dry-run') out.dryRun = true;
@@ -92,6 +110,7 @@ Options:
                           extension id and no discovered browser, defaults to chrome for compatibility.
   --node <path>           Absolute Node.js executable for GUI-launched browsers. Defaults to
                           REDBOX_BROWSER_CONTROL_NODE, REDBOX_NATIVE_NODE, then the current node.
+  --host-path <path>      Native host executable. Required on Windows; desktop builds install this automatically.
   --all                   Alias for --browser all.
   --target <path>         Write one manifest to an explicit path.
   --dry-run               Print the planned manifest writes without changing files.
@@ -146,7 +165,7 @@ function discoverInstalledExtensions(targets) {
           const sourceMatches = sourcePath && extensionSourceRoots.includes(path.resolve(sourcePath));
           const name = typeof manifest.name === 'string' ? manifest.name : '';
           const description = typeof manifest.description === 'string' ? manifest.description : '';
-          const nameMatches = /RedBox|RedConvert/i.test(`${name}\n${description}`);
+          const nameMatches = /Beav|RedBox|RedConvert/i.test(`${name}\n${description}`);
           const extensionId = normalizeExtensionId(id);
           if (!extensionId || (!sourceMatches && !nameMatches)) continue;
           matches.push({
@@ -181,12 +200,9 @@ function dedupeExtensions(items) {
 function selectExtensionId(args, extensions) {
   const requested = normalizeExtensionId(args.extensionId);
   if (requested) return { value: requested, source: 'argument' };
-  const discoveredIds = [...new Set(extensions.map((extension) => normalizeExtensionId(extension.id)).filter(Boolean))];
-  if (discoveredIds.length === 1) return { value: discoveredIds[0], source: 'discovered' };
-  if (discoveredIds.length > 1) {
-    throw new Error(`Multiple RedBox extension ids were found: ${discoveredIds.join(', ')}. Pass --extension-id explicitly.`);
-  }
-  throw new Error('No RedBox extension id found. Load Plugin/dist/extension in your browser first, or pass --extension-id.');
+  const published = normalizeExtensionId(identity.publishedExtensionId);
+  if (!published) throw new Error('browser-control.identity.json has an invalid publishedExtensionId');
+  return { value: published, source: 'published_identity' };
 }
 
 function selectTargets(args, extensions, extensionIdSource) {
@@ -208,7 +224,7 @@ function selectTargets(args, extensions, extensionIdSource) {
     });
     return dedupeTargets(targets);
   }
-  if (extensionIdSource === 'discovered') {
+  if (extensionIdSource === 'discovered' || extensions.length > 0) {
     const discoveredBrowsers = [...new Set(extensions.map((extension) => extension.browser))];
     const targets = discoveredBrowsers
       .map((id) => browserTargets.find((target) => target.id === id))
@@ -254,7 +270,15 @@ function buildLauncher(nodePath) {
   ].join('\n');
 }
 
-function installLauncher(nodePath, dryRun) {
+function installLauncher(nodePath, dryRun, explicitHostPath = '') {
+  if (explicitHostPath) {
+    const hostPath = path.resolve(explicitHostPath);
+    if (!exists(hostPath)) throw new Error(`Native host executable not found: ${hostPath}`);
+    return { path: hostPath, node: '', hostScript: '', installed: false, source: 'explicit_host' };
+  }
+  if (process.platform === 'win32') {
+    throw new Error('Windows requires --host-path <desktop executable>; packaged Beav installs the native host automatically.');
+  }
   if (!dryRun) {
     fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
     fs.writeFileSync(launcherPath, buildLauncher(nodePath));
@@ -265,6 +289,7 @@ function installLauncher(nodePath, dryRun) {
     node: nodePath,
     hostScript,
     installed: !dryRun,
+    source: 'node_launcher',
   };
 }
 
@@ -279,11 +304,16 @@ function installManifest(target, manifest, dryRun) {
     fs.mkdirSync(path.dirname(target.manifestPath), { recursive: true });
     fs.writeFileSync(target.manifestPath, manifest);
   }
+  if (!dryRun && target.registryKey) {
+    const result = spawnSync('reg.exe', ['ADD', target.registryKey, '/ve', '/t', 'REG_SZ', '/d', target.manifestPath, '/f'], { encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(`Failed to register ${target.label} native host: ${result.stderr || result.stdout}`);
+  }
   return {
     browser: target.id,
     label: target.label,
     path: target.manifestPath,
     installed: !dryRun,
+    registryKey: target.registryKey || '',
   };
 }
 
@@ -294,8 +324,8 @@ function main() {
   const extensions = discoverInstalledExtensions(browserTargets);
   const extensionId = selectExtensionId(args, extensions);
   const targets = selectTargets(args, extensions, extensionId.source);
-  const nodePath = resolveNodeExecutable(args);
-  const launcher = installLauncher(nodePath, args.dryRun);
+  const nodePath = args.hostPath ? '' : resolveNodeExecutable(args);
+  const launcher = installLauncher(nodePath, args.dryRun, args.hostPath);
   if (!args.dryRun) fs.chmodSync(hostScript, 0o755);
   const manifest = buildManifest(extensionId.value, launcher.path);
   const installations = targets.map((target) => installManifest(target, manifest, args.dryRun));
@@ -318,7 +348,7 @@ function main() {
     const verb = args.dryRun ? 'would install' : 'installed';
     console.log(`[native-host] ${verb} ${item.label}: ${item.path}`);
   }
-  console.log(`[native-host] launcher ${args.dryRun ? 'would use' : 'uses'} ${nodePath}`);
+  console.log(`[native-host] host ${args.dryRun ? 'would use' : 'uses'} ${launcher.path}`);
   console.log(`[native-host] allowed origin chrome-extension://${extensionId.value}/ (${extensionId.source})`);
 }
 

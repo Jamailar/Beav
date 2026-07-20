@@ -8,10 +8,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const hostName = 'com.redbox.browser_control';
+const identity = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'browser-control.identity.json'), 'utf8'));
+const hostName = identity.hostName;
 const hostScript = path.join(pluginRoot, 'native-host', 'host.mjs');
 const hostTemplate = path.join(pluginRoot, 'native-host', `${hostName}.json`);
-const nativeHostStateDir = path.join(os.homedir(), 'Library/Application Support/RedBox/native-host');
+const nativeHostStateDir = process.env.REDBOX_BROWSER_CONTROL_STATE_DIR || (
+  process.platform === 'darwin'
+    ? path.join(os.homedir(), 'Library/Application Support/RedBox/native-host')
+    : process.platform === 'win32'
+      ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData/Roaming'), 'RedBox/native-host')
+      : path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'RedBox/native-host')
+);
 const launcherPath = path.join(nativeHostStateDir, `${hostName}.launcher.sh`);
 const extensionSourceRoots = [
   path.join(pluginRoot, 'dist', 'extension'),
@@ -19,12 +26,12 @@ const extensionSourceRoots = [
   path.join(pluginRoot, 'src'),
 ].map((item) => path.resolve(item));
 const endpointStatePath = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
-  || path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
+  || path.join(nativeHostStateDir, 'browser-control-agent-endpoint.json');
 const defaultSocketPath = process.platform === 'win32'
   ? '\\\\.\\pipe\\redbox-browser-control'
   : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.sock`);
 
-const browserTargets = [
+const browserTargets = process.platform === 'darwin' ? [
   {
     id: 'chrome',
     label: 'Google Chrome',
@@ -61,7 +68,38 @@ const browserTargets = [
     profileRoot: path.join(os.homedir(), 'Library/Application Support/BraveSoftware/Brave-Browser'),
     manifestPath: path.join(os.homedir(), 'Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts', `${hostName}.json`),
   },
+] : process.platform === 'win32' ? [
+  windowsTarget('chrome', 'Google Chrome', 'Google/Chrome/User Data'),
+  windowsTarget('edge', 'Microsoft Edge', 'Microsoft/Edge/User Data'),
+  windowsTarget('brave', 'Brave Browser', 'BraveSoftware/Brave-Browser/User Data'),
+] : [
+  linuxTarget('chrome', 'Google Chrome', 'google-chrome'),
+  linuxTarget('chrome-beta', 'Google Chrome Beta', 'google-chrome-beta'),
+  linuxTarget('chromium', 'Chromium', 'chromium'),
+  linuxTarget('edge', 'Microsoft Edge', 'microsoft-edge'),
+  linuxTarget('brave', 'Brave Browser', 'BraveSoftware/Brave-Browser'),
 ];
+
+function windowsTarget(id, label, relative) {
+  const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  return {
+    id,
+    label,
+    profileRoot: path.join(local, relative),
+    manifestPath: path.join(nativeHostStateDir, 'manifests', `${id}.${hostName}.json`),
+  };
+}
+
+function linuxTarget(id, label, relative) {
+  const root = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  const profileRoot = path.join(root, relative);
+  return {
+    id,
+    label,
+    profileRoot,
+    manifestPath: path.join(profileRoot, 'NativeMessagingHosts', `${hostName}.json`),
+  };
+}
 
 function parseArgs(argv) {
   const args = {
@@ -118,6 +156,17 @@ function readJsonIfExists(filePath) {
   }
 }
 
+const DIAGNOSTIC_SECRET_KEYS = /^(auth(token)?|authorization|cookie|password|otp|token)$/i;
+
+function redactDiagnosticSecrets(value) {
+  if (Array.isArray(value)) return value.map((item) => redactDiagnosticSecrets(item));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    DIAGNOSTIC_SECRET_KEYS.test(key) ? '[REDACTED]' : redactDiagnosticSecrets(item),
+  ]));
+}
+
 function statIfExists(filePath) {
   try {
     return fs.statSync(filePath);
@@ -167,7 +216,7 @@ function discoverInstalledExtensions(targets) {
           const name = typeof manifest.name === 'string' ? manifest.name : '';
           const description = typeof manifest.description === 'string' ? manifest.description : '';
           const sourceMatches = sourcePath && extensionSourceRoots.includes(path.resolve(sourcePath));
-          const nameMatches = /RedBox|RedConvert/i.test(`${name}\n${description}`);
+          const nameMatches = /Beav|RedBox|RedConvert/i.test(`${name}\n${description}`);
           if (!sourceMatches && !nameMatches) continue;
           matches.push({
             browser: target.id,
@@ -201,9 +250,7 @@ function dedupeExtensions(items) {
 function chooseExtensionId(requestedId, extensions) {
   const requested = normalizeExtensionId(requestedId);
   if (requested) return { value: requested, source: 'argument' };
-  const discoveredIds = [...new Set(extensions.map((extension) => normalizeExtensionId(extension.id)).filter(Boolean))];
-  if (discoveredIds.length === 1) return { value: discoveredIds[0], source: 'discovered' };
-  return { value: '', source: discoveredIds.length > 1 ? 'ambiguous' : 'none' };
+  return { value: normalizeExtensionId(identity.publishedExtensionId), source: 'published_identity' };
 }
 
 function checkManifest(target, extensionId) {
@@ -237,10 +284,8 @@ function checkManifest(target, extensionId) {
   if (!exists(manifest.path || '')) check.issues.push('host_path_missing');
   if (manifest.path) {
     const resolvedPath = path.resolve(manifest.path);
-    const expectedLauncher = path.resolve(launcherPath);
     const legacyHostScript = path.resolve(hostScript);
     if (resolvedPath === legacyHostScript) check.issues.push('host_path_uses_env_node_script');
-    else if (resolvedPath !== expectedLauncher) check.issues.push('host_path_points_elsewhere');
   }
   const origin = expectedOrigin(extensionId);
   if (origin && !check.manifest.allowedOrigins.includes(origin)) check.issues.push('extension_origin_missing');
@@ -258,6 +303,7 @@ function readEndpointState() {
     stale: false,
     ageMs: null,
     socketPath: defaultSocketPath,
+    endpoint: null,
     state: null,
     issues: [],
   };
@@ -270,48 +316,57 @@ function readEndpointState() {
     return check;
   }
   check.state = state;
+  check.endpoint = state;
   check.socketPath = state.socketPath || defaultSocketPath;
-  if (stat) {
-    check.ageMs = Date.now() - stat.mtimeMs;
-    check.stale = check.ageMs > 10 * 60 * 1000;
+  const updatedAtMs = Number(state.lastSeenAtMs || state.updatedAtMs || stat?.mtimeMs || 0);
+  if (updatedAtMs) {
+    check.ageMs = Date.now() - updatedAtMs;
+    check.stale = check.ageMs > 2 * 60 * 1000;
     if (check.stale) check.issues.push('endpoint_state_stale');
   }
-  if (!check.socketPath) check.issues.push('socket_path_missing');
+  if (!state.socketPath && !state.endpoint?.address && !state.tcpAddress) check.issues.push('endpoint_address_missing');
   check.ok = check.issues.length === 0;
   return check;
 }
 
-async function probeSocket(socketPath, timeoutMs) {
+async function probeSocket(endpoint, timeoutMs) {
+  const socketPath = endpoint?.socketPath || defaultSocketPath;
+  const tcpAddress = String(endpoint?.endpoint?.address || endpoint?.tcpAddress || '');
   const result = {
     socketPath,
-    exists: process.platform === 'win32' ? null : exists(socketPath),
+    tcpAddress,
+    exists: tcpAddress ? null : (process.platform === 'win32' ? null : exists(socketPath)),
     connected: false,
     hostInfo: null,
     toolsList: null,
     issues: [],
   };
-  if (process.platform !== 'win32' && !exists(socketPath)) {
+  if (!tcpAddress && process.platform !== 'win32' && !exists(socketPath)) {
     result.issues.push('socket_missing');
     return result;
   }
   try {
-    result.hostInfo = await sendSocketJsonRpc(socketPath, { jsonrpc: '2.0', id: 'diag:host', method: 'host.getInfo', params: {} }, timeoutMs);
+    result.hostInfo = await sendSocketJsonRpc(endpoint, { jsonrpc: '2.0', id: 'diag:host', method: 'host.getInfo', params: {} }, timeoutMs);
     result.connected = true;
   } catch (error) {
     result.issues.push(`host_get_info_failed:${error instanceof Error ? error.message : String(error)}`);
     return result;
   }
   try {
-    result.toolsList = await sendSocketJsonRpc(socketPath, { jsonrpc: '2.0', id: 'diag:tools', method: 'tools/list', params: {} }, timeoutMs);
+    result.toolsList = await sendSocketJsonRpc(endpoint, { jsonrpc: '2.0', id: 'diag:tools', method: 'tools/list', params: {} }, timeoutMs);
   } catch (error) {
     result.issues.push(`extension_forwarding_failed:${error instanceof Error ? error.message : String(error)}`);
   }
   return result;
 }
 
-function sendSocketJsonRpc(socketPath, payload, timeoutMs) {
+function sendSocketJsonRpc(endpoint, payload, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath);
+    const address = String(endpoint?.endpoint?.address || endpoint?.tcpAddress || '');
+    const match = address.match(/^127\.0\.0\.1:(\d+)$/);
+    const socket = match
+      ? net.createConnection({ host: '127.0.0.1', port: Number(match[1]) })
+      : net.createConnection(endpoint?.socketPath || defaultSocketPath);
     let buffer = '';
     const timer = setTimeout(() => {
       socket.destroy();
@@ -319,6 +374,8 @@ function sendSocketJsonRpc(socketPath, payload, timeoutMs) {
     }, timeoutMs);
     socket.setEncoding('utf8');
     socket.on('connect', () => {
+      const authToken = String(endpoint?.endpoint?.authToken || endpoint?.authToken || '');
+      if (authToken) payload._browserControlAuth = authToken;
       socket.write(`${JSON.stringify(payload)}\n`);
     });
     socket.on('data', (chunk) => {
@@ -353,14 +410,8 @@ function sendSocketJsonRpc(socketPath, payload, timeoutMs) {
 
 function buildSummary(report, args) {
   const issues = [];
-  if (!report.source.hostScript.exists) issues.push('host_script_missing');
-  if (!report.source.hostScript.executable) issues.push('host_script_not_executable');
-  if (!report.source.launcher.exists) issues.push('launcher_missing');
-  if (!report.source.launcher.executable) issues.push('launcher_not_executable');
   if (!report.source.template.exists) issues.push('manifest_template_missing');
   if (report.extensionId.requested && !report.extensionId.valid) issues.push('invalid_extension_id');
-  if (!report.extensionId.requested && report.extensionId.source === 'none') issues.push('extension_not_found');
-  if (!report.extensionId.requested && report.extensionId.source === 'ambiguous') issues.push('extension_id_ambiguous');
   const installedManifests = report.manifests.filter((manifest) => manifest.exists);
   if (args.browser) {
     for (const manifest of report.manifests) {
@@ -402,7 +453,7 @@ function printHuman(report) {
     console.log(`Manifest ${manifest.browser}: ${manifest.ok ? 'ok' : manifest.issues.join(', ')} (${manifest.path})`);
   }
   console.log(`Endpoint state: ${report.endpoint.ok ? 'ok' : report.endpoint.issues.join(', ')} (${report.endpoint.path})`);
-  console.log(`Socket: ${report.socket.connected ? 'connected' : report.socket.issues.join(', ') || 'not connected'} (${report.socket.socketPath})`);
+  console.log(`Control endpoint: ${report.socket.connected ? 'connected' : report.socket.issues.join(', ') || 'not connected'} (${report.socket.tcpAddress || report.socket.socketPath})`);
   if (report.socket.hostInfo) {
     console.log(`Host nativeConnected: ${report.socket.hostInfo.nativeConnected === true ? 'true' : 'false'}`);
   }
@@ -425,7 +476,6 @@ async function main() {
   const chosenExtensionId = chooseExtensionId(args.extensionId, extensions);
   const extensionId = chosenExtensionId.value;
   const endpoint = readEndpointState();
-  const socketPath = endpoint.socketPath || defaultSocketPath;
   const report = {
     checkedAt: new Date().toISOString(),
     source: {
@@ -453,12 +503,15 @@ async function main() {
     },
     manifests: selectedTargets.map((target) => checkManifest(target, extensionId)),
     endpoint,
-    socket: await probeSocket(socketPath, Math.max(250, Number(args.timeoutMs || 3000))),
+    socket: await probeSocket(endpoint.endpoint || { socketPath: endpoint.socketPath || defaultSocketPath }, Math.max(250, Number(args.timeoutMs || 3000))),
     summary: null,
   };
   report.summary = buildSummary(report, args);
-  if (args.json) console.log(JSON.stringify(report, null, 2));
-  else printHuman(report);
+  const safeReport = redactDiagnosticSecrets(report);
+  const rawAuthToken = String(endpoint.endpoint?.endpoint?.authToken || endpoint.endpoint?.authToken || '');
+  if (rawAuthToken) assert(!JSON.stringify(safeReport).includes(rawAuthToken), 'diagnostic report leaked endpoint auth token');
+  if (args.json) console.log(JSON.stringify(safeReport, null, 2));
+  else printHuman(safeReport);
   if (!args.noFail && !report.summary.ok) process.exit(1);
 }
 
