@@ -2,10 +2,6 @@
   <img src="./images/beav-icon.png" alt="Beav" width="88">
 </p>
 
-<p align="center">
-  <a href="./README.md">简体中文</a> · <strong>English</strong>
-</p>
-
 <h1 align="center">Beav</h1>
 
 <p align="center">
