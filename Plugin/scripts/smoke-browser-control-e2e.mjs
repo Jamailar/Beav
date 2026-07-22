@@ -119,8 +119,8 @@ async function main() {
     const researchStepModes = researchTool?.inputSchema?.properties?.executionMode?.enum || [];
     assert.deepEqual(
       researchStepModes,
-      ['macro', 'extract', 'apply_filters', 'download_media'],
-      'current extension should expose site-research contract 3 atomic execution modes',
+      ['macro', 'submit_search', 'extract', 'apply_filters', 'open_item', 'close_item', 'download_media'],
+      'current extension should expose page-UI search, item interaction, and research extraction modes',
     );
 
     const sandbox = {};

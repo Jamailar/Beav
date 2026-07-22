@@ -1,12 +1,15 @@
 {
   "schemaVersion": 1,
-  "contractVersion": 3,
+  "contractVersion": 5,
   "capabilities": [
     {
       "id": "xiaohongshu",
       "aliases": ["xhs", "redbook", "rednote"],
       "displayName": "小红书",
       "hostPatterns": ["xiaohongshu.com", "xhslink.com", "rednote.com"],
+      "searchEntryUrl": "https://www.xiaohongshu.com/",
+      "searchViaPageUi": true,
+      "detailOpenMode": "page_click",
       "supportedOperations": ["search", "author_scan", "content_scan"],
       "supportedFilters": {
         "sort": ["relevance", "latest", "most_liked"],
@@ -15,8 +18,8 @@
       },
       "defaultSurface": ["search", "author_scan", "content_scan"],
       "debugSurface": ["search", "author_scan", "content_scan"],
-      "capabilityVersion": "1.2.0",
-      "extractorSchemaHash": "eddf2be8a517abe0cb4c06074300cecc9cf8b285e97fe2815f9530e0999100d9",
+      "capabilityVersion": "1.4.0",
+      "extractorSchemaHash": "c48bf9ce2adfa9c4fbb4a6906a24b0c44d3a07cc3aa1e8e3402168fb2e4ef666",
       "concurrencyPolicy": "single_account"
     },
     {
@@ -24,6 +27,9 @@
       "aliases": ["dy"],
       "displayName": "抖音",
       "hostPatterns": ["douyin.com", "iesdouyin.com"],
+      "searchEntryUrl": "https://www.douyin.com/",
+      "searchViaPageUi": true,
+      "detailOpenMode": "page_click",
       "supportedOperations": ["search", "author_scan", "content_scan"],
       "supportedFilters": {
         "sort": ["relevance", "latest", "most_liked"],
@@ -32,8 +38,8 @@
       },
       "defaultSurface": ["search", "author_scan", "content_scan"],
       "debugSurface": ["search", "author_scan", "content_scan"],
-      "capabilityVersion": "1.3.0",
-      "extractorSchemaHash": "67bc5c506ab968ceecfad4aab4b3aa4f0c2ca390d5adbeaa70679b4c0c0f5060",
+      "capabilityVersion": "1.5.0",
+      "extractorSchemaHash": "e3292bad562b98a43b9dc761fef811447e88c76003de0ac34d6b83e14459a89f",
       "concurrencyPolicy": "single_account"
     },
     {
@@ -41,6 +47,7 @@
       "aliases": ["yt"],
       "displayName": "YouTube",
       "hostPatterns": ["youtube.com", "youtu.be"],
+      "detailOpenMode": "direct_url",
       "supportedOperations": ["content_scan"],
       "supportedFilters": {},
       "defaultSurface": ["content_scan"],
@@ -54,6 +61,7 @@
       "aliases": ["generic_web", "generic"],
       "displayName": "Generic Web",
       "hostPatterns": ["*"],
+      "detailOpenMode": "direct_url",
       "supportedOperations": ["content_scan"],
       "supportedFilters": {},
       "defaultSurface": ["content_scan"],

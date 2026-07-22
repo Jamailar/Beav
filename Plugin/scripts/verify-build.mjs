@@ -137,7 +137,13 @@ assert.equal(
   'Manifest version_name must preserve the release version shown to users',
 );
 assert.equal(siteResearchCapabilities.schemaVersion, 1, 'Site research capability schema must be versioned');
-assert.equal(siteResearchCapabilities.contractVersion, 3, 'Site research capability contract must match Desktop');
+assert.equal(siteResearchCapabilities.contractVersion, 5, 'Site research capability contract must match Desktop');
+for (const capability of siteResearchCapabilities.capabilities || []) {
+  assert(
+    ['direct_url', 'page_click'].includes(capability.detailOpenMode),
+    `${capability.id} must declare detailOpenMode`,
+  );
+}
 assert(siteResearchCapabilities.capabilities.length > 0, 'Site research capability registry must not be empty');
 const siteCapabilityIds = new Set();
 const siteCapabilityHosts = new Set();

@@ -48,8 +48,10 @@ Site-research failures:
 - `waiting_for_user` with `login_required` or `security_verification_required` is not a failed connection. Complete the action in the retained handoff tab, then resume the same `runId` with `retryStage=browser`.
 - `partial` with saved `redbox://browser-runs/<runId>/...` artifacts means browser evidence was preserved. Retry only Knowledge ingest when the failure is `knowledge_ingest_failed`; do not repeat paid download/OCR/ASR work.
 - `BROWSER_CLEANUP_INCOMPLETE` after a successful result keeps the business result but marks the run partial. Check tab leases, debugger attachments, and terminal lifecycle records; cleanup is idempotent.
+- `BROWSER_PAGE_INTERACTION_REQUIRED` means an observed Xiaohongshu/Douyin card URL was sent to direct navigation. Return to the originating results/author page and click the visible card; do not retry the href in a background tab.
+- `content_unavailable` or a `/404` detail surface is a terminal item failure, not login/security handoff and never valid Knowledge evidence.
 
-Desktop is the macro owner. A current research trace should show individual `tab.create/claim`, `page.waitForLoadState`, `research.run(extract|apply_filters|download_media)`, bounded `page.scroll`, detail `tab.close`, and terminal `tabs.finalize`. One extension-side `research.run(macro)` call is a legacy path and is not current-build acceptance.
+Desktop is the macro owner. A current Xiaohongshu/Douyin research trace should show source `tab.create/claim`, `page.waitForLoadState`, `research.run(submit_search|extract|apply_filters|open_item|close_item|download_media)`, bounded `page.scroll`, and terminal `tabs.finalize`. It must not show a detail `tab.create` using the extracted card href. One extension-side `research.run(macro)` call is a legacy path and is not current-build acceptance.
 
 Validation commands:
 
@@ -74,4 +76,4 @@ Real Chrome acceptance:
 - At least one MCP/tool call should verify `tabs.list`, `tab.info`, `page.queryElements`, and one controlled interaction such as `page.click` or `page.type` on a safe test page.
 - Active controlled tabs should show the in-page `Beav 控制中` badge and an active favicon marker. If DOM actions work but the badge is missing, check `AGENT_CONTROL_BADGE`, `GET_AGENT_CONTROL_BADGE_STATE`, and tab lease events.
 - With more than one Chrome profile, verify `agent.browsers.list()` reports distinct `extensionInstanceId` values and call `agent.browsers.get(id)` before the tab workflow. The default `extension` alias intentionally fails with `BROWSER_INSTANCE_SELECTION_REQUIRED` when discovery is ambiguous.
-- For research acceptance, verify browser info reports site-research contract `3`, then run Xiaohongshu query/filter/limit, Xiaohongshu author/content/comments, Douyin search/author/content, and one Agent -> artifact -> Knowledge loop. Confirm every child `callId`, detail tab, source tab, and debugger reaches a terminal state.
+- For research acceptance, verify browser info reports site-research contract `5`, then run Xiaohongshu query/filter/limit, Xiaohongshu author/content/comments, Douyin search/author/content, and one Agent -> artifact -> Knowledge loop. Confirm each social detail was entered by `open_item`, restored by `close_item`, and every child `callId`, tab, and debugger reaches a terminal state.

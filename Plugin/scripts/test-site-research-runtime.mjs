@@ -6,6 +6,40 @@ import {
   normalizeResearchRequest,
   runSiteResearch,
 } from '../src/background/siteResearchRuntime.js';
+import {
+  buildBrowserPolicyDecision,
+  resolveBrowserPolicyPageUrl,
+} from '../src/background/browserPolicy.js';
+
+test('allows a leased page action while a new HTTP tab only exposes pendingUrl', () => {
+  const action = {
+    type: 'page.waitForLoadState',
+    tabId: 42,
+  };
+  const currentUrl = resolveBrowserPolicyPageUrl(action, {
+    url: 'about:blank',
+    pendingUrl: 'https://developer.aliyun.com/article/1687019',
+  });
+
+  assert.equal(currentUrl, 'https://developer.aliyun.com/article/1687019');
+  assert.equal(buildBrowserPolicyDecision({ ...action, currentUrl }).allowed, true);
+});
+
+test('keeps non-HTTP pending tabs outside the page action allowlist', () => {
+  const action = {
+    type: 'page.waitForLoadState',
+    tabId: 42,
+  };
+  const currentUrl = resolveBrowserPolicyPageUrl(action, {
+    url: 'about:blank',
+    pendingUrl: 'chrome://settings',
+  });
+  const decision = buildBrowserPolicyDecision({ ...action, currentUrl });
+
+  assert.equal(currentUrl, '');
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, 'denied_page_not_allowlisted');
+});
 
 test('normalizes generic web content scans and existing-tab requests', () => {
   const web = normalizeResearchRequest({
@@ -45,6 +79,7 @@ test('normalizes supported typed filters and rejects unsupported filters', () =>
 test('applies typed filters before collecting evidence and reports applied state', async () => {
   const sequence = [];
   let reads = 0;
+  let openedUrl = '';
   const result = await runSiteResearch({
     operation: 'search',
     site: 'douyin',
@@ -53,10 +88,18 @@ test('applies typed filters before collecting evidence and reports applied state
     depth: 'preview',
     maxScrolls: 0,
   }, {
-    createControlledTab: async ({ url }) => ({ tab: { id: 9, url, title: 'fixture' } }),
+    createControlledTab: async ({ url }) => {
+      openedUrl = url;
+      return { tab: { id: 9, url, title: 'fixture' } };
+    },
     getTab: async () => ({ id: 9, url: 'https://www.douyin.com/search/test', title: 'fixture' }),
     claimTab: async () => {},
     waitForTabComplete: async () => {},
+    submitSearch: async (_tabId, request) => {
+      sequence.push('search');
+      assert.equal(request.query, '装修');
+      return { success: true, submitted: true };
+    },
     readSnapshot: async () => ({ snapshot: '' }),
     readSiteEvidence: async () => {
       reads += 1;
@@ -70,7 +113,8 @@ test('applies typed filters before collecting evidence and reports applied state
     },
   });
 
-  assert.deepEqual(sequence, ['read:1', 'filters', 'read:2']);
+  assert.deepEqual(sequence, ['search', 'read:1', 'filters', 'read:2']);
+  assert.equal(openedUrl, 'https://www.douyin.com/');
   assert.deepEqual(result.filters, { requested: { sort: 'latest' }, applied: { sort: 'latest' } });
 });
 
@@ -85,6 +129,7 @@ test('fails closed when a requested filter is not visible', async () => {
     getTab: async () => ({ id: 11, url: 'https://www.xiaohongshu.com/search_result', title: 'fixture' }),
     claimTab: async () => {},
     waitForTabComplete: async () => {},
+    submitSearch: async () => ({ success: true, submitted: true }),
     readSnapshot: async () => ({ snapshot: '' }),
     readSiteEvidence: async () => ({ success: true, items: [] }),
     applyFilters: async () => ({ success: false, reason: 'filter_option_unavailable', filter: 'publishTime', value: 'week' }),
@@ -96,6 +141,7 @@ test('fails closed when a requested filter is not visible', async () => {
 
 test('executes registered site steps without extension-side tab orchestration', async () => {
   const calls = [];
+  const extractorRequests = [];
   const base = {
     operation: 'search',
     site: 'xhs',
@@ -105,8 +151,13 @@ test('executes registered site steps without extension-side tab orchestration', 
   };
   const deps = {
     getTab: async () => ({ id: 51, url: 'https://www.xiaohongshu.com/search_result', title: 'fixture' }),
-    readSiteEvidence: async () => {
+    submitSearch: async (_tabId, request) => {
+      calls.push('search');
+      return { success: true, submitted: true, sourceUrl: 'https://www.xiaohongshu.com/search_result' };
+    },
+    readSiteEvidence: async (_tabId, request) => {
       calls.push('extract');
+      extractorRequests.push(request);
       return {
         success: true,
         prepared: { available: true, injected: false },
@@ -128,33 +179,73 @@ test('executes registered site steps without extension-side tab orchestration', 
       calls.push(`download:${asset.sourceUrl}`);
       return { success: true, path: '/tmp/a.jpg', download_id: 9, download: { mime: 'image/jpeg', totalBytes: 128 } };
     },
+    openItem: async (_tabId, request) => {
+      calls.push('open');
+      assert.equal(request.item.id, 'a');
+      return {
+        success: true,
+        openedIn: 'same_tab_overlay',
+        targetTabId: 51,
+        tab: { id: 51, url: 'https://www.xiaohongshu.com/search_result', title: 'fixture' },
+        openState: { openedIn: 'same_tab_overlay', sourceTabId: 51, targetTabId: 51 },
+      };
+    },
+    closeItem: async (_tabId, request) => {
+      calls.push('close');
+      assert.equal(request.openState.openedIn, 'same_tab_overlay');
+      return { success: true, restored: true };
+    },
     createControlledTab: async () => {
       throw new Error('step executor must not create tabs');
     },
   };
 
+  const submitted = await runSiteResearch({ ...base, executionMode: 'submit_search' }, deps);
+  assert.equal(submitted.step, 'submit_search');
+  assert.equal(submitted.submitted, true);
   const extracted = await runSiteResearch({ ...base, executionMode: 'extract' }, deps);
   assert.equal(extracted.step, 'extract');
   assert.equal(extracted.items.length, 1);
+  assert.equal(extractorRequests[0].siteId, 'xiaohongshu');
+  assert.equal(extractorRequests[0].site, undefined);
   const filtered = await runSiteResearch({
     ...base,
     executionMode: 'apply_filters',
     filters: { sort: 'latest' },
   }, deps);
   assert.deepEqual(filtered.applied, { sort: 'latest' });
+  const opened = await runSiteResearch({
+    ...base,
+    executionMode: 'open_item',
+    item: {
+      id: 'a',
+      sourceUrl: 'https://www.xiaohongshu.com/explore/a',
+      interactionRef: { kind: 'site_card', site: 'xiaohongshu', itemId: 'a', rank: 0 },
+    },
+  }, deps);
+  assert.equal(opened.step, 'open_item');
+  assert.equal(opened.openedIn, 'same_tab_overlay');
+  const closed = await runSiteResearch({
+    ...base,
+    executionMode: 'close_item',
+    openState: opened.openState,
+  }, deps);
+  assert.equal(closed.step, 'close_item');
+  assert.equal(closed.restored, true);
   const downloaded = await runSiteResearch({
     ...base,
     executionMode: 'download_media',
     media: [{ type: 'image', sourceUrl: 'https://img.example/a.jpg' }],
   }, deps);
   assert.equal(downloaded.mediaDownloads[0].localPath, '/tmp/a.jpg');
-  assert.deepEqual(calls, ['extract', 'filters', 'download:https://img.example/a.jpg']);
+  assert.deepEqual(calls, ['search', 'extract', 'filters', 'open', 'close', 'download:https://img.example/a.jpg']);
 });
 
 test('collects bounded search cards and deep detail evidence', async () => {
   const claims = [];
-  const closed = [];
+  const restored = [];
   const created = [];
+  const opened = [];
   let searchReads = 0;
   const result = await runSiteResearch({
     operation: 'search',
@@ -166,19 +257,43 @@ test('collects bounded search cards and deep detail evidence', async () => {
   }, {
     createControlledTab: async (options) => {
       created.push(options);
-      return { tab: { id: created.length === 1 ? 10 : 10 + created.length, url: options.url, title: 'fixture' } };
+      return { tab: { id: 10, url: options.url, title: 'fixture' } };
     },
     getTab: async (tabId) => ({ id: tabId, url: 'https://www.xiaohongshu.com/search_result', title: '搜索' }),
     claimTab: async (tabId, role) => claims.push([tabId, role]),
     waitForTabComplete: async () => {},
+    submitSearch: async () => ({ success: true, submitted: true }),
     scrollPage: async () => ({ success: true }),
-    closeTab: async (tabId) => closed.push(tabId),
+    openItem: async (sourceTabId, request) => {
+      const targetTabId = 12 + opened.length;
+      opened.push([sourceTabId, request.item.id]);
+      return {
+        success: true,
+        openedIn: 'new_tab',
+        sourceTabId,
+        targetTabId,
+        tab: { id: targetTabId, url: request.item.sourceUrl, title: 'fixture' },
+        openState: {
+          openedIn: 'new_tab',
+          sourceTabId,
+          targetTabId,
+          sourceUrlBefore: 'https://www.xiaohongshu.com/search_result',
+          itemId: request.item.id,
+        },
+      };
+    },
+    closeItem: async (_sourceTabId, request) => {
+      restored.push(request.openState.targetTabId);
+      return { success: true, restored: true };
+    },
     readSnapshot: async () => ({ snapshot: '<main>fixture</main>' }),
     readSiteEvidence: async (tabId, request) => {
       if (request.operation === 'content_scan') {
         return {
           success: true,
+          pageState: { site: 'xiaohongshu', surface: 'detail', url: `https://www.xiaohongshu.com/explore/${tabId}` },
           content: {
+            body: `详情正文 ${tabId}`,
             title: `详情 ${tabId}`,
             comments: [{ id: `comment-${tabId}`, content: '有用' }],
             media: [{ type: 'image', sourceUrl: `https://img.example/${tabId}.jpg` }],
@@ -186,8 +301,8 @@ test('collects bounded search cards and deep detail evidence', async () => {
         };
       }
       searchReads += 1;
-      const items = [{ id: 'a', sourceUrl: 'https://www.xiaohongshu.com/explore/a', title: 'A' }];
-      if (searchReads > 1) items.push({ id: 'b', sourceUrl: 'https://www.xiaohongshu.com/explore/b', title: 'B' });
+      const items = [{ id: 'a', sourceUrl: 'https://www.xiaohongshu.com/explore/a', title: 'A', interactionRef: { kind: 'site_card', site: 'xiaohongshu', itemId: 'a', rank: 0 } }];
+      if (searchReads > 1) items.push({ id: 'b', sourceUrl: 'https://www.xiaohongshu.com/explore/b', title: 'B', interactionRef: { kind: 'site_card', site: 'xiaohongshu', itemId: 'b', rank: 1 } });
       return { success: true, items };
     },
   });
@@ -198,8 +313,31 @@ test('collects bounded search cards and deep detail evidence', async () => {
   assert.equal(result.counts.items, 2);
   assert.equal(result.counts.comments, 2);
   assert.equal(result.counts.media, 2);
-  assert.deepEqual(closed, [12, 13]);
-  assert.deepEqual(claims.map((entry) => entry[1]), ['research_search', 'research_detail', 'research_detail']);
+  assert.equal(created[0].url, 'https://www.xiaohongshu.com/');
+  assert.equal(created.length, 1);
+  assert.deepEqual(opened, [[10, 'a'], [10, 'b']]);
+  assert.deepEqual(restored, [12, 13]);
+  assert.deepEqual(claims.map((entry) => entry[1]), ['research_search']);
+});
+
+test('fails closed instead of fabricating a search URL when page UI search is unavailable', async () => {
+  const result = await runSiteResearch({
+    operation: 'search',
+    site: 'xhs',
+    query: 'WAIC',
+    depth: 'preview',
+  }, {
+    createControlledTab: async ({ url }) => ({ tab: { id: 19, url, title: '小红书' } }),
+    getTab: async () => ({ id: 19, url: 'https://www.xiaohongshu.com/', title: '小红书' }),
+    claimTab: async () => {},
+    waitForTabComplete: async () => {},
+    readSnapshot: async () => ({ snapshot: '' }),
+    readSiteEvidence: async () => ({ success: true, items: [] }),
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'search_ui_runtime_unavailable');
+  assert.equal(result.sourceUrl, 'https://www.xiaohongshu.com/');
 });
 
 test('returns a typed user handoff for login and security blockers', async () => {
@@ -223,8 +361,8 @@ test('returns a typed user handoff for login and security blockers', async () =>
   }
 });
 
-test('closes detail tabs and preserves partial failures', async () => {
-  const closed = [];
+test('restores clicked detail surfaces and fails closed when no detail is captured', async () => {
+  const restored = [];
   let createCount = 0;
   const result = await runSiteResearch({
     operation: 'search',
@@ -236,23 +374,36 @@ test('closes detail tabs and preserves partial failures', async () => {
   }, {
     createControlledTab: async ({ url }) => {
       createCount += 1;
-      return { tab: { id: createCount === 1 ? 30 : 31, url, title: 'fixture' } };
+      return { tab: { id: 30, url, title: 'fixture' } };
     },
     getTab: async (tabId) => ({ id: tabId, url: 'https://www.douyin.com/search/test', title: 'fixture' }),
     claimTab: async () => {},
     waitForTabComplete: async () => {},
+    submitSearch: async () => ({ success: true, submitted: true }),
     scrollPage: async () => {},
-    closeTab: async (tabId) => closed.push(tabId),
+    openItem: async (sourceTabId, request) => ({
+      success: true,
+      openedIn: 'new_tab',
+      sourceTabId,
+      targetTabId: 31,
+      tab: { id: 31, url: request.item.sourceUrl, title: 'fixture' },
+      openState: { openedIn: 'new_tab', sourceTabId, targetTabId: 31 },
+    }),
+    closeItem: async (_sourceTabId, request) => {
+      restored.push(request.openState.targetTabId);
+      return { success: true, restored: true };
+    },
     readSnapshot: async () => ({ snapshot: '' }),
     readSiteEvidence: async (_tabId, request) => request.operation === 'search'
-      ? { success: true, items: [{ id: 'video', sourceUrl: 'https://www.douyin.com/video/1', title: '视频' }] }
+      ? { success: true, items: [{ id: 'video', sourceUrl: 'https://www.douyin.com/video/1', title: '视频', interactionRef: { kind: 'site_card', site: 'douyin', itemId: 'video', rank: 0 } }] }
       : { success: false, reason: 'security_verification_required' },
   });
 
-  assert.equal(result.success, true);
-  assert.equal(result.partial, true);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'detail_capture_failed');
   assert.equal(result.counts.failed, 1);
-  assert.deepEqual(closed, [31]);
+  assert.equal(createCount, 1);
+  assert.deepEqual(restored, [31]);
 });
 
 test('downloads unique discovered media and returns local handoff paths', async () => {

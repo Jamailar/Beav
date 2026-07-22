@@ -128,6 +128,14 @@ export function assertBrowserActionAllowed(action, options = {}) {
   return decision;
 }
 
+export function resolveBrowserPolicyPageUrl(action = {}, tab = {}, options = {}) {
+  const isHttpUrl = options.isHttpUrl || ((url) => /^https?:\/\//i.test(String(url || '')));
+  for (const candidate of [tab?.url, tab?.pendingUrl, action?.currentUrl, action?.url]) {
+    if (isHttpUrl(candidate)) return String(candidate).trim();
+  }
+  return '';
+}
+
 export function buildBrowserPolicyDecision(action, options = {}) {
   const isHttpUrl = options.isHttpUrl || ((url) => /^https?:\/\//i.test(String(url || '')));
   const actionClass = action.actionClass || classifyBrowserActionPayload(action);
@@ -233,7 +241,7 @@ export function buildBrowserPolicyDecision(action, options = {}) {
   if (actionClassMetadata.requiresApprovalToken && !approval.accepted) {
     return deniedPolicyDecision('denied_state_changing_v1', action, actionClass, actionClassMetadata, { approval });
   }
-  if (pageBoundAction && !isHttpUrl(action.currentUrl || action.url || '') && !actionType.startsWith('tab.create')) {
+  if (pageBoundAction && !resolveBrowserPolicyPageUrl(action, {}, { isHttpUrl }) && !actionType.startsWith('tab.create')) {
     return deniedPolicyDecision('denied_page_not_allowlisted', action, actionClass, actionClassMetadata, { approval });
   }
   if ((actionType === 'page.click' || actionType === 'page.doubleClick' || actionType === 'page.type' || actionType.startsWith('input.')) && DANGEROUS_ACTION_TEXT.test(pageText)) {

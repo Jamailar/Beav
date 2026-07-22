@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="https://redbox.ziz.hk/download"><img src="https://img.shields.io/badge/⬇️%20下载%20Beav-开始使用-C56F2C?style=for-the-badge&logoColor=white" alt="下载 Beav" height="56"></a>
+  <a href="https://redbox.ziz.hk"><strong><big>下载 Beav</big></strong></a>
 </p>
 
 <p align="center">

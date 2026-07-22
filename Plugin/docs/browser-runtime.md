@@ -41,7 +41,7 @@ await browser.tabs.finalize({ keep: [] });
 
 ## Site research
 
-Production Agent work uses Desktop `capture.collect` with `mode: "browser_research"`. The Desktop Research Runner owns navigation, login/security handoff, typed filters, bounded scrolling, detail-tab fan-out, partial failure, media handoff, artifact persistence, Knowledge ingest, Resume, and terminal tab cleanup.
+Production Agent work uses Desktop `capture.collect` with `mode: "browser_research"`. The Desktop Research Runner owns navigation, login/security handoff, typed filters, bounded scrolling, item opening/restoration, partial failure, media handoff, artifact persistence, Knowledge ingest, Resume, and terminal tab cleanup.
 
 ```json
 {
@@ -58,13 +58,14 @@ Production Agent work uses Desktop `capture.collect` with `mode: "browser_resear
 }
 ```
 
-The extension-side `research.run` contract exposes `extract`, `apply_filters`, and `download_media` execution modes for the Desktop Runner. Each mode operates on one already claimed tab and never creates, scrolls, fans out, retries, or finalizes tabs. Extension `macro` mode remains only for old Desktop/JS facade compatibility and must not become a second production state machine.
+The extension-side `research.run` contract exposes `submit_search`, `extract`, `apply_filters`, `open_item`, `close_item`, and `download_media` execution modes for the Desktop Runner. `open_item` re-locates the exact card on the source page and dispatches a visible UI click; it may observe and claim a child tab created by the site, but it never constructs or directly navigates to the card URL. `close_item` closes the child tab or restores the original result surface. Extension `macro` mode remains only for old Desktop/JS facade compatibility and must not become a second production state machine.
 
-Current capability contract `3` supports:
+Current capability contract `5` supports:
 
 - Xiaohongshu and Douyin: `search`, `author_scan`, `content_scan`;
 - YouTube and generic Web: `content_scan`;
 - typed Xiaohongshu/Douyin filters: `sort`, `contentType`, `publishTime`.
+- Xiaohongshu/Douyin detail opening mode `page_click`; direct-card-URL fallback is forbidden.
 
 Every response carries `capabilityVersion` and `extractorSchemaHash`. Desktop fails closed on drift, so rebuilding the extension is not enough: reload `Plugin/dist/extension` in the target browser before current-build acceptance. Site research is read-only at the browser layer; it never publishes, submits, likes, follows, comments, or changes remote content.
 
@@ -80,4 +81,4 @@ Every response carries `capabilityVersion` and `extractorSchemaHash`. Desktop fa
 
 ## Compatibility contract
 
-The current checkout uses descriptor schema `2`, browser protocol `3`, site-research contract `3`, and published extension id `dhfphfekcjahljnefpdjoidehnhhoeie`. A protocol or site-capability mismatch fails closed. The Rust BrowserClient owns production discovery, instance binding, repair, retry, cancellation, and lifecycle state; Desktop Research Runner owns research macro orchestration; this JavaScript facade remains a development/external adapter.
+The current checkout uses descriptor schema `2`, browser protocol `3`, site-research contract `5`, and published extension id `dhfphfekcjahljnefpdjoidehnhhoeie`. A protocol or site-capability mismatch fails closed. The Rust BrowserClient owns production discovery, instance binding, repair, retry, cancellation, and lifecycle state; Desktop Research Runner owns research macro orchestration; this JavaScript facade remains a development/external adapter.

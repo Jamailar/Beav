@@ -4,11 +4,6 @@ const MAX_SNAPSHOT_CHARS = 180_000;
 
 export const SITE_RESEARCH_CONTRACT_VERSION = capabilityManifest.contractVersion;
 
-const SITE_SEARCH_URL_BUILDERS = Object.freeze({
-  xiaohongshu: (query) => `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(query)}`,
-  douyin: (query) => `https://www.douyin.com/search/${encodeURIComponent(query)}`,
-});
-
 const SITE_RESEARCH_FILTERS = Object.freeze({
   xiaohongshu: Object.freeze({
     sort: Object.freeze(['relevance', 'latest', 'most_liked']),
@@ -28,7 +23,6 @@ export const SITE_CAPABILITY_SPECS = Object.freeze(Object.fromEntries(
     hosts: [...capability.hostPatterns],
     operations: [...capability.supportedOperations],
     filters: Object.fromEntries(Object.entries(capability.supportedFilters || {}).map(([key, values]) => [key, [...values]])),
-    searchUrl: SITE_SEARCH_URL_BUILDERS[capability.id],
   })]),
 ));
 
@@ -38,6 +32,9 @@ export function listSiteCapabilities() {
     displayName: spec.displayName,
     operations: [...spec.operations],
     filters: Object.fromEntries(Object.entries(spec.filters).map(([key, values]) => [key, [...values]])),
+    searchEntryUrl: spec.searchEntryUrl || null,
+    searchViaPageUi: spec.searchViaPageUi === true,
+    detailOpenMode: spec.detailOpenMode || 'direct_url',
     capabilityVersion: spec.capabilityVersion,
     extractorSchemaHash: spec.extractorSchemaHash,
   }));
@@ -76,6 +73,8 @@ export function normalizeResearchRequest(input = {}) {
     ocr: input.ocr === true,
     transcribeAudio: input.transcribeAudio === true,
     executionMode: normalizeExecutionMode(input.executionMode),
+    item: input.item && typeof input.item === 'object' && !Array.isArray(input.item) ? input.item : null,
+    openState: input.openState && typeof input.openState === 'object' && !Array.isArray(input.openState) ? input.openState : null,
     media: Array.isArray(input.media) ? input.media.slice(0, 40) : [],
   };
 }
@@ -89,7 +88,7 @@ export async function runSiteResearch(requestInput, deps = {}) {
     throw new Error('site research runtime is missing browser dependencies');
   }
   const targetUrl = request.operation === 'search'
-    ? request.site.searchUrl?.(request.query)
+    ? request.site.searchEntryUrl
     : request.sourceUrl;
   if (!targetUrl && !request.tabId) throw new Error(`${request.site.displayName} research route is unavailable`);
   let tab = request.tabId ? await deps.getTab?.(request.tabId) : null;
@@ -100,10 +99,23 @@ export async function runSiteResearch(requestInput, deps = {}) {
   }
   await deps.claimTab(tab.id, request.operation === 'search' ? 'research_search' : 'research_source');
   if (typeof deps.waitForTabComplete === 'function') await deps.waitForTabComplete(tab.id, request.timeoutMs);
+  if (request.operation === 'search') {
+    if (request.site.searchViaPageUi !== true || typeof deps.submitSearch !== 'function') {
+      return researchSearchFailure(request, tab, targetUrl, {
+        reason: 'search_ui_runtime_unavailable',
+        message: `${request.site.displayName} page UI search is unavailable`,
+      });
+    }
+    const submitted = unwrapContentDelivery(await deps.submitSearch(tab.id, extractorRequest(request)));
+    if (submitted?.success !== true) {
+      return researchSearchFailure(request, tab, targetUrl, submitted);
+    }
+    if (typeof deps.waitForTabComplete === 'function') await deps.waitForTabComplete(tab.id, request.timeoutMs);
+  }
   const current = await deps.getTab?.(tab.id) || tab;
-  let extracted = unwrapContentDelivery(await deps.readSiteEvidence(tab.id, request));
+  let extracted = unwrapContentDelivery(await deps.readSiteEvidence(tab.id, extractorRequest(request)));
   if (extracted?.success === false && extracted?.reason) {
-    return {
+    const result = {
       success: false,
       kind: 'browser_research',
       site: siteMetadata(request.site),
@@ -112,12 +124,15 @@ export async function runSiteResearch(requestInput, deps = {}) {
       reason: extracted.reason,
       retryable: false,
       partial: false,
-      handoff: {
+    };
+    if (['login_required', 'security_verification_required'].includes(extracted.reason)) {
+      result.handoff = {
         required: true,
         tabId: tab.id,
         message: extracted.reason === 'login_required' ? '请在浏览器完成登录' : '请在浏览器完成安全验证',
-      },
-    };
+      };
+    }
+    return result;
   }
   let filterResult = null;
   if (Object.keys(request.filters).length) {
@@ -127,11 +142,11 @@ export async function runSiteResearch(requestInput, deps = {}) {
         message: 'site research filter dependency is unavailable',
       });
     }
-    filterResult = unwrapContentDelivery(await deps.applyFilters(tab.id, request));
+    filterResult = unwrapContentDelivery(await deps.applyFilters(tab.id, extractorRequest(request)));
     if (filterResult?.success !== true) {
       return researchFilterFailure(request, current, targetUrl, filterResult);
     }
-    extracted = unwrapContentDelivery(await deps.readSiteEvidence(tab.id, request));
+    extracted = unwrapContentDelivery(await deps.readSiteEvidence(tab.id, extractorRequest(request)));
     if (extracted?.success === false && extracted?.reason) {
       return {
         success: false,
@@ -150,12 +165,31 @@ export async function runSiteResearch(requestInput, deps = {}) {
   }
   const deep = request.depth === 'preview'
     ? { items: [], failures: [] }
-    : await collectDeepItems(request, extracted?.items || [], deps);
+    : await collectDeepItems(request, tab.id, extracted?.items || [], deps);
+  if (request.depth !== 'preview' && (extracted?.items || []).length > 0 && deep.items.length === 0) {
+    return {
+      success: false,
+      kind: 'browser_research',
+      site: siteMetadata(request.site),
+      operation: request.operation,
+      sourceUrl: current?.url || targetUrl,
+      reason: 'detail_capture_failed',
+      retryable: false,
+      partial: false,
+      failures: deep.failures,
+      counts: {
+        cards: extracted.items.length,
+        opened: deep.failures.length,
+        items: 0,
+        failed: deep.failures.length,
+      },
+    };
+  }
   const snapshot = request.snapshot
     ? unwrapContentDelivery(await deps.readSnapshot(tab.id))
     : null;
   const text = serializeSnapshot(snapshot);
-  const selectedItems = deep.items.length ? deep.items : extracted?.items || [];
+  const selectedItems = request.depth === 'preview' ? extracted?.items || [] : deep.items;
   const mediaDownloads = request.downloadMedia
     ? await downloadResearchMedia(request, extracted, selectedItems, deps)
     : { items: [], failures: [] };
@@ -205,11 +239,26 @@ async function runSiteResearchStep(request, deps) {
   }
   const tab = await deps.getTab(request.tabId);
   if (!tab?.id) throw new Error('site research step tab is unavailable');
+  if (request.executionMode === 'submit_search') {
+    if (request.operation !== 'search' || typeof deps.submitSearch !== 'function') {
+      throw new Error('research.run submit_search requires a search operation and page UI dependency');
+    }
+    const submitted = unwrapContentDelivery(await deps.submitSearch(request.tabId, extractorRequest(request)));
+    return {
+      ...submitted,
+      kind: 'browser_research_step',
+      step: 'submit_search',
+      site: siteMetadata(request.site),
+      operation: request.operation,
+      sourceUrl: submitted?.sourceUrl || tab.url || request.sourceUrl,
+      tab: normalizeTab(await deps.getTab(request.tabId) || tab),
+    };
+  }
   if (request.executionMode === 'extract') {
     if (typeof deps.readSiteEvidence !== 'function') {
       throw new Error('site research extract dependency is unavailable');
     }
-    const extracted = unwrapContentDelivery(await deps.readSiteEvidence(tab.id, request));
+    const extracted = unwrapContentDelivery(await deps.readSiteEvidence(tab.id, extractorRequest(request)));
     return {
       ...extracted,
       kind: 'browser_research_step',
@@ -224,7 +273,7 @@ async function runSiteResearchStep(request, deps) {
     if (typeof deps.applyFilters !== 'function') {
       throw new Error('site research filter dependency is unavailable');
     }
-    const applied = unwrapContentDelivery(await deps.applyFilters(tab.id, request));
+    const applied = unwrapContentDelivery(await deps.applyFilters(tab.id, extractorRequest(request)));
     return {
       ...applied,
       kind: 'browser_research_step',
@@ -233,6 +282,43 @@ async function runSiteResearchStep(request, deps) {
       operation: request.operation,
       sourceUrl: tab.url || request.sourceUrl,
       tab: normalizeTab(tab),
+    };
+  }
+  if (request.executionMode === 'open_item') {
+    const interactionRef = request.item?.interactionRef;
+    if (!['search', 'author_scan'].includes(request.operation)
+      || request.site.detailOpenMode !== 'page_click'
+      || !request.item
+      || interactionRef?.kind !== 'site_card'
+      || String(interactionRef?.site || '') !== request.site.id
+      || typeof deps.openItem !== 'function') {
+      throw new Error('research.run open_item requires a typed page-click interactionRef and page interaction dependency');
+    }
+    const opened = unwrapContentDelivery(await deps.openItem(tab.id, extractorRequest(request)));
+    return {
+      ...opened,
+      kind: 'browser_research_step',
+      step: 'open_item',
+      site: siteMetadata(request.site),
+      operation: request.operation,
+      sourceUrl: opened?.sourceUrl || tab.url || request.sourceUrl,
+    };
+  }
+  if (request.executionMode === 'close_item') {
+    if (!['search', 'author_scan'].includes(request.operation)
+      || request.site.detailOpenMode !== 'page_click'
+      || !request.openState
+      || typeof deps.closeItem !== 'function') {
+      throw new Error('research.run close_item requires a page-click site openState and restore dependency');
+    }
+    const closed = unwrapContentDelivery(await deps.closeItem(tab.id, extractorRequest(request)));
+    return {
+      ...closed,
+      kind: 'browser_research_step',
+      step: 'close_item',
+      site: siteMetadata(request.site),
+      operation: request.operation,
+      sourceUrl: tab.url || request.sourceUrl,
     };
   }
   if (request.executionMode === 'download_media') {
@@ -306,6 +392,21 @@ function researchFilterFailure(request, tab, targetUrl, failure = {}) {
   };
 }
 
+function researchSearchFailure(request, tab, targetUrl, failure = {}) {
+  return {
+    success: false,
+    kind: 'browser_research',
+    site: siteMetadata(request.site),
+    operation: request.operation,
+    sourceUrl: tab?.url || targetUrl,
+    reason: failure?.reason || 'search_ui_failed',
+    message: String(failure?.message || failure?.error || 'platform page UI search failed').slice(0, 500),
+    retryable: false,
+    partial: false,
+    failure,
+  };
+}
+
 async function downloadResearchMedia(request, extracted, selectedItems, deps) {
   if (typeof deps.downloadAsset !== 'function') {
     return {
@@ -359,34 +460,59 @@ async function collectBoundedCards(tabId, request, first, deps) {
   let latest = first || {};
   for (let index = 0; index < request.maxScrolls && collected.size < request.limit; index += 1) {
     if (typeof deps.scrollPage !== 'function') break;
+    const previousCount = collected.size;
     const scrolled = unwrapContentDelivery(await deps.scrollPage(tabId));
     if (scrolled?.success === false) break;
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    latest = unwrapContentDelivery(await deps.readSiteEvidence(tabId, request));
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    latest = unwrapContentDelivery(await deps.readSiteEvidence(tabId, extractorRequest(request)));
     if (latest?.success === false) break;
     for (const item of latest?.items || []) {
       const key = item.sourceUrl || item.id;
       if (key && !collected.has(key)) collected.set(key, item);
       if (collected.size >= request.limit) break;
     }
+    if (collected.size === previousCount) break;
   }
   return { ...first, ...latest, items: [...collected.values()].slice(0, request.limit) };
 }
 
-async function collectDeepItems(request, cards, deps) {
-  if (!cards.length || typeof deps.closeTab !== 'function') return { items: [], failures: [] };
+async function collectDeepItems(request, sourceTabId, cards, deps) {
+  if (!cards.length) return { items: [], failures: [] };
   const items = [];
   const failures = [];
   for (const card of cards.slice(0, request.limit)) {
     let detailTab = null;
+    let openState = null;
     try {
-      const created = await deps.createControlledTab({ url: card.sourceUrl, active: false });
-      detailTab = created?.tab || null;
-      if (!detailTab?.id) throw new Error('detail tab was not created');
-      await deps.claimTab(detailTab.id, 'research_detail');
+      if (request.site.detailOpenMode === 'page_click') {
+        if (typeof deps.openItem !== 'function' || typeof deps.closeItem !== 'function') {
+          throw new Error('page-click detail navigation is unavailable');
+        }
+        const opened = unwrapContentDelivery(await deps.openItem(sourceTabId, extractorRequest(request, {
+          item: card,
+          executionMode: 'open_item',
+        })));
+        if (opened?.success !== true) throw new Error(opened?.reason || 'page-click detail opening failed');
+        openState = opened.openState || null;
+        detailTab = opened.tab || await deps.getTab?.(opened.targetTabId || sourceTabId) || null;
+      } else {
+        if (typeof deps.createControlledTab !== 'function' || typeof deps.closeTab !== 'function') {
+          throw new Error('direct detail navigation is unavailable');
+        }
+        const created = await deps.createControlledTab({ url: card.sourceUrl, active: false });
+        detailTab = created?.tab || null;
+        if (detailTab?.id) await deps.claimTab(detailTab.id, 'research_detail');
+      }
+      if (!detailTab?.id) throw new Error('detail tab was not opened');
       if (typeof deps.waitForTabComplete === 'function') await deps.waitForTabComplete(detailTab.id, request.timeoutMs);
-      const detail = unwrapContentDelivery(await deps.readSiteEvidence(detailTab.id, { ...request, operation: 'content_scan' }));
+      const detail = unwrapContentDelivery(await deps.readSiteEvidence(
+        detailTab.id,
+        extractorRequest(request, { operation: 'content_scan' }),
+      ));
       if (detail?.success === false) throw new Error(detail.reason || 'detail extraction failed');
+      if (!detailEvidenceIsComplete(detail, request.site.detailOpenMode === 'page_click')) {
+        throw new Error('detail_content_incomplete');
+      }
       items.push({ ...card, content: detail.content || null, pageState: detail.pageState || null });
     } catch (error) {
       failures.push({
@@ -394,10 +520,46 @@ async function collectDeepItems(request, cards, deps) {
         reason: String(error?.message || error || 'detail extraction failed').slice(0, 500),
       });
     } finally {
-      if (detailTab?.id) await deps.closeTab(detailTab.id);
+      if (request.site.detailOpenMode === 'page_click' && openState) {
+        let closed;
+        try {
+          closed = unwrapContentDelivery(await deps.closeItem(sourceTabId, extractorRequest(request, {
+            executionMode: 'close_item',
+            openState,
+          })));
+        } catch (error) {
+          closed = { success: false, reason: String(error?.message || error || 'detail restore failed') };
+        }
+        if (closed?.success !== true) {
+          failures.push({
+            sourceUrl: card.sourceUrl || '',
+            reason: String(closed?.reason || 'detail_restore_failed').slice(0, 500),
+          });
+        }
+      } else if (detailTab?.id && typeof deps.closeTab === 'function') {
+        await deps.closeTab(detailTab.id);
+      }
     }
   }
   return { items, failures };
+}
+
+function detailEvidenceIsComplete(detail, requireDetailSurface) {
+  if (detail?.pageState?.blocker) return false;
+  if (requireDetailSurface && !['detail', 'detail_overlay'].includes(String(detail?.pageState?.surface || ''))) {
+    return false;
+  }
+  const pageUrl = String(detail?.pageState?.url || detail?.tab?.url || detail?.sourceUrl || '').toLowerCase();
+  const pageTitle = String(detail?.tab?.title || detail?.content?.title || '');
+  if (pageUrl.includes('/404') || ['页面不见了', '当前笔记暂时无法浏览', '视频已失效', '内容不存在'].some((marker) => pageTitle.includes(marker))) {
+    return false;
+  }
+  const content = detail?.content && typeof detail.content === 'object' ? detail.content : null;
+  if (!content) return false;
+  const hasText = [content.body, content.text, content.description]
+    .some((value) => typeof value === 'string' && value.trim());
+  const hasMedia = Array.isArray(content.media) && content.media.length > 0;
+  return hasText || hasMedia;
 }
 
 function siteMetadata(site) {
@@ -407,6 +569,16 @@ function siteMetadata(site) {
     capabilityVersion: site.capabilityVersion,
     extractorSchemaHash: site.extractorSchemaHash,
     supportedFilters: site.filters,
+    detailOpenMode: site.detailOpenMode || 'direct_url',
+  };
+}
+
+function extractorRequest(request, overrides = {}) {
+  const { site, ...payload } = request;
+  return {
+    ...payload,
+    ...overrides,
+    siteId: site.id,
   };
 }
 
@@ -447,7 +619,7 @@ function normalizeDepth(value) {
 
 function normalizeExecutionMode(value) {
   const mode = String(value || 'macro').trim().toLowerCase();
-  if (!['macro', 'extract', 'apply_filters', 'download_media'].includes(mode)) {
+  if (!['macro', 'submit_search', 'extract', 'apply_filters', 'open_item', 'close_item', 'download_media'].includes(mode)) {
     throw new Error(`unsupported site research execution mode: ${mode}`);
   }
   return mode;

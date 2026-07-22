@@ -1,4 +1,4 @@
-import { assertBrowserActionAllowed, BROWSER_ACTION_LEVELS, browserPolicyError, buildBrowserPolicyMetadata, classifyBrowserAction, DANGEROUS_ACTION_TEXT, DANGEROUS_CDP_METHODS } from './background/browserPolicy.js';
+import { assertBrowserActionAllowed, BROWSER_ACTION_LEVELS, browserPolicyError, buildBrowserPolicyMetadata, classifyBrowserAction, DANGEROUS_ACTION_TEXT, DANGEROUS_CDP_METHODS, resolveBrowserPolicyPageUrl } from './background/browserPolicy.js';
 import { createActiveTabObserver } from './background/activeTabObserver.js';
 import { buildBrowserCapabilityMetadata, buildPluginRegistrationPayload } from './background/browserCapabilities.js';
 import { createBrowserControlRuntime } from './background/browserControlRuntime.js';
@@ -33,6 +33,7 @@ import { getActiveTabInfo, getUserBrowserContext, listBrowserWindows, listReadin
 import { fetchUrlContents } from './background/urlContentRuntime.js';
 import { unsupportedBrowserCommandError } from './background/unsupportedCommandRuntime.js';
 import { configureWebMcpTelemetry, invokeWebMcpTool, listWebMcpTools } from './background/webMcpRuntime.js';
+import { closeSiteResearchItem, openSiteResearchItem } from './background/siteResearchNavigation.js';
 
 const PLUGIN_ID = 'redbox-browser-control';
 const API_CANDIDATES = [];
@@ -43,6 +44,9 @@ const CONTENT_READ_TYPE = 'xwow-data-ai:read-frame';
 const CONTENT_DOM_SNAPSHOT_TYPE = 'xwow-data-ai:dom-snapshot';
 const CONTENT_SITE_RESEARCH_EXTRACT_TYPE = 'xwow-data-ai:site-research-extract';
 const CONTENT_SITE_RESEARCH_APPLY_FILTERS_TYPE = 'xwow-data-ai:site-research-apply-filters';
+const CONTENT_SITE_RESEARCH_SUBMIT_SEARCH_TYPE = 'xwow-data-ai:site-research-submit-search';
+const CONTENT_SITE_RESEARCH_PREPARE_ITEM_CLICK_TYPE = 'xwow-data-ai:site-research-prepare-item-click';
+const CONTENT_SITE_RESEARCH_PREPARE_ITEM_CLOSE_TYPE = 'xwow-data-ai:site-research-prepare-item-close';
 const CONTENT_SCROLL_TYPE = 'xwow-data-ai:scroll-page';
 const CONTENT_CLICK_NEXT_TYPE = 'xwow-data-ai:click-next';
 const CONTENT_CLICK_ELEMENT_TYPE = 'xwow-data-ai:click-element';
@@ -127,7 +131,7 @@ const BROWSER_CONTROL_MCP_TOOLS = [
   },
   {
     name: 'research.run',
-    description: 'Execute one typed read-only site-research action. Desktop owns multi-step navigation, scrolling, detail-tab, retry, and cleanup orchestration; macro mode remains for backward compatibility.',
+    description: 'Execute one typed read-only site-research action. Desktop owns multi-step navigation, scrolling, item open/restore, retry, and cleanup orchestration. Xiaohongshu/Douyin items use originating-page UI clicks with no direct-URL fallback; macro mode remains for backward compatibility.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -148,7 +152,9 @@ const BROWSER_CONTROL_MCP_TOOLS = [
         limit: { type: 'number', minimum: 1, maximum: 100 },
         commentLimit: { type: 'number', minimum: 0, maximum: 100 },
         depth: { type: 'string', enum: ['preview', 'standard', 'deep'] },
-        executionMode: { type: 'string', enum: ['macro', 'extract', 'apply_filters', 'download_media'] },
+        executionMode: { type: 'string', enum: ['macro', 'submit_search', 'extract', 'apply_filters', 'open_item', 'close_item', 'download_media'] },
+        item: { type: 'object', additionalProperties: true },
+        openState: { type: 'object', additionalProperties: true },
         media: { type: 'array', maxItems: 40, items: { type: 'object', additionalProperties: true } },
         maxScrolls: { type: 'number', minimum: 0, maximum: 8 },
         downloadMedia: { type: 'boolean' },
@@ -1477,7 +1483,7 @@ async function runBrowserAction(action, context = {}) {
     decision = assertBrowserActionAllowed({
       ...normalized,
       requestId: activeRequest?.requestId || normalized.requestId || '',
-      currentUrl: tab?.url || normalized.url || '',
+      currentUrl: resolveBrowserPolicyPageUrl(normalized, tab, { isHttpUrl }),
     }, { isHttpUrl, requestId: activeRequest?.requestId || '' });
     await publishPolicyDecisionAudit({
       kind: 'policy.allowed',
@@ -1566,6 +1572,18 @@ async function runBrowserAction(action, context = {}) {
           applyFilters: async (tabId, options) => {
             await requireActiveControlledTabLease(session, tabId, 'research.run');
             return await sendContentMessage(tabId, CONTENT_SITE_RESEARCH_APPLY_FILTERS_TYPE, options || {});
+          },
+          submitSearch: async (tabId, options) => {
+            await requireActiveControlledTabLease(session, tabId, 'research.run');
+            return await sendContentMessage(tabId, CONTENT_SITE_RESEARCH_SUBMIT_SEARCH_TYPE, options || {});
+          },
+          openItem: async (tabId, options) => {
+            await requireActiveControlledTabLease(session, tabId, 'research.run');
+            return await openSiteResearchItem({ ...(options || {}), tabId }, buildSiteResearchNavigationDeps(session));
+          },
+          closeItem: async (tabId, options) => {
+            await requireActiveControlledTabLease(session, tabId, 'research.run');
+            return await closeSiteResearchItem({ ...(options || {}), tabId }, buildSiteResearchNavigationDeps(session));
           },
           scrollPage: async (tabId) => {
             await requireActiveControlledTabLease(session, tabId, 'research.run');
@@ -3594,6 +3612,56 @@ async function createControlledTab(options = {}) {
   const tab = created?.tabs?.find((item) => Number.isInteger(item?.id));
   if (!tab?.id) throw new Error('Created Chrome window has no tab id');
   return { success: true, tab, window: created, createdWindow: true, windowId: created.id || tab.windowId || null };
+}
+
+function buildSiteResearchNavigationDeps(session) {
+  return {
+    getTab: async (tabId) => await chrome.tabs.get(Number(tabId)).catch(() => null),
+    listTabs: async () => await chrome.tabs.query({}),
+    prepareItemClick: async (tabId, options) => await sendContentMessage(
+      Number(tabId),
+      CONTENT_SITE_RESEARCH_PREPARE_ITEM_CLICK_TYPE,
+      options || {},
+    ),
+    prepareItemClose: async (tabId, options) => await sendContentMessage(
+      Number(tabId),
+      CONTENT_SITE_RESEARCH_PREPARE_ITEM_CLOSE_TYPE,
+      options || {},
+    ),
+    clickPoint: async (tabId, point) => await dispatchMouseClick({
+      tabId: Number(tabId),
+      x: point.x,
+      y: point.y,
+      coordinateSpace: 'viewport',
+      waitForArrival: true,
+    }, {
+      activeTabId: Number(tabId),
+      session,
+    }),
+    readSiteEvidence: async (tabId, options) => {
+      await requireActiveControlledTabLease(session, Number(tabId), 'research.run');
+      return await sendContentMessage(Number(tabId), CONTENT_SITE_RESEARCH_EXTRACT_TYPE, options || {});
+    },
+    claimTab: async (tabId, pageRole) => await claimTabForSession(session, Number(tabId), 'agent', pageRole),
+    closeNewTab: async (tabId) => await chrome.tabs.remove(Number(tabId)),
+    waitForTabComplete: async (tabId, timeoutMs) => await waitForTabComplete(Number(tabId), Number(timeoutMs || 20_000)),
+    closeTab: async (tabId) => await closeControlledTab(session, {
+      tabId: Number(tabId),
+      reason: 'research_detail_complete',
+    }),
+    goBack: async (tabId) => {
+      await chrome.tabs.goBack(Number(tabId));
+      return await waitForTargetLoadState(Number(tabId), 'load', 20_000);
+    },
+    pressEscape: async (tabId) => await dispatchKeyboardPress({
+      tabId: Number(tabId),
+      key: 'Escape',
+      code: 'Escape',
+    }, {
+      activeTabId: Number(tabId),
+      session,
+    }),
+  };
 }
 
 async function closeControlledTab(session, action = {}) {

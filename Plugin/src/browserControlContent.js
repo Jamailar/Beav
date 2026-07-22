@@ -5,12 +5,15 @@ import { readDomSnapshot, readFrame } from './content/domReader.js';
 import { applyTabFaviconBadge } from './content/faviconBadge.js';
 import { readPageAssets } from './content/pageAssetInventory.js';
 import { checkElement, clickElement, clickNextButton, clickNode, getElementAttribute, getElementValue, getElementValues, hoverElement, inspectPoint, isCheckedElement, isElementVisible, queryElements, scrollNode, scrollPage, selectElement, typeElement, waitForDomStable, waitForNode, waitForSelector } from './content/pageActions.js';
-import { applySiteResearchFilters, extractSiteResearch } from './content/siteResearchExtractor.js';
+import { applySiteResearchFilters, extractSiteResearch, prepareSiteResearchItemClick, prepareSiteResearchItemClose, submitSiteResearchSearch } from './content/siteResearchExtractor.js';
 
 const XWOW_READ_FRAME = 'xwow-data-ai:read-frame';
 const XWOW_DOM_SNAPSHOT = 'xwow-data-ai:dom-snapshot';
 const XWOW_SITE_RESEARCH_EXTRACT = 'xwow-data-ai:site-research-extract';
 const XWOW_SITE_RESEARCH_APPLY_FILTERS = 'xwow-data-ai:site-research-apply-filters';
+const XWOW_SITE_RESEARCH_SUBMIT_SEARCH = 'xwow-data-ai:site-research-submit-search';
+const XWOW_SITE_RESEARCH_PREPARE_ITEM_CLICK = 'xwow-data-ai:site-research-prepare-item-click';
+const XWOW_SITE_RESEARCH_PREPARE_ITEM_CLOSE = 'xwow-data-ai:site-research-prepare-item-close';
 const XWOW_SCROLL_PAGE = 'xwow-data-ai:scroll-page';
 const XWOW_CLICK_NEXT = 'xwow-data-ai:click-next';
 const XWOW_CLICK_ELEMENT = 'xwow-data-ai:click-element';
@@ -62,6 +65,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === XWOW_SITE_RESEARCH_APPLY_FILTERS) {
       sendResponse(await applySiteResearchFilters(message.options || {}));
+      return;
+    }
+    if (message?.type === XWOW_SITE_RESEARCH_SUBMIT_SEARCH) {
+      sendResponse(await submitSiteResearchSearch(message.options || {}));
+      return;
+    }
+    if (message?.type === XWOW_SITE_RESEARCH_PREPARE_ITEM_CLICK) {
+      sendResponse(await prepareSiteResearchItemClick(message.options || {}));
+      return;
+    }
+    if (message?.type === XWOW_SITE_RESEARCH_PREPARE_ITEM_CLOSE) {
+      sendResponse(await prepareSiteResearchItemClose(message.options || {}));
       return;
     }
     if (message?.type === XWOW_SCROLL_PAGE) {
