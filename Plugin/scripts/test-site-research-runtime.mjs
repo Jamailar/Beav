@@ -118,6 +118,51 @@ test('applies typed filters before collecting evidence and reports applied state
   assert.deepEqual(result.filters, { requested: { sort: 'latest' }, applied: { sort: 'latest' } });
 });
 
+test('waits for typed card readiness before attempting result-page scrolling', async () => {
+  let reads = 0;
+  const waits = [];
+  const result = await runSiteResearch({
+    operation: 'search',
+    site: 'xhs',
+    query: 'AI',
+    depth: 'preview',
+    limit: 1,
+    maxScrolls: 3,
+  }, {
+    createControlledTab: async ({ url }) => ({ tab: { id: 10, url, title: 'fixture' } }),
+    getTab: async () => ({ id: 10, url: 'https://www.xiaohongshu.com/search_result', title: 'fixture' }),
+    claimTab: async () => {},
+    waitForTabComplete: async () => {},
+    submitSearch: async () => ({ success: true, submitted: true }),
+    readSnapshot: async () => ({ snapshot: '' }),
+    delay: async (ms) => { waits.push(ms); },
+    scrollPage: async () => { throw new Error('ready first card must not require scrolling'); },
+    readSiteEvidence: async () => {
+      reads += 1;
+      if (reads === 1) {
+        return {
+          success: true,
+          pageState: { results: { status: 'loading', candidateCount: 0, interactableCount: 0 } },
+          items: [],
+        };
+      }
+      return {
+        success: true,
+        pageState: { results: { status: 'ready', candidateCount: 1, interactableCount: 1 } },
+        items: [{
+          id: 'a',
+          sourceUrl: 'https://www.xiaohongshu.com/explore/a',
+          interactionRef: { kind: 'site_card', action: 'page_click', site: 'xiaohongshu', itemId: 'a' },
+        }],
+      };
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.counts.cards, 1);
+  assert.deepEqual(waits, [750]);
+});
+
 test('fails closed when a requested filter is not visible', async () => {
   const result = await runSiteResearch({
     operation: 'search',
@@ -447,4 +492,82 @@ test('downloads unique discovered media and returns local handoff paths', async 
   assert.equal(result.mediaDownloads.length, 1);
   assert.equal(result.mediaDownloads[0].localPath, '/tmp/a.jpg');
   assert.equal(result.mediaDownloads[0].bytes, 1024);
+});
+
+test('downloads only ranked media that satisfies the typed image policy', async () => {
+  const downloaded = [];
+  const result = await runSiteResearch({
+    operation: 'content_scan',
+    site: 'web',
+    url: 'https://example.com/article',
+    tabId: 40,
+    executionMode: 'download_media',
+    runId: 'research-policy-test',
+    timeoutMs: 30_000,
+    mediaTypes: ['image'],
+    mediaLimit: 1,
+    minMediaWidth: 320,
+    minMediaHeight: 180,
+    media: [
+      {
+        id: 'home-video',
+        type: 'video',
+        sourceUrl: 'https://video.example/home.mp4',
+        naturalWidth: 1920,
+        naturalHeight: 1080,
+        relevanceScore: 100,
+      },
+      {
+        id: 'avatar',
+        type: 'image',
+        sourceUrl: 'https://img.example/avatar.jpg',
+        naturalWidth: 75,
+        naturalHeight: 75,
+        relevanceScore: 90,
+      },
+      {
+        id: 'decorative',
+        type: 'image',
+        sourceUrl: 'https://img.example/logo.jpg',
+        naturalWidth: 800,
+        naturalHeight: 600,
+        role: 'decorative',
+        relevanceScore: 80,
+      },
+      {
+        id: 'secondary',
+        type: 'image',
+        sourceUrl: 'https://img.example/secondary.jpg',
+        naturalWidth: 1200,
+        naturalHeight: 800,
+        relevanceScore: 40,
+      },
+      {
+        id: 'primary',
+        type: 'image',
+        sourceUrl: 'https://img.example/primary.jpg',
+        naturalWidth: 1600,
+        naturalHeight: 1200,
+        relevanceScore: 70,
+      },
+    ],
+  }, {
+    getTab: async () => ({ id: 40, url: 'https://example.com/article', title: 'fixture' }),
+    downloadAsset: async (asset, options) => {
+      downloaded.push([asset.id, options.timeoutMs, options.runId]);
+      return {
+        success: true,
+        path: '/tmp/primary.jpg',
+        stagingOwned: true,
+        stagingRunId: options.runId,
+        download: { id: 601, mime: 'image/jpeg', totalBytes: 2048 },
+      };
+    },
+  });
+
+  assert.deepEqual(downloaded, [['primary', 10_000, 'research-policy-test']]);
+  assert.equal(result.mediaDownloads.length, 1);
+  assert.equal(result.mediaDownloads[0].id, 'primary');
+  assert.equal(result.mediaDownloads[0].stagingOwned, true);
+  assert.equal(result.mediaDownloads[0].stagingRunId, 'research-policy-test');
 });

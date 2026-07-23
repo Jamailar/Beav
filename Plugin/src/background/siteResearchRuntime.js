@@ -1,6 +1,13 @@
 import capabilityManifest from './siteResearchCapabilities.json' with { type: 'json' };
 
 const MAX_SNAPSHOT_CHARS = 180_000;
+const RESULT_READY_POLL_MS = 750;
+const RESULT_READY_TIMEOUT_MS = 8_000;
+const MAX_STALLED_SCROLLS = 2;
+const DEFAULT_MEDIA_LIMIT = 6;
+const MAX_MEDIA_LIMIT = 20;
+const MEDIA_DOWNLOAD_ACTION_RESERVE_MS = 4_000;
+const MEDIA_DOWNLOAD_ITEM_TIMEOUT_MS = 10_000;
 
 export const SITE_RESEARCH_CONTRACT_VERSION = capabilityManifest.contractVersion;
 
@@ -70,9 +77,14 @@ export function normalizeResearchRequest(input = {}) {
     depth: normalizeDepth(input.depth),
     maxScrolls: clampNumber(input.maxScrolls, 0, 8, 3),
     downloadMedia: input.downloadMedia === true || input.ocr === true || input.transcribeAudio === true,
+    mediaTypes: normalizeMediaTypes(input.mediaTypes),
+    mediaLimit: clampNumber(input.mediaLimit, 1, MAX_MEDIA_LIMIT, DEFAULT_MEDIA_LIMIT),
+    minMediaWidth: clampNumber(input.minMediaWidth, 0, 10_000, 0),
+    minMediaHeight: clampNumber(input.minMediaHeight, 0, 10_000, 0),
     ocr: input.ocr === true,
     transcribeAudio: input.transcribeAudio === true,
     executionMode: normalizeExecutionMode(input.executionMode),
+    runId: String(input.runId || '').trim(),
     item: input.item && typeof input.item === 'object' && !Array.isArray(input.item) ? input.item : null,
     openState: input.openState && typeof input.openState === 'object' && !Array.isArray(input.openState) ? input.openState : null,
     media: Array.isArray(input.media) ? input.media.slice(0, 40) : [],
@@ -162,6 +174,9 @@ export async function runSiteResearch(requestInput, deps = {}) {
   }
   if (request.operation === 'search' || request.operation === 'author_scan') {
     extracted = await collectBoundedCards(tab.id, request, extracted, deps);
+    if (!(extracted?.items || []).length) {
+      return researchCardsFailure(request, current, targetUrl, extracted);
+    }
   }
   const deep = request.depth === 'preview'
     ? { items: [], failures: [] }
@@ -407,6 +422,38 @@ function researchSearchFailure(request, tab, targetUrl, failure = {}) {
   };
 }
 
+function researchCardsFailure(request, tab, targetUrl, extracted = {}) {
+  const status = resultStatus(extracted);
+  const candidateCount = Number(extracted?.pageState?.results?.candidateCount || 0);
+  const reason = status === 'empty'
+    ? 'no_results'
+    : status === 'ready' && candidateCount > 0
+      ? 'card_interaction_unavailable'
+      : 'results_not_ready';
+  return {
+    success: false,
+    kind: 'browser_research',
+    site: siteMetadata(request.site),
+    operation: request.operation,
+    sourceUrl: tab?.url || targetUrl,
+    reason,
+    message: reason === 'no_results'
+      ? 'the platform explicitly reported that the current search has no results'
+      : reason === 'card_interaction_unavailable'
+        ? 'result cards are present, but no visible page-click target could be resolved'
+        : 'the result page did not expose stable interactive cards before the bounded readiness wait ended',
+    retryable: reason !== 'no_results',
+    partial: false,
+    failedStep: 'collect_cards',
+    pageState: extracted?.pageState || null,
+    recovery: {
+      requiresPageUiClick: request.site.detailOpenMode === 'page_click',
+      directUrlFallbackAllowed: false,
+    },
+    counts: { cards: 0, opened: 0, items: 0, comments: 0, media: 0, failed: 0 },
+  };
+}
+
 async function downloadResearchMedia(request, extracted, selectedItems, deps) {
   if (typeof deps.downloadAsset !== 'function') {
     return {
@@ -414,28 +461,51 @@ async function downloadResearchMedia(request, extracted, selectedItems, deps) {
       failures: [{ reason: 'media_download_unavailable', message: 'browser media download dependency is unavailable' }],
     };
   }
-  const media = [];
+  const candidates = [];
   const seen = new Set();
   const append = (items) => {
     for (const item of items || []) {
       const sourceUrl = String(item?.sourceUrl || item?.url || '').trim();
       if (!/^https?:\/\//i.test(sourceUrl) || seen.has(sourceUrl)) continue;
       seen.add(sourceUrl);
-      media.push({ ...item, sourceUrl });
-      if (media.length >= 40) return;
+      candidates.push({ ...item, sourceUrl });
+      if (candidates.length >= 40) return;
     }
   };
   append(extracted?.content?.media);
   for (const item of selectedItems) append(item?.content?.media || item?.media);
+  const media = selectResearchMedia(candidates, request);
   const items = [];
   const failures = [];
-  for (const asset of media) {
+  const reserveMs = Math.min(
+    MEDIA_DOWNLOAD_ACTION_RESERVE_MS,
+    Math.max(250, Math.floor(request.timeoutMs / 4)),
+  );
+  const deadline = Date.now() + Math.max(250, request.timeoutMs - reserveMs);
+  for (let index = 0; index < media.length; index += 1) {
+    const asset = media[index];
+    const remainingMs = deadline - Date.now();
+    if (remainingMs < 250) {
+      for (const pending of media.slice(index)) {
+        failures.push({
+          reason: 'media_download_budget_exhausted',
+          sourceUrl: pending.sourceUrl,
+          message: 'research media download budget ended before this selected asset could start',
+        });
+      }
+      break;
+    }
     try {
-      const result = await deps.downloadAsset(asset, request);
+      const result = await deps.downloadAsset(asset, {
+        ...request,
+        mediaIndex: index,
+        timeoutMs: Math.max(250, Math.min(MEDIA_DOWNLOAD_ITEM_TIMEOUT_MS, remainingMs)),
+      });
       if (result?.success !== true || !result?.path) {
         throw new Error(result?.error || result?.status || 'download did not return a local path');
       }
       items.push({
+        id: asset.id || null,
         sourceUrl: asset.sourceUrl,
         type: asset.type || 'unknown',
         downloadId: result.download_id || result.downloadId || result.download?.id || null,
@@ -443,6 +513,8 @@ async function downloadResearchMedia(request, extracted, selectedItems, deps) {
         mimeType: result.download?.mime || '',
         bytes: result.download?.totalBytes || result.download?.bytesReceived || 0,
         status: 'completed',
+        stagingOwned: result.stagingOwned === true,
+        stagingRunId: result.stagingRunId || null,
       });
     } catch (error) {
       failures.push({
@@ -455,25 +527,94 @@ async function downloadResearchMedia(request, extracted, selectedItems, deps) {
   return { items, failures };
 }
 
+function selectResearchMedia(candidates, request) {
+  const allowedTypes = new Set(request.mediaTypes);
+  return candidates
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => {
+      const type = String(item?.type || 'unknown').trim().toLowerCase();
+      if (allowedTypes.size && !allowedTypes.has(type)) return false;
+      if (item?.eligible === false || String(item?.role || '').toLowerCase() === 'decorative') return false;
+      const width = mediaDimension(item, ['naturalWidth', 'width', 'renderedWidth']);
+      const height = mediaDimension(item, ['naturalHeight', 'height', 'renderedHeight']);
+      if (request.minMediaWidth > 0 && width > 0 && width < request.minMediaWidth) return false;
+      if (request.minMediaHeight > 0 && height > 0 && height < request.minMediaHeight) return false;
+      return true;
+    })
+    .sort((left, right) => {
+      const scoreDifference = Number(right.item?.relevanceScore || 0) - Number(left.item?.relevanceScore || 0);
+      return scoreDifference || left.index - right.index;
+    })
+    .slice(0, request.mediaLimit)
+    .map(({ item }) => item);
+}
+
+function mediaDimension(item, keys) {
+  for (const key of keys) {
+    const value = Number(item?.[key] || 0);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+function normalizeMediaTypes(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter((item) => ['image', 'video', 'audio'].includes(item)))];
+}
+
 async function collectBoundedCards(tabId, request, first, deps) {
   const collected = new Map((first?.items || []).map((item) => [item.sourceUrl || item.id, item]));
   let latest = first || {};
+  const readyTimeoutMs = Math.min(request.timeoutMs, RESULT_READY_TIMEOUT_MS);
+  let readyWaitedMs = 0;
+  while (!collected.size && resultStatus(latest) === 'loading' && readyWaitedMs < readyTimeoutMs) {
+    const waitMs = Math.min(RESULT_READY_POLL_MS, readyTimeoutMs - readyWaitedMs);
+    await delayWithDeps(waitMs, deps);
+    readyWaitedMs += waitMs;
+    latest = unwrapContentDelivery(await deps.readSiteEvidence(tabId, extractorRequest(request)));
+    if (latest?.success === false) break;
+    appendCollectedItems(collected, latest?.items, request.limit);
+  }
+  let stalledScrolls = 0;
   for (let index = 0; index < request.maxScrolls && collected.size < request.limit; index += 1) {
+    if (!collected.size) break;
     if (typeof deps.scrollPage !== 'function') break;
     const previousCount = collected.size;
     const scrolled = unwrapContentDelivery(await deps.scrollPage(tabId));
     if (scrolled?.success === false) break;
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await delayWithDeps(800, deps);
     latest = unwrapContentDelivery(await deps.readSiteEvidence(tabId, extractorRequest(request)));
     if (latest?.success === false) break;
-    for (const item of latest?.items || []) {
-      const key = item.sourceUrl || item.id;
-      if (key && !collected.has(key)) collected.set(key, item);
-      if (collected.size >= request.limit) break;
+    appendCollectedItems(collected, latest?.items, request.limit);
+    if (collected.size === previousCount) {
+      stalledScrolls += 1;
+      if (stalledScrolls >= MAX_STALLED_SCROLLS) break;
+    } else {
+      stalledScrolls = 0;
     }
-    if (collected.size === previousCount) break;
   }
   return { ...first, ...latest, items: [...collected.values()].slice(0, request.limit) };
+}
+
+function appendCollectedItems(collected, items, limit) {
+  for (const item of items || []) {
+    const key = item.sourceUrl || item.id;
+    if (key && !collected.has(key)) collected.set(key, item);
+    if (collected.size >= limit) break;
+  }
+}
+
+function resultStatus(extracted) {
+  const status = String(extracted?.pageState?.results?.status || 'loading');
+  return ['loading', 'ready', 'empty'].includes(status) ? status : 'loading';
+}
+
+function delayWithDeps(ms, deps) {
+  return typeof deps.delay === 'function'
+    ? deps.delay(ms)
+    : new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function collectDeepItems(request, sourceTabId, cards, deps) {
@@ -579,6 +720,7 @@ function extractorRequest(request, overrides = {}) {
     ...payload,
     ...overrides,
     siteId: site.id,
+    detailOpenMode: site.detailOpenMode || 'direct_url',
   };
 }
 

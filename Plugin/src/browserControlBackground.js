@@ -1596,21 +1596,32 @@ async function runBrowserAction(action, context = {}) {
           downloadAsset: async (asset, options) => {
             const sourceUrl = String(asset?.sourceUrl || '').trim();
             if (!isHttpUrl(sourceUrl)) throw new Error('research media URL must use http or https');
+            const staging = researchDownloadStaging(asset, options);
             const downloadId = await chrome.downloads.download({
               url: sourceUrl,
               saveAs: false,
               conflictAction: 'uniquify',
+              ...(staging.filename ? { filename: staging.filename } : {}),
             });
-            return await waitForDownload({
+            const result = await waitForDownload({
               downloadId,
-              timeoutMs: Math.max(Number(options?.timeoutMs || 30_000), 30_000),
+              timeoutMs: clamp(Number(options?.timeoutMs || 10_000), 250, 15_000),
+              cancelOnTimeout: true,
+              removeFileOnFailure: true,
               sessionId: session.sessionId,
               turnId: session.currentTurnId || session.turnId || '',
               artifactBinding: {
                 kind: 'browser_research_media',
                 sourceUrl,
+                runId: staging.runId || null,
+                mediaId: staging.mediaId || null,
               },
             });
+            return {
+              ...result,
+              stagingOwned: Boolean(staging.filename),
+              stagingRunId: staging.runId || null,
+            };
           },
         });
         break;
@@ -3769,6 +3780,40 @@ async function resolveNormalWindowId() {
 
 function isHttpUrl(url) {
   return /^https?:\/\//i.test(String(url || ''));
+}
+
+function researchDownloadStaging(asset = {}, options = {}) {
+  const runId = safeResearchPathSegment(options.runId);
+  if (!runId) return { filename: '', runId: '', mediaId: '' };
+  const mediaId = safeResearchPathSegment(asset.id)
+    || `media-${Math.max(1, Number(options.mediaIndex || 0) + 1)}`;
+  let extension = '';
+  try {
+    extension = new URL(String(asset.sourceUrl || '')).pathname
+      .split('/')
+      .at(-1)
+      ?.match(/\.([a-z0-9]{1,8})$/i)?.[1]
+      ?.toLowerCase() || '';
+  } catch {
+    extension = '';
+  }
+  if (!extension) {
+    extension = asset.type === 'video' ? 'mp4' : asset.type === 'audio' ? 'bin' : 'jpg';
+  }
+  return {
+    filename: `RedBox/research/${runId}/${mediaId}.${extension}`,
+    runId,
+    mediaId,
+  };
+}
+
+function safeResearchPathSegment(value) {
+  const segment = String(value || '')
+    .trim()
+    .replace(/[^a-z0-9_-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+  return segment || '';
 }
 
 function slug(value) {

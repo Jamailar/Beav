@@ -164,7 +164,7 @@ async function main() {
       `atomic research result should unwrap to its step payload: ${summarize(researchStepResponse)}`,
     );
     assert.equal(researchStep.site?.id, 'web');
-    assert.equal(researchStep.site?.capabilityVersion, '1.1.0');
+    assert.equal(researchStep.site?.capabilityVersion, '1.2.0');
     assert.match(researchStep.content?.body || '', /Example Domain/);
     assert.equal(researchStep.response, undefined, 'atomic research evidence should not retain the content-delivery envelope');
     const faults = args.faultMatrix

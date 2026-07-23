@@ -1,4 +1,9 @@
 const DEFAULT_POLL_INTERVAL_MS = 250;
+const RETRYABLE_CLICK_PREPARATION_REASONS = new Set([
+  'item_click_target_unavailable',
+  'item_click_target_not_visible',
+  'item_click_target_detached',
+]);
 
 export async function openSiteResearchItem(input = {}, deps = {}) {
   const sourceTabId = positiveInteger(input.tabId || input.sourceTabId);
@@ -15,7 +20,18 @@ export async function openSiteResearchItem(input = {}, deps = {}) {
   if (!sourceBefore?.id) return failure('item_source_tab_unavailable', 'research source tab is unavailable');
   const beforeTabs = await deps.listTabs();
   const beforeTabIds = new Set((beforeTabs || []).map((tab) => Number(tab?.id)).filter(Number.isInteger));
-  const prepared = unwrapContentDelivery(await deps.prepareItemClick(sourceTabId, input));
+  let prepared = unwrapContentDelivery(await deps.prepareItemClick(sourceTabId, input));
+  let preparationAttempts = 1;
+  if (prepared?.success !== true && RETRYABLE_CLICK_PREPARATION_REASONS.has(prepared?.reason)) {
+    const refreshedItem = await refreshItemForClick(sourceTabId, input, deps);
+    await delay(DEFAULT_POLL_INTERVAL_MS, deps);
+    prepared = unwrapContentDelivery(await deps.prepareItemClick(sourceTabId, {
+      ...input,
+      item: refreshedItem || input.item,
+      interactionRef: refreshedItem?.interactionRef || input.interactionRef,
+    }));
+    preparationAttempts += 1;
+  }
   if (prepared?.success !== true) {
     return {
       ...failure(
@@ -24,6 +40,7 @@ export async function openSiteResearchItem(input = {}, deps = {}) {
       ),
       itemId: prepared?.itemId || input.item?.id || '',
       sourceUrl: sourceBefore.url || '',
+      preparationAttempts,
     };
   }
   const clickPoint = normalizeClickPoint(prepared.clickPoint);
@@ -92,6 +109,29 @@ export async function openSiteResearchItem(input = {}, deps = {}) {
     observedUrl: prepared.observedUrl || '',
     lastPageState: lastEvidence?.pageState || null,
   };
+}
+
+async function refreshItemForClick(sourceTabId, input, deps) {
+  try {
+    const evidence = unwrapContentDelivery(await deps.readSiteEvidence(sourceTabId, {
+      ...input,
+      executionMode: 'extract',
+    }));
+    if (evidence?.success !== true || !Array.isArray(evidence.items)) return null;
+    const interactionRef = input.interactionRef && typeof input.interactionRef === 'object'
+      ? input.interactionRef
+      : input.item?.interactionRef || {};
+    const expectedId = String(interactionRef.itemId || input.item?.id || input.itemId || '').trim();
+    const expectedUrl = String(interactionRef.sourceUrl || input.item?.sourceUrl || input.sourceUrl || '').trim();
+    return evidence.items.find((item) => {
+      const itemRef = item?.interactionRef || {};
+      const itemId = String(itemRef.itemId || item?.id || '').trim();
+      const itemUrl = String(itemRef.sourceUrl || item?.sourceUrl || item?.url || '').trim();
+      return (expectedId && itemId === expectedId) || (expectedUrl && sameUrl(itemUrl, expectedUrl));
+    }) || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function closeSiteResearchItem(input = {}, deps = {}) {

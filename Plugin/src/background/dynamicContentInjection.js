@@ -77,6 +77,8 @@ export async function sendContentMessage(tabId, type, options = {}, frameId = 0,
     phase: 'handler',
     success: response?.success === true,
     error: response?.error || '',
+    reason: response?.reason || '',
+    message: response?.message || '',
     prepared,
   });
   return { success: Boolean(response?.success), tabId: id, prepared, response };

@@ -56,10 +56,17 @@ export async function waitForDownload(options = {}) {
   const terminalExisting = existing.find((item) => matchesDownload(item, options) && isTerminalDownloadState(item.state));
   if (terminalExisting) {
     const status = normalizeWaitDownloadStatus(terminalExisting);
+    const cleanupResult = status === 'complete'
+      ? null
+      : await cleanupFailedDownload(terminalExisting.id, {
+        cancel: false,
+        removeFile: options.removeFileOnFailure === true,
+      });
     const payload = withTargetDownloadWaitFields({
       success: status === 'complete',
       status,
       download: terminalExisting,
+      cleanup: cleanupResult,
     });
     await recordDownloadLifecycleEvent(`wait.${status}`, {
       waitId,
@@ -94,24 +101,43 @@ export async function waitForDownload(options = {}) {
       finished = true;
       cleanup();
       const status = String(payload.status || (payload.error === 'download_timeout' ? 'timeout' : 'unknown'));
+      const cleanupDownloadId = Number.isInteger(payload.download?.id)
+        ? payload.download.id
+        : targetDownloadId;
+      let download = payload.download || null;
+      let cleanupResult = null;
+      if (Number.isInteger(cleanupDownloadId) && status !== 'complete') {
+        const [observed] = await chrome.downloads.search({ id: cleanupDownloadId }).catch(() => []);
+        download ||= observed || null;
+        cleanupResult = await cleanupFailedDownload(cleanupDownloadId, {
+          cancel: status === 'timeout' && options.cancelOnTimeout === true,
+          removeFile: options.removeFileOnFailure === true,
+        });
+      }
       await recordDownloadLifecycleEvent(`wait.${status}`, {
         waitId,
         timeoutMs,
         elapsedMs: Date.now() - startedAt,
-        downloadId: Number.isInteger(payload.download?.id) ? payload.download.id : null,
-        download_id: Number.isInteger(payload.download?.id) ? String(payload.download.id) : '',
-        path: payload.download?.filename || null,
+        downloadId: Number.isInteger(cleanupDownloadId) ? cleanupDownloadId : null,
+        download_id: Number.isInteger(cleanupDownloadId) ? String(cleanupDownloadId) : '',
+        path: download?.filename || null,
         status,
         success: payload.success === true,
         error: payload.error || '',
+        cleanup: cleanupResult,
         artifactBindingSchemaVersion: 1,
         artifactBinding,
         downloadContext,
       });
-      if (Number.isInteger(payload.download?.id) && shouldPersistDownloadContext(downloadContext)) {
-        await updateDownloadContext(payload.download.id, downloadContext);
+      if (Number.isInteger(cleanupDownloadId) && shouldPersistDownloadContext(downloadContext)) {
+        await updateDownloadContext(cleanupDownloadId, downloadContext);
       }
-      resolve(withTargetDownloadWaitFields({ ...payload, waitId }));
+      resolve(withTargetDownloadWaitFields({
+        ...payload,
+        download,
+        cleanup: cleanupResult,
+        waitId,
+      }));
     };
     const onCreated = (download) => {
       if (!matchesDownload(download, options)) return;
@@ -140,6 +166,26 @@ export async function waitForDownload(options = {}) {
       void finish({ success: false, status: 'timeout', error: 'download_timeout', elapsedMs: Date.now() - startedAt });
     }, timeoutMs);
   });
+}
+
+async function cleanupFailedDownload(downloadId, options = {}) {
+  const result = {
+    cancelRequested: options.cancel === true,
+    canceled: false,
+    removeFileRequested: options.removeFile === true,
+    fileRemoved: false,
+    historyErased: false,
+  };
+  if (options.cancel === true) {
+    result.canceled = await chrome.downloads.cancel(downloadId).then(() => true).catch(() => false);
+  }
+  if (options.removeFile === true) {
+    result.fileRemoved = await chrome.downloads.removeFile(downloadId).then(() => true).catch(() => false);
+    result.historyErased = await chrome.downloads.erase({ id: downloadId })
+      .then((ids) => Array.isArray(ids) && ids.includes(downloadId))
+      .catch(() => false);
+  }
+  return result;
 }
 
 export async function listDownloadEvents(action = {}) {

@@ -60,12 +60,14 @@ Production Agent work uses Desktop `capture.collect` with `mode: "browser_resear
 
 The extension-side `research.run` contract exposes `submit_search`, `extract`, `apply_filters`, `open_item`, `close_item`, and `download_media` execution modes for the Desktop Runner. `open_item` re-locates the exact card on the source page and dispatches a visible UI click; it may observe and claim a child tab created by the site, but it never constructs or directly navigates to the card URL. `close_item` closes the child tab or restores the original result surface. Extension `macro` mode remains only for old Desktop/JS facade compatibility and must not become a second production state machine.
 
-Current capability contract `5` supports:
+Current capability contract `6` supports:
 
 - Xiaohongshu and Douyin: `search`, `author_scan`, `content_scan`;
 - YouTube and generic Web: `content_scan`;
 - typed Xiaohongshu/Douyin filters: `sort`, `contentType`, `publishTime`.
 - Xiaohongshu/Douyin detail opening mode `page_click`; direct-card-URL fallback is forbidden.
+
+Media collection is candidate-first. Extractors attach dimensions, visibility, semantic role, article context, and a relevance score; Desktop applies the typed `mediaTypes`, `mediaLimit`, `minMediaWidth`, and `minMediaHeight` policy before invoking `download_media`. Downloads use a run-owned staging path, reserve time to return before the outer browser action deadline, cancel and remove timed-out files, and are removed from staging after Desktop has copied them into the controlled browser-run artifact directory. Desktop writes an evidence checkpoint before the first download, so a later media failure still leaves a readable partial manifest.
 
 Every response carries `capabilityVersion` and `extractorSchemaHash`. Desktop fails closed on drift, so rebuilding the extension is not enough: reload `Plugin/dist/extension` in the target browser before current-build acceptance. Site research is read-only at the browser layer; it never publishes, submits, likes, follows, comments, or changes remote content.
 
@@ -81,4 +83,4 @@ Every response carries `capabilityVersion` and `extractorSchemaHash`. Desktop fa
 
 ## Compatibility contract
 
-The current checkout uses descriptor schema `2`, browser protocol `3`, site-research contract `5`, and published extension id `dhfphfekcjahljnefpdjoidehnhhoeie`. A protocol or site-capability mismatch fails closed. The Rust BrowserClient owns production discovery, instance binding, repair, retry, cancellation, and lifecycle state; Desktop Research Runner owns research macro orchestration; this JavaScript facade remains a development/external adapter.
+The current checkout uses descriptor schema `2`, browser protocol `3`, site-research contract `6`, and published extension id `dhfphfekcjahljnefpdjoidehnhhoeie`. A protocol or site-capability mismatch fails closed. The Rust BrowserClient owns production discovery, instance binding, repair, retry, cancellation, and lifecycle state; Desktop Research Runner owns research macro orchestration; this JavaScript facade remains a development/external adapter.

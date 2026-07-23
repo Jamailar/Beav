@@ -137,7 +137,7 @@ assert.equal(
   'Manifest version_name must preserve the release version shown to users',
 );
 assert.equal(siteResearchCapabilities.schemaVersion, 1, 'Site research capability schema must be versioned');
-assert.equal(siteResearchCapabilities.contractVersion, 5, 'Site research capability contract must match Desktop');
+assert.equal(siteResearchCapabilities.contractVersion, 6, 'Site research capability contract must match Desktop');
 for (const capability of siteResearchCapabilities.capabilities || []) {
   assert(
     ['direct_url', 'page_click'].includes(capability.detailOpenMode),
