@@ -1,15 +1,7 @@
 #!/usr/bin/env node
 
-import fs from 'node:fs';
-import net from 'node:net';
-import os from 'node:os';
-import path from 'node:path';
+import { DesktopBridgeControlClient } from './scripts/desktop-bridge-client.mjs';
 
-const DEFAULT_ENDPOINT_STATE_PATH = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
-  || path.join(os.homedir(), 'Library/Application Support/RedBox/native-host/browser-control-agent-endpoint.json');
-const DEFAULT_SOCKET_PATH = process.platform === 'win32'
-  ? '\\\\.\\pipe\\redbox-browser-control'
-  : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.sock`);
 const DEFAULT_TIMEOUT_MS = Number(process.env.REDBOX_BROWSER_CONTROL_MCP_TIMEOUT_MS || 30_000);
 
 const FALLBACK_TOOLS = [
@@ -153,21 +145,23 @@ async function handleMessage(message) {
     if (message.method === 'tools/call') {
       const name = String(message.params?.name || '').trim();
       if (!name) throw new Error('tools/call requires params.name');
-      const result = await callAgentSocket({
-        jsonrpc: '2.0',
-        id: `mcp:${Date.now().toString(36)}`,
-        method: 'tools/call',
-        params: {
-          name,
-          arguments: message.params?.arguments || {},
-        },
-      });
+      const client = new DesktopBridgeControlClient({ timeoutMs: DEFAULT_TIMEOUT_MS });
+      let result;
+      try {
+        result = await client.invokeTool(name, message.params?.arguments || {}, {
+          timeoutMs: DEFAULT_TIMEOUT_MS,
+          callId: `mcp:${Date.now().toString(36)}`,
+        });
+      } finally {
+        await client.close();
+      }
+      const response = result.response;
       send({
         jsonrpc: '2.0',
         id: message.id,
         result: {
-          content: [{ type: 'text', text: JSON.stringify(result.result ?? result, null, 2) }],
-          isError: Boolean(result.error),
+          content: [{ type: 'text', text: JSON.stringify(response?.result ?? response, null, 2) }],
+          isError: Boolean(response?.error),
         },
       });
       return;
@@ -179,60 +173,16 @@ async function handleMessage(message) {
 }
 
 async function listTools() {
+  const client = new DesktopBridgeControlClient({ timeoutMs: DEFAULT_TIMEOUT_MS });
   try {
-    const response = await callAgentSocket({
-      jsonrpc: '2.0',
-      id: `mcp-tools:${Date.now().toString(36)}`,
-      method: 'tools/list',
-      params: {},
-    });
-    const tools = response?.result?.tools || response?.tools;
+    const tools = await client.listTools();
     if (Array.isArray(tools) && tools.length) return tools;
-  } catch {}
+  } catch {
+    // MCP retains a static inventory only when the Desktop Bridge is unavailable.
+  } finally {
+    await client.close();
+  }
   return FALLBACK_TOOLS;
-}
-
-function resolveSocketPath() {
-  if (process.env.REDBOX_BROWSER_CONTROL_SOCKET) return process.env.REDBOX_BROWSER_CONTROL_SOCKET;
-  try {
-    const state = JSON.parse(fs.readFileSync(DEFAULT_ENDPOINT_STATE_PATH, 'utf8'));
-    if (state.socketPath) return state.socketPath;
-  } catch {}
-  return DEFAULT_SOCKET_PATH;
-}
-
-function callAgentSocket(request, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const socketPath = resolveSocketPath();
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath);
-    let buffer = '';
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error(`browser-control request timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    socket.setEncoding('utf8');
-    socket.on('connect', () => {
-      socket.write(`${JSON.stringify(request)}\n`);
-    });
-    socket.on('data', (chunk) => {
-      buffer += chunk;
-      while (buffer.includes('\n')) {
-        const index = buffer.indexOf('\n');
-        const line = buffer.slice(0, index).trim();
-        buffer = buffer.slice(index + 1);
-        if (!line) continue;
-        clearTimeout(timer);
-        socket.end();
-        resolve(JSON.parse(line));
-        return;
-      }
-    });
-    socket.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    socket.on('close', () => clearTimeout(timer));
-  });
 }
 
 function send(message) {

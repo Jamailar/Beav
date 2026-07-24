@@ -7,7 +7,7 @@ Use `pnpm diagnose:browser-control -- --no-fail` from `Plugin/` to inspect the l
 The expected chain is:
 
 ```text
-agent typed browser action -> Browser Client/MCP adapter -> authenticated loopback endpoint -> Beav Native Host -> Chrome native messaging -> Beav extension -> page/content script
+agent typed browser action -> Desktop Bridge -> Beav Native Host -> Chrome native messaging -> Beav extension -> page/content script
 ```
 
 Privacy boundary:
@@ -15,15 +15,15 @@ Privacy boundary:
 - Browser-control tests must use a temporary profile and `--use-mock-keychain`; they must not ask for the macOS login keychain or a real browser safe-storage secret.
 - If macOS shows a prompt such as `Chromium wants to use Chromium Safe Storage`, deny it and fix the launch flags/profile isolation.
 - Stable Google Chrome is not used by smoke tests unless explicitly requested with `--allow-stable-chrome`.
-- The smoke test overrides `HOME`, endpoint state, registry, Native Messaging manifests, and the browser profile into one temporary root. It never writes a test manifest into the real user profile.
+- The smoke test overrides `HOME`, Native Messaging manifests, and the browser profile into one temporary root, while connecting to the already-running App's Desktop Bridge. It never writes a test manifest into the real user profile.
 - Clipboard reads, history search, and broad browser context reads expose local user data. They require explicit typed user intent in the App and should not be marked as no-approval tools in external MCP configs.
-- A web fetch, HTTP reader, search API, or screenshot-only flow is not browser control. Browser control is only healthy when the Native Host `ping` handshake and an extension-forwarded action both succeed.
+- A web fetch, HTTP reader, search API, or screenshot-only flow is not browser control. Browser control is only healthy when Desktop Bridge handshake, Native Host registration and an extension-forwarded action all succeed.
 
 Native Host installation:
 
 - 正式桌面端启动时会在 macOS / Windows / Linux 对账 Chrome、Edge、Brave 的 manifest；manifest 直接指向当前 Beav 可执行文件，不依赖 GUI 浏览器的 Node/PATH。
 - 宿主只接受 `browser-control.identity.json` 声明的官方扩展 origin。扩展 ID 由 manifest 固定公钥稳定生成，开发构建与商店构建必须一致。
-- 每个浏览器连接生成独立 `instanceId`、随机 loopback 端口和 auth token。descriptor 在 `~/Library/Application Support/RedBox/native-host/browser-control-agent-endpoints/`，聚合 registry 为 `browser-control-hosts-v2.json`；旧 singleton endpoint 只用于兼容读取。
+- 每个浏览器连接生成独立 `extensionInstanceId`，并注册到 Desktop 主进程内存 registry。Host 与外部 control client 使用分离 token 连接同一 Windows Named Pipe / Unix Domain Socket；不存在每个 Host 一个 TCP 端口。
 - 扩展只有收到 Native Host `ping` 回包后才显示 `connected`。单纯获得 `chrome.runtime.Port` 不再视为连接成功。
 - `pnpm install:native-host` 只用于开发态 Node fallback 或旧版本排障。
 
@@ -32,10 +32,10 @@ Common failure states:
 - `extension_not_found`: Beav is not loaded in a known Chrome, Chromium, Edge, or Brave profile.
 - `no_native_host_manifest`: Chrome cannot launch `com.redbox.browser_control`.
 - `host_missing` / `host_not_executable`: manifest 存在，但指向的 Beav 可执行文件已移动或不可执行。
-- `endpoint_state_missing`: Native Host 尚未完成握手并发布端点。
-- `endpoint_state_stale`: heartbeat 过期；一次 repair 会清理 stale descriptor 并重新对账 manifest。
-- `endpoint_registry_stale`: v2 registry 包含已关闭实例；客户端会跳过过期/不可连接端点，不会盲选 singleton。
-- `endpoint_auth_failed`: descriptor token 与端点不匹配；禁止无 token 访问 loopback RPC。
+- `bridge_descriptor_missing`: Desktop 未启动，或尚未完成 Desktop Bridge 初始化。
+- `bridge_descriptor_invalid`: descriptor schema/protocol/权限或 ready 状态无效。
+- `bridge_handshake_failed`: App 实例、角色 token、Bridge/browser 协议或 Host/App 版本校验失败。
+- `BROWSER_INSTANCE_SELECTION_REQUIRED`: 多个 profile 已连接；必须选择诊断返回的 `browserInstanceId`。
 - `extension_forwarding_failed`: Native Host 可响应，但扩展没有回答 browser-control action。
 - Tool results that show only `capabilities.toolsResponse.tools` and end with `[truncated by ToolResultBudget]` are not page-read failures. They mean the App facade returned a full MCP capability snapshot before the action result, so the model never saw the real `tab.info` / `page.queryElements` payload.
 
@@ -62,10 +62,10 @@ pnpm test:browser-control-faults
 pnpm test:browser-control-binding
 pnpm diagnose:browser-control -- --json --no-fail
 pnpm diagnose:browser-control -- --require-connected
-pnpm smoke:browser-control -- --host-path <path-to-beav> --fault-matrix --timeout-ms 30000
+pnpm smoke:browser-control -- --host-path <path-to-current-beav> --fault-matrix --timeout-ms 30000
 ```
 
-`smoke:browser-control` defaults to the built Rust `desktop/src-tauri/target/debug/beav` Host and fails closed when it is missing. `--allow-js-host` is an explicit compatibility-only fallback. The isolated fault matrix covers stale descriptor cleanup, timeout with a late response, Host kill/socket disconnect with endpoint rotation, and MV3 service-worker restart with stable `extensionInstanceId`. Full extension reload is intentionally reserved for the installed-extension acceptance path: Chromium's `--load-extension` mode unloads the command-line extension when its developer reload control is used, so that result cannot represent a store-installed extension reload.
+`smoke:browser-control` defaults to the built Rust `desktop/src-tauri/target/debug/beav` Host and requires a running Desktop Bridge with the same App version. It has no JS Host fallback. The isolated fault matrix covers invalid control-token rejection, timeout with a late response, and MV3 service-worker restart with stable `extensionInstanceId`. Full extension reload is intentionally reserved for the installed-extension acceptance path: Chromium's `--load-extension` mode unloads the command-line extension when its developer reload control is used, so that result cannot represent a store-installed extension reload.
 
 For development, load `Plugin/dist/extension` as an unpacked extension, start Beav once so it reconciles the Native Host manifest, then run the connected diagnosis. Reload the unpacked extension after rebuilding `dist/extension`; Chrome does not reliably reload changed service-worker code just because files changed on disk.
 

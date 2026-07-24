@@ -282,10 +282,12 @@ class BrowserCollection {
   async list() {
     const endpoints = await this.runtime.transport.listEndpoints();
     const browsers = await Promise.all(endpoints.map(async (endpoint) => {
-      const transport = new BrowserControlTransport({
-        endpoint,
-        timeoutMs: this.runtime.transport.timeoutMs,
-      });
+      const transport = typeof this.runtime.transport.withEndpoint === 'function'
+        ? this.runtime.transport.withEndpoint(endpoint)
+        : new BrowserControlTransport({
+          endpoint,
+          timeoutMs: this.runtime.transport.timeoutMs,
+        });
       try {
         const [host, info, tools] = await Promise.all([
           transport.hostInfo(),

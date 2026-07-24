@@ -1,6 +1,4 @@
 const DEFAULT_SETTINGS = {
-  knowledgeApiBaseUrl: 'http://127.0.0.1:31937',
-  knowledgeApiEndpointPath: '/api/knowledge',
   xhsSaveCommentsWithNote: true,
   saveToRedboxByDefault: true,
   autoUpdateCheck: true,
@@ -8,8 +6,6 @@ const DEFAULT_SETTINGS = {
 
 const elements = {
   form: document.getElementById('settings-form'),
-  apiBaseUrl: document.getElementById('api-base-url'),
-  apiEndpointPath: document.getElementById('api-endpoint-path'),
   xhsSaveComments: document.getElementById('xhs-save-comments'),
   saveDefault: document.getElementById('save-default'),
   autoUpdate: document.getElementById('auto-update'),
@@ -56,8 +52,6 @@ function sendMessage(message) {
 
 function normalizeFormSettings() {
   return {
-    knowledgeApiBaseUrl: elements.apiBaseUrl.value.trim() || DEFAULT_SETTINGS.knowledgeApiBaseUrl,
-    knowledgeApiEndpointPath: elements.apiEndpointPath.value.trim() || DEFAULT_SETTINGS.knowledgeApiEndpointPath,
     xhsSaveCommentsWithNote: elements.xhsSaveComments.checked,
     saveToRedboxByDefault: elements.saveDefault.checked,
     autoUpdateCheck: elements.autoUpdate.checked,
@@ -66,8 +60,6 @@ function normalizeFormSettings() {
 
 function renderSettings(settings) {
   const next = { ...DEFAULT_SETTINGS, ...(settings || {}) };
-  elements.apiBaseUrl.value = next.knowledgeApiBaseUrl;
-  elements.apiEndpointPath.value = next.knowledgeApiEndpointPath;
   elements.xhsSaveComments.checked = next.xhsSaveCommentsWithNote !== false;
   elements.saveDefault.checked = next.saveToRedboxByDefault !== false;
   elements.autoUpdate.checked = next.autoUpdateCheck !== false;

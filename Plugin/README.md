@@ -19,14 +19,14 @@
 - 通用采集运行时：页面内滚动追踪、可见节点判断、数量解析、展开按钮点击、基础验证页检测和采集 checkpoint
 - 侧边栏执行日志：展示任务开始、保存成功、部分成功和失败原因
 - 小红书采集任务历史和 JSON 导出
-- 插件设置页：本地 API、采集间隔、默认采集数量和更新检查配置
+- 插件设置页：采集间隔、默认采集数量和更新检查配置
 - 侧边栏和页面浮动面板平台识别：小红书、抖音、快手、Bilibili、TikTok、Reddit、X、Instagram
 - YouTube 视频页 / Shorts 页
 - 任意网页链接收藏
 - 任意网页选中文字摘录（右键菜单）
 - 自动检查插件更新
 - AI 浏览器控制：tab/session、DOM snapshot、selector 查询、点击、输入、滚动、截图、CDP、下载状态、页面资产读取
-- MCP / native host 控制面：`App AI -> Browser Client -> 认证的本机端点 -> Beav Native Host -> Chrome extension -> page`
+- MCP / native host 控制面：`App AI -> Desktop Bridge -> Beav Native Host -> Chrome extension -> page`
 
 ## 加载方式
 
@@ -55,12 +55,12 @@ pnpm verify
 
 - 现有采集：`pageObserver.js`、`xhsBridge.js`、`captureRuntime.js` 保持 content script 常驻，用于小红书、多平台识别、右键保存和网页浮动面板。
 - AI 控制：`browserControlContent.js` 只在 AI 调用浏览器工具时动态注入。
-- native host：正式桌面端启动时会把 Chrome / Edge / Brave 的 native messaging manifest 对账到当前 Beav 可执行文件。浏览器启动同一个签名应用的隐藏 Native Host 模式，宿主在 `127.0.0.1` 随机端口暴露带随机 token 的 newline JSON-RPC，并写入带 heartbeat 的 v2 多实例 registry。`native-host/host.mjs` 和 Node installer 只保留开发/旧版本兼容。
-- Knowledge API：插件优先直接访问桌面端 loopback HTTP；浏览器因本地网络权限、代理或 CORS 拒绝该请求时，已认证 Native Host 只允许把 `/api/knowledge` 下的 GET / POST 代发到 loopback 地址，不接受远程主机或其他本地路径。
+- native host：正式桌面端启动时会把 Chrome / Edge / Brave 的 Native Messaging manifest 对账到当前 Beav 可执行文件。浏览器启动同一签名应用的隐藏 Native Host 模式，Host 通过 Windows Named Pipe 或 Unix Domain Socket 连接 Desktop Bridge，不监听 TCP 端口。`native-host/host.mjs` 和 Node installer 只保留隔离的 legacy 传输测试。
+- Knowledge / Accounts：插件的保存、查询和账号导入请求均通过 Native Messaging 交给 Desktop Bridge 的 typed allowlist；Host 不代理 HTTP，也不直接写本地业务数据。
 - App 内置 MCP：桌面端启动时会自动注册 `Beav Browser Control` MCP server，stdio command 指向 Beav App 自身的隐藏兼容 `--redbox-browser-control-mcp` 模式，不要求用户手动导入 MCP 配置。
 - App AI 首选入口：模型使用 `browser.connection.status/repair`、`browser.tabs.list`、`browser.tab.open/claim`、`browser.page.inspect/click/type`、`browser.tabs.finalize` 等单一职责 typed action。旧 `browser.control` 只做历史 session 兼容；MCP / Native Host 是后端适配层，不作为普通任务的模型调用面。
-- Agent-side JS client：`scripts/browser-client.mjs` 提供 Codex 同款 `setupBrowserRuntime({ globals }) -> agent.browsers.get("extension")` 入口，用对象方法包装 `browser.user.openTabs()`、`browser.tabs.new()`、`tab.playwright.locator()`、`browser.tabs.finalize()` 等能力；底层仍走 Beav Native Host endpoint / MCP 工具。
-- 开发 MCP server：`mcp-server.mjs` 保留给插件目录独立调试，负责把 `tools/list` / `tools/call` 转发到当前健康 Native Host endpoint。
+- Agent-side JS client：`scripts/browser-client.mjs` 提供 Codex 同款对象 facade；生产型调试使用 `DesktopBridgeBrowserTransport`，旧 `BrowserControlTransport` 只服务隔离的 legacy contract tests。
+- 开发 MCP server：`mcp-server.mjs` 保留给插件目录独立调试，负责把 `tools/list` / `tools/call` 转发到当前 Desktop Bridge。
 
 开发态安装 Node fallback native host：
 
@@ -86,7 +86,7 @@ App 安装包内置 MCP 配置由桌面端自动写入，不需要用户选择�
 
 ```bash
 pnpm diagnose:browser-control -- --no-fail
-pnpm agent:call -- --method host.getInfo
+pnpm agent:call -- --method browser.info
 pnpm agent:call -- --method tools/list
 ```
 
@@ -94,7 +94,7 @@ pnpm agent:call -- --method tools/list
 
 - “打开网页读取内容”不是浏览器控制验收；必须看到 Beav MCP / Native Host 经真实 Chrome 扩展返回 `tools/list`、`tabs.list`、`tab.info`、DOM 查询和至少一个交互动作。
 - `pnpm smoke:browser-control` 使用临时 profile / Chromium 做回归，不代表用户真实 Chrome 可用。
-- 真实 Chrome 验收必须使用已安装的 Beav 扩展、真实 Chrome native messaging manifest、真实 socket，以及真实标签页或受控测试标签页。
+- 真实 Chrome 验收必须使用已安装的 Beav 扩展、真实 Chrome Native Messaging manifest、真实 Desktop Bridge，以及真实标签页或受控测试标签页。
 - 被 `tab.claim` / `tab.create` 纳入 active browser session 的页面必须显示 `Beav 控制中` 页面内标签；释放、finalize 或 turn 结束后自动移除。
 - 不要为 smoke 或调试授权 macOS login keychain / Chrome Safe Storage；如果弹出此类提示，应拒绝并改用隔离 profile。
 
@@ -115,15 +115,15 @@ pnpm package
 - `pnpm verify`：检查 manifest、HTML 引用、动态注入脚本和关键 content script 合同。
 - `scripts/browser-client.mjs`：供 agent / 调试脚本按 Codex Browser Use 对象 API 使用 Beav browser-control；配套文档在 [Plugin/docs/browser-runtime.md](/Users/Jam/LocalDev/GitHub/RedConvert/Plugin/docs/browser-runtime.md)。
 - `pnpm install:native-host`：安装 Chrome native messaging host manifest。
-- `pnpm diagnose:browser-control`：检查 Native Host manifest、v2 endpoint registry、认证端点和 extension forwarding 状态；需要只取报告时加 `-- --no-fail`。
-- `pnpm smoke:browser-control`：用临时 Chrome profile 加载构建后的扩展，临时安装 Native Host manifest，验证握手、tools/list、tab 创建、DOM 读取和 finalize；传 `-- --host-path ../desktop/src-tauri/target/debug/beav` 可直接验收正式 Rust 宿主。
+- `pnpm diagnose:browser-control`：检查 Native Host manifest、Desktop Bridge descriptor、鉴权握手和 extension forwarding 状态；需要只取报告时加 `-- --no-fail`。
+- `pnpm smoke:browser-control`：在当前运行的 Desktop Bridge 上，用临时 Chrome profile 加载构建后的扩展并临时安装 Native Host manifest，验证握手、tools/list、tab 创建、DOM 读取和 finalize；Host 版本必须与运行中的 App 版本一致。
 - `pnpm mcp:server`：启动开发态 Beav browser-control stdio MCP server；正式 App 使用内置 Rust MCP 入口。
 - `pnpm package`：先构建，再生成 `dist/Beav-<version>.zip`。
 
 ## 使用前提
 
 - Beav 桌面端必须已经启动。
-- 当前桌面端会在本地开启 `http://127.0.0.1:31937/api/knowledge` 供插件写入知识库。
+- Desktop Bridge 必须已启动；插件不需要配置 API 地址或本机端口。
 
 ## 使用方式
 

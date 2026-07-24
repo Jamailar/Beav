@@ -1077,7 +1077,7 @@ export function buildBrowserCapabilityMetadata(options = {}) {
       xwowEventSummaryExtension: true,
       browserEventCheckpointFields: ['latestByEventType', 'latestBySourceKind', 'nextQuery.afterEventId', 'nextQuery.since'],
       browserEventNativeDeliveryFields: ['posted', 'success', 'pending', 'failed'],
-      transport: nativeStatus.state === 'connected' ? 'nativeMessaging+local-http-command-poll' : 'local-http-command-poll',
+      transport: nativeStatus.state === 'connected' ? 'nativeMessaging+desktopBridge' : 'nativeMessaging',
       permissionInferredCapabilities: {
         downloadsUi: permissions.includes('downloads.ui'),
         notifications: permissions.includes('notifications'),

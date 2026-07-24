@@ -1,24 +1,10 @@
 import './browserControlBackground.js';
 import { getNativeStatus, requestNativeHost } from './background/nativeTransport.js';
 
-const KNOWLEDGE_API_CANDIDATES = [
-  {
-    baseUrl: 'http://127.0.0.1:31937',
-    endpointPath: '/api/knowledge',
-  },
-  {
-    baseUrl: 'http://localhost:31937',
-    endpointPath: '/api/knowledge',
-  },
-  {
-    baseUrl: 'http://127.0.0.1:23456',
-    endpointPath: '/api/knowledge',
-  },
-  {
-    baseUrl: 'http://localhost:23456',
-    endpointPath: '/api/knowledge',
-  },
-];
+const NATIVE_KNOWLEDGE_ENDPOINT = Object.freeze({
+  baseUrl: 'native://beav',
+  endpointPath: '/knowledge',
+});
 const pageStateCache = new Map();
 const PAGE_STATE_NEGATIVE_TTL_MS = 350;
 const KNOWLEDGE_API_CACHE_TTL_MS = 30_000;
@@ -50,8 +36,6 @@ const MENU_LINK_ID = 'redbox-save-link';
 const MENU_IMAGE_ID = 'redbox-save-image';
 const MENU_VIDEO_ID = 'redbox-save-video';
 const DEFAULT_PLUGIN_SETTINGS = {
-  knowledgeApiBaseUrl: 'http://127.0.0.1:31937',
-  knowledgeApiEndpointPath: '/api/knowledge',
   xhsIntervalMinSeconds: 3,
   xhsIntervalMaxSeconds: 6,
   xhsBloggerNoteLimit: 50,
@@ -776,24 +760,6 @@ function setStorageLocal(values) {
   });
 }
 
-function normalizeSettingsBaseUrl(value) {
-  const raw = normalizeText(value).replace(/\/+$/g, '');
-  if (!raw) return DEFAULT_PLUGIN_SETTINGS.knowledgeApiBaseUrl;
-  try {
-    const parsed = new URL(raw);
-    if (!/^https?:$/i.test(parsed.protocol)) return DEFAULT_PLUGIN_SETTINGS.knowledgeApiBaseUrl;
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    return DEFAULT_PLUGIN_SETTINGS.knowledgeApiBaseUrl;
-  }
-}
-
-function normalizeSettingsEndpointPath(value) {
-  const raw = normalizeText(value) || DEFAULT_PLUGIN_SETTINGS.knowledgeApiEndpointPath;
-  const prefixed = raw.startsWith('/') ? raw : `/${raw}`;
-  return prefixed.replace(/\/+$/g, '') || DEFAULT_PLUGIN_SETTINGS.knowledgeApiEndpointPath;
-}
-
 function normalizePluginSettings(input = {}) {
   const source = input && typeof input === 'object' ? input : {};
   let intervalMin = clampNumber(
@@ -812,8 +778,6 @@ function normalizePluginSettings(input = {}) {
     [intervalMin, intervalMax] = [intervalMax, intervalMin];
   }
   return {
-    knowledgeApiBaseUrl: normalizeSettingsBaseUrl(source.knowledgeApiBaseUrl),
-    knowledgeApiEndpointPath: normalizeSettingsEndpointPath(source.knowledgeApiEndpointPath),
     xhsIntervalMinSeconds: Math.round(intervalMin * 10) / 10,
     xhsIntervalMaxSeconds: Math.round(intervalMax * 10) / 10,
     xhsBloggerNoteLimit: normalizePositiveInteger(source.xhsBloggerNoteLimit, DEFAULT_PLUGIN_SETTINGS.xhsBloggerNoteLimit),
@@ -888,18 +852,8 @@ async function writePluginSettings(nextSettings) {
 }
 
 function knowledgeApiCandidatesFromSettings(settings) {
-  const normalized = normalizePluginSettings(settings);
-  const custom = {
-    baseUrl: normalized.knowledgeApiBaseUrl,
-    endpointPath: normalized.knowledgeApiEndpointPath,
-  };
-  const seen = new Set();
-  return [custom, ...KNOWLEDGE_API_CANDIDATES].filter((candidate) => {
-    const key = `${candidate.baseUrl}${candidate.endpointPath}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  void settings;
+  return [NATIVE_KNOWLEDGE_ENDPOINT];
 }
 
 async function configureUpdateAlarm(settingsInput) {
@@ -2219,18 +2173,23 @@ async function checkForPluginUpdates(options = {}) {
 
 async function checkDesktopServer(forceRefresh = false) {
   try {
-    const endpoint = await resolveKnowledgeApiEndpoint(forceRefresh);
-    const response = await fetchKnowledgeJson(endpoint, '/health', {
-      method: 'GET',
-    });
+    if (forceRefresh) clearCachedKnowledgeApi();
+    const result = await requestNativeHost('desktop.health', {}, 5_000);
+    const response = result?.knowledge || result;
+    cachedKnowledgeApi = NATIVE_KNOWLEDGE_ENDPOINT;
+    cachedKnowledgeApiAt = Date.now();
     pluginLog('healthcheck-success', {
-      endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}`,
+      endpoint: 'native://beav/knowledge',
       counts: response?.counts || null,
     });
     return {
       success: true,
-      endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}`,
+      endpoint: 'native://beav/knowledge',
       health: response,
+      bridge: {
+        appVersion: result?.appVersion || '',
+        protocolVersion: Number(result?.bridgeProtocolVersion || 0),
+      },
     };
   } catch (error) {
     pluginError('healthcheck-failed', {
@@ -2252,176 +2211,84 @@ async function resolveKnowledgeApiEndpoint(forceRefresh = false) {
   ) {
     return cachedKnowledgeApi;
   }
-
-  const settings = await readPluginSettings();
-  let lastError = null;
-  const attemptedUrls = [];
-  for (const candidate of knowledgeApiCandidatesFromSettings(settings)) {
-    const probeUrl = `${candidate.baseUrl}${candidate.endpointPath}/health`;
-    attemptedUrls.push(probeUrl);
-    try {
-      pluginLog('endpoint-probe', {
-        url: probeUrl,
-      });
-      const response = await fetchKnowledgeJson(candidate, '/health', {
-        method: 'GET',
-      });
-      if (response?.success) {
-        cachedKnowledgeApi = candidate;
-        cachedKnowledgeApiAt = now;
-        pluginLog('endpoint-selected', {
-          url: `${candidate.baseUrl}${candidate.endpointPath}`,
-        });
-        return candidate;
-      }
-      lastError = new Error(response?.error || 'Knowledge API healthcheck failed');
-      pluginWarn('endpoint-probe-non-success', {
-        url: probeUrl,
-        response,
-      });
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      pluginWarn('endpoint-probe-failed', {
-        url: probeUrl,
-        error: describeError(lastError),
-      });
-    }
-  }
-
-  throw new Error(
-    `未连接到 Beav Knowledge API。已尝试: ${attemptedUrls.join(', ')}。` +
-    `最后错误: ${lastError?.message || 'unknown error'}。` +
-    ' 请确认 Beav 桌面端已启动，并且插件设置页中的本地 API 地址正确。'
-  );
+  if (forceRefresh) clearCachedKnowledgeApi();
+  await requestNativeHost('desktop.health', {}, 5_000);
+  cachedKnowledgeApi = NATIVE_KNOWLEDGE_ENDPOINT;
+  cachedKnowledgeApiAt = now;
+  return cachedKnowledgeApi;
 }
 
 async function fetchKnowledgeJson(endpoint, path, init = {}) {
-  const url = `${endpoint.baseUrl}${endpoint.endpointPath}${path}`;
-  const headers = new Headers(init.headers || {});
+  void endpoint;
   const method = String(init.method || 'GET').toUpperCase();
-  if (!headers.has('Content-Type') && init.method && init.method !== 'GET') {
-    headers.set('Content-Type', 'application/json');
-  }
-
-  pluginLog('http-request', {
+  const nativeMethod = knowledgeNativeMethod(path, method);
+  const payload = method === 'GET'
+    ? {}
+    : parseBridgeJsonBody(init.body, `Knowledge ${path}`);
+  const operationId = bridgeOperationId(nativeMethod, payload);
+  pluginLog('native-desktop-request', {
     method,
-    url,
+    nativeMethod,
+    path,
+    operationId,
   });
-
-  let response;
-  try {
-    response = await fetch(url, {
-      ...init,
-      headers,
-    });
-  } catch (error) {
-    pluginWarn('http-network-failed', {
-      method,
-      url,
-      error: describeError(error),
-    });
-    return await fetchKnowledgeJsonViaNative({
-      url,
-      method,
-      body: init.body,
-      networkError: error,
-    });
-  }
-
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
-  }
-
-  if (!response.ok || data?.success === false) {
-    pluginError('http-response-failed', {
-      method,
-      url,
-      status: response.status,
-      body: data,
-    });
-    throw new Error(data?.error || `HTTP ${response.status}`);
-  }
-
-  pluginLog('http-response', {
-    method,
-    url,
-    status: response.status,
-    success: data?.success !== false,
-  });
-
-  return data || { success: true };
-}
-
-async function fetchKnowledgeJsonViaNative({ url, method, body, networkError }) {
-  try {
-    const result = await requestNativeHost('knowledge.request', {
-      url,
-      method,
-      body: typeof body === 'string' ? body : '',
-    }, 35_000);
-    const data = result?.body ?? null;
-    if (result?.ok !== true || data?.success === false) {
-      pluginError('native-knowledge-response-failed', {
-        method,
-        url,
-        status: result?.status || 0,
-        body: data,
-      });
-      throw new Error(data?.error || `HTTP ${result?.status || 0}`);
-    }
-    pluginLog('native-knowledge-response', {
-      method,
-      url,
-      status: result.status,
-      success: data?.success !== false,
-    });
-    return data || { success: true };
-  } catch (nativeError) {
-    pluginError('native-knowledge-request-failed', {
-      method,
-      url,
-      networkError: describeError(networkError),
-      nativeError: describeError(nativeError),
-    });
-    throw new Error(
-      `请求失败: ${method} ${url} -> ` +
-      `${networkError instanceof Error ? networkError.message : String(networkError)}；` +
-      `Native Messaging 回退失败: ${nativeError instanceof Error ? nativeError.message : String(nativeError)}`
-    );
-  }
-}
-
-function isRecoverableKnowledgeNetworkError(error) {
-  const message = error instanceof Error ? error.message : String(error || '');
-  return /Failed to fetch|NetworkError|Load failed|ERR_|请求失败/i.test(message);
+  const result = await requestNativeHost(nativeMethod, {
+    operationId,
+    payload,
+  }, method === 'GET' ? 5_000 : 35_000);
+  return nativeMethod === 'desktop.health'
+    ? (result?.knowledge || result)
+    : (result || { success: true });
 }
 
 async function postKnowledgeJson(path, payload, logScope) {
-  let endpoint = await resolveKnowledgeApiEndpoint();
-  try {
-    return await fetchKnowledgeJson(endpoint, path, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    if (!isRecoverableKnowledgeNetworkError(error)) {
-      throw error;
-    }
-    clearCachedKnowledgeApi();
-    pluginWarn(`${logScope || 'knowledge-post'}-retry`, {
-      path,
-      firstEndpoint: `${endpoint.baseUrl}${endpoint.endpointPath}`,
-      error: describeError(error),
-    });
-    endpoint = await resolveKnowledgeApiEndpoint(true);
-    return await fetchKnowledgeJson(endpoint, path, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  pluginLog(`${logScope || 'knowledge-post'}-native`, { path });
+  return await fetchKnowledgeJson(NATIVE_KNOWLEDGE_ENDPOINT, path, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+function knowledgeNativeMethod(path, method) {
+  const key = `${String(method || 'GET').toUpperCase()} ${String(path || '')}`;
+  const methods = {
+    'GET /health': 'desktop.health',
+    'POST /entries': 'knowledge.ingestEntry',
+    'POST /xhs/v2/entries': 'knowledge.ingestXhsEntryV2',
+    'POST /zhihu/answers': 'knowledge.ingestZhihuAnswer',
+    'POST /zhihu/articles': 'knowledge.ingestZhihuArticle',
+    'POST /document-sources': 'knowledge.ingestDocumentSource',
+    'POST /media-assets': 'knowledge.ingestMediaAssets',
+    'POST /batch-ingest': 'knowledge.batchIngest',
+  };
+  const nativeMethod = methods[key];
+  if (!nativeMethod) {
+    throw new Error(`不支持的 Beav Desktop action: ${key}`);
   }
+  return nativeMethod;
+}
+
+function parseBridgeJsonBody(body, label) {
+  if (body && typeof body === 'object') return body;
+  try {
+    return body ? JSON.parse(String(body)) : {};
+  } catch (error) {
+    throw new Error(`${label || 'Desktop action'} payload 无法解析: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function bridgeOperationId(scope, payload) {
+  const stableSource = normalizeText(
+    payload?.operationId
+    || payload?.id
+    || payload?.entryId
+    || payload?.note?.noteId
+    || payload?.source?.externalId
+    || payload?.source?.sourceLink
+    || payload?.source?.sourceUrl,
+  );
+  const fingerprint = stableSource || JSON.stringify(payload || {});
+  return `${String(scope || 'desktop').replace(/[^A-Za-z0-9._-]/g, '-')}:${hashString(fingerprint)}`;
 }
 
 async function postKnowledgeEntry(payload) {
@@ -5038,45 +4905,63 @@ function buildXhsNotePayloadFromFeed(feedResult, fallback = {}) {
 }
 
 async function fetchAccountsJson(path, init = {}) {
-  const knowledgeEndpoint = await resolveKnowledgeApiEndpoint(false);
-  const endpoint = {
-    baseUrl: knowledgeEndpoint.baseUrl,
-    endpointPath: '/api/accounts',
-  };
-  const url = `${endpoint.baseUrl}${endpoint.endpointPath}${path}`;
-  const headers = new Headers(init.headers || {});
   const method = String(init.method || 'GET').toUpperCase();
-  if (!headers.has('Content-Type') && init.method && init.method !== 'GET') {
-    headers.set('Content-Type', 'application/json');
+  if (method !== 'POST') {
+    throw new Error(`不支持的账号档案 Desktop action: ${method} ${path}`);
   }
-  pluginLog('accounts-http-request', { method, url });
-  let response;
-  try {
-    response = await fetch(url, { ...init, headers });
-  } catch (error) {
-    pluginError('accounts-http-network-failed', {
-      method,
-      url,
-      error: describeError(error),
-    });
-    throw new Error(`账号档案请求失败: ${method} ${url} -> ${error instanceof Error ? error.message : String(error)}`);
+  const payload = parseBridgeJsonBody(init.body, `Accounts ${path}`);
+  const route = accountNativeRoute(path);
+  const nativePayload = {
+    ...payload,
+    ...(route.accountId ? { accountId: route.accountId } : {}),
+    ...(route.sessionId ? { sessionId: route.sessionId } : {}),
+  };
+  const operationId = bridgeOperationId(route.method, nativePayload);
+  pluginLog('accounts-native-request', {
+    method: route.method,
+    path,
+    operationId,
+  });
+  return await requestNativeHost(route.method, {
+    operationId,
+    payload: nativePayload,
+  }, 35_000);
+}
+
+function accountNativeRoute(path) {
+  const normalized = String(path || '');
+  if (normalized === '/import-sessions') {
+    return { method: 'accounts.createImportSession' };
   }
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
+  let match = normalized.match(/^\/([^/]+)\/posts\/batch$/);
+  if (match) {
+    return {
+      method: 'accounts.upsertPostsBatch',
+      accountId: decodeURIComponent(match[1]),
+    };
   }
-  if (!response.ok || data?.success === false) {
-    pluginError('accounts-http-response-failed', {
-      method,
-      url,
-      status: response.status,
-      body: data,
-    });
-    throw new Error(data?.error || `账号档案 API HTTP ${response.status}`);
+  match = normalized.match(/^\/([^/]+)\/comments\/batch$/);
+  if (match) {
+    return {
+      method: 'accounts.upsertCommentsBatch',
+      accountId: decodeURIComponent(match[1]),
+    };
   }
-  return data;
+  match = normalized.match(/^\/([^/]+)\/media\/batch$/);
+  if (match) {
+    return {
+      method: 'accounts.upsertMediaBatch',
+      accountId: decodeURIComponent(match[1]),
+    };
+  }
+  match = normalized.match(/^\/import-sessions\/([^/]+)\/complete$/);
+  if (match) {
+    return {
+      method: 'accounts.completeImportSession',
+      sessionId: decodeURIComponent(match[1]),
+    };
+  }
+  throw new Error(`不支持的账号档案 Desktop action: ${normalized}`);
 }
 
 async function createAccountImportSessionFromXhs(payload, options = {}) {

@@ -2,10 +2,15 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  DesktopBridgeControlClient,
+  desktopBridgeDescriptorPath,
+  resolveDesktopBridgeEndpoint,
+  validateDesktopBridgeDescriptor,
+} from './desktop-bridge-client.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const identity = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'browser-control.identity.json'), 'utf8'));
@@ -25,11 +30,7 @@ const extensionSourceRoots = [
   pluginRoot,
   path.join(pluginRoot, 'src'),
 ].map((item) => path.resolve(item));
-const endpointStatePath = process.env.REDBOX_BROWSER_CONTROL_ENDPOINT_STATE
-  || path.join(nativeHostStateDir, 'browser-control-agent-endpoint.json');
-const defaultSocketPath = process.platform === 'win32'
-  ? '\\\\.\\pipe\\redbox-browser-control'
-  : path.join(os.tmpdir(), `redbox-browser-control-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.sock`);
+const bridgeDescriptorPath = desktopBridgeDescriptorPath();
 
 const browserTargets = process.platform === 'darwin' ? [
   {
@@ -132,8 +133,8 @@ function printHelp() {
 Options:
   --browser <id>          Limit manifest checks to chrome, chrome-beta, chrome-canary, chromium, edge, or brave.
   --extension-id <id>     Expected Chrome extension id. Also reads REDBOX_BROWSER_CONTROL_EXTENSION_ID.
-  --timeout-ms <ms>       Socket probe timeout. Defaults to 3000.
-  --require-connected     Fail unless native-host socket and extension forwarding work.
+  --timeout-ms <ms>       Desktop Bridge probe timeout. Defaults to 3000.
+  --require-connected     Fail unless Desktop Bridge and extension forwarding work.
   --no-fail, --soft       Always exit 0 and print issues in the report.
   --json                  Print JSON instead of human-readable text.
 `);
@@ -156,7 +157,7 @@ function readJsonIfExists(filePath) {
   }
 }
 
-const DIAGNOSTIC_SECRET_KEYS = /^(auth(token)?|authorization|cookie|password|otp|token)$/i;
+const DIAGNOSTIC_SECRET_KEYS = /(auth(token)?|authorization|cookie|password|otp|token)$/i;
 
 function redactDiagnosticSecrets(value) {
   if (Array.isArray(value)) return value.map((item) => redactDiagnosticSecrets(item));
@@ -293,119 +294,72 @@ function checkManifest(target, extensionId) {
   return check;
 }
 
-function readEndpointState() {
-  const state = readJsonIfExists(endpointStatePath);
-  const stat = statIfExists(endpointStatePath);
+function readBridgeDescriptor() {
+  const descriptor = readJsonIfExists(bridgeDescriptorPath);
   const check = {
-    path: endpointStatePath,
-    exists: Boolean(state),
+    path: bridgeDescriptorPath,
+    exists: Boolean(descriptor),
     ok: false,
-    stale: false,
-    ageMs: null,
-    socketPath: defaultSocketPath,
     endpoint: null,
-    state: null,
+    descriptor: null,
     issues: [],
   };
-  if (!state) {
-    check.issues.push('endpoint_state_missing');
+  if (!descriptor) {
+    check.issues.push('bridge_descriptor_missing');
     return check;
   }
-  if (state.__parseError) {
-    check.issues.push(`endpoint_state_parse_error:${state.__parseError}`);
+  if (descriptor.__parseError) {
+    check.issues.push(`bridge_descriptor_parse_error:${descriptor.__parseError}`);
     return check;
   }
-  check.state = state;
-  check.endpoint = state;
-  check.socketPath = state.socketPath || defaultSocketPath;
-  const updatedAtMs = Number(state.lastSeenAtMs || state.updatedAtMs || stat?.mtimeMs || 0);
-  if (updatedAtMs) {
-    check.ageMs = Date.now() - updatedAtMs;
-    check.stale = check.ageMs > 2 * 60 * 1000;
-    if (check.stale) check.issues.push('endpoint_state_stale');
+  try {
+    validateDesktopBridgeDescriptor(descriptor);
+    check.endpoint = resolveDesktopBridgeEndpoint(descriptor.endpoint);
+    check.descriptor = descriptor;
+    check.ok = true;
+  } catch (error) {
+    check.issues.push(`bridge_descriptor_invalid:${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!state.socketPath && !state.endpoint?.address && !state.tcpAddress) check.issues.push('endpoint_address_missing');
-  check.ok = check.issues.length === 0;
   return check;
 }
 
-async function probeSocket(endpoint, timeoutMs) {
-  const socketPath = endpoint?.socketPath || defaultSocketPath;
-  const tcpAddress = String(endpoint?.endpoint?.address || endpoint?.tcpAddress || '');
+async function probeDesktopBridge(bridge, timeoutMs) {
   const result = {
-    socketPath,
-    tcpAddress,
-    exists: tcpAddress ? null : (process.platform === 'win32' ? null : exists(socketPath)),
+    endpoint: bridge.endpoint,
+    exists: bridge.endpoint?.kind === 'windows_named_pipe'
+      ? null
+      : exists(bridge.endpoint?.path || ''),
     connected: false,
-    hostInfo: null,
-    toolsList: null,
+    handshake: null,
+    tools: null,
     issues: [],
   };
-  if (!tcpAddress && process.platform !== 'win32' && !exists(socketPath)) {
-    result.issues.push('socket_missing');
+  if (!bridge.ok) {
+    result.issues.push('bridge_descriptor_unavailable');
     return result;
   }
-  try {
-    result.hostInfo = await sendSocketJsonRpc(endpoint, { jsonrpc: '2.0', id: 'diag:host', method: 'host.getInfo', params: {} }, timeoutMs);
-    result.connected = true;
-  } catch (error) {
-    result.issues.push(`host_get_info_failed:${error instanceof Error ? error.message : String(error)}`);
+  if (bridge.endpoint.kind !== 'windows_named_pipe' && !result.exists) {
+    result.issues.push('bridge_socket_missing');
     return result;
   }
+  const client = new DesktopBridgeControlClient({ timeoutMs });
   try {
-    result.toolsList = await sendSocketJsonRpc(endpoint, { jsonrpc: '2.0', id: 'diag:tools', method: 'tools/list', params: {} }, timeoutMs);
-  } catch (error) {
-    result.issues.push(`extension_forwarding_failed:${error instanceof Error ? error.message : String(error)}`);
+    try {
+      result.handshake = await client.connect();
+      result.connected = true;
+    } catch (error) {
+      result.issues.push(`bridge_handshake_failed:${error instanceof Error ? error.message : String(error)}`);
+      return result;
+    }
+    try {
+      result.tools = await client.listTools(timeoutMs);
+    } catch (error) {
+      result.issues.push(`extension_forwarding_failed:${error instanceof Error ? error.message : String(error)}`);
+    }
+  } finally {
+    await client.close();
   }
   return result;
-}
-
-function sendSocketJsonRpc(endpoint, payload, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const address = String(endpoint?.endpoint?.address || endpoint?.tcpAddress || '');
-    const match = address.match(/^127\.0\.0\.1:(\d+)$/);
-    const socket = match
-      ? net.createConnection({ host: '127.0.0.1', port: Number(match[1]) })
-      : net.createConnection(endpoint?.socketPath || defaultSocketPath);
-    let buffer = '';
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error(`timeout_after_${timeoutMs}ms`));
-    }, timeoutMs);
-    socket.setEncoding('utf8');
-    socket.on('connect', () => {
-      const authToken = String(endpoint?.endpoint?.authToken || endpoint?.authToken || '');
-      if (authToken) payload._browserControlAuth = authToken;
-      socket.write(`${JSON.stringify(payload)}\n`);
-    });
-    socket.on('data', (chunk) => {
-      buffer += chunk;
-      while (buffer.includes('\n')) {
-        const index = buffer.indexOf('\n');
-        const line = buffer.slice(0, index).trim();
-        buffer = buffer.slice(index + 1);
-        if (!line) continue;
-        clearTimeout(timer);
-        socket.end();
-        try {
-          const message = JSON.parse(line);
-          if (message.error) reject(new Error(message.error.message || JSON.stringify(message.error)));
-          else resolve(message.result);
-        } catch (error) {
-          reject(error);
-        }
-        return;
-      }
-    });
-    socket.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    socket.on('end', () => {
-      clearTimeout(timer);
-      if (!buffer.trim()) reject(new Error('socket_closed_without_response'));
-    });
-  });
 }
 
 function buildSummary(report, args) {
@@ -423,10 +377,10 @@ function buildSummary(report, args) {
       if (!manifest.ok) issues.push(`${manifest.browser}:${manifest.issues.join('|')}`);
     }
   }
-  if (!report.endpoint.ok) issues.push(`endpoint:${report.endpoint.issues.join('|')}`);
-  if (report.socket.issues.length) issues.push(`socket:${report.socket.issues.join('|')}`);
-  if (args.requireConnected && !report.socket.connected) issues.push('require_connected_failed');
-  if (args.requireConnected && !report.socket.toolsList) issues.push('require_extension_forwarding_failed');
+  if (!report.bridge.ok) issues.push(`bridge:${report.bridge.issues.join('|')}`);
+  if (report.bridgeProbe.issues.length) issues.push(`bridge_probe:${report.bridgeProbe.issues.join('|')}`);
+  if (args.requireConnected && !report.bridgeProbe.connected) issues.push('require_connected_failed');
+  if (args.requireConnected && !report.bridgeProbe.tools) issues.push('require_extension_forwarding_failed');
   return {
     ok: issues.length === 0,
     issues,
@@ -452,15 +406,13 @@ function printHuman(report) {
   for (const manifest of report.manifests) {
     console.log(`Manifest ${manifest.browser}: ${manifest.ok ? 'ok' : manifest.issues.join(', ')} (${manifest.path})`);
   }
-  console.log(`Endpoint state: ${report.endpoint.ok ? 'ok' : report.endpoint.issues.join(', ')} (${report.endpoint.path})`);
-  console.log(`Control endpoint: ${report.socket.connected ? 'connected' : report.socket.issues.join(', ') || 'not connected'} (${report.socket.tcpAddress || report.socket.socketPath})`);
-  if (report.socket.hostInfo) {
-    console.log(`Host nativeConnected: ${report.socket.hostInfo.nativeConnected === true ? 'true' : 'false'}`);
-  }
-  if (report.socket.toolsList) {
-    const count = Array.isArray(report.socket.toolsList.tools) ? report.socket.toolsList.tools.length : 0;
+  console.log(`Desktop Bridge descriptor: ${report.bridge.ok ? 'ok' : report.bridge.issues.join(', ')} (${report.bridge.path})`);
+  const bridgeAddress = report.bridge.endpoint?.path || 'unavailable';
+  console.log(`Desktop Bridge: ${report.bridgeProbe.connected ? 'connected' : report.bridgeProbe.issues.join(', ') || 'not connected'} (${bridgeAddress})`);
+  if (report.bridgeProbe.tools) {
+    const count = Array.isArray(report.bridgeProbe.tools) ? report.bridgeProbe.tools.length : 0;
     console.log(`Extension forwarding: ok (${count} tools)`);
-  } else if (report.socket.issues.some((issue) => issue.startsWith('extension_forwarding_failed:'))) {
+  } else if (report.bridgeProbe.issues.some((issue) => issue.startsWith('extension_forwarding_failed:'))) {
     console.log('Extension forwarding: failed');
   }
   console.log(`Overall: ${report.summary.ok ? 'ok' : report.summary.issues.join(', ')}`);
@@ -475,7 +427,7 @@ async function main() {
   const extensions = discoverInstalledExtensions(selectedTargets);
   const chosenExtensionId = chooseExtensionId(args.extensionId, extensions);
   const extensionId = chosenExtensionId.value;
-  const endpoint = readEndpointState();
+  const bridge = readBridgeDescriptor();
   const report = {
     checkedAt: new Date().toISOString(),
     source: {
@@ -502,14 +454,18 @@ async function main() {
       valid: args.extensionId ? Boolean(normalizeExtensionId(args.extensionId)) : null,
     },
     manifests: selectedTargets.map((target) => checkManifest(target, extensionId)),
-    endpoint,
-    socket: await probeSocket(endpoint.endpoint || { socketPath: endpoint.socketPath || defaultSocketPath }, Math.max(250, Number(args.timeoutMs || 3000))),
+    bridge,
+    bridgeProbe: await probeDesktopBridge(bridge, Math.max(250, Number(args.timeoutMs || 3000))),
     summary: null,
   };
   report.summary = buildSummary(report, args);
   const safeReport = redactDiagnosticSecrets(report);
-  const rawAuthToken = String(endpoint.endpoint?.endpoint?.authToken || endpoint.endpoint?.authToken || '');
-  if (rawAuthToken) assert(!JSON.stringify(safeReport).includes(rawAuthToken), 'diagnostic report leaked endpoint auth token');
+  for (const rawToken of [
+    String(bridge.descriptor?.hostAuthToken || ''),
+    String(bridge.descriptor?.controlAuthToken || ''),
+  ]) {
+    if (rawToken) assert(!JSON.stringify(safeReport).includes(rawToken), 'diagnostic report leaked bridge auth token');
+  }
   if (args.json) console.log(JSON.stringify(safeReport, null, 2));
   else printHuman(safeReport);
   if (!args.noFail && !report.summary.ok) process.exit(1);

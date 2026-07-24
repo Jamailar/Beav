@@ -819,47 +819,25 @@ void ensureInitialized().catch((error) => {
 async function getSettings() {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
   return {
-    apiBaseUrl: '',
     autoPoll: false,
     ...(result?.[SETTINGS_KEY] || {}),
   };
 }
 
 async function resolveApiBase(force = false) {
-  if (cachedBaseUrl && !force) return cachedBaseUrl;
-  const settings = await getSettings();
-  const candidates = [settings.apiBaseUrl, ...API_CANDIDATES].filter(Boolean);
-  let lastError = '';
-  for (const baseUrl of candidates) {
-    try {
-      const response = await fetch(`${baseUrl}/health`, { method: 'GET' });
-      if (!response.ok) {
-        lastError = `${baseUrl} ${response.status}`;
-        continue;
-      }
-      cachedBaseUrl = baseUrl.replace(/\/+$/, '');
-      setStatus({ connected: true, baseUrl: cachedBaseUrl, lastError: '' });
-      return cachedBaseUrl;
-    } catch (error) {
-      lastError = describeError(error);
-    }
-  }
+  void force;
   cachedBaseUrl = null;
-  throw new Error(lastError || 'Beav browser-control HTTP bridge is not configured');
+  throw new Error('Beav browser-control HTTP bridge has been retired; use Native Messaging');
 }
 
 async function registerPlugin(force) {
-  const baseUrl = await resolveApiBase(force);
-  const manifest = chrome.runtime.getManifest();
-  const settings = await getSettings();
-  const result = await postJson(`${baseUrl}/plugins/register`, buildPluginRegistrationPayload({
-    pluginId: PLUGIN_ID,
-    manifest,
-    nativeHostName: settings.nativeHostName || NATIVE_HOST_DEFAULT,
-    nativeStatus,
-  }));
-  setStatus({ connected: true, baseUrl, lastError: '' });
-  return result;
+  const status = await connectNativeTransport({ force: force === true });
+  setStatus({
+    connected: status.state === 'connected',
+    baseUrl: '',
+    lastError: status.error || '',
+  });
+  return { success: status.state === 'connected', status };
 }
 
 async function connectNativeTransport(options = {}) {
@@ -954,36 +932,7 @@ async function handleNativeRequest(message) {
 }
 
 async function pollCommandOnce() {
-  const settings = await getSettings();
-  if (!settings.autoPoll) return { success: true, skipped: true };
-  const baseUrl = await resolveApiBase(true);
-  const url = `${baseUrl}/commands/next?pluginId=${encodeURIComponent(PLUGIN_ID)}&extensionId=${encodeURIComponent(chrome.runtime.id)}`;
-  const result = await getJson(url).catch((error) => {
-    if (String(describeError(error)).includes('404')) return { command: null };
-    throw error;
-  });
-  if (!result?.command) return { success: true, command: null };
-  const command = result.command;
-  setStatus({ lastCommandId: command.id });
-  try {
-    const commandResult = await executeCommand(command);
-    if (commandResult?.success === false) {
-      throw new Error(commandResult.error || commandResult.result?.error || `${command.action} failed`);
-    }
-    await postJson(`${baseUrl}/commands/complete`, {
-      commandId: command.id,
-      success: true,
-      result: commandResult,
-    });
-    return { success: true, command: command.id, result: commandResult };
-  } catch (error) {
-    await postJson(`${baseUrl}/commands/complete`, {
-      commandId: command.id,
-      success: false,
-      error: describeError(error),
-    }).catch(() => {});
-    throw error;
-  }
+  return { success: true, skipped: true, transport: 'native_messaging' };
 }
 
 async function executeCommand(command) {

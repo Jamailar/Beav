@@ -11,6 +11,7 @@ export const NATIVE_RECONNECT_DELAY_MS = 5000;
 export const NATIVE_RECONNECT_PERIOD_MINUTES = NATIVE_RECONNECT_DELAY_MS / 60_000;
 export const NATIVE_TELEMETRY_LIMIT = 50;
 export const NATIVE_HANDSHAKE_TIMEOUT_MS = 3000;
+export const NATIVE_PENDING_REQUEST_LIMIT = 8;
 
 let nativePort = null;
 let nativeRequestSeq = 0;
@@ -47,7 +48,7 @@ export function refreshNativeStatus() {
   const previousState = nativeStatus.state;
   nativeStatus = {
     ...nativeStatus,
-    state: nativePort ? 'connected' : nativeStatus.state,
+    state: nativePort ? nativeStatus.state : 'disconnected',
     lastChecked: Date.now(),
     reconnectAttempt: nativeReconnectAttempt,
     telemetry: nativeTelemetry.slice(-20),
@@ -116,6 +117,7 @@ export async function connectNativeTransport(options = {}) {
     if (!handshake || handshake.ok !== true) {
       throw new Error('Native host handshake returned an invalid response');
     }
+    assertNativeHostVersionCompatibility(handshake);
   } catch (error) {
     if (nativePort === connectedPort) {
       nativePort = null;
@@ -160,16 +162,60 @@ export async function connectNativeTransport(options = {}) {
   nativeReconnectAttempt = 0;
   nativeReconnectPending = false;
   clearNativeReconnectTimeout();
-  recordNativeTelemetry('connected', { hostName, handshake: true, registered: registrationSucceeded });
-  await setNativeStatus('connected', {
+  const connectionState = classifyDesktopBridgeHandshake(handshake);
+  const desktopBridgeConnected = connectionState === 'connected';
+  const connectionError = connectionState === 'upgrade_required'
+    ? '当前 Beav 版本不支持 Desktop Bridge，请升级 Beav'
+    : (desktopBridgeConnected ? '' : 'Beav desktop app is not connected');
+  recordNativeTelemetry(connectionState, {
     hostName,
-    error: '',
+    handshake: true,
+    registered: registrationSucceeded,
+    desktopBridgeConnected,
+  });
+  await setNativeStatus(connectionState, {
+    hostName,
+    error: connectionError,
     handshake,
     registration,
     registrationSucceeded,
   });
-  await clearNativeReconnectAlarm();
+  if (desktopBridgeConnected) {
+    await clearNativeReconnectAlarm();
+  } else {
+    scheduleNativeReconnectTimeout();
+    await ensureNativeReconnectAlarm();
+  }
   return getNativeStatus();
+}
+
+export function assertNativeHostVersionCompatibility(handshake = {}) {
+  const manifest = chrome.runtime.getManifest();
+  const extensionVersion = manifest.version_name || manifest.version || '';
+  const hostVersion = String(handshake.appVersion || '');
+  const expected = normalizeProductVersion(extensionVersion);
+  const actual = normalizeProductVersion(hostVersion);
+  const expectedCompatibility = expected.split('.').slice(0, 2).join('.');
+  const actualCompatibility = actual.split('.').slice(0, 2).join('.');
+  if (!expected || !actual || expectedCompatibility !== actualCompatibility) {
+    throw new Error(
+      `Native host version mismatch: extension ${expected || 'unknown'}, host ${actual || 'unknown'}. Restart Beav and reload the extension.`,
+    );
+  }
+  return true;
+}
+
+export function classifyDesktopBridgeHandshake(handshake = {}) {
+  if (!handshake?.desktopBridge || typeof handshake.desktopBridge !== 'object') {
+    return 'upgrade_required';
+  }
+  return handshake.desktopBridge.connected === true ? 'connected' : 'app_not_running';
+}
+
+export function normalizeProductVersion(value = '') {
+  const segments = String(value).trim().split('.').slice(0, 3);
+  if (segments.length !== 3 || segments.some((segment) => !/^\d+$/.test(segment))) return '';
+  return segments.join('.');
 }
 
 export async function disconnectNativeTransport(reason = 'disconnect') {
@@ -191,6 +237,12 @@ export async function requestNativeHost(method, params = {}, timeoutMs = 12_000)
   if (!nativePort) {
     await scheduleNativeReconnect();
     throw new Error(TARGET_NATIVE_DISCONNECTED_ERROR);
+  }
+  if (pendingNativeRequests.size >= NATIVE_PENDING_REQUEST_LIMIT) {
+    const error = new Error('Native transport is busy; retry the request');
+    error.code = 'NATIVE_TRANSPORT_BUSY';
+    error.retryable = true;
+    throw error;
   }
   nativeRequestSeq += 1;
   const id = `native-host:${nativeRequestSeq}`;
@@ -326,7 +378,37 @@ async function scheduleNativeReconnect() {
 
 async function runNativeReconnectAttempt(hostName = '') {
   if (nativePort) {
-    await clearNativeReconnectAlarm();
+    try {
+      const handshake = await requestNativeHost('ping', {}, NATIVE_HANDSHAKE_TIMEOUT_MS);
+      assertNativeHostVersionCompatibility(handshake);
+      const connectionState = classifyDesktopBridgeHandshake(handshake);
+      if (connectionState === 'connected') {
+        nativeReconnectAttempt = 0;
+        nativeReconnectPending = false;
+        clearNativeReconnectTimeout();
+        await setNativeStatus('connected', {
+          handshake,
+          error: '',
+          nextRetryMs: 0,
+        });
+        await clearNativeReconnectAlarm();
+        return getNativeStatus();
+      }
+      await setNativeStatus(connectionState, {
+        handshake,
+        error: connectionState === 'upgrade_required'
+          ? '当前 Beav 版本不支持 Desktop Bridge，请升级 Beav'
+          : 'Beav desktop app is not connected',
+        nextRetryMs: NATIVE_RECONNECT_DELAY_MS,
+      });
+    } catch (error) {
+      await setNativeStatus('reconnecting', {
+        error: describeError(error),
+        nextRetryMs: NATIVE_RECONNECT_DELAY_MS,
+      });
+    }
+    scheduleNativeReconnectTimeout();
+    await ensureNativeReconnectAlarm();
     return getNativeStatus();
   }
   clearNativeReconnectTimeout();
@@ -342,7 +424,7 @@ async function runNativeReconnectAttempt(hostName = '') {
 }
 
 function scheduleNativeReconnectTimeout() {
-  if (nativePort || nativeReconnectTimeoutId != null) return;
+  if ((nativePort && nativeStatus.state === 'connected') || nativeReconnectTimeoutId != null) return;
   nativeReconnectTimeoutId = setTimeout(() => {
     nativeReconnectTimeoutId = null;
     void runNativeReconnectAttempt().catch(() => {});
@@ -356,16 +438,16 @@ function clearNativeReconnectTimeout() {
 }
 
 async function ensureNativeReconnectAlarm() {
-  if (nativePort) return;
+  if (nativePort && nativeStatus.state === 'connected') return;
   const existing = await chrome.alarms.get(NATIVE_RECONNECT_ALARM).catch(() => null);
-  if (!existing && !nativePort) {
+  if (!existing) {
     await chrome.alarms.create(NATIVE_RECONNECT_ALARM, {
       periodInMinutes: NATIVE_RECONNECT_PERIOD_MINUTES,
     }).catch(() => {});
   }
   const targetAlarmName = getTargetNativeReconnectAlarmName();
   const targetExisting = await chrome.alarms.get(targetAlarmName).catch(() => null);
-  if (!targetExisting && !nativePort) {
+  if (!targetExisting) {
     await chrome.alarms.create(targetAlarmName, {
       periodInMinutes: NATIVE_RECONNECT_PERIOD_MINUTES,
     }).catch(() => {});
@@ -447,7 +529,12 @@ function nativeResponseError(error = {}) {
   const message = error.message || JSON.stringify(error);
   const nativeError = new Error(message);
   if (typeof error.code === 'number') nativeError.code = error.code;
-  if (error.data !== undefined) nativeError.data = error.data;
+  if (error.data !== undefined) {
+    nativeError.data = error.data;
+    if (typeof error.data?.code === 'string') nativeError.code = error.data.code;
+    if (typeof error.data?.retryable === 'boolean') nativeError.retryable = error.data.retryable;
+    if (typeof error.data?.phase === 'string') nativeError.phase = error.data.phase;
+  }
   return nativeError;
 }
 

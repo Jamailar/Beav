@@ -13,11 +13,11 @@ Beav 浏览器扩展的单一用途是连接 Beav 桌面端，让用户把自己
 
 ## 远程代码说明
 
-Beav 不加载 CDN 或第三方服务器托管的扩展脚本；扩展运行所需的 JavaScript、CSS 和资源都随扩展包提交。扩展会与本机 Beav 桌面端、Chrome Native Messaging host 和 localhost API 通信，用于接收用户在 Beav 中发起的网页采集或浏览器控制指令。浏览器控制任务可能通过 Chrome Debugger API 或 `chrome.scripting` 在用户指定或扩展创建的标签页中执行一次性的页面脚本，用于 DOM 读取、点击、输入、滚动、截图、剪贴板或文件选择等自动化操作。这些脚本只在用户明确发起任务时运行，不作为扩展持久代码加载，不来自公共 CDN，也不会暴露 Chrome 扩展 API 给网页。
+Beav 不加载 CDN 或第三方服务器托管的扩展脚本；扩展运行所需的 JavaScript、CSS 和资源都随扩展包提交。扩展通过 Chrome Native Messaging 与本机 Beav 通信；Native Host 再通过仅当前用户可访问的 Windows Named Pipe 或 Unix Domain Socket 连接 Beav 桌面端，不监听或访问 localhost API。浏览器控制任务可能通过 Chrome Debugger API 或 `chrome.scripting` 在用户指定或扩展创建的标签页中执行一次性的页面脚本，用于 DOM 读取、点击、输入、滚动、截图、剪贴板或文件选择等自动化操作。这些脚本只在用户明确发起任务时运行，不作为扩展持久代码加载，不来自公共 CDN，也不会暴露 Chrome 扩展 API 给网页。
 
 ## 主机权限说明
 
-Beav 需要主机权限来读取用户当前选择保存或处理的网页内容、页面标题、链接、图片、视频和页面结构，并把结构化结果发送到本机 Beav 桌面端。`http://127.0.0.1` 和 `http://localhost` 权限用于连接本机 Beav 服务；`https://redbox.ziz.hk/*` 用于检查插件更新；小红书、Rednote、抖音、快手、TikTok、Bilibili、Reddit、X、Instagram、微信公众号、知乎等域名用于对应平台的内容采集适配。`<all_urls>` 用于“保存任意网页”和用户发起的通用浏览器控制任务，因为用户可能在任意网站上保存页面链接、摘录正文或让 Beav 处理当前网页。
+Beav 需要主机权限来读取用户当前选择保存或处理的网页内容、页面标题、链接、图片、视频和页面结构，并把结构化结果通过 Native Messaging 发送到本机 Beav 桌面端。`https://redbox.ziz.hk/*` 用于检查插件更新；小红书、Rednote、抖音、快手、TikTok、Bilibili、Reddit、X、Instagram、微信公众号、知乎等域名用于对应平台的内容采集适配。`<all_urls>` 用于“保存任意网页”和用户发起的通用浏览器控制任务，因为用户可能在任意网站上保存页面链接、摘录正文或让 Beav 处理当前网页。
 
 ## 权限说明
 

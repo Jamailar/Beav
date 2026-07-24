@@ -9,20 +9,24 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BrowserControlTransport, setupBrowserRuntime } from './browser-client.mjs';
+import { setupBrowserRuntime } from './browser-client.mjs';
+import {
+  DesktopBridgeBrowserTransport,
+  DesktopBridgeControlClient,
+  desktopBridgeDescriptorPath,
+  readDesktopBridgeDescriptor,
+} from './desktop-bridge-client.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = path.resolve(pluginRoot, '..');
 const extensionPath = path.join(pluginRoot, 'dist', 'extension');
 const hostName = 'com.redbox.browser_control';
-const hostScript = path.join(pluginRoot, 'native-host', 'host.mjs');
 const defaultRustHostPath = path.join(repositoryRoot, 'desktop', 'src-tauri', 'target', 'debug', 'beav');
 const stableChromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 function parseArgs(argv) {
   const args = {
     allowStableChrome: false,
-    allowJsHost: false,
     chromePath: process.env.REDBOX_BROWSER_CONTROL_CHROME_PATH || '',
     hostPath: process.env.REDBOX_BROWSER_CONTROL_HOST_PATH || defaultRustHostPath,
     faultMatrix: false,
@@ -32,7 +36,6 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
     if (item === '--allow-stable-chrome') args.allowStableChrome = true;
-    else if (item === '--allow-js-host') args.allowJsHost = true;
     else if (item === '--chrome-path') args.chromePath = argv[++index] || '';
     else if (item === '--host-path') args.hostPath = argv[++index] || '';
     else if (item === '--fault-matrix') args.faultMatrix = true;
@@ -44,11 +47,10 @@ function parseArgs(argv) {
 Options:
   --chrome-path <path>       Browser binary to launch. Also reads REDBOX_BROWSER_CONTROL_CHROME_PATH.
   --host-path <path>         Native Host executable. Defaults to desktop/src-tauri/target/debug/beav.
-  --allow-js-host            Explicitly use Plugin/native-host/host.mjs when the Rust Host is unavailable.
-  --fault-matrix             Inject stale descriptor, late response, Host kill, and MV3 worker restart faults.
+  --fault-matrix             Inject auth failure, late response, and MV3 worker restart faults.
   --allow-stable-chrome      Allow /Applications/Google Chrome.app as a fallback.
   --keep-profile             Keep the temporary profile directory after the smoke run.
-  --timeout-ms <ms>          Wait timeout for extension/socket readiness. Defaults to 20000.
+  --timeout-ms <ms>          Wait timeout for Desktop Bridge readiness. Defaults to 20000.
 `);
       process.exit(0);
     }
@@ -60,22 +62,19 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const selectedBrowser = chooseBrowser(args);
   assert(fs.existsSync(extensionPath), `Built extension not found: ${extensionPath}. Run pnpm build first.`);
-  if (args.allowJsHost) {
-    assert(fs.existsSync(hostScript), `Native host script not found: ${hostScript}`);
-  } else {
-    assert(
-      fs.existsSync(args.hostPath),
-      `Built Rust Native Host not found: ${args.hostPath}. Build the desktop binary or pass --host-path; use --allow-js-host only for compatibility diagnostics.`,
-    );
-  }
+  assert(
+    fs.existsSync(args.hostPath),
+    `Built Rust Native Host not found: ${args.hostPath}. Build the desktop binary or pass --host-path.`,
+  );
+  const bridgeDescriptorPath = desktopBridgeDescriptorPath();
+  const bridgeDescriptor = readDesktopBridgeDescriptor(bridgeDescriptorPath).descriptor;
+  const discoveryTransport = new DesktopBridgeBrowserTransport({ timeoutMs: args.timeoutMs });
+  const baselineInstances = await discoveryTransport.listEndpoints();
+  const baselineInstanceIds = new Set(baselineInstances.map(browserInstanceKey));
 
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'redbox-browser-e2e-'));
   const isolatedHome = path.join(tempRoot, 'home');
   const profileRoot = path.join(tempRoot, 'chrome-profile');
-  const endpointPath = path.join(tempRoot, 'browser-control-endpoint.json');
-  const endpointsDirectory = path.join(tempRoot, 'browser-control-agent-endpoints');
-  const socketPath = path.join(tempRoot, 'browser-control.sock');
-  const launcherPath = path.join(tempRoot, 'native-host-launcher.sh');
   const manifestPaths = nativeManifestPathsForBrowser(selectedBrowser.path, profileRoot, isolatedHome);
   const extensionId = extensionIdForUnpackedPath(extensionPath);
   for (const manifestPath of manifestPaths) {
@@ -87,15 +86,20 @@ async function main() {
   try {
     await fsp.mkdir(isolatedHome, { recursive: true });
     await fsp.mkdir(profileRoot, { recursive: true });
-    const nativeHostPath = await installNativeHostManifest(extensionId, manifestPaths, launcherPath, args);
-    chromeProcess = launchChrome(selectedBrowser.path, profileRoot, endpointPath, endpointsDirectory, socketPath, isolatedHome);
+    const nativeHostPath = await installNativeHostManifest(extensionId, manifestPaths, args);
+    chromeProcess = launchChrome(
+      selectedBrowser.path,
+      profileRoot,
+      isolatedHome,
+      bridgeDescriptorPath,
+    );
     const devtools = await waitForDevTools(profileRoot, args.timeoutMs, chromeProcess);
     nativeConnectResult = await triggerNativeConnect({
       extensionId,
       port: devtools.port,
       timeoutMs: args.timeoutMs,
     });
-    await waitForEndpoint(endpointPath, socketPath, args.timeoutMs, {
+    const isolatedInstance = await waitForNewBridgeInstance(baselineInstanceIds, args.timeoutMs, {
       browserPath: selectedBrowser.path,
       child: chromeProcess,
       devtools,
@@ -105,14 +109,12 @@ async function main() {
       profileRoot,
     });
 
-    transport = new BrowserControlTransport({ endpointStatePath: endpointPath, endpointsDirectory, timeoutMs: 5000 });
+    transport = new DesktopBridgeBrowserTransport({
+      browserId: browserInstanceKey(isolatedInstance),
+      timeoutMs: 5000,
+    });
     const hostInfo = await transport.hostInfo();
     assert.equal(hostInfo.hostName, hostName);
-    assert.equal(
-      args.allowJsHost,
-      nativeHostPath === launcherPath,
-      'smoke Host selection should only use the JS launcher when --allow-js-host is explicit',
-    );
     const tools = await transport.listTools();
     assert(tools.some((tool) => tool.name === 'tab.create'), 'tools/list should include tab.create');
     const researchTool = tools.find((tool) => tool.name === 'research.run');
@@ -169,9 +171,9 @@ async function main() {
     assert.equal(researchStep.response, undefined, 'atomic research evidence should not retain the content-delivery envelope');
     const faults = args.faultMatrix
       ? await runFaultMatrix({
+        bridgeDescriptor,
+        bridgeDescriptorPath,
         devtools,
-        endpointPath,
-        endpointsDirectory,
         extensionId,
         initialHostInfo: hostInfo,
         profileRoot,
@@ -195,7 +197,6 @@ async function main() {
 
       const stableExtensionInstanceId = String(hostInfo.extension?.extensionInstanceId || '');
       assert(stableExtensionInstanceId, 'browser restart requires a stable extensionInstanceId');
-      await transport.request('host.shutdown', {}, { timeoutMs: 2000 }).catch(() => {});
       await stopChrome(chromeProcess);
       chromeProcess = null;
       await fsp.rm(path.join(profileRoot, 'DevToolsActivePort'), { force: true }).catch(() => {});
@@ -203,10 +204,8 @@ async function main() {
       chromeProcess = launchChrome(
         selectedBrowser.path,
         profileRoot,
-        endpointPath,
-        endpointsDirectory,
-        socketPath,
         isolatedHome,
+        bridgeDescriptorPath,
       );
       const restartedDevtools = await waitForDevTools(profileRoot, args.timeoutMs, chromeProcess);
       await triggerNativeConnect({
@@ -214,7 +213,7 @@ async function main() {
         port: restartedDevtools.port,
         timeoutMs: args.timeoutMs,
       });
-      await waitForEndpoint(endpointPath, socketPath, args.timeoutMs, {
+      await waitForBridgeInstance(stableExtensionInstanceId, args.timeoutMs, {
         browserPath: selectedBrowser.path,
         child: chromeProcess,
         devtools: restartedDevtools,
@@ -222,7 +221,10 @@ async function main() {
         manifestPaths,
         profileRoot,
       });
-      transport = new BrowserControlTransport({ endpointStatePath: endpointPath, endpointsDirectory, timeoutMs: 5000 });
+      transport = new DesktopBridgeBrowserTransport({
+        browserId: stableExtensionInstanceId,
+        timeoutMs: 5000,
+      });
       const restartedHostInfo = await transport.hostInfo();
       assert.equal(
         restartedHostInfo.extension?.extensionInstanceId,
@@ -234,13 +236,10 @@ async function main() {
         scenario: 'browser_process_restart',
         terminal: 'reconnected',
         extensionInstanceId: stableExtensionInstanceId,
-        hostPid: restartedHostInfo.pid,
       });
     } else {
       await runtimeBrowser.tabs.finalize({ keep: [] });
     }
-    await transport.request('host.shutdown', {}, { timeoutMs: 2000 }).catch(() => {});
-
     console.log(JSON.stringify({
       ok: true,
       browser: selectedBrowser.label,
@@ -248,7 +247,12 @@ async function main() {
       extensionId,
       host: hostInfo.hostName,
       nativeHostPath,
-      nativeHostKind: args.allowJsHost ? 'js-compatibility' : 'rust-production',
+      nativeHostKind: 'rust-production',
+      desktopBridge: {
+        descriptorPath: bridgeDescriptorPath,
+        appVersion: bridgeDescriptor.appVersion,
+        protocolVersion: bridgeDescriptor.bridgeProtocolVersion,
+      },
       manifestPaths,
       tools: tools.length,
       researchStepModes,
@@ -267,10 +271,7 @@ async function main() {
       profileRoot: args.keepProfile ? profileRoot : null,
     }, null, 2));
   } finally {
-    if (transport) await transport.request('host.shutdown', {}, { timeoutMs: 1000 }).catch(() => {});
     if (chromeProcess) await stopChrome(chromeProcess).catch(() => {});
-    try { fs.rmSync(socketPath, { force: true }); } catch {}
-    try { fs.rmSync(endpointPath, { force: true }); } catch {}
     if (!args.keepProfile) {
       await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
     }
@@ -371,7 +372,7 @@ function nativeManifestPathsForBrowser(browserPath, profileRoot = '', isolatedHo
   return [...new Set(manifestDirs)].map((dir) => path.join(dir, fileName));
 }
 
-function launchChrome(browserPath, profileRoot, endpointPath, endpointsDirectory, socketPath, isolatedHome) {
+function launchChrome(browserPath, profileRoot, isolatedHome, bridgeDescriptorPath) {
   const args = [
     `--user-data-dir=${profileRoot}`,
     '--remote-debugging-port=0',
@@ -390,10 +391,7 @@ function launchChrome(browserPath, profileRoot, endpointPath, endpointsDirectory
       HOME: isolatedHome,
       XDG_CONFIG_HOME: path.join(isolatedHome, '.config'),
       XDG_DATA_HOME: path.join(isolatedHome, '.local', 'share'),
-      REDBOX_BROWSER_CONTROL_ENDPOINT_STATE: endpointPath,
-      REDBOX_BROWSER_CONTROL_ENDPOINTS_DIRECTORY: endpointsDirectory,
-      REDBOX_BROWSER_CONTROL_STATE_DIR: path.dirname(endpointPath),
-      REDBOX_BROWSER_CONTROL_SOCKET: socketPath,
+      REDBOX_BROWSER_BRIDGE_DESCRIPTOR: bridgeDescriptorPath,
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -488,33 +486,20 @@ async function triggerNativeConnect({ extensionId, port, timeoutMs }) {
 
 async function runFaultMatrix(options) {
   const faults = [];
-  const staleDescriptorPath = path.join(options.endpointsDirectory, 'stale-smoke-endpoint.json');
-  await fsp.mkdir(options.endpointsDirectory, { recursive: true });
-  await fsp.writeFile(staleDescriptorPath, `${JSON.stringify({
-    instanceId: 'stale-smoke-endpoint',
-    tcpAddress: '127.0.0.1:9',
-    lastSeenAtMs: Date.now() - 300_000,
+  const invalidDescriptorPath = path.join(options.profileRoot, 'invalid-desktop-bridge.json');
+  await fsp.writeFile(invalidDescriptorPath, `${JSON.stringify({
+    ...options.bridgeDescriptor,
+    controlAuthToken: '0'.repeat(64),
   })}\n`, 'utf8');
-  const endpointsAfterStale = await options.transport.listEndpoints();
-  assert(!endpointsAfterStale.some((endpoint) => endpoint.instanceId === 'stale-smoke-endpoint'));
-  assert(!fs.existsSync(staleDescriptorPath), 'stale endpoint descriptor should be removed');
-  faults.push({ scenario: 'stale_descriptor', terminal: 'completed', cleaned: true });
-
-  const authenticatedEndpoint = await options.transport.resolveEndpoint();
-  assert(authenticatedEndpoint && typeof authenticatedEndpoint === 'object', 'fault matrix requires a descriptor endpoint');
-  const invalidAuthEndpoint = structuredClone(authenticatedEndpoint);
-  invalidAuthEndpoint.endpoint = {
-    ...(invalidAuthEndpoint.endpoint || {}),
-    authToken: 'invalid-smoke-auth-token',
-  };
-  const invalidAuthTransport = new BrowserControlTransport({
-    endpoint: invalidAuthEndpoint,
+  const invalidAuthClient = new DesktopBridgeControlClient({
+    descriptorPath: invalidDescriptorPath,
     timeoutMs: 2000,
   });
   await assert.rejects(
-    invalidAuthTransport.hostInfo(),
+    invalidAuthClient.connect(),
     (error) => /auth/i.test(String(error?.message || error)),
   );
+  await invalidAuthClient.close();
   const hostAfterAuthFailure = await options.transport.hostInfo({ timeoutMs: 2000 });
   assert.equal(hostAfterAuthFailure.instanceId, options.initialHostInfo.instanceId);
   faults.push({
@@ -531,7 +516,7 @@ async function runFaultMatrix(options) {
       turnId: 'smoke-turn',
       tabId: options.tabId,
       timeoutMs: 350,
-    }, { id: lateCallId, timeoutMs: 50 }),
+    }, { callId: lateCallId, timeoutMs: 50 }),
     (error) => /timed out/i.test(String(error?.message || error)),
   );
   await delay(500);
@@ -541,25 +526,6 @@ async function runFaultMatrix(options) {
 
   const stableExtensionInstanceId = String(options.initialHostInfo.extension?.extensionInstanceId || '');
   assert(stableExtensionInstanceId, 'fault matrix requires a registered extensionInstanceId');
-  const killedPid = Number(options.initialHostInfo.pid);
-  assert(Number.isInteger(killedPid) && killedPid > 1 && killedPid !== process.pid, `invalid Native Host pid: ${killedPid}`);
-  process.kill(killedPid, 'SIGKILL');
-  await delay(250);
-  await triggerNativeConnect({ extensionId: options.extensionId, port: options.devtools.port, timeoutMs: options.timeoutMs });
-  const recoveredAfterKill = await waitForRecoveredHost({
-    ...options,
-    previousInstanceId: options.initialHostInfo.instanceId,
-    extensionInstanceId: stableExtensionInstanceId,
-  });
-  await removeEndpointDescriptor(options.endpointsDirectory, options.initialHostInfo.instanceId);
-  faults.push({
-    scenario: 'host_kill_socket_disconnect',
-    terminal: 'failed_then_recovered',
-    previousPid: killedPid,
-    recoveredPid: recoveredAfterKill.pid,
-    endpointRotated: recoveredAfterKill.instanceId !== options.initialHostInfo.instanceId,
-  });
-
   await stopExtensionServiceWorker({
     browserWebSocketPath: options.devtools.browserWebSocketPath,
     extensionId: options.extensionId,
@@ -568,18 +534,13 @@ async function runFaultMatrix(options) {
   });
   await delay(500);
   await triggerNativeConnect({ extensionId: options.extensionId, port: options.devtools.port, timeoutMs: options.timeoutMs });
-  const recoveredAfterReload = await waitForRecoveredHost({
-    ...options,
-    previousInstanceId: recoveredAfterKill.instanceId,
-    extensionInstanceId: stableExtensionInstanceId,
-  });
-  await removeEndpointDescriptor(options.endpointsDirectory, recoveredAfterKill.instanceId);
+  await waitForBridgeInstance(stableExtensionInstanceId, options.timeoutMs, options);
+  const recoveredAfterReload = await options.transport.hostInfo({ timeoutMs: 2000 });
   assert.equal(recoveredAfterReload.extension?.extensionInstanceId, stableExtensionInstanceId);
   faults.push({
     scenario: 'extension_service_worker_restart',
     terminal: 'reconciled',
     extensionInstanceId: stableExtensionInstanceId,
-    endpointRotated: recoveredAfterReload.instanceId !== recoveredAfterKill.instanceId,
   });
   return faults;
 }
@@ -601,43 +562,6 @@ async function stopExtensionServiceWorker({ browserWebSocketPath, extensionId, p
   } finally {
     client.close();
   }
-}
-
-async function waitForRecoveredHost(options) {
-  const deadline = Date.now() + options.timeoutMs;
-  let lastError = '';
-  while (Date.now() < deadline) {
-    const discovery = new BrowserControlTransport({
-      browserId: options.extensionInstanceId,
-      endpointStatePath: options.endpointPath,
-      endpointsDirectory: options.endpointsDirectory,
-      timeoutMs: 2000,
-    });
-    try {
-      const endpoints = await discovery.listEndpoints();
-      const candidates = endpoints.filter((endpoint) => (
-        endpoint.instanceId !== options.previousInstanceId
-        && endpoint.extension?.extensionInstanceId === options.extensionInstanceId
-      ));
-      for (const endpoint of candidates) {
-        try {
-          const info = await discovery.withEndpoint(endpoint).hostInfo({ timeoutMs: 1000 });
-          if (info.extensionReady === true && info.instanceId !== options.previousInstanceId) return info;
-        } catch (error) {
-          lastError = error instanceof Error ? error.message : String(error);
-        }
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    await delay(200);
-  }
-  throw new Error(`Timed out waiting for recovered Native Host: ${lastError}`);
-}
-
-async function removeEndpointDescriptor(endpointsDirectory, instanceId) {
-  if (!instanceId) return;
-  await fsp.rm(path.join(endpointsDirectory, `${instanceId}.json`), { force: true }).catch(() => {});
 }
 
 async function openDevToolsTarget(port, targetUrl, timeoutMs) {
@@ -879,21 +803,9 @@ async function findExtensionId(profileRoot) {
   return '';
 }
 
-async function installNativeHostManifest(extensionId, manifestPaths, launcherPath, args) {
-  const resolvedHostPath = args.allowJsHost
-    ? launcherPath
-    : path.resolve(expandHome(args.hostPath));
-  if (args.allowJsHost) {
-    await fsp.writeFile(launcherPath, [
-      '#!/bin/sh',
-      '# Generated by RedBox browser-control smoke test.',
-      `exec ${shellQuote(process.execPath)} ${shellQuote(hostScript)} "$@"`,
-      '',
-    ].join('\n'), 'utf8');
-    await fsp.chmod(launcherPath, 0o755);
-  } else {
-    assert(fs.existsSync(resolvedHostPath), `Native Host executable not found: ${resolvedHostPath}`);
-  }
+async function installNativeHostManifest(extensionId, manifestPaths, args) {
+  const resolvedHostPath = path.resolve(expandHome(args.hostPath));
+  assert(fs.existsSync(resolvedHostPath), `Native Host executable not found: ${resolvedHostPath}`);
   const manifest = {
     name: hostName,
     description: 'RedBox browser control native messaging host',
@@ -901,7 +813,6 @@ async function installNativeHostManifest(extensionId, manifestPaths, launcherPat
     type: 'stdio',
     allowed_origins: [`chrome-extension://${extensionId}/`],
   };
-  await fsp.chmod(hostScript, 0o755);
   for (const manifestPath of manifestPaths) {
     await fsp.mkdir(path.dirname(manifestPath), { recursive: true });
     await fsp.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -909,16 +820,34 @@ async function installNativeHostManifest(extensionId, manifestPaths, launcherPat
   return resolvedHostPath;
 }
 
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", "'\\''")}'`;
+async function waitForNewBridgeInstance(baselineInstanceIds, timeoutMs, diagnostics = {}) {
+  return await waitForBridgeMatch(
+    (instance) => !baselineInstanceIds.has(browserInstanceKey(instance)),
+    timeoutMs,
+    diagnostics,
+  );
 }
 
-async function waitForEndpoint(endpointPath, socketPath, timeoutMs, diagnostics = {}) {
+async function waitForBridgeInstance(browserInstanceId, timeoutMs, diagnostics = {}) {
+  return await waitForBridgeMatch(
+    (instance) => browserInstanceKey(instance) === browserInstanceId,
+    timeoutMs,
+    diagnostics,
+  );
+}
+
+async function waitForBridgeMatch(predicate, timeoutMs, diagnostics = {}) {
   const deadline = Date.now() + timeoutMs;
+  let lastError = '';
   while (Date.now() < deadline) {
-    if (fs.existsSync(socketPath)) return;
-    const endpoint = await readJsonOptional(endpointPath).catch(() => null);
-    if (endpoint?.endpoint?.address || endpoint?.tcpAddress) return;
+    try {
+      const transport = new DesktopBridgeBrowserTransport({ timeoutMs: 2000 });
+      const instances = await transport.listEndpoints();
+      const match = instances.find(predicate);
+      if (match) return match;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
     await delay(200);
   }
   const child = diagnostics.child;
@@ -930,7 +859,9 @@ async function waitForEndpoint(endpointPath, socketPath, timeoutMs, diagnostics 
     ? await findExtensionId(diagnostics.profileRoot).catch(() => '')
     : '';
   throw new Error([
-    `Timed out waiting for browser-control endpoint: ${endpointPath}`,
+    `Timed out waiting for Native Host registration on Desktop Bridge`,
+    `bridgeDescriptor=${desktopBridgeDescriptorPath()}`,
+    `lastBridgeError=${lastError}`,
     `browserPath=${diagnostics.browserPath || ''}`,
     `profileRoot=${diagnostics.profileRoot || ''}`,
     `extensionPath=${extensionPath}`,
@@ -942,6 +873,15 @@ async function waitForEndpoint(endpointPath, socketPath, timeoutMs, diagnostics 
     `chrome=${childState}`,
     stderr ? `stderr:\n${stderr}` : 'stderr=<empty>',
   ].join('\n'));
+}
+
+function browserInstanceKey(instance) {
+  return String(
+    instance?.extensionInstanceId
+    || instance?.browserInstanceId
+    || instance?.hostInstanceId
+    || '',
+  );
 }
 
 async function readOptional(filePath) {

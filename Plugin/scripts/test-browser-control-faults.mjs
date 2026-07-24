@@ -6,6 +6,11 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { BrowserControlTransport } from './browser-client.mjs';
+import {
+  assertNativeHostVersionCompatibility,
+  classifyDesktopBridgeHandshake,
+  normalizeProductVersion,
+} from '../src/background/nativeTransport.js';
 
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'redbox-browser-faults-'));
 const endpointsDirectory = path.join(tempRoot, 'endpoints');
@@ -18,6 +23,8 @@ try {
   await testDisconnectedSocket();
   await testLateResponseTimeout();
   await testOversizedResponse();
+  testNativeHostVersionCompatibility();
+  testDesktopBridgeHandshakeClassification();
   console.log(JSON.stringify({
     ok: true,
     isolatedStateRoot: tempRoot,
@@ -26,11 +33,48 @@ try {
       'socket_disconnect_terminal',
       'late_response_preserves_timeout',
       'oversized_response_rejected',
+      'native_host_patch_update_compatible',
+      'native_host_minor_mismatch_rejected',
+      'old_app_requires_upgrade',
     ],
   }, null, 2));
 } finally {
   await Promise.all(servers.map((server) => closeServer(server)));
   await fs.rm(tempRoot, { recursive: true, force: true });
+}
+
+function testNativeHostVersionCompatibility() {
+  globalThis.chrome = {
+    runtime: {
+      getManifest: () => ({ version: '2.6.11.65535', version_name: '2.6.11' }),
+    },
+  };
+  assert.equal(normalizeProductVersion('2.6.11.65535'), '2.6.11');
+  assert.equal(
+    assertNativeHostVersionCompatibility({ appVersion: '2.6.11' }),
+    true,
+  );
+  assert.equal(
+    assertNativeHostVersionCompatibility({ appVersion: '2.6.10' }),
+    true,
+  );
+  assert.throws(
+    () => assertNativeHostVersionCompatibility({ appVersion: '2.5.99' }),
+    /Native host version mismatch/,
+  );
+  delete globalThis.chrome;
+}
+
+function testDesktopBridgeHandshakeClassification() {
+  assert.equal(classifyDesktopBridgeHandshake({ appVersion: '2.6.9' }), 'upgrade_required');
+  assert.equal(
+    classifyDesktopBridgeHandshake({ desktopBridge: { connected: false } }),
+    'app_not_running',
+  );
+  assert.equal(
+    classifyDesktopBridgeHandshake({ desktopBridge: { connected: true } }),
+    'connected',
+  );
 }
 
 async function testStaleDescriptorCleanup() {
