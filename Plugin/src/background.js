@@ -2315,12 +2315,17 @@ async function fetchKnowledgeJson(endpoint, path, init = {}) {
       headers,
     });
   } catch (error) {
-    pluginError('http-network-failed', {
+    pluginWarn('http-network-failed', {
       method,
       url,
       error: describeError(error),
     });
-    throw new Error(`请求失败: ${method} ${url} -> ${error instanceof Error ? error.message : String(error)}`);
+    return await fetchKnowledgeJsonViaNative({
+      url,
+      method,
+      body: init.body,
+      networkError: error,
+    });
   }
 
   let data = null;
@@ -2348,6 +2353,45 @@ async function fetchKnowledgeJson(endpoint, path, init = {}) {
   });
 
   return data || { success: true };
+}
+
+async function fetchKnowledgeJsonViaNative({ url, method, body, networkError }) {
+  try {
+    const result = await requestNativeHost('knowledge.request', {
+      url,
+      method,
+      body: typeof body === 'string' ? body : '',
+    }, 35_000);
+    const data = result?.body ?? null;
+    if (result?.ok !== true || data?.success === false) {
+      pluginError('native-knowledge-response-failed', {
+        method,
+        url,
+        status: result?.status || 0,
+        body: data,
+      });
+      throw new Error(data?.error || `HTTP ${result?.status || 0}`);
+    }
+    pluginLog('native-knowledge-response', {
+      method,
+      url,
+      status: result.status,
+      success: data?.success !== false,
+    });
+    return data || { success: true };
+  } catch (nativeError) {
+    pluginError('native-knowledge-request-failed', {
+      method,
+      url,
+      networkError: describeError(networkError),
+      nativeError: describeError(nativeError),
+    });
+    throw new Error(
+      `请求失败: ${method} ${url} -> ` +
+      `${networkError instanceof Error ? networkError.message : String(networkError)}；` +
+      `Native Messaging 回退失败: ${nativeError instanceof Error ? nativeError.message : String(nativeError)}`
+    );
+  }
 }
 
 function isRecoverableKnowledgeNetworkError(error) {

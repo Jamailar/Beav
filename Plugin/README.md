@@ -56,6 +56,7 @@ pnpm verify
 - 现有采集：`pageObserver.js`、`xhsBridge.js`、`captureRuntime.js` 保持 content script 常驻，用于小红书、多平台识别、右键保存和网页浮动面板。
 - AI 控制：`browserControlContent.js` 只在 AI 调用浏览器工具时动态注入。
 - native host：正式桌面端启动时会把 Chrome / Edge / Brave 的 native messaging manifest 对账到当前 Beav 可执行文件。浏览器启动同一个签名应用的隐藏 Native Host 模式，宿主在 `127.0.0.1` 随机端口暴露带随机 token 的 newline JSON-RPC，并写入带 heartbeat 的 v2 多实例 registry。`native-host/host.mjs` 和 Node installer 只保留开发/旧版本兼容。
+- Knowledge API：插件优先直接访问桌面端 loopback HTTP；浏览器因本地网络权限、代理或 CORS 拒绝该请求时，已认证 Native Host 只允许把 `/api/knowledge` 下的 GET / POST 代发到 loopback 地址，不接受远程主机或其他本地路径。
 - App 内置 MCP：桌面端启动时会自动注册 `Beav Browser Control` MCP server，stdio command 指向 Beav App 自身的隐藏兼容 `--redbox-browser-control-mcp` 模式，不要求用户手动导入 MCP 配置。
 - App AI 首选入口：模型使用 `browser.connection.status/repair`、`browser.tabs.list`、`browser.tab.open/claim`、`browser.page.inspect/click/type`、`browser.tabs.finalize` 等单一职责 typed action。旧 `browser.control` 只做历史 session 兼容；MCP / Native Host 是后端适配层，不作为普通任务的模型调用面。
 - Agent-side JS client：`scripts/browser-client.mjs` 提供 Codex 同款 `setupBrowserRuntime({ globals }) -> agent.browsers.get("extension")` 入口，用对象方法包装 `browser.user.openTabs()`、`browser.tabs.new()`、`tab.playwright.locator()`、`browser.tabs.finalize()` 等能力；底层仍走 Beav Native Host endpoint / MCP 工具。
