@@ -2174,7 +2174,7 @@ async function checkForPluginUpdates(options = {}) {
 async function checkDesktopServer(forceRefresh = false) {
   try {
     if (forceRefresh) clearCachedKnowledgeApi();
-    const result = await requestNativeHost('desktop.health', {}, 5_000);
+    const result = await requestDesktopHealth();
     const response = result?.knowledge || result;
     cachedKnowledgeApi = NATIVE_KNOWLEDGE_ENDPOINT;
     cachedKnowledgeApiAt = Date.now();
@@ -2194,12 +2194,36 @@ async function checkDesktopServer(forceRefresh = false) {
   } catch (error) {
     pluginError('healthcheck-failed', {
       error: describeError(error),
+      code: error?.code || 'NATIVE_REQUEST_FAILED',
+      phase: error?.phase || 'native_messaging',
+      retryable: error?.retryable === true,
+      details: error?.details || error?.data || null,
     });
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+async function requestDesktopHealth() {
+  const host = await requestNativeHost('ping', {}, 1_500);
+  const bridge = host?.desktopBridge && typeof host.desktopBridge === 'object'
+    ? host.desktopBridge
+    : null;
+  if (!bridge?.connected) {
+    const error = new Error('Beav desktop bridge is not connected');
+    error.code = 'APP_BRIDGE_UNAVAILABLE';
+    error.phase = 'bridge';
+    error.retryable = true;
+    error.details = {
+      nativeHostReachable: host?.nativeConnected === true,
+      bridgeConnected: bridge?.connected === true,
+      appVersion: bridge?.appVersion || '',
+    };
+    throw error;
+  }
+  return await requestNativeHost('desktop.health', {}, 2_000);
 }
 
 async function resolveKnowledgeApiEndpoint(forceRefresh = false) {
@@ -2212,7 +2236,7 @@ async function resolveKnowledgeApiEndpoint(forceRefresh = false) {
     return cachedKnowledgeApi;
   }
   if (forceRefresh) clearCachedKnowledgeApi();
-  await requestNativeHost('desktop.health', {}, 5_000);
+  await requestDesktopHealth();
   cachedKnowledgeApi = NATIVE_KNOWLEDGE_ENDPOINT;
   cachedKnowledgeApiAt = now;
   return cachedKnowledgeApi;
@@ -2232,10 +2256,12 @@ async function fetchKnowledgeJson(endpoint, path, init = {}) {
     path,
     operationId,
   });
-  const result = await requestNativeHost(nativeMethod, {
-    operationId,
-    payload,
-  }, method === 'GET' ? 5_000 : 35_000);
+  const result = nativeMethod === 'desktop.health'
+    ? await requestDesktopHealth()
+    : await requestNativeHost(nativeMethod, {
+      operationId,
+      payload,
+    }, method === 'GET' ? 5_000 : 35_000);
   return nativeMethod === 'desktop.health'
     ? (result?.knowledge || result)
     : (result || { success: true });
