@@ -1,7 +1,7 @@
 {
   "name": "beav",
   "private": true,
-  "version": "2.6.17",
+  "version": "2.6.18",
   "type": "module",
   "engines": {
     "node": ">=22 <23"
